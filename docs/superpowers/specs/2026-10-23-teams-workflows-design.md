@@ -83,9 +83,9 @@ The definition's `steps` is a list. Each step has an `id` (stable, made by the b
 ### 5.1 Trigger (exactly one, always first)
 
 - `chat`: a member starts the workflow with the `start_workflow` tool (section 7) during a chat with the person. The trigger names which members may do it (the user helper, in the first team). The workflow run's `origin_run_id` is that chat run.
-- `manual`: "Run now" on the team page or the builder, or "Test run" in the builder. The person types the task and picks the project. Both run the saved definition (the builder saves first). A **Test run** is a real run in every way except that every deploy step acts as `branch`: nothing is pushed. It is flagged (`workflow_runs.test`) and labelled "Test" on the run page and the team page.
+- `manual`: "Run now" on the team page or the builder, or "Test run" in the builder. The person types the task and picks the project. Both run the saved definition (the builder saves first). A **Test run** is a real run in every way except that every deploy step acts as `branch`: nothing is pushed. It is flagged (`workflow_runs.test`) and labelled "Test" on the run page and the team page. The workflow's enabled switch arms the `chat`, `schedule` and `webhook` triggers and Run now; a Test run starts while the workflow is off, so a new workflow can be tried before it is armed (plan C). Every other start of an off workflow is refused with `workflow <name> is turned off`, and a workflow with a problem refuses a Test run too.
 - `schedule`: Dots' schedule rules (Scheduler v2), with a fixed task text and project. My call: no catch-up and no retries. A slot that comes due while an earlier run of the same workflow is still in flight (waiting on a check included) is skipped, with a log line. Workflow schedules keep their own state, keyed by workflow, not the dot-keyed `schedule_state`. "Pause schedules" pauses them too.
-- `webhook`: `POST` to the workflow's URL with its token. The body's `task` and `project` (by name) are used, falling back to fixed values set on the trigger.
+- `webhook`: `POST` to the workflow's URL, `http://127.0.0.1:<port>/workflows/<id>/trigger`, with its token in an `Authorization: Bearer <token>` header. The body's `task` and `project` (by name) are used, falling back to fixed values set on the trigger. The token is shown once, when it is made, as a dot's is. At most 3 runs of one workflow may be in flight, waiting included, whatever started them (`MAX_WEBHOOK_IN_FLIGHT`, the person's decision, 2026-11-04): past that the webhook answers `429` with `too many runs in flight` and starts nothing. The cap is checked after the token (401) and the 409s (a workflow turned off or with a problem), before the body is read. Only webhook starts are capped.
 
 ### 5.2 Agent step
 
@@ -107,6 +107,10 @@ The workflow pauses (`waiting`, `waiting_on: check`) and the check appears in **
 
 The person **approves** (the workflow goes on) or **sends back** with a note. They can also **stop** the workflow run.
 
+**What the check shows is read from the core** (plan C): the step, the hand-off summary, and each shown branch (section 6.2) with its tip commit, or `null` for a branch that is gone. Reading it changes nothing. **Approve names the tips the page showed.** Under the loop's lock the core reads the shown branches again; if the set differs, or any tip differs from what git says now, it refuses with `The branches changed since the check was shown: <branch>. Look at the check again.` (several branches joined by `, `) and records nothing. The page then reads the check again. The recorded approval is the tips the page showed, which equal git's.
+
+**View diff** shows a branch's committed changes from the project's default branch: `<merge-base(default, commit)>..<commit>` in the project repo, capped as a worktree's diff is. The default branch is found as deploys find it: the project's `default_branch`, else the remote's `HEAD`, else the branch the repo is on. Only a branch the waiting check shows (at its tip now), or a branch and commit an approval or a deploy result recorded, may be diffed. Any other branch or commit is refused, so the page cannot make Dots read an arbitrary ref.
+
 **A send-back picks up where the target step left off** (the person's choice). The target step gets a new step run (`attempt` + 1). It is not a fresh start: its agent's last run is resumed, as an answer to `ask` is, with a message carrying the note ("The person sent this back: <note>"). It keeps the same session and works on the same worktree and branch, recreated if needed as the main spec's resumes do. For a delegate step, the delegating run is resumed. It decides whether to start members again, which are new runs counted against `total` and the budget. The steps after the target, up to the sender, then run again in order, each also resumed from its last run with a message naming the send-back and the new hand-off. A step whose last run cannot be resumed (its session gone) starts fresh from the target's branch, and the run page says so. The same applies to an agent's `send_back`.
 
 ### 5.5 Deploy
@@ -120,6 +124,8 @@ Done by Dots itself after a check, never by an agent. Fields: `mode`, and per mo
 | `pr` | `push`, then `gh pr create` against the default branch, title from the task, body from the hand-off summary |
 | `pr_merge` | `pr`, then `gh pr merge` with `merge_method` (`merge`, `squash` or `rebase`, default `squash`) |
 | `member` | Starts a member as an agent step with a deploy job, e.g. "tag a release" (for apps whose deploy is more than a push). Its run's policy applies as usual |
+
+A `push`, `pr` or `pr_merge` deploy whose check approved no branch fails with `Nothing to ship: the check approved no branch.`, before any scan or `gh` call, and the workflow waits as for any failed step (the person's decision, 2026-11-04). A `branch` deploy with no branch still succeeds, listing none. A `member` deploy with no approved branch starts from its usual start.
 
 Git and `gh` run as the person, with their existing credentials. Dots never reads or stores those credentials. A missing `gh`, a rejected push or a failed merge fails the deploy step with the tool's message. Nothing already pushed is undone. The workflow run then fails, and the person can retry the deploy step from the run page.
 
@@ -151,7 +157,7 @@ Sandboxed dots ask before `git commit`, because commit hooks run code (`policy.r
 
 ### 6.2 Which branches a check shows and a deploy pushes
 
-My call: **the branches of the latest agent step before the check**, on the path taken. Earlier steps' branches are ancestors or stale. For a delegate step, if the delegating run's own branch has commits (it merged its members' work), that branch alone. Otherwise each member's branch. The deploy acts on exactly the branches its check showed and approved, recorded with the decision. A later commit to any of them (there should be none) refuses the deploy with "The branch changed after it was approved."
+My call: **the branches of the latest agent step before the check**, on the path taken. Earlier steps' branches are ancestors or stale. For a delegate step whose delegating run's own branch has commits, that branch first, then every member branch whose tip is not an ancestor of the lead's tip (`git merge-base --is-ancestor`), in the order the members started: the members' work the lead did not merge is not hidden (the person's decision, 2026-11-04). A member branch that is gone is left out; one git cannot judge is shown. Without lead commits, each member's branch. The rule is applied when the step's hand-off is built, so it also decides where the next agent step starts (section 6): a lead that left a member unmerged hands on two or more branches, and the next step starts from the project's default branch with them listed. The deploy acts on exactly the branches its check showed and approved, recorded with the decision (section 5.4). A later commit to any of them (there should be none) refuses the deploy with `The branch changed after it was approved.`
 
 ## 7. Workflow tools
 
@@ -164,13 +170,13 @@ Served like `notify`, `ask` and `follow_up`: built in on the local engine, tools
 | `report_outcome` | `Workflow` | runs of agent steps that declare `outcomes` | `outcome` (one of the declared labels) | "Outcome recorded." The last call wins |
 | `send_back` | `Workflow` | runs of agent steps with `can_send_back_to` | `to_step` (step name), `note` | "Sent back to <step>." The run should then finish its turn; the send-back happens when it ends |
 
-Every new and stored policy preset gets a `Workflow` rule (a code step after the migration, as `finish_0007` did for `Context`): Sandboxed and Custom ask, so each call is an approval before the workflow starts, and ReadOnly and Trusted allow (the person's decision, 2026-10-24). A stored Sandboxed policy gets `ask`; a stored Custom policy gets nothing, as before. A dot's own `Workflow` rule (`ask`, `deny`) still wins. A rule of `ask` makes each call an approval as usual, and the tool is still offered to the chat.
+Every new and stored policy preset gets a `Workflow` rule (a code step after the migration, as `finish_0007` did for `Context`): Sandboxed and Custom ask, so each `start_workflow` call is an approval before the workflow starts, and ReadOnly and Trusted allow (the person's decision, 2026-10-24). A stored Sandboxed policy gets `ask`; a stored Custom policy gets nothing, as before. Under `ask`, `start_workflow` and `start_member` ask. `report_outcome` and `send_back` do not (the person's decision, 2026-11-04): an `ask` for them, from a rule or the policy's default, counts as allow. A policy cannot tell the person's own `Workflow: ask` from the one the preset gave (a rule carries no origin, and Custom starts from the Sandboxed rules), so the person's own `ask` counts as allow for these two as well. A dot's own `Workflow: deny`, or a default of deny, refuses all four tools. A rule of `ask` makes each `start_workflow` or `start_member` call an approval as usual, and the tool is still offered to the chat.
 
 A refused call is a tool error naming the rule, in one sentence, and the run goes on, as with `follow_up`.
 
 ## 8. Runs and the runner
 
-- **Workspace.** A run with `workflow_step_run_id` uses the workflow run's project repo in place of its dot's `workdir`. The dot's `workspace_mode` still applies: `worktree` (the expected setting for dev agents) makes a worktree of the project repo. `folder` works in the project repo itself, the person's own checkout, so the builder shows a warning on a member in folder mode.
+- **Workspace.** A run with `workflow_step_run_id` uses the workflow run's project repo in place of its dot's `workdir`. The dot's `workspace_mode` still applies: `worktree` (the expected setting for dev agents) makes a worktree of the project repo. `folder` works in the project repo itself, the person's own checkout, so the builder shows a warning on a member in folder mode (in the step's settings sheet, not on the card: `<name> works in the folder itself: in a workflow it changes the project's own checkout, and leaves no branch to check or deploy.`).
 - **One running run per dot.** The rule stays for ordinary runs. Workflow runs are exempt: two copies of the dev agent run at once, each in its own worktree. A workflow run counts as one dot "busy" for the rest of the app (the column's status mark).
 - **Concurrency.** `max_concurrent_runs` still caps every run at once, team or not. Started members beyond it queue. The builder's `at_once` is a ceiling, not a promise. The team page shows the current setting and links to Settings.
 - **Order.** Queued workflow runs are dispatched FIFO with the rest. My call: no priority.
@@ -194,6 +200,8 @@ A **Teams** link in the rail, after Library. Routes: `/teams` (list), `/teams/:t
 
 **Team page:** name and description; **Members** (add an existing dot, set its role, remove); **Projects** (name, repo folder picker, remote, default branch); **Workflows** (name, trigger, enabled switch, last run, "New workflow"); **Recent runs** (status, task, project, spend).
 
+As built (plan C): the rail link is `Teams` (lucide `UsersRound`), after Library and before a publisher's Releases and Settings. The team page opens with a **Waiting** list while any of the team's runs waits on the person (the Inbox's rows, section 10.5), then Members, Projects, Workflows and Recent runs. The member picker offers only dots of the team's account and workspace. A workflow's row shows its trigger, `<n> run(s) in flight`, its problem, its last run, and the enabled switch, which saves at once. **New workflow** makes one turned off, with one agent step done by the first member, and opens it in the builder. **Run now** asks for the task and the project in a dialog and opens the new run's page; it is disabled while the workflow is off, has a problem, or the team has no project. Recent runs are the newest 20 (status, task, workflow, project, spent, started). **Delete team** asks first and says that runs in flight are stopped first.
+
 ### 10.2 The builder (layout B)
 
 The chosen mockup: `.superpowers/brainstorm/3795-1792776045/content/builder-layout.html`, option B.
@@ -206,6 +214,16 @@ The chosen mockup: `.superpowers/brainstorm/3795-1792776045/content/builder-layo
 - Validation errors (section 5.8) show on the card they name, and Save stays disabled until they are fixed.
 - No canvas or graph library: cards, lists and the existing shadcn kit.
 
+As built (plan C):
+
+- **The draft** lives in the page until **Save**, the enabled switch included (the team page's switch saves at once). Under the header, `1 run in flight uses the previous version` or `<n> runs in flight use the previous version` while `runs_in_flight` is above 0.
+- **Live validation** sends the draft to the core 300 ms after an edit (`workflow_check_spec`), which answers with the first refusal a save would give and the step it names (`WorkflowProblem { step_id, message }`, by the same rules as section 5.8). The problem shows on that card, else on the header, and Save stays off. It does not see a name another workflow has, or a schedule that would never run: Save refuses those, and the refusal shows on the header.
+- **Moves** stay within the step's own list: `Move <name> up` and `Move <name> down`, or Alt+ArrowUp and Alt+ArrowDown on a focused card. There is no drag handle, and no move into or out of a branch's path. A step is deleted at once (it is a draft); a branch that holds steps asks first.
+- **Step ids** are `<kind>-<n>`, the smallest n no step of the whole tree has, made when the step is added.
+- **The sheets.** Each step's sheet holds its kind's fields. The trigger card opens its own sheet: the kind, a chat's starters, a schedule (the dot editor's schedule editor, without None and without catch-up), its task and project, or a webhook's URL, its token (shown once, as a dot's), and the fallbacks. Outcomes can be added and removed but not renamed, since a rename would break a branch's label; a branch's path labels can be renamed.
+- **Test run** saves a changed draft first, then asks for the task and the project. It works while the workflow is off (section 5.1).
+- **Delete workflow** sits in the header and asks first. Its runs stay on the team page as runs of a deleted workflow.
+
 ### 10.3 The run page (option A of the second mockup)
 
 `.superpowers/brainstorm/3795-1792776045/content/run-view.html`, option A.
@@ -216,6 +234,14 @@ The chosen mockup: `.superpowers/brainstorm/3795-1792776045/content/builder-layo
 - A waiting check shows its hand-off summary, **View diff** for each branch (the existing diff view), a note box, **Send back**, **Approve** and **Stop**.
 - A finished deploy shows what it did: branches pushed, PR links, or the ready branches with **Open folder**.
 - A failed step shows its error and **Retry step** (a new attempt, counted against the budget).
+
+As built (plan C):
+
+- **One Stop**, in the header, which also links the team and, for a run a chat started, `Open the chat`. A deleted workflow's run is titled `A deleted workflow`.
+- **Meters** show cache reads beside the tokens meter (`· <n> cache reads`). A reached limit's bar takes the needs colour.
+- **Links to dot runs** come from the core (`workflow_run_dot_runs`, section 11): each step card lists `Run of <dot>` with its status, one link per thread, and a delegate's members each link to their own run (`Open run`). A branch's paths show as columns, marked `Taken` or `Not taken` once it decided.
+- **At a limit:** **Add budget** takes no amount. It raises each limit reached by its default, once per click, and the panel says what it will add. A send-back held at the cap shows its note and **Allow one more send-back**.
+- **View diff** opens the diff in a dialog (section 5.4). A deploy's result lists each branch as `Ready`, `Pushed` or `Not pushed`, its pull request (a link only for an `https://` URL), whether it merges once its checks pass, and, for a ready branch, **Open folder** and **View diff**.
 
 ### 10.4 The chat card (option B of the second mockup)
 
@@ -228,17 +254,34 @@ When a chat run calls `start_workflow`, its conversation shows a **workflow card
 
 The card is part of the transcript, so reopening the conversation later shows its last state. My call: when the workflow run ends, the user helper is **not** woken up automatically. The card shows the result, and the person can ask the helper about it.
 
+As built (plan C): the card is shown in the home conversation only, inside the section of the run that started it, after that run's words and check-ins; the run screen shows none. One query reads the cards of every run the conversation shows (`workflow_runs_for_origins`), and `workflow_run_updated` keeps them live. The step line follows the path a branch took, and marks a failed step ✕ and a stopped or skipped one –. A waiting check shows the run page's whole check panel (the summary, each branch with View diff, the note, Send back, and Approve with the tips it showed). A failed step shows its error and **Retry step**. **Stop** shows once while the run is in flight. The card's actions act on the workflow only: they do not wake the chat's dot. Delegate members are not on the card; the run page shows them.
+
 ### 10.5 Needs you and notifications
 
-- A workflow run waiting on a check or a limit counts in **needs you** for the dot whose chat started it. With no chat origin (manual, schedule, webhook), it counts in the Inbox. Either way it is listed on the team page.
-- Notifications, in the needs-you wording: "**<team>** needs your check": the step name and the task's first line. "**<team>** hit its budget": the limit. "**<team>** finished" or "failed". A click opens the run page.
-- The Inbox lists workflow runs that need the person, linking to the run page.
+- A workflow run waiting on the person (a check, the budget, the send-back cap, or a failed step: plan A's `step_failed`) is listed in the Inbox under **Workflows** and counts in the Inbox badge, whatever started it (the person's decision, 2026-11-04). A run a chat started also counts in **needs you** for the dot whose chat started it; once that chat run is deleted, it counts in the Inbox only. Either way it is listed on the team page, under **Waiting**.
+- An Inbox row shows the task's first line, the team (a link to its page), the workflow (`A deleted workflow` once it is gone), ` · at <step>`, when it started and what it waits on (`Needs your check`, `Hit its budget`, `Hit its send-back limit`, `A step failed`), and **Open the run**. The section stands after Apps to review and before New instructions.
+- Notifications are sent when a run's state changes, once per change (a wait on a new step run is a change):
+
+  | When | Title | Body |
+  |---|---|---|
+  | A check waits | `<team> needs your check` | `<step name>: <task's first line>` |
+  | The budget is reached | `<team> hit its budget` | the limit, e.g. `runs, 10 of 10` |
+  | The send-back cap holds one | `<team> hit its send-back limit` | `send-backs, <n> of <max>` |
+  | A step failed | `<team> failed` | the run's error, `<step name>: <error>` |
+  | The run succeeded | `<team> finished` | the task's first line |
+
+  A Test run's title ends with ` (test)`. A cancelled run is not told: the person stopped it. A click opens `/workflow-runs/<id>`. A run a chat started is quiet while the person reads that dot's conversation, where its card is live.
+- **Step runs are quiet** (the person's decision, 2026-11-04): a dot run of a workflow step gets no "finished" or "failed" notice and is not listed in Runs to review. Its questions and approvals notify and count as before.
 
 ## 11. Commands and events
 
 Thin Tauri commands over new `Runtime` methods, in a new core module (`teams.rs`, with `store/teams.rs` and `store/workflows.rs`). Teams, members and projects: create, update, delete, list. Workflows: create, update (validates), delete, list, get. Workflow runs: start (manual), list (by team, by status), get (with step runs and hand-offs), decide check (approve, send back with note), add budget, allow send-back, retry step, stop.
 
 Runtime events, forwarded to the UI as today: `team_updated`, `workflow_updated`, `workflow_run_updated` (status, current step, spend, waiting state; the run page, chat card, Needs you and Inbox refresh from it). The contract fixture gains the new types and events.
+
+As built (plan C), the commands are: `teams_list`, `team_get`, `team_create`, `team_update`, `team_delete` (stops the team's runs in flight first), `project_add`, `project_update`, `project_delete`, `open_project_folder` (a project's repo, or a ready branch's worktree, found by id, never a path from the UI), `workflows_list`, `workflow_get`, `workflow_create`, `workflow_update`, `workflow_delete`, `workflow_check_spec` (the builder's live validation), `workflow_webhook_url` (refused while the local server is not running, as a dot's webhook URL is), `regenerate_workflow_token`, `workflow_runs_list` (by team, workflow, statuses and a limit, newest first), `workflow_runs_for_origins` (the runs the given chat runs started, oldest first: the chat card), `workflow_run_get`, `workflow_run_dot_runs` (every dot run of the run's step runs, oldest first, each with its thread's root, its dot's name and its status), `workflow_run_start` (Run now and Test run, trigger `manual`), `workflow_check`, `workflow_branch_diff`, `workflow_approve` (with the tips the check showed), `workflow_send_back`, `workflow_add_budget`, `workflow_allow_send_back`, `workflow_retry_step` and `workflow_stop`. Stop needs the `RunDots` permission, as Add budget and Retry step do. A `Workflow` also says how many of its runs are in flight (`runs_in_flight`) and which started last (`last_run`).
+
+Events, as built: `team_updated` is also sent for each team of a dot that is renamed or deleted. `workflow_updated` is sent for each workflow of a team whose set of members changes (its problem may change), of each team of a deleted dot, and for each workflow a team's deletion removes. No event is sent for a workflow when one of its runs starts or ends: the UI reads its workflows again on `workflow_run_updated`. A `run_updated` for a dot run of a step marks the run pages' dot-run links stale.
 
 ## 12. The app library, later
 
@@ -256,7 +299,7 @@ Nothing in this spec should block that. Keep project lookup behind one function 
 - **A member's dot is disabled:** its steps queue no runs. The step fails with "<dot> is disabled", and the workflow waits so the person can enable it and retry.
 - **The project repo is gone or not a repo** at start: `start_workflow` is refused with the reason. If it happens mid-run, the step fails.
 - **Two workflow runs on one project:** allowed. Each run's worktrees are separate. Two deploys may push different branches to the same remote.
-- **A chat run that called `start_workflow` is deleted:** the workflow run goes on, and its needs-you counting moves to the Inbox.
+- **A chat run that called `start_workflow` is deleted:** the workflow run goes on. It stays in the Inbox and no longer counts in a dot's needs you (section 10.5).
 - **Schedules paused:** scheduled workflow triggers do not fire. Running workflow runs go on.
 - **A dev agent asks the person (`ask`)** inside a workflow: it works as today, and the workflow's step waits on that run. The question shows in the dev agent's conversation and in Needs you as usual.
 
@@ -280,7 +323,9 @@ Integration with the app library (section 12, later); a free canvas or lanes; me
 - The exact prompt wording of the `## Workflow` section and the tool descriptions, in the style of `checkins.rs`.
 - Visual detail within Deep Teal and the chosen mockups.
 
-## 17. What plan B built
+## 17. What plans B and C built
+
+### 17.1 Plan B
 
 Plan B (`docs/superpowers/plans/2026-11-02-teams-b.md`) built the core of sections 5.1 (`schedule`, `webhook`), 5.3 to 5.6, 6.2, 7 and 9: delegate steps and `start_member`, send-backs and their cap, `report_outcome` and `send_back`, deploys, branch steps, and the two triggers, with plan A's parked findings. Its "Deviations from the spec" table holds, except where this list says otherwise. The plan's text was not changed while it ran, so its code blocks for Task 7 still show the first versions of the scan, the gh calls and the refusal.
 
@@ -292,9 +337,40 @@ Plan B (`docs/superpowers/plans/2026-11-02-teams-b.md`) built the core of sectio
 - **A step with outcomes, run again after a send-back,** is told so: ``Report the outcome again with `<tool>`, one of: "a", "b": the earlier one no longer counts.`` follows the send-back or rerun message.
 - **`send_back` to a name several targets share** (compared without case) is refused: `"<to>" names more than one step you can send work back to: "a", "b". Nothing was recorded.`
 - **A step run cut off by a restart** before the workflow run moved to it (`Running`, no runs) is used again by the next pass, not left running beside a new attempt: agent steps, branches and deploys. A check's own step run is not.
-- **A Sandboxed step asks** before `report_outcome`, `send_back` and `start_member`, all under `Workflow`, as the plan's open row said.
+- **A Sandboxed step asks** before `report_outcome`, `send_back` and `start_member`, all under `Workflow`, as the plan's open row said. Plan C changed this: `report_outcome` and `send_back` no longer ask (section 7).
 - **Cancelling one member of a delegate step** reports it to the lead with its status, and the step goes on (section 5.3 read as the rule for members; section 8's "fails its step" as the step's own run).
 
-**Open questions for the person:** whether `report_outcome` and `send_back` should not ask under Sandboxed; whether a lead's own commits should no longer hide its members' branches at a check (6.2: an ancestor rule); whether the webhook should cap the runs in flight per workflow (an answer 429).
+**Open questions for the person**, answered on 2026-11-04 and built by plan C (17.2): whether `report_outcome` and `send_back` should not ask under Sandboxed; whether a lead's own commits should no longer hide its members' branches at a check (6.2: an ancestor rule); whether the webhook should cap the runs in flight per workflow (an answer 429).
 
-**Known gaps:** a rerun message names the latest hand-off's branches, so a later step that kept its branch gets no merge line when the step just before it changed nothing; a delegate step whose second attempt changed nothing hides its first attempt's member branches, so with no earlier branches the check shows none and a deploy after it succeeds having pushed nothing (a fix: fail a `push`, `pr` or `pr_merge` deploy with zero branches); a `member` deploy refused by its tip check records no `deploy_result`; the Claude-engine test of tools a step was not offered sees an empty result for the server's `unknown tool` error (fake-claude drops RPC errors). Approving records each branch's tip when the request arrives, so a commit that lands between the check page's render and the click is approved; plan C's approve call should send the tips the page showed.
+### 17.2 Plan C
+
+Plan C (`docs/superpowers/plans/2026-11-04-teams-c.md`) built sections 10 and 11: the Teams screens, the builder and its sheets, the run page, the chat card, the Inbox's Workflows section and the notifications, over new app commands, with the person's answers to plan B's open questions and three more of their decisions (a deploy with no branch fails, the Inbox lists every waiting run, step runs are quiet), all of 2026-11-04. The sections above now say what it built where it differs from or adds to their first text; in short:
+
+- **Workflow tools under Sandboxed and Custom** (section 7): `start_workflow` and `start_member` ask; `report_outcome` and `send_back` do not. The check is in `Policy::resolve_in`, so both engines get it from one place, and the tool is told apart by its input as approvals tell it. A deviation: the person's own `Workflow: ask`, or a default of ask, counts as allow for those two, since a policy cannot tell it from the preset's. A deny still refuses all four.
+- **The ancestor rule** (section 6.2) is applied when the hand-off is built, so the check, the approval, the deploy and the next step's start branch all read one list.
+- **A deploy with no branch** (section 5.5) fails a `push`, `pr` or `pr_merge` with `Nothing to ship: the check approved no branch.`; the run's error is `<step name>: Nothing to ship: the check approved no branch.` and it waits on `step_failed`.
+- **A check is read before it is approved** (section 5.4): `Workflows::check` gives `CheckView { step_id, summary, branches: [ShownBranch { branch, run_id, commit }] }`, and `approve_check(id, note, tips)` refuses tips that are not git's now. A branch's diff is from the project's default branch (`Workflows::branch_diff`, `workspace::range_diff`).
+- **The webhook's cap** (section 5.1) is 3 runs in flight per workflow, answered `429` `too many runs in flight`.
+- **A Test run starts while its workflow is off** (section 5.1, the controller's call after the builder was built), so a new workflow, which is made off, can be tried before it is armed. Only a `manual` start with `test` passes; a `test` flag on another trigger does not.
+- **Waiting runs** (section 10.5) are listed in the Inbox and counted in its badge (core `inbox_count` and the rail), and in needs you for the dot whose chat started them. Step runs send no "finished" or "failed" notice and are left out of Runs to review.
+- **A step's dot runs** come from one store query (`Workflows::dot_runs`, `StepDotRun { step_run_id, run_id, root_run_id, dot_id, dot_name, status, started_at }`), not from the newest dot runs.
+- **Workflow notices** are decided on `workflow_run_updated` only, by the run's status, its wait and the current step's newest step run, so a repeat is quiet. A run first seen waiting or ended is told, since the core publishes a workflow run only when it moves or the person acts on it.
+
+### 17.3 Known gaps
+
+- A rerun message names the latest hand-off's branches, so a later step that kept its branch gets no merge line when the step just before it changed nothing (plan B).
+- A delegate step whose second attempt changed nothing still hides its first attempt's member branches, so with no earlier branches the check shows none. A `push`, `pr` or `pr_merge` deploy after it now fails with `Nothing to ship: the check approved no branch.` instead of succeeding having pushed nothing, but the branches stay hidden.
+- A `member` deploy refused by its tip check records no `deploy_result` (plan B).
+- The Claude-engine test of tools a step was not offered sees an empty result for the server's `unknown tool` error: fake-claude drops RPC errors (plan B).
+- The webhook cap's lock is one for the whole process, so it serialises the webhook starts of every workflow, not of one. Manual, chat and schedule starts are not capped and can add a run between the count and the start. A `429` has no `Retry-After`.
+- The person's own `Workflow: ask` cannot make `report_outcome` or `send_back` ask (section 7).
+- Live validation does not see a name another workflow has, or a schedule that would never run; only Save refuses them.
+- The rail's Inbox badge keeps its muted tone for waiting workflow runs, a check included; only approvals, app reviews and open questions give it the needs tone.
+- An Inbox row of a waiting workflow run has no "Open the chat" link (the item carries the origin dot, not the origin run); the run page has one.
+- The notifier keeps each ended workflow run in its map until the event stream lags and it forgets them all, so the map grows by one entry per run until then.
+- A dot's `fresh` count (new since seen, part of its unread mark) still counts its ended step runs; only Runs to review and the notices leave them out.
+- The chat card shows no delegate members and no links to a step's dot runs; the run page has both. On the run page, an approved check's card still lists the delegate members of the hand-off it showed.
+- The builder has no drag handle and no move into or out of a branch's path, and nothing guards leaving it with an unsaved draft. A schedule switched inside the schedule editor from `once` to another kind can carry `catch_up: true`, which the core ignores. Field hints are not linked to their controls (`aria-describedby`). A disabled button's title, which says why Run now or Test run is off, does not show on hover.
+- A branch's diff is read whole from git before it is capped, as a worktree's diff is.
+- `workflow_runs` has no index on `origin_run_id` or `workflow_id`.
+- Under load, multi-step tests in `workflows_test` can hit their 60 s deadline; they pass alone.
