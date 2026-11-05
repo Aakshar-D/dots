@@ -2,9 +2,9 @@ mod common;
 
 use common::{init_repo, spec, temp_store};
 use dots_core::model::{
-    Handoff, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus, StepRunChange,
-    StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WorkflowRunChange, WorkflowRunStatus,
-    WorkflowTrigger,
+    Handoff, LastRun, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus, StepRunChange,
+    StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
+    WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use dots_core::store::Store;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
@@ -565,4 +565,236 @@ async fn a_member_is_added_with_its_run_and_reported_with_the_run_that_continues
         Err(Error::Conflict(_))
     ));
     assert_eq!(f.store.step_members(&step.id).await.unwrap().len(), 2);
+}
+
+/// The ids `of`, as the store gives them.
+fn ids(of: &[&String]) -> Vec<String> {
+    of.iter().map(|id| id.to_string()).collect()
+}
+
+impl Fixture {
+    /// A workflow run of `new`, started a moment after the one before: runs started in one
+    /// millisecond would sort by their random ids.
+    async fn started(&self, new: &NewWorkflowRun) -> WorkflowRun {
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        self.store.create_workflow_run(new).await.unwrap()
+    }
+
+    /// Moves the workflow run `id` to `status`.
+    async fn now(&self, id: &str, status: WorkflowRunStatus) {
+        self.store
+            .set_workflow_run(
+                id,
+                &WorkflowRunChange {
+                    status: Some(status),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// The ids of the runs `filter` picks, in its order.
+    async fn picked(&self, filter: WorkflowRunFilter) -> Vec<String> {
+        let runs = self.store.find_workflow_runs(&filter).await.unwrap();
+        runs.into_iter().map(|wr| wr.id).collect()
+    }
+
+    /// The ids of the workflow runs the dot runs `origins` started, in their order.
+    async fn from(&self, origins: &[&String]) -> Vec<String> {
+        let origins: Vec<String> = origins.iter().map(|id| id.to_string()).collect();
+        let runs = self.store.workflow_runs_from(&origins).await.unwrap();
+        runs.into_iter().map(|wr| wr.id).collect()
+    }
+
+    /// A chat run of the fixture's dot.
+    async fn chat(&self) -> String {
+        self.store
+            .create_run(&NewRun::new(&self.dot, TriggerKind::Chat))
+            .await
+            .unwrap()
+            .id
+    }
+}
+
+#[tokio::test]
+async fn workflow_runs_are_found_by_team_workflow_status_and_limit_newest_first() {
+    let f = fixture().await;
+    let other = f
+        .store
+        .create_workflow(
+            &f.new.team_id,
+            &dots_core::model::WorkflowSpec {
+                name: "Other".into(),
+                definition: f.new.definition.clone(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+    let of_other = NewWorkflowRun {
+        workflow_id: other.id.clone(),
+        ..f.new.clone()
+    };
+    let running = f.started(&f.new).await.id;
+    let waiting = f.started(&f.new).await.id;
+    f.now(&waiting, WorkflowRunStatus::Waiting).await;
+    let done = f.started(&f.new).await.id;
+    f.now(&done, WorkflowRunStatus::Succeeded).await;
+    let elsewhere = f.started(&of_other).await.id;
+
+    let all = ids(&[&elsewhere, &done, &waiting, &running]);
+    assert_eq!(f.picked(WorkflowRunFilter::default()).await, all);
+    let team = WorkflowRunFilter {
+        team_id: Some(f.new.team_id.clone()),
+        ..Default::default()
+    };
+    assert_eq!(f.picked(team.clone()).await, all);
+    let fix = WorkflowRunFilter {
+        workflow_id: Some(f.new.workflow_id.clone()),
+        ..team
+    };
+    assert_eq!(
+        f.picked(fix.clone()).await,
+        ids(&[&done, &waiting, &running])
+    );
+    let in_flight = WorkflowRunFilter {
+        statuses: vec![WorkflowRunStatus::Running, WorkflowRunStatus::Waiting],
+        ..Default::default()
+    };
+    assert_eq!(
+        f.picked(in_flight.clone()).await,
+        ids(&[&elsewhere, &waiting, &running])
+    );
+    assert_eq!(
+        f.picked(WorkflowRunFilter {
+            limit: Some(1),
+            ..in_flight
+        })
+        .await,
+        ids(&[&elsewhere])
+    );
+    assert_eq!(
+        f.picked(WorkflowRunFilter {
+            statuses: vec![WorkflowRunStatus::Waiting],
+            ..fix.clone()
+        })
+        .await,
+        ids(&[&waiting])
+    );
+    assert_eq!(
+        f.picked(WorkflowRunFilter {
+            limit: Some(2),
+            ..fix
+        })
+        .await,
+        ids(&[&done, &waiting])
+    );
+    assert!(f
+        .picked(WorkflowRunFilter {
+            team_id: Some("no-team".into()),
+            ..Default::default()
+        })
+        .await
+        .is_empty());
+    assert!(f
+        .picked(WorkflowRunFilter {
+            statuses: vec![WorkflowRunStatus::Failed],
+            ..Default::default()
+        })
+        .await
+        .is_empty());
+    // A filter as the app sends it: every field may be left out.
+    let sent: WorkflowRunFilter =
+        serde_json::from_value(json!({"statuses": ["waiting"], "limit": 5})).unwrap();
+    assert_eq!(sent.team_id, None);
+    assert_eq!(f.picked(sent).await, ids(&[&waiting]));
+    // The team's list is the filter with a team and a limit.
+    let listed = f
+        .store
+        .list_workflow_runs(Some(&f.new.team_id), 2)
+        .await
+        .unwrap();
+    let listed: Vec<_> = listed.iter().map(|wr| &wr.id).collect();
+    assert_eq!(listed, [&elsewhere, &done]);
+}
+
+#[tokio::test]
+async fn the_runs_a_chat_started_are_found_by_its_runs_oldest_first() {
+    let f = fixture().await;
+    let (one, two, quiet) = (f.chat().await, f.chat().await, f.chat().await);
+    let from = |origin: &str| NewWorkflowRun {
+        trigger: WorkflowTrigger::Chat,
+        origin_run_id: Some(origin.to_string()),
+        ..f.new.clone()
+    };
+    let first = f.started(&from(&one)).await.id;
+    let manual = f.started(&f.new).await.id;
+    let second = f.started(&from(&two)).await.id;
+    let again = f.started(&from(&one)).await.id;
+    f.now(&again, WorkflowRunStatus::Cancelled).await;
+
+    assert_eq!(
+        f.from(&[&two, &one, &quiet]).await,
+        ids(&[&first, &second, &again])
+    );
+    assert_eq!(f.from(&[&two]).await, ids(&[&second]));
+    assert!(f.from(&[&quiet]).await.is_empty());
+    assert!(
+        f.from(&[&manual]).await.is_empty(),
+        "a workflow run's id is no origin"
+    );
+    assert!(f.from(&[]).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_workflow_says_how_many_runs_are_in_flight_and_which_started_last() {
+    let f = fixture().await;
+    let id = f.new.workflow_id.clone();
+    let fix = f.store.get_workflow(&id).await.unwrap();
+    assert_eq!((fix.runs_in_flight, fix.last_run), (0, None));
+
+    let first = f.started(&f.new).await;
+    let fix = f.store.get_workflow(&id).await.unwrap();
+    assert_eq!(fix.runs_in_flight, 1);
+    assert_eq!(
+        fix.last_run,
+        Some(LastRun {
+            id: first.id.clone(),
+            status: WorkflowRunStatus::Running,
+            started_at: first.started_at.clone(),
+            test: false,
+        })
+    );
+    let test = f
+        .started(&NewWorkflowRun {
+            test: true,
+            ..f.new.clone()
+        })
+        .await;
+    f.now(&test.id, WorkflowRunStatus::Waiting).await;
+    let listed = f.store.list_workflows(&f.new.team_id).await.unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].runs_in_flight, 2);
+    assert_eq!(
+        listed[0].last_run,
+        Some(LastRun {
+            id: test.id.clone(),
+            status: WorkflowRunStatus::Waiting,
+            started_at: test.started_at.clone(),
+            test: true,
+        })
+    );
+    // Ended runs are not in flight; the newest stays the last run, whatever its status.
+    f.now(&first.id, WorkflowRunStatus::Succeeded).await;
+    f.now(&test.id, WorkflowRunStatus::Failed).await;
+    let saved = f.store.update_workflow(&id, &fix.spec).await.unwrap();
+    assert_eq!(saved.runs_in_flight, 0);
+    let last = saved.last_run.clone().expect("a last run");
+    assert_eq!((last.id, last.status), (test.id, WorkflowRunStatus::Failed));
+    // Serialized beside the rest of the workflow.
+    let value = serde_json::to_value(&saved).unwrap();
+    assert_eq!(value["runs_in_flight"], json!(0));
+    assert_eq!(value["last_run"]["status"], json!("failed"));
+    assert_eq!(value["last_run"]["test"], json!(true));
 }

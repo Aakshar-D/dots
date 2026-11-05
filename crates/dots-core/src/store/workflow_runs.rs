@@ -7,8 +7,8 @@ use sqlx::Row;
 
 use super::{opt_json, Store};
 use crate::model::{
-    Message, NewWorkflowRun, Run, StepRun, StepRunChange, StepRunStatus, WaitingOn, WorkflowRun,
-    WorkflowRunChange, WorkflowRunStatus, WorkflowTrigger,
+    LastRun, Message, NewWorkflowRun, Run, StepRun, StepRunChange, StepRunStatus, WaitingOn,
+    WorkflowRun, WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::util::{new_id, now};
 use crate::{Error, Result};
@@ -128,18 +128,34 @@ impl Store {
         })
     }
 
-    /// The newest workflow runs, of one team or of all.
+    /// The newest workflow runs, of one team or of all: `find_workflow_runs` with those two.
     pub async fn list_workflow_runs(
         &self,
         team_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<WorkflowRun>> {
+        self.find_workflow_runs(&WorkflowRunFilter {
+            team_id: team_id.map(str::to_string),
+            limit: u32::try_from(limit).ok(),
+            ..Default::default()
+        })
+        .await
+    }
+
+    /// The workflow runs `filter` picks, newest first.
+    pub async fn find_workflow_runs(&self, filter: &WorkflowRunFilter) -> Result<Vec<WorkflowRun>> {
+        let statuses: Vec<&str> = filter.statuses.iter().map(|s| s.as_str()).collect();
         let ids: Vec<String> = sqlx::query_scalar(
             "SELECT id FROM workflow_runs WHERE (?1 IS NULL OR team_id = ?1) \
-             ORDER BY started_at DESC, id DESC LIMIT ?2",
+             AND (?2 IS NULL OR workflow_id = ?2) \
+             AND (?3 = '[]' OR status IN (SELECT value FROM json_each(?3))) \
+             ORDER BY started_at DESC, id DESC LIMIT ?4",
         )
-        .bind(team_id)
-        .bind(limit)
+        .bind(&filter.team_id)
+        .bind(&filter.workflow_id)
+        .bind(serde_json::to_string(&statuses)?)
+        // A negative limit is none in SQLite.
+        .bind(filter.limit.map_or(-1, i64::from))
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::new();
@@ -147,6 +163,42 @@ impl Store {
             out.push(self.get_workflow_run(&id).await?);
         }
         Ok(out)
+    }
+
+    /// The workflow runs that the dot runs `run_ids` started (`origin_run_id`), oldest first.
+    pub async fn workflow_runs_from(&self, run_ids: &[String]) -> Result<Vec<WorkflowRun>> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM workflow_runs \
+             WHERE origin_run_id IN (SELECT value FROM json_each(?)) ORDER BY started_at, id",
+        )
+        .bind(serde_json::to_string(run_ids)?)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::new();
+        for id in ids {
+            out.push(self.get_workflow_run(&id).await?);
+        }
+        Ok(out)
+    }
+
+    /// The workflow's newest run, as the team page shows it.
+    pub async fn last_workflow_run(&self, workflow_id: &str) -> Result<Option<LastRun>> {
+        let row = sqlx::query(
+            "SELECT id, status, started_at, test FROM workflow_runs WHERE workflow_id = ? \
+             ORDER BY started_at DESC, id DESC LIMIT 1",
+        )
+        .bind(workflow_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok(LastRun {
+                id: row.try_get("id")?,
+                status: WorkflowRunStatus::parse(&row.try_get::<String, _>("status")?)?,
+                started_at: row.try_get("started_at")?,
+                test: row.try_get::<i64, _>("test")? != 0,
+            })
+        })
+        .transpose()
     }
 
     /// The ids of the workflow runs that have not ended (running or waiting), oldest first.

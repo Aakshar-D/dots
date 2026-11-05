@@ -645,3 +645,25 @@ async fn calls_at_once_start_no_more_than_the_cap() {
     assert_eq!(in_flight(&t, &workflow.id).await, 3);
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn the_workflow_s_url_is_the_one_its_webhook_answers_on() {
+    let t = Rt::start().await;
+    let (workflow, token) = t.hooked(Some(TRIGGER_TASK), Some("Dots")).await;
+    let url = t.rt.workflow_webhook_url(&workflow.id).await.unwrap();
+    assert_eq!(
+        url,
+        format!(
+            "http://127.0.0.1:{}/workflows/{}/trigger",
+            t.rt.port(),
+            workflow.id
+        )
+    );
+    let resp = t.http.post(&url).bearer_auth(&token).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 202);
+    assert!(matches!(
+        t.rt.workflow_webhook_url("nope").await,
+        Err(dots_core::Error::NotFound(m)) if m == "workflow nope"
+    ));
+    t.rt.shutdown();
+}

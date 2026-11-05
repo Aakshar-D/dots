@@ -14,8 +14,8 @@ use dots_core::followups::FollowUps;
 use dots_core::model::{
     Dot, EngineKind, FileStatus, FollowUpStatus, MemberHandoff, MemberSpec, NewRun, ProjectSpec,
     Run, RunStatus, SendBack, SentBy, StepRun, StepRunChange, StepRunStatus, TeamSpec, TriggerKind,
-    WaitingOn, WorkflowRun, WorkflowRunChange, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger,
-    WorkspaceMode,
+    WaitingOn, WorkflowRun, WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowSpec,
+    WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::scheduler::{Clock, SystemClock};
@@ -5151,5 +5151,160 @@ async fn a_branch_s_diff_is_its_work_from_the_default_branch_and_other_refs_are_
     assert_eq!(
         conflict(w.workflows.branch_diff(&wr.id, &branch, &moved).await),
         NO_DEFAULT_BRANCH
+    );
+}
+
+impl World {
+    /// Starts a run of `workflow` as `start` does, a moment after the one before (runs started
+    /// in one millisecond would sort by their random ids), from the chat run `origin` and as a
+    /// test run when asked.
+    async fn start_from(&self, workflow: &str, origin: Option<&str>, test: bool) -> WorkflowRun {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        self.workflows
+            .start(StartRequest {
+                workflow_id: workflow.into(),
+                project_id: self.project.clone(),
+                task: "The tray icon is invisible in dark mode.".into(),
+                trigger: if origin.is_some() {
+                    WorkflowTrigger::Chat
+                } else {
+                    WorkflowTrigger::Manual
+                },
+                origin_run_id: origin.map(str::to_string),
+                test,
+            })
+            .await
+            .unwrap()
+    }
+
+    /// The ids of the workflow runs `filter` lists, in its order.
+    async fn listed(&self, filter: WorkflowRunFilter) -> Vec<String> {
+        let runs = self.workflows.list(&filter).await.unwrap();
+        runs.into_iter().map(|wr| wr.id).collect()
+    }
+}
+
+#[tokio::test]
+async fn workflow_runs_are_listed_by_workflow_and_status_and_found_by_the_chat_that_started_them() {
+    let w = world().await;
+    let fix = w.workflow("Fix", vec![check("check")]).await;
+    let other = w.workflow("Other", vec![check("check")]).await;
+    let chat = w
+        .store
+        .create_run(&NewRun::new(&w.helper.id, TriggerKind::Chat))
+        .await
+        .unwrap()
+        .id;
+    let stopped = w.start_from(&fix, None, false).await;
+    w.until(&stopped.id, waits_on(WaitingOn::Check)).await;
+    w.workflows.stop(&stopped.id).await.unwrap();
+    let carded = w.start_from(&fix, Some(&chat), false).await;
+    let elsewhere = w.start_from(&other, None, true).await;
+    for wr in [&carded, &elsewhere] {
+        w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    }
+
+    let fix_runs = WorkflowRunFilter {
+        team_id: Some(w.team.clone()),
+        workflow_id: Some(fix.clone()),
+        ..Default::default()
+    };
+    assert_eq!(
+        w.listed(fix_runs.clone()).await,
+        [carded.id.as_str(), stopped.id.as_str()]
+    );
+    assert_eq!(
+        w.listed(WorkflowRunFilter {
+            statuses: vec![WorkflowRunStatus::Waiting],
+            ..Default::default()
+        })
+        .await,
+        [elsewhere.id.as_str(), carded.id.as_str()]
+    );
+    assert_eq!(
+        w.listed(WorkflowRunFilter {
+            statuses: vec![WorkflowRunStatus::Cancelled],
+            ..fix_runs
+        })
+        .await,
+        [stopped.id.as_str()]
+    );
+    assert_eq!(
+        w.listed(WorkflowRunFilter {
+            limit: Some(1),
+            ..Default::default()
+        })
+        .await,
+        [elsewhere.id.as_str()]
+    );
+
+    // The chat card: the runs its chat started, whole.
+    let cards = w
+        .workflows
+        .for_origins(std::slice::from_ref(&chat))
+        .await
+        .unwrap();
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0].id, carded.id);
+    assert_eq!(cards[0].origin_run_id.as_deref(), Some(chat.as_str()));
+    assert_eq!(cards[0].waiting_on, Some(WaitingOn::Check));
+    assert!(w.workflows.for_origins(&[]).await.unwrap().is_empty());
+
+    // Each workflow says what runs it has in flight and which started last.
+    let fix_now = w.store.get_workflow(&fix).await.unwrap();
+    assert_eq!(fix_now.runs_in_flight, 1);
+    let last = fix_now.last_run.unwrap();
+    assert_eq!(
+        (last.id.as_str(), last.status, last.test),
+        (carded.id.as_str(), WorkflowRunStatus::Waiting, false)
+    );
+    let other_now = w.store.get_workflow(&other).await.unwrap();
+    assert_eq!(other_now.runs_in_flight, 1);
+    assert!(other_now.last_run.unwrap().test);
+    w.workflows.stop(&carded.id).await.unwrap();
+    assert_eq!(w.store.get_workflow(&fix).await.unwrap().runs_in_flight, 0);
+}
+
+#[tokio::test]
+async fn deleting_a_team_announces_each_workflow_it_removes() {
+    let w = world().await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Hold]);
+    let fix = w
+        .workflow("Fix", vec![agent("dev", "Fix it", &w.dev, "Fix.")])
+        .await;
+    let ship = w.workflow("Ship", vec![check("check")]).await;
+    let wr = w.start(&fix).await;
+    w.until(&wr.id, |wr| wr.current_step.as_deref() == Some("dev"))
+        .await;
+    let mut events = w.bus.subscribe();
+    w.workflows.delete_team(&w.team).await.unwrap();
+    let mut seen = Vec::new();
+    while let Ok(e) = events.try_recv() {
+        match e {
+            // A pass may announce the run before the stop; the stop announces it cancelled.
+            RuntimeEvent::WorkflowRunUpdated { run }
+                if run.status == WorkflowRunStatus::Cancelled =>
+            {
+                seen.push("run cancelled".to_string())
+            }
+            RuntimeEvent::WorkflowUpdated {
+                team_id,
+                workflow_id,
+            } => {
+                assert_eq!(team_id, w.team);
+                let name = if workflow_id == fix { "Fix" } else { "?" };
+                let name = if workflow_id == ship { "Ship" } else { name };
+                seen.push(format!("workflow {name}"));
+            }
+            RuntimeEvent::TeamUpdated { team_id } => {
+                assert_eq!(team_id, w.team);
+                seen.push("team".into());
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        seen,
+        ["run cancelled", "workflow Fix", "workflow Ship", "team"]
     );
 }

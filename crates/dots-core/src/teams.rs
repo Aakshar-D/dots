@@ -8,6 +8,7 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::model::{Project, ProjectSpec, Team, TeamSpec, Workflow, WorkflowSpec};
 use crate::store::Store;
 use crate::vault::org::Orgs;
+use crate::workflow::WorkflowProblem;
 use crate::workspace::git;
 use crate::{Error, Result};
 
@@ -118,6 +119,37 @@ impl Teams {
         });
     }
 
+    /// Announces each workflow of the team: its members changed, so its `problem` may have.
+    /// Called after the change, which stands whatever this finds: a failed read is logged.
+    async fn workflows_updated(&self, team_id: &str) {
+        match self.store.list_workflows(team_id).await {
+            Ok(workflows) => workflows
+                .iter()
+                .for_each(|w| self.workflow_updated(team_id, &w.id)),
+            Err(e) => {
+                tracing::warn!(team = %team_id, "announcing the team's workflows failed: {e}")
+            }
+        }
+    }
+
+    /// Announces the teams `team_ids` of a dot that was deleted, read before it was: it left
+    /// them, so each team and each of its workflows changed.
+    pub(crate) async fn dot_deleted(&self, team_ids: &[String]) {
+        for team_id in team_ids {
+            self.team_updated(team_id);
+            self.workflows_updated(team_id).await;
+        }
+    }
+
+    /// Announces the teams of the dot `dot_id`, which was renamed: a team shows its members by
+    /// name.
+    pub(crate) async fn dot_renamed(&self, dot_id: &str) {
+        match self.store.teams_of_dot(dot_id).await {
+            Ok(team_ids) => team_ids.iter().for_each(|id| self.team_updated(id)),
+            Err(e) => tracing::warn!(dot = %dot_id, "announcing the dot's teams failed: {e}"),
+        }
+    }
+
     pub async fn list(&self) -> Result<Vec<Team>> {
         self.store.list_teams().await
     }
@@ -148,11 +180,20 @@ impl Teams {
     }
 
     /// Replaces the team's name, description and members; its account and workspace stay. A workflow that names a member
-    /// removed here keeps its definition and gets a `problem`.
+    /// removed here keeps its definition and gets a `problem`. When the members change, each
+    /// workflow of the team is announced too.
     pub async fn update(&self, id: &str, spec: &TeamSpec) -> Result<Team> {
         self.require_edit_team(id).await?;
+        let mut before = self.store.team_member_ids(id).await?;
         let team = self.store.update_team(id, spec).await?;
         self.team_updated(id);
+        // Which dots are members, not their order or roles: what a workflow's `problem` reads.
+        let mut after: Vec<String> = team.members.iter().map(|m| m.dot_id.clone()).collect();
+        before.sort();
+        after.sort();
+        if before != after {
+            self.workflows_updated(id).await;
+        }
         Ok(team)
     }
 
@@ -165,7 +206,11 @@ impl Teams {
                 "the team has workflow runs in flight; stop them first".into(),
             ));
         }
+        let workflows = self.store.list_workflows(id).await?;
         self.store.delete_team(id).await?;
+        for workflow in &workflows {
+            self.workflow_updated(id, &workflow.id);
+        }
         self.team_updated(id);
         Ok(())
     }
@@ -213,6 +258,22 @@ impl Teams {
         let workflow = self.store.create_workflow(team_id, spec).await?;
         self.workflow_updated(team_id, &workflow.id);
         Ok(workflow)
+    }
+
+    /// What saving `spec` as a workflow of the team `team_id` would be refused with, and the
+    /// step it names, checked while the builder edits (section 5.8): the name, then the
+    /// definition against the team's members now, by the rules a save uses
+    /// (`WorkflowSpec::problem`). `None` when a save would pass them. Two refusals are left to
+    /// the save: a name another workflow of the team has (which workflow is being edited is not
+    /// known here), and a changed schedule with no slot ahead (read against the clock and the
+    /// stored schedule at the save).
+    pub async fn check_workflow(
+        &self,
+        team_id: &str,
+        spec: &WorkflowSpec,
+    ) -> Result<Option<WorkflowProblem>> {
+        self.store.get_team(team_id).await?;
+        Ok(spec.problem(&self.store.team_member_ids(team_id).await?))
     }
 
     pub async fn update_workflow(&self, id: &str, spec: &WorkflowSpec) -> Result<Workflow> {

@@ -393,7 +393,7 @@ async fn a_local_helper_starts_the_teams_workflow_from_a_chat() {
             "Workflow \"Fix\" started on \"Dots\".",
         ]
     );
-    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1);
     let wr = &runs[0];
     assert_eq!(wr.trigger, WorkflowTrigger::Chat);
@@ -449,7 +449,7 @@ async fn a_claude_helper_starts_it_through_dots_own_server() {
         args.contains(&"mcp__dots__start_workflow".to_string()),
         "{args:?}"
     );
-    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1, "{runs:#?}");
     assert_eq!(runs[0].origin_run_id.as_deref(), Some(chat.id.as_str()));
     assert_eq!(runs[0].task, "Fix the icon.");
@@ -593,7 +593,13 @@ async fn a_call_held_for_approval_is_refused_once_the_member_stops_being_a_start
         tool_result(&llm.requests()[1], "c1"),
         "There is no workflow named \"Fix\" that you may start."
     );
-    assert!(t.rt.workflows().list(None, 10).await.unwrap().is_empty());
+    assert!(t
+        .rt
+        .workflows()
+        .list(&Default::default())
+        .await
+        .unwrap()
+        .is_empty());
     t.rt.shutdown();
 }
 
@@ -640,7 +646,7 @@ async fn an_approval_that_outlives_the_wait_still_starts_the_workflow_on_the_res
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     wait_status(t.rt.store(), &child.id, RunStatus::Succeeded, 30).await;
-    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1, "{runs:#?}");
     assert_eq!(runs[0].task, "Fix the icon.");
     t.rt.shutdown();
@@ -749,7 +755,7 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
         tool_result(&reqs[2], "c2"),
         "Not started: \"Fix\" is already running on \"Dots\" from this chat."
     );
-    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1, "{runs:#?}");
     // Once that run has ended, the same chat starts it again.
     t.rt.workflows().stop(&runs[0].id).await.unwrap();
@@ -763,7 +769,14 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
         tool_result(reqs.last().unwrap(), "c3"),
         "Workflow \"Fix\" started on \"Dots\"."
     );
-    assert_eq!(t.rt.workflows().list(None, 10).await.unwrap().len(), 2);
+    assert_eq!(
+        t.rt.workflows()
+            .list(&Default::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     t.rt.shutdown();
 }
 
@@ -815,12 +828,25 @@ async fn a_sandboxed_dot_is_offered_start_workflow_and_asks_before_it_starts_one
     };
     assert_eq!(approval.tool, "Workflow");
     assert!(tool_names(&llm.requests()[0]).contains(&"start_workflow".to_string()));
-    assert!(t.rt.workflows().list(None, 10).await.unwrap().is_empty());
+    assert!(t
+        .rt
+        .workflows()
+        .list(&Default::default())
+        .await
+        .unwrap()
+        .is_empty());
     t.rt.decide_approval(&approval.id, true, None, None)
         .await
         .unwrap();
     wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
-    assert_eq!(t.rt.workflows().list(None, 10).await.unwrap().len(), 1);
+    assert_eq!(
+        t.rt.workflows()
+            .list(&Default::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     t.rt.shutdown();
 }
 

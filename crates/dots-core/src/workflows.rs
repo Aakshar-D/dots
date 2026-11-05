@@ -40,7 +40,7 @@ use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
     BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepMember,
     StepRun, StepRunChange, StepRunStatus, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
-    WorkflowRunStatus, WorkflowTrigger,
+    WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::runner::Runner;
 use crate::scheduler::Clock;
@@ -447,9 +447,15 @@ impl Workflows {
         self.store.get_workflow_run(id).await
     }
 
-    /// The newest workflow runs, of one team or of all.
-    pub async fn list(&self, team_id: Option<&str>, limit: i64) -> Result<Vec<WorkflowRun>> {
-        self.store.list_workflow_runs(team_id, limit).await
+    /// The workflow runs `filter` picks (by team, workflow and status), newest first.
+    pub async fn list(&self, filter: &WorkflowRunFilter) -> Result<Vec<WorkflowRun>> {
+        self.store.find_workflow_runs(filter).await
+    }
+
+    /// The workflow runs the chat runs `run_ids` started (`origin_run_id`), oldest first: a
+    /// chat shows each one's card after the turn that started it (section 10.4).
+    pub async fn for_origins(&self, run_ids: &[String]) -> Result<Vec<WorkflowRun>> {
+        self.store.workflow_runs_from(run_ids).await
     }
 
     /// Starts a run of a workflow on one of its team's projects. Refused for a workflow that is
@@ -856,20 +862,27 @@ impl Workflows {
         Ok(wr)
     }
 
-    /// Stops the team's workflow runs in flight, then deletes the team (section 4).
+    /// Stops the team's workflow runs in flight, then deletes the team (section 4), and
+    /// announces each workflow it removed and the team.
     pub async fn delete_team(&self, team_id: &str) -> Result<()> {
         self.require(team_id, Permission::EditDots).await?;
         let _one = self.lock.lock().await;
-        for wr in self
-            .store
-            .list_workflow_runs(Some(team_id), i64::MAX)
-            .await?
-        {
-            if !wr.status.is_terminal() {
-                self.stop_locked(&wr.id).await?;
-            }
+        let in_flight = WorkflowRunFilter {
+            team_id: Some(team_id.to_string()),
+            statuses: vec![WorkflowRunStatus::Running, WorkflowRunStatus::Waiting],
+            ..Default::default()
+        };
+        for wr in self.store.find_workflow_runs(&in_flight).await? {
+            self.stop_locked(&wr.id).await?;
         }
+        let workflows = self.store.list_workflows(team_id).await?;
         self.store.delete_team(team_id).await?;
+        for workflow in &workflows {
+            let _ = self.bus.send(RuntimeEvent::WorkflowUpdated {
+                team_id: team_id.to_string(),
+                workflow_id: workflow.id.clone(),
+            });
+        }
         let _ = self.bus.send(RuntimeEvent::TeamUpdated {
             team_id: team_id.to_string(),
         });

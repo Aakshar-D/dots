@@ -504,6 +504,8 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
         .unwrap();
     t.become_(2, Some("viewer")).await;
     let team = t.rt.teams().get(&team.id).await.unwrap();
+    // As it is now: it counts the run above in flight.
+    let workflow = t.rt.teams().get_workflow(&workflow.id).await.unwrap();
     let edit = viewer_cant("create or change dots");
     let answer = viewer_cant("answer approvals");
     let run_text = viewer_cant("run dots");

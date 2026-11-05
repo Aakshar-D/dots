@@ -195,6 +195,30 @@ pub struct Definition {
     pub budget: Budget,
 }
 
+/// The first rule of section 5.8 a workflow breaks, and the step it is about, so the builder
+/// shows it on that step's card and keeps Save off until it is fixed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowProblem {
+    /// The id of the step the message names; `None` for the workflow's name, its trigger, its
+    /// budget or its list of steps as a whole.
+    pub step_id: Option<String>,
+    /// The refusal a save would give.
+    pub message: String,
+}
+
+impl WorkflowProblem {
+    /// The problem `e` (a refusal), about the step `step_id`.
+    pub(crate) fn new(step_id: Option<&str>, e: Error) -> Self {
+        Self {
+            step_id: step_id.map(str::to_string),
+            message: match e {
+                Error::Invalid(m) => m,
+                e => e.to_string(),
+            },
+        }
+    }
+}
+
 fn invalid<T>(message: String) -> Result<T> {
     Err(Error::Invalid(message))
 }
@@ -209,6 +233,30 @@ fn id_ok(id: &str) -> bool {
 /// Whether `text`, trimmed, is longer than `max` characters.
 fn too_long(text: &str, max: usize) -> bool {
     text.trim().chars().count() > max
+}
+
+/// The rules of a step's name and id; `ids` are the ids of the steps before it in `all()`, and
+/// gets its own.
+fn validate_name_and_id<'a>(step: &'a Step, ids: &mut HashSet<&'a str>) -> Result<()> {
+    let name = step.name.trim();
+    if name.is_empty() || name.chars().count() > MAX_NAME {
+        return invalid(format!(
+            "step {:?}: a name must be 1 to {MAX_NAME} characters",
+            step.id
+        ));
+    }
+    if !id_ok(&step.id) {
+        return invalid(format!(
+            "step \"{name}\": its id must be 1 to 40 of a-z, 0-9, '-' and '_'"
+        ));
+    }
+    if !ids.insert(step.id.as_str()) {
+        return invalid(format!(
+            "step \"{name}\": another step has the id {:?}",
+            step.id
+        ));
+    }
+    Ok(())
 }
 
 impl StepKind {
@@ -275,47 +323,51 @@ fn passes_check(step: &Step) -> bool {
 
 impl Definition {
     /// Checks the definition against the team's `members` (dot ids): section 5.8's rules. The
-    /// message names the step it is about.
+    /// message names the step it is about. Refuses with `problem`'s message.
     pub fn validate(&self, members: &[String]) -> Result<()> {
+        match self.problem(members) {
+            Some(p) => invalid(p.message),
+            None => Ok(()),
+        }
+    }
+
+    /// The first of section 5.8's rules the definition breaks against the team's `members`
+    /// (dot ids), with the id of the step it is about; `None` when it breaks none. The one
+    /// source of `validate`'s refusals and of the builder's live check.
+    pub fn problem(&self, members: &[String]) -> Option<WorkflowProblem> {
         let member = |id: &str| members.iter().any(|m| m == id);
-        self.validate_trigger(&member)?;
+        let whole = |e| Some(WorkflowProblem::new(None, e));
+        if let Err(e) = self.validate_trigger(&member) {
+            return whole(e);
+        }
         if self.steps.is_empty() {
-            return invalid("a workflow needs at least one step".into());
+            return whole(Error::Invalid("a workflow needs at least one step".into()));
         }
         let all = self.all();
         if all.len() > MAX_STEPS {
-            return invalid(format!("a workflow has at most {MAX_STEPS} steps"));
+            return whole(Error::Invalid(format!(
+                "a workflow has at most {MAX_STEPS} steps"
+            )));
         }
         let mut ids = HashSet::new();
         for step in &all {
-            let name = step.name.trim();
-            if name.is_empty() || name.chars().count() > MAX_NAME {
-                return invalid(format!(
-                    "step {:?}: a name must be 1 to {MAX_NAME} characters",
-                    step.id
-                ));
-            }
-            if !id_ok(&step.id) {
-                return invalid(format!(
-                    "step \"{name}\": its id must be 1 to 40 of a-z, 0-9, '-' and '_'"
-                ));
-            }
-            if !ids.insert(step.id.as_str()) {
-                return invalid(format!(
-                    "step \"{name}\": another step has the id {:?}",
-                    step.id
-                ));
+            if let Err(e) = validate_name_and_id(step, &mut ids) {
+                return Some(WorkflowProblem::new(Some(&step.id), e));
             }
         }
         // The rules below look back along a step's path, so every id is known to be unique.
         for step in &all {
-            self.validate_step(step, &member)?;
+            if let Err(e) = self.validate_step(step, &member) {
+                return Some(WorkflowProblem::new(Some(&step.id), e));
+            }
         }
         let b = &self.budget;
         if b.max_runs == 0 || b.max_tokens == 0 || b.max_minutes == 0 || b.max_send_backs == 0 {
-            return invalid("every budget limit must be at least 1".into());
+            return whole(Error::Invalid(
+                "every budget limit must be at least 1".into(),
+            ));
         }
-        Ok(())
+        None
     }
 
     /// The trigger's rules; `member` tells whether a dot id is a member of the team.

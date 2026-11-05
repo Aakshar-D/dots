@@ -48,18 +48,15 @@ fn project_from_row(row: &SqliteRow) -> Result<Project> {
     })
 }
 
-/// The workflow of `row`, with `problem` set against the team's `members`.
+/// The workflow of `row`, with `problem` set against the team's `members`. What its runs say
+/// is left empty: `Store::with_runs` fills it.
 fn workflow_from_row(row: &SqliteRow, members: &[String]) -> Result<Workflow> {
     let spec = WorkflowSpec {
         name: row.try_get("name")?,
         definition: serde_json::from_str(&row.try_get::<String, _>("definition")?)?,
         enabled: row.try_get::<i64, _>("enabled")? != 0,
     };
-    let problem = match spec.definition.validate(members) {
-        Err(Error::Invalid(m)) => Some(m),
-        Err(e) => Some(e.to_string()),
-        Ok(()) => None,
-    };
+    let problem = spec.definition.problem(members).map(|p| p.message);
     Ok(Workflow {
         id: row.try_get("id")?,
         team_id: row.try_get("team_id")?,
@@ -69,6 +66,8 @@ fn workflow_from_row(row: &SqliteRow, members: &[String]) -> Result<Workflow> {
         has_webhook_token: row
             .try_get::<Option<String>, _>("webhook_token")?
             .is_some_and(|t| !t.is_empty()),
+        runs_in_flight: 0,
+        last_run: None,
         spec,
     })
 }
@@ -467,7 +466,18 @@ impl Store {
         .await?
         .ok_or_else(|| Error::NotFound(format!("workflow {id}")))?;
         let team_id: String = row.try_get("team_id")?;
-        workflow_from_row(&row, &self.team_member_ids(&team_id).await?)
+        self.with_runs(workflow_from_row(
+            &row,
+            &self.team_member_ids(&team_id).await?,
+        )?)
+        .await
+    }
+
+    /// `workflow` with what its runs say now: how many are in flight, and its newest.
+    async fn with_runs(&self, mut workflow: Workflow) -> Result<Workflow> {
+        workflow.runs_in_flight = self.count_workflow_runs_in_flight(&workflow.id).await?;
+        workflow.last_run = self.last_workflow_run(&workflow.id).await?;
+        Ok(workflow)
     }
 
     /// Whether `token` is the workflow's webhook token, compared by its hash in constant time,
@@ -583,8 +593,10 @@ impl Store {
         .bind(team_id)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter()
-            .map(|r| workflow_from_row(r, &members))
-            .collect()
+        let mut out = Vec::new();
+        for row in &rows {
+            out.push(self.with_runs(workflow_from_row(row, &members)?).await?);
+        }
+        Ok(out)
     }
 }

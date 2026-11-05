@@ -1006,10 +1006,22 @@ pub struct WorkflowSpec {
 }
 
 impl WorkflowSpec {
-    /// Its name and its definition against the team's `members` (dot ids).
+    /// Its name and its definition against the team's `members` (dot ids). Refuses with
+    /// `problem`'s message.
     pub fn validate(&self, members: &[String]) -> Result<()> {
-        check_name("workflow", &self.name)?;
-        self.definition.validate(members)
+        match self.problem(members) {
+            Some(p) => Err(Error::Invalid(p.message)),
+            None => Ok(()),
+        }
+    }
+
+    /// The first refusal `validate` gives, with the step it names: its name's, then its
+    /// definition's (`Definition::problem`). `None` when it gives none.
+    pub fn problem(&self, members: &[String]) -> Option<crate::workflow::WorkflowProblem> {
+        if let Err(e) = check_name("workflow", &self.name) {
+            return Some(crate::workflow::WorkflowProblem::new(None, e));
+        }
+        self.definition.problem(members)
     }
 }
 
@@ -1025,8 +1037,23 @@ pub struct Workflow {
     /// Whether the workflow has a webhook token. The token is shown once, when it is made;
     /// Dots keeps only its hash, as a dot's (section 5.1).
     pub has_webhook_token: bool,
+    /// How many of its runs have not ended (running or waiting). They keep the definition they
+    /// started with: the builder says "N runs in flight use the previous version".
+    pub runs_in_flight: u32,
+    /// Its newest run, for the team page's "last run".
+    pub last_run: Option<LastRun>,
     #[serde(flatten)]
     pub spec: WorkflowSpec,
+}
+
+/// A workflow's newest run, as the team page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastRun {
+    pub id: String,
+    pub status: WorkflowRunStatus,
+    pub started_at: String,
+    /// A test run (section 5.1).
+    pub test: bool,
 }
 
 str_enum!(WorkflowTrigger {
@@ -1216,6 +1243,19 @@ pub struct NewWorkflowRun {
     pub trigger: WorkflowTrigger,
     pub origin_run_id: Option<String>,
     pub test: bool,
+}
+
+/// Which workflow runs `Workflows::list` gives, newest first. Each field that is set narrows
+/// them; the default is every run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkflowRunFilter {
+    pub team_id: Option<String>,
+    pub workflow_id: Option<String>,
+    /// The runs in one of these statuses; empty for any status.
+    pub statuses: Vec<WorkflowRunStatus>,
+    /// The most runs given; `None` for all.
+    pub limit: Option<u32>,
 }
 
 /// The fields `Store::set_workflow_run` writes: `None` leaves one as it is, `Some(None)` clears

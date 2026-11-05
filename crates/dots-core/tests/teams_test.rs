@@ -5,7 +5,7 @@ use dots_core::events::{new_bus, RuntimeEvent};
 use dots_core::model::{MemberSpec, ProjectSpec, TeamSpec, WorkflowSpec};
 use dots_core::store::Store;
 use dots_core::teams::Teams;
-use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
+use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger, WorkflowProblem};
 use dots_core::Error;
 
 async fn dot(store: &Store, name: &str) -> String {
@@ -433,4 +433,241 @@ async fn backfill_assigns_single_org_teams() {
     );
     assert_eq!(store.get_team(&mixed.id).await.unwrap().org_id, None);
     assert_eq!(store.get_team(&empty.id).await.unwrap().org_id, None);
+}
+
+/// The problem of `message` about the step `step_id`.
+fn problem(step_id: Option<&str>, message: &str) -> WorkflowProblem {
+    WorkflowProblem {
+        step_id: step_id.map(str::to_string),
+        message: message.to_string(),
+    }
+}
+
+#[tokio::test]
+async fn a_workflow_is_checked_as_it_is_edited_by_the_rules_a_save_uses() {
+    let (_dir, store) = temp_store().await;
+    let helper = dot(&store, "helper").await;
+    let dev = dot(&store, "dev").await;
+    let teams = Teams::new(store.clone(), new_bus());
+    let t = teams.create(&team("T", &[&helper])).await.unwrap();
+    let saved = teams
+        .create_workflow(&t.id, &flow("Fix", &helper))
+        .await
+        .unwrap();
+    assert_eq!(
+        teams
+            .check_workflow(&t.id, &flow("Fix", &helper))
+            .await
+            .unwrap(),
+        None
+    );
+
+    let named = |name: &str| flow(name, &helper);
+    let with = |change: &dyn Fn(&mut Definition)| {
+        let mut spec = flow("Fix", &helper);
+        change(&mut spec.definition);
+        spec
+    };
+    let check_after = Step {
+        id: "check".into(),
+        name: "Your check".into(),
+        kind: StepKind::Check {
+            send_back_to: Some("later".into()),
+        },
+    };
+    let cases = [
+        (
+            named(" "),
+            problem(None, "a workflow name must be 1 to 64 characters"),
+        ),
+        (
+            with(&|d| d.trigger = Trigger::Chat { starters: vec![] }),
+            problem(
+                None,
+                "a chat trigger needs at least one member who starts it",
+            ),
+        ),
+        (
+            with(&|d| d.steps.clear()),
+            problem(None, "a workflow needs at least one step"),
+        ),
+        (
+            flow("Fix", &dev),
+            problem(
+                Some("a"),
+                &format!("step \"Work\": {dev} is not a member of the team"),
+            ),
+        ),
+        (
+            with(&|d| {
+                let mut twin = d.steps[0].clone();
+                twin.name = "Twin".into();
+                d.steps.push(twin);
+            }),
+            problem(Some("a"), "step \"Twin\": another step has the id \"a\""),
+        ),
+        (
+            with(&|d| d.steps.push(check_after.clone())),
+            problem(
+                Some("check"),
+                "step \"Your check\": work can be sent back only to an agent step before it, \
+                 not to \"later\"",
+            ),
+        ),
+        (
+            with(&|d| d.budget.max_minutes = 0),
+            problem(None, "every budget limit must be at least 1"),
+        ),
+    ];
+    for (spec, want) in cases {
+        let got = teams.check_workflow(&t.id, &spec).await.unwrap();
+        assert_eq!(got.as_ref(), Some(&want), "{spec:?}");
+        // A save is refused with the same message, and changes nothing.
+        match teams.update_workflow(&saved.id, &spec).await {
+            Err(Error::Invalid(m)) => assert_eq!(m, want.message),
+            other => panic!("{spec:?} was not refused: {other:?}"),
+        }
+        match teams
+            .create_workflow(&t.id, &named_like(&spec, "New"))
+            .await
+        {
+            Err(Error::Invalid(m)) => assert_eq!(m, want.message),
+            other => panic!("{spec:?} was not refused: {other:?}"),
+        }
+    }
+    assert_eq!(teams.get_workflow(&saved.id).await.unwrap(), saved);
+    // As JSON, for the builder.
+    let json = serde_json::to_value(
+        teams
+            .check_workflow(&t.id, &flow("Fix", &dev))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({
+            "step_id": "a",
+            "message": format!("step \"Work\": {dev} is not a member of the team"),
+        })
+    );
+    // A name another workflow has is left to the save, which knows which one is edited.
+    let other = teams
+        .create_workflow(&t.id, &flow("Other", &helper))
+        .await
+        .unwrap();
+    assert_eq!(
+        teams.check_workflow(&t.id, &named("Fix")).await.unwrap(),
+        None
+    );
+    assert!(matches!(
+        teams.update_workflow(&other.id, &named("Fix")).await,
+        Err(Error::Conflict(m)) if m == "the team has a workflow named \"Fix\""
+    ));
+    // The members are the team's now.
+    teams
+        .update(&t.id, &team("T", &[&helper, &dev]))
+        .await
+        .unwrap();
+    assert_eq!(
+        teams
+            .check_workflow(&t.id, &flow("Fix", &dev))
+            .await
+            .unwrap(),
+        None
+    );
+    assert!(matches!(
+        teams.check_workflow("nope", &named("Fix")).await,
+        Err(Error::NotFound(_))
+    ));
+}
+
+/// `spec` under another name, unless its own name is the problem.
+fn named_like(spec: &WorkflowSpec, name: &str) -> WorkflowSpec {
+    let mut spec = spec.clone();
+    if !spec.name.trim().is_empty() {
+        spec.name = name.into();
+    }
+    spec
+}
+
+/// What `events` has had since it was last read: `team` and `workflow <name>` for the team and
+/// workflow events, by the names in `workflows`.
+fn announced(
+    events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>,
+    workflows: &[(&str, &str)],
+) -> Vec<String> {
+    let mut seen = Vec::new();
+    while let Ok(e) = events.try_recv() {
+        seen.push(match e {
+            RuntimeEvent::TeamUpdated { .. } => "team".to_string(),
+            RuntimeEvent::WorkflowUpdated { workflow_id, .. } => {
+                let name = workflows.iter().find(|(id, _)| *id == workflow_id);
+                format!("workflow {}", name.map_or("?", |(_, n)| n))
+            }
+            other => format!("{other:?}"),
+        });
+    }
+    seen
+}
+
+#[tokio::test]
+async fn a_change_of_members_announces_each_workflow_of_the_team() {
+    let (_dir, store) = temp_store().await;
+    let helper = dot(&store, "helper").await;
+    let dev = dot(&store, "dev").await;
+    let bus = new_bus();
+    let teams = Teams::new(store.clone(), bus.clone());
+    let t = teams.create(&team("T", &[&helper, &dev])).await.unwrap();
+    let fix = teams
+        .create_workflow(&t.id, &flow("Fix", &helper))
+        .await
+        .unwrap();
+    let ship = teams
+        .create_workflow(&t.id, &flow("Ship", &dev))
+        .await
+        .unwrap();
+    let names = [(fix.id.as_str(), "Fix"), (ship.id.as_str(), "Ship")];
+    let mut events = bus.subscribe();
+
+    // Other roles, another order, a new name: the same members.
+    let mut same = team("Crew", &[&dev, &helper]);
+    same.members[0].role = "lead".into();
+    teams.update(&t.id, &same).await.unwrap();
+    assert_eq!(announced(&mut events, &names), ["team"]);
+
+    // A member removed: the workflow that names it gets a problem, and both are announced.
+    teams
+        .update(&t.id, &team("Crew", &[&helper]))
+        .await
+        .unwrap();
+    assert_eq!(
+        announced(&mut events, &names),
+        ["team", "workflow Fix", "workflow Ship"]
+    );
+    assert_eq!(teams.get_workflow(&fix.id).await.unwrap().problem, None);
+    assert!(teams
+        .get_workflow(&ship.id)
+        .await
+        .unwrap()
+        .problem
+        .is_some());
+
+    // A member added back.
+    teams
+        .update(&t.id, &team("Crew", &[&helper, &dev]))
+        .await
+        .unwrap();
+    assert_eq!(
+        announced(&mut events, &names),
+        ["team", "workflow Fix", "workflow Ship"]
+    );
+    assert_eq!(teams.get_workflow(&ship.id).await.unwrap().problem, None);
+
+    // Deleting the team announces each workflow it removed, then the team.
+    teams.delete(&t.id).await.unwrap();
+    assert_eq!(
+        announced(&mut events, &names),
+        ["workflow Fix", "workflow Ship", "team"]
+    );
 }
