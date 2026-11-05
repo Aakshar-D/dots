@@ -651,6 +651,9 @@ export const Inbox = z.strictObject({
   app_reviews: z.array(z.lazy(() => PendingAppReview)),
   // Teams with a member dot outside the team's account or workspace.
   team_scope: z.array(z.lazy(() => TeamScopeIssue)),
+  // Workflow runs that wait for the person (a check, the budget, the send-back cap or a failed
+  // step), newest first.
+  workflows: z.array(z.lazy(() => WaitingWorkflowRun)),
 });
 // A member dot that is not in its team's account or workspace, as the Inbox lists it.
 export const TeamScopeIssue = z.strictObject({
@@ -661,6 +664,27 @@ export const TeamScopeIssue = z.strictObject({
   reason: z.string(),
 });
 export type TeamScopeIssue = z.infer<typeof TeamScopeIssue>;
+// What a waiting workflow run waits for: the person's check, more budget, a send-back past the
+// cap, or a decision about a failed step (retry or stop).
+export const WaitingOn = z.enum(["check", "budget", "send_backs", "step_failed"]);
+export type WaitingOn = z.infer<typeof WaitingOn>;
+// A workflow run that waits for the person, as the Inbox lists it. The workflow is null once it
+// is deleted; the step is null before the first one; the origin dot is the one whose chat
+// started the run.
+export const WaitingWorkflowRun = z.strictObject({
+  id: z.string(),
+  team_id: z.string(),
+  team_name: z.string(),
+  workflow_id: nullable(z.string()),
+  workflow_name: nullable(z.string()),
+  task: z.string(),
+  waiting_on: WaitingOn,
+  step_name: nullable(z.string()),
+  origin_dot_id: nullable(z.string()),
+  test: z.boolean(),
+  started_at: z.string(),
+});
+export type WaitingWorkflowRun = z.infer<typeof WaitingWorkflowRun>;
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
 // reference: the core reads the environment when the server starts.

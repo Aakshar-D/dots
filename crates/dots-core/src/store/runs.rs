@@ -299,12 +299,14 @@ impl Store {
     /// Inbox can ever show (failed, or with a branch) are returned; `Runtime::inbox` filters further.
     /// A failed scheduled run that made no tool call and that the scheduler judged into a retry
     /// or into "Needs attention" is marked reviewed when it is judged (Scheduler v2), so it is
-    /// not listed.
+    /// not listed. Nor is a run of a workflow step: its workflow run's page shows it (teams spec
+    /// section 10).
     pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
             "SELECT {RUN_COLUMNS} FROM runs r \
              WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
              AND (r.status = 'failed' OR r.branch IS NOT NULL) \
+             AND r.workflow_step_run_id IS NULL \
              AND r.id = (SELECT x.id FROM runs x WHERE x.root_run_id = r.root_run_id \
                          ORDER BY x.queued_at DESC, x.id DESC LIMIT 1) \
              ORDER BY r.ended_at DESC, r.id DESC"

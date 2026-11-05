@@ -123,7 +123,7 @@ export function installDefaults(): void {
     review_runs: [],
     attention: [],
     tools_changed: [],
-    watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [],
+    watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [],
   }));
   // No dot proposed instructions.
   backend.on("instruction_proposals_list", () => []);

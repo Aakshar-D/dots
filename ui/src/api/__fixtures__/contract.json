@@ -1471,6 +1471,12 @@
       "org",
       "personal"
     ],
+    "WaitingOn": [
+      "check",
+      "budget",
+      "send_backs",
+      "step_failed"
+    ],
     "WatcherKind": [
       "folder",
       "email",
@@ -1808,6 +1814,21 @@
         "name": "Billing mail",
         "reason": "error",
         "watcher_id": "01J0WAT2"
+      }
+    ],
+    "workflows": [
+      {
+        "id": "01J0WFR",
+        "origin_dot_id": "01J0DOT",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "step_name": "Review",
+        "task": "The tray icon is invisible on a light taskbar.",
+        "team_id": "01J0TEAM",
+        "team_name": "crew",
+        "test": false,
+        "waiting_on": "check",
+        "workflow_id": "01J0WFL",
+        "workflow_name": "Fix and ship"
       }
     ]
   },

@@ -682,8 +682,8 @@ impl Runtime {
     }
 
     /// Pending approvals, the finished, unreviewed thread ends that failed or kept a worktree
-    /// with changes, the schedules that need attention, and the MCP servers whose tool list
-    /// waits for review.
+    /// with changes, the schedules that need attention, the MCP servers whose tool list waits
+    /// for review, and the workflow runs that wait for the person.
     pub async fn inbox(&self) -> Result<Inbox> {
         let mut names = std::collections::HashMap::new();
         for dot in self.store.list_dots().await? {
@@ -748,6 +748,7 @@ impl Runtime {
             instructions,
             app_reviews,
             team_scope: self.store.team_scope_issues().await?,
+            workflows: self.store.waiting_workflow_runs().await?,
         })
     }
 
@@ -766,6 +767,8 @@ impl Runtime {
             + inbox.app_reviews.len()
             // A team with a member outside its account or workspace (accounts design §6.3).
             + inbox.team_scope.len()
+            // A workflow run waiting on the person (teams spec section 10).
+            + inbox.workflows.len()
             + self.store.count_waiting_messages().await?)
     }
 

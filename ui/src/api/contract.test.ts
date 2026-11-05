@@ -106,6 +106,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   UsagePeriod: T.UsagePeriod,
   FolderEvent: T.FolderEvent,
   GithubEvent: T.GithubEvent,
+  WaitingOn: T.WaitingOn,
   GrantState: T.GrantState,
   ValueSource: T.ValueSource,
   PersonalMode: T.PersonalMode,

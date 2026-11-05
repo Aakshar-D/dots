@@ -611,6 +611,33 @@ pub struct Inbox {
     /// a team's members had to share them (accounts design section 6.3).
     #[serde(default)]
     pub team_scope: Vec<TeamScopeIssue>,
+    /// Workflow runs that wait for the person (on a check, the budget, the send-back cap or a
+    /// failed step), newest first (teams spec section 10).
+    #[serde(default)]
+    pub workflows: Vec<WaitingWorkflowRun>,
+}
+
+/// A workflow run that waits for the person, as the Inbox lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitingWorkflowRun {
+    /// The workflow run's id.
+    pub id: String,
+    pub team_id: String,
+    pub team_name: String,
+    /// `None` once the workflow is deleted: the run goes on with its copy of the definition.
+    pub workflow_id: Option<String>,
+    pub workflow_name: Option<String>,
+    /// The first line of the run's task.
+    pub task: String,
+    pub waiting_on: WaitingOn,
+    /// The step it waits at (the check, the failed step, the step the budget or the send-back
+    /// cap holds), by name; `None` before its first step.
+    pub step_name: Option<String>,
+    /// The dot whose chat started the run; `None` for any other start, or once that chat's run
+    /// is deleted.
+    pub origin_dot_id: Option<String>,
+    pub test: bool,
+    pub started_at: String,
 }
 
 /// A member dot that is not in its team's account or workspace, as the Inbox lists it.

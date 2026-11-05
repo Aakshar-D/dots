@@ -20,17 +20,17 @@ const failedRun = {
 };
 
 /// An Inbox as a test writes it: without paused watchers, held runs, proposed instructions,
-/// apps to review or team scope problems unless it says so.
-type InboxSpec = Omit<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope"> &
-  Partial<Pick<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope">>;
+/// apps to review, team scope problems or waiting workflow runs unless it says so.
+type InboxSpec = Omit<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope" | "workflows"> &
+  Partial<Pick<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope" | "workflows">>;
 
 /// An inbox the test can empty, the way a decision or a review does.
 function inbox(initial: InboxSpec) {
-  let current: Inbox = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], ...initial };
+  let current: Inbox = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], ...initial };
   backend.on("inbox", () => current);
   return {
     set: (next: InboxSpec) => {
-      current = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], ...next };
+      current = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], ...next };
     },
   };
 }
@@ -140,6 +140,7 @@ describe("the Inbox", () => {
         held: [], instructions: [],
         app_reviews: [],
         team_scope: [],
+        workflows: [],
       };
     });
 
@@ -535,6 +536,7 @@ describe("the approvals of one run", () => {
     held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
+    workflows: [],
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
@@ -710,6 +712,7 @@ describe("a schedule that needs attention", () => {
     held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
+    workflows: [],
   };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });

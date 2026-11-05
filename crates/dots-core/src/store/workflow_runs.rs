@@ -8,9 +8,11 @@ use sqlx::Row;
 use super::{opt_json, Store};
 use crate::model::{
     LastRun, Message, NewWorkflowRun, Run, StepRun, StepRunChange, StepRunStatus, WaitingOn,
-    WorkflowRun, WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
+    WaitingWorkflowRun, WorkflowRun, WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus,
+    WorkflowTrigger,
 };
 use crate::util::{new_id, now};
+use crate::workflow::Definition;
 use crate::{Error, Result};
 
 const WR_COLUMNS: &str = "id, workflow_id, team_id, definition, project_id, project, task, \
@@ -199,6 +201,48 @@ impl Store {
             })
         })
         .transpose()
+    }
+
+    /// The workflow runs that wait for the person, as the Inbox lists them, newest first.
+    pub async fn waiting_workflow_runs(&self) -> Result<Vec<WaitingWorkflowRun>> {
+        let rows = sqlx::query(
+            "SELECT w.id, w.team_id, t.name AS team_name, w.workflow_id, f.name AS workflow_name, \
+             w.definition, w.task, w.waiting_on, w.current_step, o.dot_id AS origin_dot_id, \
+             w.test, w.started_at FROM workflow_runs w JOIN teams t ON t.id = w.team_id \
+             LEFT JOIN workflows f ON f.id = w.workflow_id \
+             LEFT JOIN runs o ON o.id = w.origin_run_id \
+             WHERE w.status = 'waiting' AND w.waiting_on IS NOT NULL \
+             ORDER BY w.started_at DESC, w.id DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let definition: Definition =
+                    serde_json::from_str(&row.try_get::<String, _>("definition")?)?;
+                let current: Option<String> = row.try_get("current_step")?;
+                let task: String = row.try_get("task")?;
+                Ok(WaitingWorkflowRun {
+                    id: row.try_get("id")?,
+                    team_id: row.try_get("team_id")?,
+                    team_name: row.try_get("team_name")?,
+                    workflow_id: row.try_get("workflow_id")?,
+                    workflow_name: row.try_get("workflow_name")?,
+                    task: task
+                        .trim()
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                    waiting_on: WaitingOn::parse(&row.try_get::<String, _>("waiting_on")?)?,
+                    step_name: current.and_then(|id| definition.step(&id).map(|s| s.name.clone())),
+                    origin_dot_id: row.try_get("origin_dot_id")?,
+                    test: row.try_get::<i64, _>("test")? != 0,
+                    started_at: row.try_get("started_at")?,
+                })
+            })
+            .collect()
     }
 
     /// The ids of the workflow runs that have not ended (running or waiting), oldest first.

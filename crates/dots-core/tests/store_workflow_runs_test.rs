@@ -3,8 +3,8 @@ mod common;
 use common::{init_repo, spec, temp_store};
 use dots_core::model::{
     Handoff, LastRun, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus, StepRunChange,
-    StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
-    WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
+    StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WaitingWorkflowRun, WorkflowRun,
+    WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use dots_core::store::Store;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
@@ -797,4 +797,211 @@ async fn a_workflow_says_how_many_runs_are_in_flight_and_which_started_last() {
     assert_eq!(value["runs_in_flight"], json!(0));
     assert_eq!(value["last_run"]["status"], json!("failed"));
     assert_eq!(value["last_run"]["test"], json!(true));
+}
+
+impl Fixture {
+    /// Puts the workflow run `id` in wait on `on`, at the step `step`.
+    async fn wait(&self, id: &str, on: WaitingOn, step: Option<&str>) {
+        self.store
+            .set_workflow_run(
+                id,
+                &WorkflowRunChange {
+                    status: Some(WorkflowRunStatus::Waiting),
+                    waiting_on: Some(Some(on)),
+                    current_step: Some(step.map(str::to_string)),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+    }
+
+    /// A run of the fixture's dot for the step run `step_run_id`, with `branch`, ended with
+    /// `status`.
+    async fn step_run_ended(
+        &self,
+        step_run_id: &str,
+        branch: Option<&str>,
+        status: RunStatus,
+    ) -> dots_core::model::Run {
+        let mut new = NewRun::new(&self.dot, TriggerKind::Manual);
+        new.workflow_step_run_id = Some(step_run_id.to_string());
+        new.branch = branch.map(str::to_string);
+        let run = self.store.create_run(&new).await.unwrap();
+        self.store
+            .finish_run(&run.id, status, None, None)
+            .await
+            .unwrap()
+    }
+}
+
+/// The Inbox lists every workflow run that waits for the person, newest first, with its team,
+/// its workflow, its task's first line, what it waits on and at which step, and the dot whose
+/// chat started it. A run that runs or has ended is not listed.
+#[tokio::test]
+async fn the_waiting_workflow_runs_are_listed_for_the_inbox_newest_first() {
+    let f = fixture().await;
+    let chatter = f
+        .store
+        .create_dot(&spec("chatter"), None, "default")
+        .await
+        .unwrap()
+        .id;
+    let chat = f
+        .store
+        .create_run(&NewRun::new(&chatter, TriggerKind::Chat))
+        .await
+        .unwrap();
+    let _running = f.started(&f.new).await;
+    let check = f.started(&f.new).await;
+    f.wait(&check.id, WaitingOn::Check, Some("a")).await;
+    let budget = f
+        .started(&NewWorkflowRun {
+            task: "  Ship the fix.\nThen tell the team.".into(),
+            origin_run_id: Some(chat.id.clone()),
+            test: true,
+            ..f.new.clone()
+        })
+        .await;
+    f.wait(&budget.id, WaitingOn::Budget, None).await;
+    let ended = f.started(&f.new).await;
+    f.wait(&ended.id, WaitingOn::StepFailed, Some("a")).await;
+    f.now(&ended.id, WorkflowRunStatus::Failed).await;
+
+    let item = |wr: &WorkflowRun| WaitingWorkflowRun {
+        id: wr.id.clone(),
+        team_id: f.new.team_id.clone(),
+        team_name: "T".into(),
+        workflow_id: Some(f.new.workflow_id.clone()),
+        workflow_name: Some("Fix".into()),
+        task: "The tray icon is invisible.".into(),
+        waiting_on: WaitingOn::Check,
+        step_name: Some("Work".into()),
+        origin_dot_id: None,
+        test: false,
+        started_at: wr.started_at.clone(),
+    };
+    let budget_item = WaitingWorkflowRun {
+        task: "Ship the fix.".into(),
+        waiting_on: WaitingOn::Budget,
+        step_name: None,
+        origin_dot_id: Some(chatter.clone()),
+        test: true,
+        ..item(&budget)
+    };
+    assert_eq!(
+        f.store.waiting_workflow_runs().await.unwrap(),
+        vec![budget_item.clone(), item(&check)]
+    );
+    let value = serde_json::to_value(&budget_item).unwrap();
+    assert_eq!(value["waiting_on"], json!("budget"));
+    assert_eq!(value["step_name"], json!(null));
+    assert_eq!(value["origin_dot_id"], json!(chatter));
+
+    // A deleted workflow and a deleted chat leave the run listed, without them.
+    f.store.delete_workflow(&f.new.workflow_id).await.unwrap();
+    f.store.delete_dot(&chatter).await.unwrap();
+    let listed = f.store.waiting_workflow_runs().await.unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|w| (
+                w.id.as_str(),
+                w.workflow_id.as_deref(),
+                w.workflow_name.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (budget.id.as_str(), None, None),
+            (check.id.as_str(), None, None)
+        ]
+    );
+    assert_eq!(listed[0].origin_dot_id, None);
+}
+
+/// A waiting workflow run that a chat started needs the chat's dot, only while it waits; one
+/// started another way needs no dot.
+#[tokio::test]
+async fn a_waiting_workflow_run_needs_the_dot_whose_chat_started_it() {
+    let f = fixture().await;
+    let other = f
+        .store
+        .create_dot(&spec("other"), None, "default")
+        .await
+        .unwrap()
+        .id;
+    let chat = f.chat().await;
+    let started = f
+        .started(&NewWorkflowRun {
+            origin_run_id: Some(chat),
+            ..f.new.clone()
+        })
+        .await;
+    let manual = f.started(&f.new).await;
+    f.wait(&manual.id, WaitingOn::Check, Some("a")).await;
+    assert_eq!(f.store.dot_counts(&f.dot).await.unwrap(), (0, 0));
+
+    f.wait(&started.id, WaitingOn::Check, Some("a")).await;
+    assert_eq!(f.store.dot_counts(&f.dot).await.unwrap(), (1, 1));
+    assert_eq!(f.store.dot_counts(&other).await.unwrap(), (0, 0));
+    // Approved, it runs again; held by the budget, it waits again; stopped, it has ended.
+    f.now(&started.id, WorkflowRunStatus::Running).await;
+    assert_eq!(f.store.dot_counts(&f.dot).await.unwrap(), (0, 0));
+    f.wait(&started.id, WaitingOn::Budget, Some("a")).await;
+    assert_eq!(f.store.dot_counts(&f.dot).await.unwrap(), (1, 1));
+    f.now(&started.id, WorkflowRunStatus::Cancelled).await;
+    assert_eq!(f.store.dot_counts(&f.dot).await.unwrap(), (0, 0));
+}
+
+/// A run of a workflow step is never a run to review, failed or with a branch, and nor is a
+/// run that continues it while the step is open; the person's own runs still are. The step's
+/// approvals still need its dot.
+#[tokio::test]
+async fn a_step_s_runs_are_never_runs_to_review() {
+    let f = fixture().await;
+    let wr = f.started(&f.new).await;
+    let step = f
+        .store
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    let failed = f.step_run_ended(&step.id, None, RunStatus::Failed).await;
+    f.step_run_ended(&step.id, Some("dots/work-1"), RunStatus::Succeeded)
+        .await;
+    let mut reply = NewRun::new(&f.dot, TriggerKind::Chat);
+    reply.parent_run_id = Some(failed.id.clone());
+    reply.root_run_id = Some(failed.root_run_id.clone());
+    let reply = f.store.create_run(&reply).await.unwrap();
+    assert_eq!(reply.workflow_step_run_id, Some(step.id.clone()));
+    f.store
+        .finish_run(&reply.id, RunStatus::Failed, None, Some("down"))
+        .await
+        .unwrap();
+    let own = f
+        .store
+        .create_run(&NewRun::new(&f.dot, TriggerKind::Manual))
+        .await
+        .unwrap();
+    f.store
+        .finish_run(&own.id, RunStatus::Failed, None, Some("down"))
+        .await
+        .unwrap();
+    let listed: Vec<String> = f
+        .store
+        .unreviewed_thread_ends()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.id)
+        .collect();
+    assert_eq!(listed, vec![own.id]);
+
+    let mut parked = NewRun::new(&f.dot, TriggerKind::Manual);
+    parked.workflow_step_run_id = Some(step.id.clone());
+    let parked = f.store.create_run(&parked).await.unwrap();
+    f.store
+        .create_approval(&parked.id, "Bash", &json!({"command": "ls"}))
+        .await
+        .unwrap();
+    assert_eq!(f.store.dot_counts(&f.dot).await.unwrap(), (1, 1));
 }

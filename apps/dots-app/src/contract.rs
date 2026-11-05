@@ -1154,6 +1154,19 @@ pub fn samples() -> Value {
                 dot_name: "nightly-tests".into(),
                 reason: "nightly-tests is in another workspace than the crew team.".into(),
             }],
+            workflows: vec![WaitingWorkflowRun {
+                id: "01J0WFR".into(),
+                team_id: "01J0TEAM".into(),
+                team_name: "crew".into(),
+                workflow_id: Some("01J0WFL".into()),
+                workflow_name: Some("Fix and ship".into()),
+                task: "The tray icon is invisible on a light taskbar.".into(),
+                waiting_on: WaitingOn::Check,
+                step_name: Some("Review".into()),
+                origin_dot_id: Some("01J0DOT".into()),
+                test: false,
+                started_at: TS.into(),
+            }],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -1266,6 +1279,7 @@ pub fn samples() -> Value {
     samples["Enums"]["UsagePeriod"] = to(UsagePeriod::ALL);
     samples["Enums"]["FolderEvent"] = to(FolderEvent::ALL);
     samples["Enums"]["GithubEvent"] = to(GithubEvent::ALL);
+    samples["Enums"]["WaitingOn"] = to(WaitingOn::ALL);
     samples["RuntimeEvent"]
         .as_array_mut()
         .expect("the RuntimeEvent samples")
