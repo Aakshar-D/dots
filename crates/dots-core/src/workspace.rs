@@ -233,14 +233,53 @@ pub async fn diff(path: &Path, base_commit: &str) -> Result<WorktreeDiff> {
         files.push(file);
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
+    truncated |= cap(&mut files);
+    Ok(WorktreeDiff {
+        files,
+        truncated,
+        exists: true,
+    })
+}
+
+/// Clears the patches of the files past `MAX_DIFF_BYTES` of patch text, in order; `true` when
+/// it cleared any.
+fn cap(files: &mut [FileDiff]) -> bool {
+    let mut truncated = false;
     let mut used = 0;
-    for f in &mut files {
+    for f in files {
         if used + f.patch.len() > MAX_DIFF_BYTES {
             f.patch.clear();
             truncated = true;
         }
         used += f.patch.len();
     }
+    truncated
+}
+
+/// The committed changes from the commit `from` to the commit `to` in the repo at `repo`
+/// (teams spec section 5.4: a branch's work from where it left the default branch), capped as
+/// `diff` caps a worktree's. Only commits are read: no worktree, so nothing untracked.
+pub async fn range_diff(repo: &Path, from: &str, to: &str) -> Result<WorktreeDiff> {
+    let text = git_raw(
+        repo,
+        &[
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--find-renames",
+            "--end-of-options",
+            from,
+            to,
+            "--",
+        ],
+    )
+    .await?;
+    let mut files = parse_diff(&text);
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let truncated = cap(&mut files);
     Ok(WorktreeDiff {
         files,
         truncated,

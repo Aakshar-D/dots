@@ -9,14 +9,16 @@
 //! loop's lock (`jobs`). A delegate step's run may start other members, whose results continue
 //! it (`delegate`). A check or an agent step may send the work back to an earlier agent step,
 //! which goes on where it left off (`send_back`). A deploy step ships the branches its check
-//! approved (`deploy_step`).
+//! approved (`deploy_step`), at the tips the person was shown (`check`).
 
+mod check;
 mod delegate;
 mod deploy_step;
 mod jobs;
 mod send_back;
 mod tools;
 
+pub use check::{branches_changed, CheckTip, CheckView, ShownBranch};
 pub use deploy_step::{INTERRUPTED, NO_APPROVAL, NO_DEFAULT_BRANCH};
 pub use tools::STEP_CLOSED;
 
@@ -699,28 +701,35 @@ impl Workflows {
 
     /// Approves the check the workflow run waits on (section 5.4): the check passes the hand-off
     /// it was shown on, with the tip of each of its branches (section 6.2), and the workflow
-    /// goes on.
-    pub async fn approve_check(&self, id: &str, note: Option<&str>) -> Result<WorkflowRun> {
+    /// goes on. `tips` are the branches and commits the check page showed (`check`): when they
+    /// are not exactly the shown branches at their tips now, the approval is refused
+    /// (`Conflict`, `branches_changed`) and nothing is recorded.
+    pub async fn approve_check(
+        &self,
+        id: &str,
+        note: Option<&str>,
+        tips: &[CheckTip],
+    ) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
         let wr = self.store.get_workflow_run(id).await?;
         self.require(&wr.team_id, Permission::AnswerApprovals)
             .await?;
         let wr = self.tick(&wr).await?;
-        let step_run = match (&wr.status, &wr.waiting_on, &wr.current_step) {
-            (WorkflowRunStatus::Waiting, Some(WaitingOn::Check), Some(current)) => {
-                latest(&wr, current).cloned()
-            }
-            _ => None,
-        };
-        let Some(step_run) = step_run else {
+        let Some(step_run) = check::waiting_check(&wr).cloned() else {
             return Err(Error::Conflict(format!(
                 "workflow run {id} is not waiting for a check"
             )));
         };
         let shown = shown_at(&wr, &step_run.step_id);
-        let note = note.map(str::trim).filter(|n| !n.is_empty());
-        // The tips the person approved: a deploy after the check pushes exactly these.
+        // The tips the person approved, read again under the lock: a deploy after the check
+        // pushes exactly these, so they must be what the page showed. Equal to the page's tips,
+        // and kept in the order the check shows them.
         let branches = deploy_step::tips(Path::new(&wr.project.repo_path), &shown).await;
+        let differ = check::changed(&branches, tips);
+        if !differ.is_empty() {
+            return Err(Error::Conflict(branches_changed(&differ)));
+        }
+        let note = note.map(str::trim).filter(|n| !n.is_empty());
         let decision = json!({"decision": "approved", "note": note, "branches": branches});
         self.store
             .set_step_run(
@@ -790,9 +799,12 @@ impl Workflows {
 
     /// Stops the workflow run (section 8): its queued and running dot runs are cancelled, the
     /// questions they left open are dismissed, its open steps and a waiting check are closed as
-    /// cancelled, and with them the follow-ups their runs scheduled.
+    /// cancelled, and with them the follow-ups their runs scheduled. Refused without the
+    /// permission to run dots in the team's account.
     pub async fn stop(&self, id: &str) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
+        let wr = self.store.get_workflow_run(id).await?;
+        self.require(&wr.team_id, Permission::RunDots).await?;
         self.stop_locked(id).await
     }
 

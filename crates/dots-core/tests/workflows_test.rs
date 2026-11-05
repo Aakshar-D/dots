@@ -12,8 +12,8 @@ use dots_core::engine::{Engine, EngineEvent, RunContext};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::followups::FollowUps;
 use dots_core::model::{
-    Dot, EngineKind, FollowUpStatus, MemberHandoff, MemberSpec, NewRun, ProjectSpec, Run,
-    RunStatus, SendBack, SentBy, StepRun, StepRunChange, StepRunStatus, TeamSpec, TriggerKind,
+    Dot, EngineKind, FileStatus, FollowUpStatus, MemberHandoff, MemberSpec, NewRun, ProjectSpec,
+    Run, RunStatus, SendBack, SentBy, StepRun, StepRunChange, StepRunStatus, TeamSpec, TriggerKind,
     WaitingOn, WorkflowRun, WorkflowRunChange, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger,
     WorkspaceMode,
 };
@@ -25,7 +25,10 @@ use dots_core::workflow::{
     BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
     Trigger,
 };
-use dots_core::workflows::{StartRequest, Workflows, ENDED_STEP_THREAD, STEP_CLOSED};
+use dots_core::workflows::{
+    CheckTip, CheckView, ShownBranch, StartRequest, Workflows, ENDED_STEP_THREAD,
+    NO_DEFAULT_BRANCH, STEP_CLOSED,
+};
 use dots_core::Error;
 use serde_json::json;
 use tempfile::TempDir;
@@ -529,6 +532,15 @@ impl World {
     }
 }
 
+impl World {
+    /// Approves the check the workflow run `id` waits on as the check page does: with the tips
+    /// its check shows now.
+    async fn approve(&self, id: &str, note: Option<&str>) -> dots_core::Result<WorkflowRun> {
+        let tips = self.workflows.check(id).await?.tips();
+        self.workflows.approve_check(id, note, &tips).await
+    }
+}
+
 fn waits_on(w: WaitingOn) -> impl Fn(&WorkflowRun) -> bool {
     move |wr| wr.status == WorkflowRunStatus::Waiting && wr.waiting_on == Some(w)
 }
@@ -590,11 +602,7 @@ async fn a_run_goes_through_its_steps_and_waits_for_the_check() {
         assert!(prompt.contains(part), "missing {part:?} in:\n{prompt}");
     }
 
-    let done = w
-        .workflows
-        .approve_check(&wr.id, Some("looks good"))
-        .await
-        .unwrap();
+    let done = w.approve(&wr.id, Some("looks good")).await.unwrap();
     assert_eq!(done.status, WorkflowRunStatus::Succeeded);
     assert!(done.ended_at.is_some());
     let check = &done.steps[2];
@@ -660,7 +668,7 @@ async fn a_failed_step_waits_and_can_be_retried() {
     assert_eq!(wr.error.as_deref(), Some("Fix it: compiler exploded"));
     assert_eq!(wr.steps[0].status, StepRunStatus::Failed);
     assert!(matches!(
-        w.workflows.approve_check(&wr.id, None).await,
+        w.workflows.approve_check(&wr.id, None, &[]).await,
         Err(Error::Conflict(_))
     ));
     let retried = w.workflows.retry_step(&wr.id).await.unwrap();
@@ -708,7 +716,7 @@ async fn a_deploy_after_a_check_that_showed_no_branch_fails_unless_it_only_lists
             .await;
         let wr = w.start(&flow).await;
         let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
-        w.workflows.approve_check(&wr.id, None).await.unwrap();
+        w.approve(&wr.id, None).await.unwrap();
         let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
         assert_eq!(
             wr.steps[0].decision.as_ref().unwrap()["branches"],
@@ -740,7 +748,7 @@ async fn a_deploy_after_a_check_that_showed_no_branch_fails_unless_it_only_lists
         .await;
     let wr = w.start(&flow).await;
     let wr = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -1140,7 +1148,7 @@ async fn the_clock_counts_only_while_nobody_waits_on_the_person() {
         w.store.get_workflow_run(&wr.id).await.unwrap().active_ms,
         240_000
     );
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -1156,7 +1164,7 @@ async fn the_clock_counts_only_while_nobody_waits_on_the_person() {
         .await;
     w.engine.gate.notify_one();
     let second = w.until(&second.id, waits_on(WaitingOn::Check)).await;
-    w.workflows.approve_check(&second.id, None).await.unwrap();
+    w.approve(&second.id, None).await.unwrap();
     let second = w.until(&second.id, waits_on(WaitingOn::Budget)).await;
     assert_eq!(
         second.error.as_deref(),
@@ -1268,7 +1276,7 @@ async fn a_pass_puts_a_run_cut_off_behind_a_waiting_check_back_to_waiting() {
     let fixed = w.store.get_workflow_run(&wr.id).await.unwrap();
     assert_eq!(fixed.status, WorkflowRunStatus::Waiting);
     assert_eq!(fixed.waiting_on, Some(WaitingOn::Check));
-    let done = w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let done = w.approve(&wr.id, None).await.unwrap();
     assert_eq!(done.status, WorkflowRunStatus::Succeeded);
 }
 
@@ -2104,13 +2112,10 @@ async fn a_hand_off_being_built_holds_up_neither_the_loop_nor_a_stop() {
     let checked = w.workflow("Check", vec![check("check")]).await;
     let other = w.start(&checked).await;
     let other = w.until(&other.id, waits_on(WaitingOn::Check)).await;
-    let done = tokio::time::timeout(
-        Duration::from_secs(10),
-        w.workflows.approve_check(&other.id, None),
-    )
-    .await
-    .expect("the approval waited on the job")
-    .unwrap();
+    let done = tokio::time::timeout(Duration::from_secs(10), w.approve(&other.id, None))
+        .await
+        .expect("the approval waited on the job")
+        .unwrap();
     assert_eq!(done.status, WorkflowRunStatus::Succeeded);
     // Stopping the run whose hand-off is held does not wait for it.
     let stopped = tokio::time::timeout(Duration::from_secs(10), w.workflows.stop(&held.id))
@@ -2592,7 +2597,7 @@ async fn a_check_shows_and_a_deploy_ships_the_member_branches_its_lead_did_not_m
     // The approval records the tips of exactly those branches, and the deploy pushes them.
     let tip = |b: &str| git_out(&w.repo, &["rev-parse", &format!("refs/heads/{b}")]);
     let (own_tip, other_tip) = (tip(&own), tip(other));
-    let approved = w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let approved = w.approve(&wr.id, None).await.unwrap();
     assert_eq!(
         newest(&approved, "check").decision.as_ref().unwrap()["branches"],
         json!([
@@ -3031,7 +3036,7 @@ async fn the_person_sends_back_from_a_check_and_the_step_goes_on_in_its_own_sess
     assert_eq!(w.engine.prompts_of("helper").len(), 1);
     assert_eq!(wr.spent_runs, 3);
 
-    let done = w.workflows.approve_check(&wr.id, None).await.unwrap();
+    let done = w.approve(&wr.id, None).await.unwrap();
     assert_eq!(done.status, WorkflowRunStatus::Succeeded);
     assert_eq!(
         done.steps[4].handoff.as_ref().unwrap().summary,
@@ -3225,7 +3230,7 @@ async fn past_the_cap_a_send_back_waits_until_the_person_allows_one_more() {
     assert_eq!(still.steps.iter().filter(|s| s.step_id == "dev").count(), 4);
     assert_eq!(w.engine.prompts_of("dev").len(), 4);
     assert!(matches!(
-        w.workflows.approve_check(&wr.id, None).await,
+        w.workflows.approve_check(&wr.id, None, &[]).await,
         Err(Error::Conflict(_))
     ));
 
@@ -3360,7 +3365,7 @@ async fn a_step_whose_session_cannot_be_resumed_starts_again_and_says_so() {
     assert_eq!(wr.steps[0].notice, None);
 
     // The dev made a change: it starts again from its old branch.
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w.until(&wr.id, at_check(1)).await;
     let old = w.runs_of(&newest(&wr, "dev").id).await.remove(0);
     let old_branch = old.branch.clone().unwrap();
@@ -3487,7 +3492,7 @@ async fn send_back_check_refuses_a_bad_note_a_check_with_no_agent_before_it_and_
     assert_eq!(still.waiting_on, Some(WaitingOn::Check));
     assert_eq!((still.send_backs, still.send_back.clone()), (0, None));
 
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     match w.workflows.send_back_check(&wr.id, "Redo it.").await {
         Err(Error::Conflict(m)) => assert_eq!(
             m,
@@ -3792,7 +3797,7 @@ impl World {
     async fn approved_and_held(&self, id: &str) -> (String, Arc<tokio::sync::Semaphore>) {
         let gate = Arc::new(tokio::sync::Semaphore::new(0));
         self.workflows.hold_jobs(Some(gate.clone()));
-        let wr = self.workflows.approve_check(id, None).await.unwrap();
+        let wr = self.approve(id, None).await.unwrap();
         let step_run = newest(&wr, "ship").clone();
         assert_eq!(step_run.status, StepRunStatus::Running);
         assert!(self.workflows.has_job(&step_run.id));
@@ -3834,10 +3839,7 @@ async fn a_push_deploy_lands_the_commit_the_check_approved_on_the_remote() {
     let flow = w.ship_flow(DeployMode::Push).await;
     let (wr, branch, tip) = w.at_the_check(&flow, false).await;
     assert_eq!(w.remote_tip(&branch), None);
-    w.workflows
-        .approve_check(&wr.id, Some("Ship it."))
-        .await
-        .unwrap();
+    w.approve(&wr.id, Some("Ship it.")).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -3877,7 +3879,7 @@ async fn a_pr_merge_deploy_opens_a_pull_request_and_sets_it_to_merge() {
         })
         .await;
     let (wr, branch, tip) = w.at_the_check(&flow, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -3931,7 +3933,7 @@ async fn a_test_run_pushes_nothing_and_lists_the_branch_as_ready() {
         })
         .await;
     let (wr, branch, tip) = w.at_the_check(&flow, true).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -4019,7 +4021,7 @@ async fn a_deploy_refuses_a_branch_that_holds_a_secret() {
         )
         .await;
     let (wr, branch, _) = w.at_the_check(&flow, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
     assert_eq!(
         wr.error,
@@ -4051,7 +4053,7 @@ async fn a_failed_gh_fails_the_deploy_with_its_message_and_keeps_the_push() {
         })
         .await;
     let (wr, branch, tip) = w.at_the_check(&flow, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
     assert_eq!(
         wr.error.as_deref(),
@@ -4147,7 +4149,7 @@ async fn a_member_deploy_runs_the_members_step_and_a_test_run_lists_the_branch_i
         })
         .await;
     let (wr, branch, tip) = w.at_the_check(&flow, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -4185,7 +4187,7 @@ async fn a_member_deploy_runs_the_members_step_and_a_test_run_lists_the_branch_i
 
     // A test run starts no one: the deploy lists the branch as ready.
     let (wr, branch, tip) = w.at_the_check(&flow, true).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -4246,7 +4248,7 @@ async fn a_deploy_after_a_delegate_step_pushes_the_members_branches() {
         .map(|b| b.branch.clone())
         .collect();
     assert_eq!(shown.len(), 2);
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -4293,7 +4295,7 @@ async fn a_member_deploy_starts_from_the_approved_commit() {
         )
         .await;
     let (wr, _, tip) = w.at_the_check(&flow, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -4314,11 +4316,7 @@ async fn a_member_deploy_starts_from_the_approved_commit() {
 /// and the dev's branch.
 async fn member_deploy_on_budget(budget_w: &World, flow: &str) -> (WorkflowRun, String) {
     let (wr, branch, _) = budget_w.at_the_check(flow, false).await;
-    budget_w
-        .workflows
-        .approve_check(&wr.id, None)
-        .await
-        .unwrap();
+    budget_w.approve(&wr.id, None).await.unwrap();
     let held = budget_w.until(&wr.id, waits_on(WaitingOn::Budget)).await;
     assert!(budget_w.runs_of(&newest(&held, "ship").id).await.is_empty());
     (held, branch)
@@ -4427,7 +4425,7 @@ async fn a_pr_deploy_needs_a_default_branch_and_a_push_deploy_does_not() {
     let pr = w.ship_flow(DeployMode::Pr).await;
     git_out(&w.repo, &["checkout", "-q", "--detach"]);
     let (wr, branch, _) = w.at_the_check(&pr, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let failed = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
     assert_eq!(
         failed.error.as_deref(),
@@ -4449,7 +4447,7 @@ async fn a_pr_deploy_needs_a_default_branch_and_a_push_deploy_does_not() {
         vec![Act::Write("fix.txt", "Fixed the icon.")],
     );
     let (wr, branch, tip) = w.at_the_check(&push, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
     assert_eq!(w.remote_tip(&branch), Some(tip));
@@ -4507,7 +4505,7 @@ async fn a_member_deploy_run_again_after_a_send_back_starts_from_the_approved_co
     )
     .await;
     let (wr, branch, tip) = w.at_the_check(&flow, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -4546,7 +4544,7 @@ async fn a_member_deploy_after_a_later_step_is_refused_if_the_approved_branch_mo
     );
     let flow = late_member_deploy(&w, vec![]).await;
     let (wr, branch, _) = w.at_the_check(&flow, false).await;
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     // While the later step runs, a commit lands on the approved branch.
     w.commit_after(&branch);
     w.engine.held.add_permits(1);
@@ -4594,7 +4592,7 @@ async fn a_check_after_a_step_that_changed_nothing_shows_and_ships_the_earlier_b
         .unwrap()
         .branches
         .is_empty());
-    w.workflows.approve_check(&wr.id, None).await.unwrap();
+    w.approve(&wr.id, None).await.unwrap();
     let wr = w
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
@@ -4880,4 +4878,278 @@ async fn a_step_run_cut_off_before_the_workflow_run_moved_to_it_is_used_not_left
         ]
     );
     assert_eq!(newest(&wr, "ship").id, orphan);
+}
+
+impl World {
+    /// Moves `branch` on by a commit that adds the file `path` with `text`, made outside any
+    /// worktree (in an index of its own), as someone working on it would. Gives the new tip.
+    fn commit_file(&self, branch: &str, path: &str, text: &str) -> String {
+        let tip = git_out(&self.repo, &["rev-parse", &format!("refs/heads/{branch}")]);
+        let file = self.dir.path().join("blob.txt");
+        std::fs::write(&file, text).unwrap();
+        let blob = git_out(&self.repo, &["hash-object", "-w", &file.to_string_lossy()]);
+        let index = self.dir.path().join("index.tmp");
+        let git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .arg("-C")
+                .arg(&self.repo)
+                .env("GIT_INDEX_FILE", &index)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["read-tree", &tip]);
+        let entry = format!("100644,{blob},{path}");
+        git(&["update-index", "--add", "--cacheinfo", &entry]);
+        let tree = git(&["write-tree"]);
+        let later = git_out(
+            &self.repo,
+            &["commit-tree", &tree, "-p", &tip, "-m", "More."],
+        );
+        git_out(
+            &self.repo,
+            &["update-ref", &format!("refs/heads/{branch}"), &later],
+        );
+        std::fs::remove_file(&index).unwrap();
+        later
+    }
+}
+
+/// The text of a `Conflict` refusal; anything else fails the test.
+fn conflict<T: std::fmt::Debug>(result: dots_core::Result<T>) -> String {
+    match result {
+        Err(Error::Conflict(text)) => text,
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+}
+
+/// Why an approval or a diff of `branch` is refused when the page saw another tip.
+fn changed(branch: &str) -> String {
+    format!("The branches changed since the check was shown: {branch}. Look at the check again.")
+}
+
+#[tokio::test]
+async fn a_check_shows_its_branches_at_their_tips_and_the_approval_records_what_it_showed() {
+    let w = world().await;
+    let flow = w.ship_flow(DeployMode::Branch).await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    let dev = newest(&wr, "dev").handoff.clone().unwrap();
+    let run_id = dev.branches[0].run_id.clone();
+    let view = w.workflows.check(&wr.id).await.unwrap();
+    assert_eq!(
+        view,
+        CheckView {
+            step_id: "check".into(),
+            summary: "Fixed the icon.".into(),
+            branches: vec![ShownBranch {
+                branch: branch.clone(),
+                run_id: run_id.clone(),
+                commit: Some(tip.clone()),
+            }],
+        }
+    );
+    // What the app is given.
+    assert_eq!(
+        serde_json::to_value(&view).unwrap(),
+        json!({
+            "step_id": "check",
+            "summary": "Fixed the icon.",
+            "branches": [{"branch": branch, "run_id": run_id, "commit": tip}],
+        })
+    );
+    assert_eq!(
+        view.tips(),
+        vec![CheckTip {
+            branch: branch.clone(),
+            commit: Some(tip.clone()),
+        }]
+    );
+    // Reading it changes nothing.
+    let still = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(still.waiting_on, Some(WaitingOn::Check));
+    assert_eq!(newest(&still, "check").decision, None);
+
+    w.workflows
+        .approve_check(&wr.id, Some("Ship it."), &view.tips())
+        .await
+        .unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(
+        newest(&wr, "check").decision,
+        Some(json!({
+            "decision": "approved",
+            "note": "Ship it.",
+            "branches": [{"branch": branch, "commit": tip}],
+        }))
+    );
+    assert_eq!(
+        conflict(w.workflows.check(&wr.id).await),
+        format!("workflow run {} is not waiting for a check", wr.id)
+    );
+}
+
+#[tokio::test]
+async fn an_approval_of_tips_git_no_longer_has_is_refused_and_records_nothing() {
+    let w = world().await;
+    let flow = w.ship_flow(DeployMode::Branch).await;
+    let (wr, branch, _) = w.at_the_check(&flow, false).await;
+    let seen = w.workflows.check(&wr.id).await.unwrap().tips();
+    // The branch moves on after the page read the check.
+    let later = w.commit_after(&branch);
+    let approve = |tips: Vec<CheckTip>| {
+        let w = &w;
+        let id = wr.id.clone();
+        async move {
+            w.workflows
+                .approve_check(&id, Some("Ship it."), &tips)
+                .await
+        }
+    };
+    assert_eq!(conflict(approve(seen).await), changed(&branch));
+    let fresh = w.workflows.check(&wr.id).await.unwrap().tips();
+    assert_eq!(
+        fresh,
+        vec![CheckTip {
+            branch: branch.clone(),
+            commit: Some(later.clone()),
+        }]
+    );
+    // A page that showed no branch, one the check does not show, or the same one twice.
+    assert_eq!(conflict(approve(vec![]).await), changed(&branch));
+    let mut more = fresh.clone();
+    more.push(CheckTip {
+        branch: "main".into(),
+        commit: None,
+    });
+    assert_eq!(conflict(approve(more).await), changed("main"));
+    let twice = vec![fresh[0].clone(), fresh[0].clone()];
+    assert_eq!(conflict(approve(twice).await), changed(&branch));
+    // Nothing was recorded.
+    let still = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(still.status, WorkflowRunStatus::Waiting);
+    assert_eq!(still.waiting_on, Some(WaitingOn::Check));
+    assert_eq!(newest(&still, "check").status, StepRunStatus::Waiting);
+    assert_eq!(newest(&still, "check").decision, None);
+    assert!(still.steps.iter().all(|s| s.step_id != "ship"));
+
+    // Read again, the approval records the tip the page now showed, and the deploy lists it.
+    approve(fresh).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(
+        newest(&wr, "check").decision.as_ref().unwrap()["branches"],
+        json!([{"branch": branch, "commit": later}])
+    );
+    let listed = newest(&wr, "ship").deploy_result.clone().unwrap();
+    assert_eq!(listed.branches[0].commit, later);
+}
+
+#[tokio::test]
+async fn a_branch_s_diff_is_its_work_from_the_default_branch_and_other_refs_are_refused() {
+    let w = world().await;
+    let flow = w.ship_flow(DeployMode::Branch).await;
+    let (wr, branch, tip) = w.at_the_check(&flow, false).await;
+    // The default branch moves on meanwhile: its new work is not the branch's.
+    std::fs::write(w.repo.join("later.txt"), "On main.\n").unwrap();
+    git_out(&w.repo, &["add", "later.txt"]);
+    git_out(&w.repo, &["commit", "-q", "-m", "Later on main."]);
+    let main = git_out(&w.repo, &["rev-parse", "refs/heads/main"]);
+
+    let diff = w
+        .workflows
+        .branch_diff(&wr.id, &branch, &tip)
+        .await
+        .unwrap();
+    let files: Vec<_> = diff
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.status))
+        .collect();
+    assert_eq!(files, [("fix.txt", FileStatus::Added)]);
+    assert!(
+        diff.files[0].patch.contains("+Fixed the icon."),
+        "{}",
+        diff.files[0].patch
+    );
+    assert!(!diff.truncated);
+    assert!(diff.exists);
+
+    // Only a branch the run shows: not the default branch, a ref, or an option.
+    for name in ["main", "HEAD", "--output=x.txt"] {
+        match w.workflows.branch_diff(&wr.id, name, &tip).await {
+            Err(Error::Invalid(m)) => {
+                assert_eq!(m, format!("workflow run {} shows no branch {name}", wr.id))
+            }
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+    // And only at the commit it shows: not a ref, another commit, or an option.
+    let before = format!("{tip}~1");
+    for commit in [
+        "HEAD",
+        "main",
+        main.as_str(),
+        before.as_str(),
+        "--output=x.txt",
+    ] {
+        assert_eq!(
+            conflict(w.workflows.branch_diff(&wr.id, &branch, commit).await),
+            changed(&branch)
+        );
+    }
+    assert!(!w.repo.join("x.txt").exists());
+
+    // Past the cap, the later files are listed without their patch.
+    let big = "x".repeat(dots_core::workspace::MAX_DIFF_BYTES) + "\n";
+    let moved = w.commit_file(&branch, "big.txt", &big);
+    let diff = w
+        .workflows
+        .branch_diff(&wr.id, &branch, &moved)
+        .await
+        .unwrap();
+    let files: Vec<_> = diff
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.status, f.patch.is_empty()))
+        .collect();
+    assert_eq!(
+        files,
+        [
+            ("big.txt", FileStatus::Added, true),
+            ("fix.txt", FileStatus::Added, false),
+        ]
+    );
+    assert!(diff.truncated);
+    // The check now shows the new tip, so the old one is refused.
+    assert_eq!(
+        conflict(w.workflows.branch_diff(&wr.id, &branch, &tip).await),
+        changed(&branch)
+    );
+
+    // Once approved and listed by the deploy, the branch is diffed at the commit recorded.
+    w.approve(&wr.id, None).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let diff = w
+        .workflows
+        .branch_diff(&wr.id, &branch, &moved)
+        .await
+        .unwrap();
+    assert_eq!(diff.files.len(), 2);
+    assert_eq!(
+        conflict(w.workflows.branch_diff(&wr.id, &branch, &tip).await),
+        changed(&branch)
+    );
+    // With no default branch to diff from, it says so.
+    git_out(&w.repo, &["checkout", "-q", "--detach"]);
+    assert_eq!(
+        conflict(w.workflows.branch_diff(&wr.id, &branch, &moved).await),
+        NO_DEFAULT_BRANCH
+    );
 }
