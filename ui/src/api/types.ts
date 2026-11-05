@@ -742,6 +742,28 @@ export const BrowserStatus = z.strictObject({
   npx: nullable(z.string()),
 });
 
+// The company's Claude Code managed settings (managed policy). `path` is null when the machine
+// has none; `error` is set when a file could not be read.
+export const ManagedPolicy = z.strictObject({
+  path: nullable(z.string()),
+  blocks_skipping_asks: z.boolean(),
+  forced_ask: z.array(z.string()),
+  forced_deny: z.array(z.string()),
+  managed_rules_only: z.boolean(),
+  error: nullable(z.string()),
+});
+export const ConflictKind = z.enum(["deny"]);
+// One thing the dot's policy would allow that a company deny rule refuses.
+export const ManagedConflict = z.strictObject({
+  kind: ConflictKind,
+  rule: z.string(),
+  dot_rule: z.string(),
+});
+export const ManagedCheck = z.strictObject({
+  managed: ManagedPolicy,
+  conflicts: z.array(ManagedConflict),
+});
+
 // Where a dot's schedule stands (Scheduler v2 spec §8). Times are RFC 3339 local.
 // `next_fire` is null when nothing more fires (disabled, not active, nothing left);
 // `retry_at` and `retry_attempt` are set only while a retry waits.
@@ -1783,6 +1805,10 @@ export type Status = z.infer<typeof Status>;
 export type Settings = z.infer<typeof Settings>;
 export type SettingsSaved = z.infer<typeof SettingsSaved>;
 export type BrowserStatus = z.infer<typeof BrowserStatus>;
+export type ManagedPolicy = z.infer<typeof ManagedPolicy>;
+export type ConflictKind = z.infer<typeof ConflictKind>;
+export type ManagedConflict = z.infer<typeof ManagedConflict>;
+export type ManagedCheck = z.infer<typeof ManagedCheck>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
 export type ScheduleSkip = z.infer<typeof ScheduleSkip>;
 export type ScheduledStatus = z.infer<typeof ScheduledStatus>;

@@ -2,7 +2,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { commands } from "@/api/commands";
-import { Action, Preset, type Policy, type Rule } from "@/api/types";
+import { Action, Preset, type EngineKind, type Policy, type Rule } from "@/api/types";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +10,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { describeAllowRule, isDotsOwnRule } from "@/lib/allow-rules";
 import { PRESET_SENTENCES } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
+import { ManagedPolicyNotice, useManagedCheck } from "@/screens/ManagedPolicyNotice";
 
 const PRESETS: Record<Preset, string> = {
   "read-only": "Read-only: may read, never writes or runs commands",
@@ -24,8 +25,11 @@ export function PolicyEditor(props: {
   policy: Policy;
   onChange: (policy: Policy) => void;
   error?: string;
+  /// Only a dot run by the Claude CLI meets the company's Claude Code policy; default `claude`.
+  engine?: EngineKind;
 }) {
   const { policy, onChange } = props;
+  const managed = useManagedCheck(props.engine ?? "claude", policy);
   // Named presets keep their rules folded; a custom policy or a rule error shows them from the
   // start.
   const [open, setOpen] = useState(policy.preset === "custom" || Boolean(props.error));
@@ -68,6 +72,7 @@ export function PolicyEditor(props: {
       <p className="text-xs text-muted-foreground">
         {policy.preset === "custom" ? "Your own rules." : PRESET_SENTENCES[policy.preset]}
       </p>
+      <ManagedPolicyNotice check={managed} />
       <AlwaysAllowed
         rules={policy.rules}
         onRemove={(index) => custom({ rules: policy.rules.filter((_, j) => j !== index) })}

@@ -24,6 +24,7 @@ use dots_core::library_service::{
     ContextDetail, ContextDocuments, EnvVariable, LibraryEntry, McpProbe, PluginDetail,
     ScannedSkill, ScopedCatalog, SkillDetail,
 };
+use dots_core::managed_policy::ManagedPolicy;
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
@@ -1522,6 +1523,30 @@ pub fn samples() -> Value {
         }),
         None,
     ]);
+    let managed = ManagedPolicy {
+        path: Some("C:/Program Files/ClaudeCode/managed-settings.json".into()),
+        blocks_skipping_asks: true,
+        forced_ask: vec!["Bash(git push:*)".into()],
+        forced_deny: vec!["WebFetch".into()],
+        managed_rules_only: false,
+        error: None,
+    };
+    samples["ManagedPolicy"] = to(&managed);
+    samples["ManagedPolicyUnread"] = to(ManagedPolicy {
+        path: Some("C:/Program Files/ClaudeCode/managed-settings.json".into()),
+        error: Some(
+            "Couldn't read your company's Claude Code policy at C:/Program Files/ClaudeCode/managed-settings.json: expected value at line 1 column 3".into(),
+        ),
+        ..Default::default()
+    });
+    samples["ManagedCheck"] = to(dots_core::managed_policy::ManagedCheck {
+        conflicts: dots_core::managed_policy::conflicts(
+            EngineKind::Claude,
+            &Policy::preset(Preset::Trusted),
+            &managed,
+        ),
+        managed,
+    });
     samples["BrowserStatus"] = to(BrowserStatus {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
         npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
