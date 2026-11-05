@@ -50,6 +50,8 @@ export const sample = {
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
   memories: T.Memory.array().parse(contract.Memory),
+  /// An urgent goal handed to a dot, one with a due date, and a done one.
+  intents: T.Intent.array().parse(contract.Intent),
   /// A folder watcher that is on, an email one paused on an error, a GitHub one paused on a flood.
   watchers: T.Watcher.array().parse(contract.Watcher),
   /// This install's Dots ID, with a name and email set.
@@ -206,6 +208,8 @@ export function installDefaults(): void {
   backend.on("schedule_skips", () => []);
   // No dot remembers anything.
   backend.on("memories_list", () => []);
+  // No goals yet, and the person may change them.
+  backend.on("intents_list", () => ({ intents: [], refusal: null }));
   backend.on("watchers_list", () => []);
   // Nothing is unread; looking at a dot and saying which one is viewed are taken.
   backend.on("unread_total", () => 0);

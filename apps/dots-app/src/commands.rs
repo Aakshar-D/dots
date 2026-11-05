@@ -24,15 +24,16 @@ use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
 use dots_core::claude_agents::{AgentImport, ScannedAgent};
 use dots_core::inbox::InboxKey;
+use dots_core::intents::{IntentFields, IntentsView};
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
 use dots_core::library_service::{
     ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
 };
 use dots_core::model::{
-    Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory,
-    Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved, StagedAttachment,
-    Status, TopicInfo, WatchHours, Watcher, WatcherConfig, WorktreeDiff,
+    Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, FollowUp, Inbox, Intent,
+    Memory, Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved,
+    StagedAttachment, Status, TopicInfo, WatchHours, Watcher, WatcherConfig, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -1708,6 +1709,53 @@ pub async fn memory_update(
 #[tauri::command]
 pub async fn memory_delete(state: State<'_, AppState>, id: String) -> Res<()> {
     Ok(state.rt()?.memory_delete(&id).await?)
+}
+
+/// The goals of the workspace `workspace` of `scope` (`personal` or an org id), and why this
+/// PC may not change them (Intents).
+#[tauri::command]
+pub async fn intents_list(
+    state: State<'_, AppState>,
+    scope: String,
+    workspace: String,
+) -> Res<IntentsView> {
+    Ok(state.rt()?.intents_list(&scope, &workspace).await?)
+}
+
+/// Adds a goal. Refused, with the core's sentence, for a blank or too long text, a date that
+/// isn't one, a dot that is gone or in another workspace, or a role that can't change goals.
+#[tauri::command]
+pub async fn intent_create(
+    state: State<'_, AppState>,
+    scope: String,
+    workspace: String,
+    fields: IntentFields,
+) -> Res<Intent> {
+    Ok(state
+        .rt()?
+        .intent_create(&scope, &workspace, fields)
+        .await?)
+}
+
+/// Replaces a goal's text, due date, urgency and dot; the rules of `intent_create` apply.
+#[tauri::command]
+pub async fn intent_update(
+    state: State<'_, AppState>,
+    id: String,
+    fields: IntentFields,
+) -> Res<Intent> {
+    Ok(state.rt()?.intent_update(&id, fields).await?)
+}
+
+/// Marks a goal done, or open again.
+#[tauri::command]
+pub async fn intent_set_done(state: State<'_, AppState>, id: String, done: bool) -> Res<Intent> {
+    Ok(state.rt()?.intent_set_done(&id, done).await?)
+}
+
+#[tauri::command]
+pub async fn intent_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.intent_delete(&id).await?)
 }
 
 /// The installed apps, with the dots that use each and the error that keeps one out of runs

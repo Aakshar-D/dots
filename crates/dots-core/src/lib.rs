@@ -18,6 +18,7 @@ pub mod events;
 pub mod followups;
 pub mod inbox;
 pub mod instructions;
+pub mod intents;
 pub mod kit;
 pub mod library;
 pub mod library_service;
