@@ -72,6 +72,8 @@ export function ReplyArea(props: {
   onPick: (pick: ReplyPick) => void;
   /// The older topic shown alone, if it is one.
   olderRoot?: string;
+  /// What the message box starts with: a goal's text, from Start on the Intents screen.
+  draft?: string;
 }) {
   const { dotId, dotName, shown, pick, onPick, olderRoot } = props;
   const qc = useQueryClient();
@@ -264,6 +266,7 @@ export function ReplyArea(props: {
         )}
       </div>
       <Composer
+        initialText={props.draft}
         disabled={composerDisabled}
         hint={hint}
         files={staged.files}

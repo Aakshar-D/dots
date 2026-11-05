@@ -91,6 +91,8 @@ export const keys = {
   /// The rows of a dot's topics: names and archive marks.
   topics: (dotId: string) => ["topics", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
+  /// The goals of one workspace of an account (Intents).
+  intents: (scope: string, workspace: string) => ["intents", scope, workspace] as const,
   /// The instructions a dot proposed (conversational chat spec section 4).
   instructionProposals: (dotId: string) => ["instruction-proposals", dotId] as const,
   watchers: (dotId: string) => ["watchers", dotId] as const,
