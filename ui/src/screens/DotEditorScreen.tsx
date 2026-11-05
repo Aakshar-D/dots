@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { commands } from "@/api/commands";
 import type { Dot, DotSpec } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import { DotAvatar } from "@/components/DotAvatar";
 import { ErrorNote } from "@/components/ErrorNote";
 import { FollowUpsList } from "@/components/FollowUpsList";
 import { Page } from "@/components/Page";
@@ -151,6 +152,12 @@ function Editor(props: {
   return (
     <Page
       title={props.title}
+      // A stored dot keeps its avatar through a rename; a new one takes it from the name so far.
+      leading={
+        (props.existing?.id ?? draft.spec.name.trim()) !== "" && (
+          <DotAvatar seed={props.existing?.id ?? draft.spec.name.trim()} size="md" />
+        )
+      }
       actions={
         <>
           {props.actions}

@@ -7,6 +7,14 @@ import { backend, later } from "@/test/backend";
 import { quietStatus, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
+type User = ReturnType<typeof renderApp>["user"];
+
+/// Opens a Settings tab from the list beside the content.
+async function openTab(user: User, name: string) {
+  const tabs = await screen.findByRole("navigation", { name: "Settings sections" });
+  await user.click(within(tabs).getByRole("link", { name }));
+}
+
 const stored = sample.settings; // one local endpoint, defaults otherwise
 const [endpoint] = stored.local_endpoints;
 
@@ -22,17 +30,20 @@ function saving(restartRequired = false) {
 
 describe("the Settings screen", () => {
   it("shows what is stored and what is in use", async () => {
-    renderApp("/settings");
-    expect(await screen.findByLabelText("Port")).toHaveValue(stored.port);
-    expect(screen.getByLabelText("Runs at once")).toHaveValue(stored.max_concurrent_runs);
-    expect(screen.getByLabelText("Start Dots when I sign in")).toBeChecked();
-    expect(screen.getByLabelText("Program path")).toHaveValue("");
-    expect(screen.getByRole("listitem", { name: endpoint })).toBeVisible();
+    const { user } = renderApp("/settings");
+    expect(await screen.findByLabelText("Start Dots when I sign in")).toBeChecked();
     await waitFor(() =>
       expect(screen.getByLabelText("Data folder")).toHaveValue(quietStatus.data_dir),
     );
+    await openTab(user, "Runs & server");
+    expect(await screen.findByLabelText("Port")).toHaveValue(stored.port);
+    expect(screen.getByLabelText("Runs at once")).toHaveValue(stored.max_concurrent_runs);
+    await openTab(user, "Claude");
+    expect(await screen.findByLabelText("Program path")).toHaveValue("");
     expect(screen.getByText(quietStatus.claude.program!)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Mark as tested" })).toBeNull();
+    await openTab(user, "Local models");
+    expect(await screen.findByRole("listitem", { name: endpoint })).toBeVisible();
   });
 
   it("saves the whole settings and says when a restart is needed", async () => {
@@ -42,11 +53,12 @@ describe("the Settings screen", () => {
         ? { ...quietStatus, restart_required: true }
         : quietStatus,
     );
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/runs");
     const port = await screen.findByLabelText("Port");
     await user.clear(port);
     await user.type(port, "40123");
-    await user.click(screen.getByLabelText("Start Dots when I sign in"));
+    await openTab(user, "General");
+    await user.click(await screen.findByLabelText("Start Dots when I sign in"));
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     expect(await screen.findByText("Saved. Restart Dots to apply.")).toBeVisible();
@@ -59,7 +71,7 @@ describe("the Settings screen", () => {
 
   it("saves the global instructions, up to 32 KB", async () => {
     saving();
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/instructions");
     const text = await screen.findByLabelText("Global instructions");
     expect(text).toHaveValue(stored.global_instructions);
     await user.clear(text);
@@ -77,6 +89,34 @@ describe("the Settings screen", () => {
     });
   });
 
+  it("saves the default model new dots start with", async () => {
+    saving();
+    const { user } = renderApp("/settings/claude");
+    const model = await screen.findByLabelText("Default model");
+    await within(model).findByRole("option", { name: "Opus" });
+    expect(model).toHaveValue(stored.default_model);
+    await user.selectOptions(model, "Opus");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, default_model: "opus" } },
+    ]);
+    // Any id through Custom…, but not none.
+    await user.selectOptions(model, "Custom…");
+    const box = screen.getByRole("textbox", { name: "Custom model ID" });
+    await user.clear(box);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByText("Name the model new dots start with.")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toHaveLength(1);
+    await user.type(box, "claude-opus-4-1");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(backend.callsTo("update_settings")[1]).toEqual({
+        settings: { ...stored, default_model: "claude-opus-4-1" },
+      }),
+    );
+  });
+
   it("keeps numbers inside the core's bounds", async () => {
     expect(settingsErrors({ port: 47321, max_concurrent_runs: 16 })).toEqual({});
     expect(Object.keys(settingsErrors({ port: 0, max_concurrent_runs: 17 }))).toEqual([
@@ -90,7 +130,7 @@ describe("the Settings screen", () => {
     });
 
     saving();
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/runs");
     const max = await screen.findByLabelText("Runs at once");
     await user.clear(max);
     await user.type(max, "99");
@@ -101,7 +141,7 @@ describe("the Settings screen", () => {
 
   it("sends a new Claude program, and an emptied path as none", async () => {
     saving(true);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/claude");
     const path = await screen.findByLabelText("Program path");
     await user.type(path, "  C:/tools/claude.exe ");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -120,7 +160,7 @@ describe("the Settings screen", () => {
     backend.on("update_settings", () => {
       throw { kind: "cancelled", message: "the Claude program was not changed" };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/claude");
     await user.type(await screen.findByLabelText("Program path"), "C:/evil.exe");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(
@@ -135,16 +175,18 @@ describe("the Settings screen", () => {
     backend.on("update_settings", () => {
       throw { kind: "cancelled", message: "the Claude program was not changed" };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/claude");
     const path = await screen.findByLabelText("Program path");
     await user.type(path, "C:/evil.exe");
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText(/^Not saved:/)).toBeVisible();
 
     // Another field does not answer what was declined; a new path does.
-    await user.click(screen.getByLabelText("Start Dots when I sign in"));
-    expect(screen.getByText(/^Not saved:/)).toBeVisible();
-    await user.type(path, "{Backspace}");
+    await openTab(user, "General");
+    await user.click(await screen.findByLabelText("Start Dots when I sign in"));
+    await openTab(user, "Claude");
+    expect(await screen.findByText(/^Not saved:/)).toBeVisible();
+    await user.type(screen.getByLabelText("Program path"), "{Backspace}");
     expect(screen.queryByText(/^Not saved:/)).toBeNull();
     expect(screen.getByText(/^Leave empty to find claude on your PATH/)).toBeVisible();
   });
@@ -153,7 +195,7 @@ describe("the Settings screen", () => {
     backend.on("update_settings", () => {
       throw { kind: "invalid", message: "endpoint_url must start with http://" };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/claude");
     await user.click(await screen.findByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("must start with http://");
     // A refusal is about what was sent: it stays until the next save, whatever is typed.
@@ -163,7 +205,7 @@ describe("the Settings screen", () => {
 
   it("adds and removes local endpoints", async () => {
     saving();
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/models");
     const add = await screen.findByLabelText("Add an endpoint");
     await user.type(add, "https://lan-box:11434{Enter}");
     expect(screen.getByText("An endpoint starts with http:// and names a host.")).toBeVisible();
@@ -185,7 +227,7 @@ describe("the Settings screen", () => {
 
   it("tests an endpoint with a model and shows the answer or the failure", async () => {
     backend.on("test_endpoint", () => "The model answered with a well-formed tool call.");
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/models");
     const row = within(await screen.findByRole("listitem", { name: endpoint }));
     expect(row.getByRole("button", { name: "Test endpoint" })).toBeDisabled();
     await user.type(row.getByLabelText(`Model for ${endpoint}`), "gemma");
@@ -282,7 +324,7 @@ describe("the Settings screen", () => {
       claude: { ...quietStatus.claude, version: "2.1.300", mismatch: true },
     }));
     backend.on("mark_claude_tested", () => quietStatus);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/claude");
     const main = within(await screen.findByRole("main"));
     await user.click(await main.findByRole("button", { name: "Mark as tested" }));
     await waitFor(() => expect(main.queryByRole("button", { name: "Mark as tested" })).toBeNull());
@@ -293,7 +335,7 @@ describe("the Settings screen", () => {
 describe("the quiet limit setting", () => {
   it("shows the stored seconds as minutes and saves minutes as seconds", async () => {
     saving();
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/runs");
     const field = await screen.findByLabelText("Quiet limit for every dot");
     expect(stored.quiet_limit_secs).toBe(600);
     expect(field).toHaveValue(10);
@@ -308,7 +350,7 @@ describe("the quiet limit setting", () => {
 
   it.each(["0", "1441"])("marks %s minutes and does not save", async (minutes) => {
     saving();
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/runs");
     const field = await screen.findByLabelText("Quiet limit for every dot");
     await user.clear(field);
     await user.type(field, minutes);
@@ -332,7 +374,7 @@ describe("the quiet limit setting", () => {
 describe("the auto-archive setting", () => {
   it("saves the days after which an idle topic is archived, 0 for never", async () => {
     saving();
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/runs");
     const field = await screen.findByLabelText("Archive topics idle for (days)");
     expect(field).toHaveValue(stored.auto_archive_days);
     await user.clear(field);
@@ -350,5 +392,121 @@ describe("the auto-archive setting", () => {
     expect(settingsErrors({ ...base, auto_archive_days: 3650 })).toEqual({});
     expect(settingsErrors({ ...base, auto_archive_days: 3651 })).toHaveProperty("archive");
     expect(settingsErrors({ ...base, auto_archive_days: 1.5 })).toHaveProperty("archive");
+  });
+});
+
+describe("the Settings tabs", () => {
+  const tabs = () => screen.findByRole("navigation", { name: "Settings sections" });
+
+  it("opens General at /settings", async () => {
+    const { router } = renderApp("/settings");
+    expect(await screen.findByLabelText("Start Dots when I sign in")).toBeVisible();
+    expect(router.state.location.pathname).toBe("/settings/general");
+    expect(within(await tabs()).getByRole("link", { name: "General" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.queryByLabelText("Port")).toBeNull();
+  });
+
+  it("lists the tabs in order", async () => {
+    renderApp("/settings");
+    const names = within(await tabs())
+      .getAllByRole("link")
+      .map((link) => link.textContent);
+    expect(names).toEqual([
+      "General",
+      "Account",
+      "Instructions",
+      "Claude",
+      "Runs & server",
+      "Local models",
+      "Browser",
+      "Updates",
+      "Help",
+    ]);
+  });
+
+  it("shows only the chosen tab and puts it in the address", async () => {
+    const { user, router } = renderApp("/settings");
+    await screen.findByLabelText("Start Dots when I sign in");
+    await openTab(user, "Runs & server");
+    expect(await screen.findByLabelText("Port")).toBeVisible();
+    expect(router.state.location.pathname).toBe("/settings/runs");
+    expect(within(await tabs()).getByRole("link", { name: "Runs & server" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(within(await tabs()).getByRole("link", { name: "General" })).not.toHaveAttribute(
+      "aria-current",
+    );
+    expect(screen.queryByLabelText("Start Dots when I sign in")).toBeNull();
+    expect(screen.queryByLabelText("Global instructions")).toBeNull();
+
+    // Back goes to the tab before.
+    await act(() => router.navigate(-1));
+    expect(await screen.findByLabelText("Start Dots when I sign in")).toBeVisible();
+    expect(screen.queryByLabelText("Port")).toBeNull();
+  });
+
+  it("sends an unknown tab back to the first", async () => {
+    const { router } = renderApp("/settings/nonsense");
+    expect(await screen.findByLabelText("Start Dots when I sign in")).toBeVisible();
+    expect(router.state.location.pathname).toBe("/settings/general");
+  });
+
+  it("keeps an unsaved edit across tabs, says so, and saves it", async () => {
+    saving();
+    const { user } = renderApp("/settings/instructions");
+    const text = await screen.findByLabelText("Global instructions");
+    expect(screen.queryByText("Unsaved changes")).toBeNull();
+    await user.clear(text);
+    await user.type(text, "Be brief.");
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
+
+    await openTab(user, "Help");
+    expect(await screen.findByRole("button", { name: "Report a problem" })).toBeVisible();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
+    await openTab(user, "Instructions");
+    expect(await screen.findByLabelText("Global instructions")).toHaveValue("Be brief.");
+
+    await openTab(user, "Updates");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, global_instructions: "Be brief." } },
+    ]);
+    await waitFor(() => expect(screen.queryByText("Unsaved changes")).toBeNull());
+  });
+
+  it("opens the tab with an error when Save finds one there, and marks it", async () => {
+    saving();
+    const { user, router } = renderApp("/settings/runs");
+    const max = await screen.findByLabelText("Runs at once");
+    await user.clear(max);
+    await user.type(max, "99");
+    await openTab(user, "General");
+    await screen.findByLabelText("Start Dots when I sign in");
+    expect(within(await tabs()).queryByText("has errors")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(router.state.location.pathname).toBe("/settings/runs"));
+    expect(await screen.findByText("Runs at once must be a whole number, 1 to 16.")).toBeVisible();
+    expect(within(await tabs()).getByRole("link", { name: /Runs & server/ })).toHaveTextContent(
+      "has errors",
+    );
+    expect(within(await tabs()).getByRole("link", { name: "General" })).not.toHaveTextContent(
+      "has errors",
+    );
+    expect(backend.callsTo("update_settings")).toEqual([]);
+  });
+
+  it("keeps the rail's Settings link lit on every tab", async () => {
+    renderApp("/settings/updates");
+    const rail = await screen.findByRole("navigation", { name: "Main" });
+    expect(within(rail).getByRole("link", { name: "Settings" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
   });
 });

@@ -21,6 +21,7 @@ async fn an_empty_table_gives_the_defaults() {
     assert!(s.notify_on_notes);
     assert_eq!(s.quiet_limit_secs, 600);
     assert_eq!(s.auto_archive_days, 30);
+    assert_eq!(s.default_model, "sonnet");
 }
 
 #[tokio::test]
@@ -44,6 +45,7 @@ async fn settings_round_trip() {
         publish_token: Some("GH_PUBLISH".into()),
         quiet_limit_secs: 900,
         auto_archive_days: 7,
+        default_model: "opus".into(),
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
@@ -70,6 +72,7 @@ async fn bad_and_unknown_rows_are_ignored_one_by_one() {
         // Right type, but a value `validate` rejects.
         ("claude_path", "\"\""),
         ("tested_claude_version", "\"\""),
+        ("default_model", "\"\""),
     ] {
         sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
             .bind(k)
@@ -85,6 +88,7 @@ async fn bad_and_unknown_rows_are_ignored_one_by_one() {
     assert!(s.autostart);
     assert_eq!(s.claude_path, None);
     assert_eq!(s.tested_claude_version, TESTED_CLAUDE_VERSION);
+    assert_eq!(s.default_model, "sonnet");
 }
 
 #[tokio::test]
@@ -119,6 +123,10 @@ async fn invalid_settings_are_rejected_and_not_stored() {
         (
             |s| s.auto_archive_days = 3651,
             "auto_archive_days must be between 0 and 3650",
+        ),
+        (
+            |s| s.default_model = "  ".into(),
+            "default_model must not be empty",
         ),
         // Settings has no "off": only a dot can turn the watchdog off, with 0.
         (

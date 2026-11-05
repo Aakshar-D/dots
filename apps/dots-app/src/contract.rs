@@ -24,6 +24,7 @@ use dots_core::library_service::{
     ContextDetail, ContextDocuments, EnvVariable, LibraryEntry, McpProbe, PluginDetail,
     ScannedSkill, ScopedCatalog, SkillDetail,
 };
+use dots_core::managed_policy::ManagedPolicy;
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
@@ -32,6 +33,7 @@ use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
+use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::org::{
     BaoAuth, CreatedInvite, DraftView, EditOutcome, InviteOffer, InviteState, InviteView,
     JoinPreview, JoinsMember, KeyView, MemberView, MembersView, OrgEntry, OrgStatus, OrgSummary,
@@ -47,6 +49,12 @@ use crate::state::StartupError;
 use crate::update::UpdateNote;
 
 const TS: &str = "2026-10-09T12:00:00.000Z";
+
+fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .expect("a sample time parses")
+        .with_timezone(&chrono::Utc)
+}
 
 /// How the core refuses a Viewer in the Platform workspace of Acme Engineering.
 fn viewer_in_platform(action: &str) -> String {
@@ -1295,7 +1303,7 @@ pub fn samples() -> Value {
         }),
         "CmdError": to(CmdError { kind: CmdErrorKind::Conflict, message: "run 01J0RUN is already succeeded".into() }),
         "RunEventData": engine_events(),
-        "NewDotSpec": to(crate::commands::new_dot_spec()),
+        "NewDotSpec": to(dots_core::models::new_dot_spec(&Settings::default(), "", "", "")),
         "Commands": crate::COMMANDS,
         "Enums": {
             "EngineKind": EngineKind::ALL,
@@ -1365,6 +1373,45 @@ pub fn samples() -> Value {
     // Usage and limits (spec sections 5 and 6).
     samples["LimitsState"] = to(limits_states());
     samples["UsageSummary"] = to(usage_summary());
+    // Hourly usage counts (usage counts spec): the state, on and never turned on, and a report.
+    samples["UsageCountsState"] = to(vec![
+        UsageCountsState {
+            enabled: true,
+            url: Some("https://counts.example.com/v1/hourly".into()),
+            install_id: Some("3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f".into()),
+            first_hour: Some(ts("2026-10-09T11:00:00Z")),
+            last_sent_hour: Some(ts("2026-10-09T11:00:00Z")),
+            last_sent_at: Some(ts("2026-10-09T12:02:00Z")),
+            last_error: Some("the server answered 503".into()),
+        },
+        UsageCountsState::default(),
+    ]);
+    samples["UsageCountsReport"] = to(vec![
+        Report {
+            schema: dots_core::usage_counts::SCHEMA,
+            install_id: Some("3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f".into()),
+            app_version: "0.3.0".into(),
+            hour_start: ts("2026-10-09T11:00:00Z"),
+            runs_started: 4,
+            runs_succeeded: 3,
+            runs_failed: 1,
+            messages_sent: 2,
+            approvals_asked: 1,
+            dots: 5,
+        },
+        Report {
+            schema: dots_core::usage_counts::SCHEMA,
+            install_id: None,
+            app_version: "0.3.0".into(),
+            hour_start: ts("2026-10-09T13:00:00Z"),
+            runs_started: 0,
+            runs_succeeded: 0,
+            runs_failed: 0,
+            messages_sent: 0,
+            approvals_asked: 0,
+            dots: 5,
+        },
+    ]);
     samples["Enums"]["MessageKind"] = to(MessageKind::ALL);
     samples["Enums"]["FollowUpStatus"] = to(FollowUpStatus::ALL);
     samples["Enums"]["MemorySource"] = to(MemorySource::ALL);
@@ -1522,9 +1569,43 @@ pub fn samples() -> Value {
         }),
         None,
     ]);
+    let managed = ManagedPolicy {
+        path: Some("C:/Program Files/ClaudeCode/managed-settings.json".into()),
+        blocks_skipping_asks: true,
+        forced_ask: vec!["Bash(git push:*)".into()],
+        forced_deny: vec!["WebFetch".into()],
+        managed_rules_only: false,
+        error: None,
+    };
+    samples["ManagedPolicy"] = to(&managed);
+    samples["ManagedPolicyUnread"] = to(ManagedPolicy {
+        path: Some("C:/Program Files/ClaudeCode/managed-settings.json".into()),
+        error: Some(
+            "Couldn't read your company's Claude Code policy at C:/Program Files/ClaudeCode/managed-settings.json: expected value at line 1 column 3".into(),
+        ),
+        ..Default::default()
+    });
+    samples["ManagedCheck"] = to(dots_core::managed_policy::ManagedCheck {
+        conflicts: dots_core::managed_policy::conflicts(
+            EngineKind::Claude,
+            &Policy::preset(Preset::Trusted),
+            &managed,
+        ),
+        managed,
+    });
     samples["BrowserStatus"] = to(BrowserStatus {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
         npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
+    });
+    // The Claude list, then a model a local endpoint lists (no hint).
+    samples["ModelOption"] = to({
+        let mut models = dots_core::models::claude_models();
+        models.push(dots_core::models::ModelOption {
+            id: "qwen2.5-coder-7b".into(),
+            label: "qwen2.5-coder-7b".into(),
+            hint: String::new(),
+        });
+        models
     });
     samples["DraftRequest"] = to([
         DraftRequest {
@@ -1805,6 +1886,7 @@ pub fn samples() -> Value {
     inbox_marks_samples(&mut samples);
     send_later_samples(&mut samples);
     attachments_samples(&mut samples);
+    intents_samples(&mut samples);
     samples
 }
 
@@ -1965,6 +2047,56 @@ fn inbox_marks_samples(samples: &mut Value) {
             to(RuntimeEvent::InboxUpdated),
             to(RuntimeEvent::SnoozeEnded { items: vec![back] }),
         ]);
+}
+
+/// The person's goals: an urgent one handed to a dot, one with a due date, and a done one;
+/// the list a Viewer gets, read-only; and what the person writes for a goal.
+fn intents_samples(samples: &mut Value) {
+    use dots_core::intents::{IntentFields, IntentsView};
+
+    let urgent = Intent {
+        id: "01J0GOAL1".into(),
+        org_id: Some("acme-eng".into()),
+        workspace_id: "platform".into(),
+        text: "Ship the spring report".into(),
+        due_date: None,
+        urgent: true,
+        dot_id: Some("01J0DOT".into()),
+        created_at: TS.into(),
+        done_at: None,
+    };
+    let dated = Intent {
+        id: "01J0GOAL2".into(),
+        text: "Book the venue".into(),
+        due_date: Some("2026-10-14".into()),
+        urgent: false,
+        dot_id: None,
+        ..urgent.clone()
+    };
+    let done = Intent {
+        id: "01J0GOAL3".into(),
+        text: "Renew the passport".into(),
+        done_at: Some(TS.into()),
+        ..dated.clone()
+    };
+    samples["Intent"] = to([urgent.clone(), dated, done]);
+    samples["IntentsView"] = to(IntentsView {
+        intents: vec![urgent],
+        refusal: Some(viewer_in_platform("change goals")),
+    });
+    samples["IntentFields"] = to(IntentFields {
+        text: "Book the venue".into(),
+        due_date: Some("2026-10-14".into()),
+        urgent: false,
+        dot_id: Some("01J0DOT".into()),
+    });
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .push(to(RuntimeEvent::IntentsUpdated {
+            org_id: None,
+            workspace_id: "default".into(),
+        }));
 }
 
 /// Instructions a dot proposed (conversational chat spec section 4), with `status`.

@@ -15,7 +15,7 @@ describe("browser use in Settings", () => {
       current = args.settings as Settings;
       return { settings: current, restart_required: false };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/browser");
     expect(await screen.findByText("Microsoft Edge found")).toBeVisible();
     expect(screen.getByText("C:/Edge/msedge.exe")).toBeVisible();
     expect(screen.getByText("Node.js not found")).toBeVisible();
@@ -32,7 +32,7 @@ describe("browser use in Settings", () => {
     backend.on("update_settings", () => {
       throw { kind: "cancelled", message: "the Edge program was not changed" };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/browser");
     expect(await screen.findByText("Microsoft Edge not found")).toBeVisible();
     expect(screen.getByText("Node.js not found")).toBeVisible();
     await user.type(screen.getByLabelText("Edge path"), "D:/Edge/msedge.exe");

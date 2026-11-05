@@ -5,6 +5,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{check_endpoint_url, MAX_QUIET_LIMIT_SECS, MIN_QUIET_LIMIT_SECS};
+use crate::models::DEFAULT_CLAUDE_MODEL;
 use crate::store::Store;
 use crate::{Error, Result};
 
@@ -54,6 +55,9 @@ pub struct Settings {
     pub quiet_limit_secs: u64,
     /// A topic idle for this many days is archived (topic tools spec section 3.3); 0 never.
     pub auto_archive_days: u32,
+    /// The model a new Claude dot starts with (model switcher spec section 2.2). Existing dots
+    /// keep their own.
+    pub default_model: String,
 }
 
 impl Default for Settings {
@@ -76,6 +80,7 @@ impl Default for Settings {
             publish_token: None,
             quiet_limit_secs: 600,
             auto_archive_days: 30,
+            default_model: DEFAULT_CLAUDE_MODEL.to_string(),
         }
     }
 }
@@ -122,6 +127,9 @@ impl Settings {
         }
         if self.auto_archive_days > MAX_AUTO_ARCHIVE_DAYS {
             return invalid("auto_archive_days must be between 0 and 3650");
+        }
+        if self.default_model.trim().is_empty() {
+            return invalid("default_model must not be empty");
         }
         Ok(())
     }

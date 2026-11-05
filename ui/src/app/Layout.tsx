@@ -8,6 +8,7 @@ import {
   Plug,
   Rocket,
   Settings as SettingsIcon,
+  Target,
 } from "lucide-react";
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router";
@@ -27,6 +28,7 @@ import { useActivity } from "@/lib/use-activity";
 const LINKS = [
   { to: "/home", label: "Home", icon: House },
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
+  { to: "/intents", label: "Intents", icon: Target },
   { to: "/apps", label: "Apps", icon: LayoutGrid },
   { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/connectors", label: "Connectors", icon: Plug },

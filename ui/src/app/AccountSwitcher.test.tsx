@@ -101,8 +101,7 @@ describe("the account switcher", () => {
     const { user, router } = setup();
     await user.click(await screen.findByRole("button", { name: /^Account:/ }));
     await user.click(screen.getByRole("menuitem", { name: "Manage accounts" }));
-    expect(router.state.location.pathname).toBe("/settings");
-    expect(router.state.location.hash).toBe("#accounts");
+    expect(router.state.location.pathname).toBe("/settings/account");
   });
 
   it("labels each account with the person's role in it", async () => {

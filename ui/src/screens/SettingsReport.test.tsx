@@ -15,7 +15,7 @@ function settings() {
       ? `${REPORT}${String(args.description)}\n== Recent log lines (1, scrubbed) ==\nstarting Dots\n`
       : `${REPORT}${String(args.description)}\n== Recent log lines ==\n(not included)\n`,
   );
-  return renderApp("/settings");
+  return renderApp("/settings/help");
 }
 
 async function openDialog(user: ReturnType<typeof settings>["user"]) {

@@ -27,7 +27,7 @@ describe("the Connectors screen", () => {
     const labels = within(nav)
       .getAllByRole("link")
       .map((l) => l.getAttribute("aria-label"));
-    expect(labels).toEqual(["Home", "Inbox", "Apps", "Library", "Connectors", "Settings"]);
+    expect(labels).toEqual(["Home", "Inbox", "Intents", "Apps", "Library", "Connectors", "Settings"]);
     expect(await screen.findByRole("heading", { name: "Connectors" })).toBeVisible();
   });
 

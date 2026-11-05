@@ -109,6 +109,13 @@ pub async fn probe(endpoint: &str, model: &str) -> Result<String> {
     }
 }
 
+/// The model ids `endpoint` lists (model switcher spec section 2.1). The endpoint is checked
+/// as `probe` checks it.
+pub async fn list_models(endpoint: &str) -> Result<Vec<String>> {
+    crate::model::check_endpoint_url(endpoint)?;
+    client::fetch_models(endpoint).await
+}
+
 pub struct LocalEngine {
     store: Store,
     gate: Arc<dyn PermissionGate>,

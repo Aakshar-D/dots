@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, Navigate } from "react-router";
+import { Link, Navigate, useLocation, useNavigate } from "react-router";
 
 import { CommandError, commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { dotStatus, skipLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
+import { DotModelSwitch } from "@/screens/home/DotModelSwitch";
 import { FilesPanel, FilesToggle } from "@/screens/home/FilesPanel";
 import { filesHidden, setFilesHidden } from "@/screens/home/files-pref";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
@@ -49,7 +50,24 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     older !== undefined &&
     ((older.error instanceof CommandError && older.error.kind === "not_found") ||
       (older.isSuccess && older.data.length === 0));
-  const [pick, setPick] = useState<ReplyPick>({ kind: "default" });
+  // A goal's Start (Intents) opens the dot with the goal as the draft of a new topic's first
+  // message. It is only a draft: nothing is sent until the person sends it. Taken once, then
+  // dropped from the history entry so that going back here does not bring it again.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [draft] = useState(() => {
+    const state: unknown = location.state;
+    return typeof state === "object" && state !== null && "draft" in state
+      ? String(state.draft)
+      : undefined;
+  });
+  useEffect(() => {
+    if (draft !== undefined) void navigate(location.pathname, { replace: true, state: null });
+    // Once, on mount.
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [pick, setPick] = useState<ReplyPick>(
+    draft !== undefined ? { kind: "new" } : { kind: "default" },
+  );
   // The current conversation, loaded and with nothing in it, greets like a new chat
   // (conversational chat spec section 5). A failed load shows its errors instead.
   // Scheduled messages wait as cards in the conversation, so a dot with one does not greet.
@@ -89,6 +107,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         status={dotStatus(row, allMessages, held, hidden)}
         skipLine={skipLine(row.schedule_state)}
       >
+        <DotModelSwitch dot={dot} />
         {hasFiles && <FilesToggle hidden={panelHidden} onToggle={toggleFiles} />}
         <HistoryMenu dotId={dot.id} topics={view.older} archived={view.archived} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
@@ -143,6 +162,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           pick={pick}
           onPick={setPick}
           olderRoot={rootRunId}
+          draft={draft}
         />
       )}
       {greeting && <div aria-hidden className="flex-1" />}

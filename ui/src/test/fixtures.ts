@@ -53,6 +53,8 @@ export const sample = {
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
   memories: T.Memory.array().parse(contract.Memory),
+  /// An urgent goal handed to a dot, one with a due date, and a done one.
+  intents: T.Intent.array().parse(contract.Intent),
   /// A folder watcher that is on, an email one paused on an error, a GitHub one paused on a flood.
   watchers: T.Watcher.array().parse(contract.Watcher),
   /// This install's Dots ID, with a name and email set.
@@ -83,7 +85,12 @@ export const sample = {
   /// Ben's request answering his invite; then one with no invite whose email is Asha's, with a
   /// problem.
   requestPreviews: T.RequestPreview.array().parse(contract.RequestPreview),
+  /// The Claude models (Opus, Sonnet, Haiku), then one a local endpoint lists.
+  models: T.ModelOption.array().parse(contract.ModelOption),
 };
+
+/// What `list_models` answers for the Claude engine.
+export const claudeModels = sample.models.filter((m) => m.hint !== "");
 
 /// What `new_dot_spec` answers: the core's defaults with nothing filled in.
 /// What a workspace or a dot refuses when it refuses nothing (`Refusals`, `DotAccess`).
@@ -99,6 +106,15 @@ export const quietStatus: T.Status = {
 
 /// The answers every screen's frame needs: a started app with nothing to warn about, no dots
 /// and an empty inbox. A test replaces what it cares about with `backend.on`.
+const noManagedPolicy = {
+  path: null,
+  blocks_skipping_asks: false,
+  forced_ask: [],
+  forced_deny: [],
+  managed_rules_only: false,
+  error: null,
+};
+
 export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
@@ -147,6 +163,9 @@ export function installDefaults(): void {
   backend.on("approval_touches_private", () => false);
   // The policy editor asks which always-allowed rules cover a private folder; by default none.
   backend.on("rules_touch_private", ({ patterns }) => (patterns as string[]).map(() => false));
+  // No company Claude Code policy is installed on this PC.
+  backend.on("managed_policy", () => noManagedPolicy);
+  backend.on("managed_policy_check", () => ({ managed: noManagedPolicy, conflicts: [] }));
   // A conversation asks for the dot's app proposals; by default it has none.
   backend.on("app_proposals_list", () => []);
   // A conversation and the dot menu ask for the dot's scheduled messages; by default none.
@@ -154,6 +173,16 @@ export function installDefaults(): void {
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
+  // Usage counts are off and were never turned on.
+  backend.on("usage_counts_state", () => ({
+    enabled: false, url: null, install_id: null, first_hour: null,
+    last_sent_hour: null, last_sent_at: null, last_error: null,
+  }));
+  backend.on("usage_counts_preview", () => ({
+    schema: 1, install_id: null, app_version: "0.3.0", hour_start: "2026-10-09T13:00:00Z",
+    runs_started: 0, runs_succeeded: 0, runs_failed: 0, messages_sent: 0, approvals_asked: 0,
+    dots: 0,
+  }));
   backend.on("chatgpt_account", () => ({
     configured: false, signing_in: false, account: null, expires_at: null,
     setup_error: "ChatGPT sign-in needs a registered OpenAI client for Dots.",
@@ -192,6 +221,10 @@ export function installDefaults(): void {
   // No grant has a status: the editor shows each as it shows a grant not saved yet.
   backend.on("dot_variables", () => []);
   backend.on("new_dot_spec", () => blankSpec);
+  // The Claude list; a local endpoint lists one model.
+  backend.on("list_models", (args) =>
+    args.engine === "claude" ? claudeModels : sample.models.filter((m) => m.hint === ""),
+  );
   backend.on("list_runs", () => []);
   // No dot has checked in or scheduled anything. A question on screen is marked read.
   backend.on("messages_list", () => []);
@@ -200,6 +233,8 @@ export function installDefaults(): void {
   backend.on("schedule_skips", () => []);
   // No dot remembers anything.
   backend.on("memories_list", () => []);
+  // No goals yet, and the person may change them.
+  backend.on("intents_list", () => ({ intents: [], refusal: null }));
   backend.on("watchers_list", () => []);
   // Nothing is unread; looking at a dot and saying which one is viewed are taken.
   backend.on("unread_total", () => 0);

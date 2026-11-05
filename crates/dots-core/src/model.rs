@@ -1127,6 +1127,25 @@ pub struct Memory {
     pub updated_at: String,
 }
 
+/// One of the person's goals (Intents): 1 to 500 characters, in the account (`org_id`, `None`
+/// for Personal) and workspace it was added in. `due_date` is a calendar date, `YYYY-MM-DD`;
+/// times are RFC 3339 UTC (`util::now`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Intent {
+    pub id: String,
+    pub org_id: Option<String>,
+    pub workspace_id: String,
+    pub text: String,
+    pub due_date: Option<String>,
+    /// Shown under Now, whatever its date.
+    pub urgent: bool,
+    /// The dot it is handed to; `None` when it has none, or that dot was deleted.
+    pub dot_id: Option<String>,
+    pub created_at: String,
+    /// When it was marked done; `None` while it is open.
+    pub done_at: Option<String>,
+}
+
 /// The longest team, project or workflow name, in characters after trimming.
 pub const MAX_TEAM_NAME: usize = 64;
 /// The longest team description, in characters after trimming.
