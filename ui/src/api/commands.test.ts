@@ -380,6 +380,9 @@ describe("commands", () => {
     await commands.workflowRunsForOrigins(["r1", "r2"]);
     reply = async () => fixture.WorkflowRun[0];
     await commands.workflowRunGet("w1");
+    reply = async () => fixture.StepDotRun;
+    expect(await commands.workflowRunDotRuns("w1")).toEqual(fixture.StepDotRun);
+    reply = async () => fixture.WorkflowRun[0];
     await commands.workflowRunStart("f1", "p1", "Fix the icon.", false);
     await commands.workflowRunStart("f1", "p1", "Fix the icon.", true);
     reply = async () => fixture.CheckView;
@@ -401,6 +404,7 @@ describe("commands", () => {
       ["workflow_runs_list", { filter: {} }],
       ["workflow_runs_for_origins", { runIds: ["r1", "r2"] }],
       ["workflow_run_get", { id: "w1" }],
+      ["workflow_run_dot_runs", { id: "w1" }],
       [
         "workflow_run_start",
         { workflowId: "f1", projectId: "p1", task: "Fix the icon.", test: false },

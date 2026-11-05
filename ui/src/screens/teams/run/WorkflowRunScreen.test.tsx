@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Run, Team, Workflow, WorkflowRun } from "@/api/types";
+import type { StepDotRun, Team, Workflow, WorkflowRun } from "@/api/types";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -18,13 +18,13 @@ const [waiting, done, held, failed, budget] = sample.workflowRuns as [
 const LEAD = "dots/nightly-tests/01J0RUN5";
 const MEMBER = "dots/reviewer/01J0RUN6";
 
-/// The page of `run`, of crew's Fix and ship; the newest dot runs are `runs`.
-function runPage(run: WorkflowRun, runs: Run[] = []) {
+/// The page of `run`, of crew's Fix and ship; its steps' dot runs are `runs`.
+function runPage(run: WorkflowRun, runs: StepDotRun[] = []) {
   backend.on("workflow_run_get", () => run);
   backend.on("team_get", () => crew);
   backend.on("workflow_get", () => fixAndShip);
   backend.on("workflow_check", () => sample.check);
-  backend.on("list_runs", () => runs);
+  backend.on("workflow_run_dot_runs", () => runs);
   return renderApp(`/workflow-runs/${run.id}`);
 }
 
@@ -66,23 +66,24 @@ describe("the workflow run page", () => {
   });
 
   it("lays out the steps with their state, the path taken, the members and their dot runs", async () => {
-    const lead: Run = {
-      ...sample.run,
-      id: "01J0RUN5",
-      root_run_id: "01J0RUN5",
-      status: "succeeded",
-      workflow_step_run_id: "01J0STP1",
-    };
-    runPage(waiting, [lead]);
+    runPage(waiting, sample.stepDotRuns);
     const build = within(await screen.findByRole("group", { name: "Step 1: Build" }));
     expect(build.getByText("Done")).toBeVisible();
     expect(build.getByText("Delegate")).toBeVisible();
     expect(await build.findByText("may start reviewer · 2 at once · 4 total")).toBeVisible();
     expect(build.getByText("fixed")).toBeVisible();
-    expect(build.getByRole("link", { name: "Run of nightly-tests" })).toHaveAttribute(
-      "href",
-      "/runs/01J0RUN5",
-    );
+    // One link per thread of the step's own runs: the lead's (continued once), and the member's
+    // that handed back no branch. The member with a branch is linked from the member.
+    const dotRuns = within(await build.findByRole("list", { name: "Dot runs of Build" }));
+    const links = dotRuns.getAllByRole("link");
+    expect(links.map((l) => [l.textContent, l.getAttribute("href")])).toEqual([
+      ["Run of nightly-tests", "/runs/01J0RUN5"],
+      ["Run of reviewer", "/runs/01J0RUN8"],
+    ]);
+    expect(dotRuns.getAllByRole("listitem").map((i) => i.textContent)).toEqual([
+      "Run of nightly-testsSucceeded",
+      "Run of reviewerFailed",
+    ]);
     const members = within(build.getByRole("list", { name: "Members Build started" }));
     const windows = within(
       members.getByRole("listitem", { name: "Check the icon on Windows 10." }),
@@ -116,7 +117,11 @@ describe("the workflow run page", () => {
     expect(await within(check).findByText("Made the icon dark on a light taskbar.")).toBeVisible();
     expect(within(check).queryByRole("button", { name: "Stop" })).toBeNull();
     expect(screen.getAllByRole("button", { name: "Stop" })).toHaveLength(1);
-    expect(backend.callsTo("list_runs")).toContainEqual({ dotId: null, limit: 100 });
+    expect(backend.callsTo("workflow_run_dot_runs")).toContainEqual({ id: "01J0WFR" });
+    // The check runs no dot run of its own.
+    expect(
+      within(step("Step 2.1: Review")).queryByRole("list", { name: "Dot runs of Review" }),
+    ).toBeNull();
   });
 
   it("approves the check on its card, then shows the run going on", async () => {
@@ -263,6 +268,11 @@ describe("the workflow run page", () => {
     expect(ship.getByRole("button", { name: `Copy the branch ${LEAD}` })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
     expect(screen.queryByRole("region", { name: "Your check" })).toBeNull();
+    // The approved check's hand-off names the lead's branch, but the check ran no dot run, so
+    // its card links none: the lead's run is linked from Build.
+    expect(
+      within(step("Step 2.1: Review")).queryByRole("list", { name: "Dot runs of Review" }),
+    ).toBeNull();
   });
 
   it("follows the run's events: what the core says now is shown", async () => {
@@ -274,6 +284,24 @@ describe("the workflow run page", () => {
     act(() => backend.emit("runtime", { type: "workflow_run_updated", run: moved }));
     expect(await status("Running")).toBeVisible();
     expect(screen.queryByRole("region", { name: "Your check" })).toBeNull();
+  });
+
+  it("follows its steps' dot runs: a step's run that changes shows its new state", async () => {
+    const lead = { ...sample.stepDotRuns[0], status: "running" as const };
+    const { listening } = runPage(waiting, [lead]);
+    const build = within(await screen.findByRole("group", { name: "Step 1: Build" }));
+    const dotRuns = within(await build.findByRole("list", { name: "Dot runs of Build" }));
+    expect(dotRuns.getByText("Running")).toBeVisible();
+    await listening();
+    backend.on("workflow_run_dot_runs", () => [{ ...lead, status: "succeeded" }]);
+    act(() =>
+      backend.emit("runtime", {
+        type: "run_updated",
+        run: { ...sample.run, id: lead.run_id, workflow_step_run_id: lead.step_run_id },
+      }),
+    );
+    expect(await dotRuns.findByText("Succeeded")).toBeVisible();
+    expect(dotRuns.queryByText("Running")).toBeNull();
   });
 
   it("says why a run cannot be shown", async () => {

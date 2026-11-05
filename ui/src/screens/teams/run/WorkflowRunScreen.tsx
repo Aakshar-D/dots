@@ -16,10 +16,6 @@ import { RunMeters } from "./RunMeters";
 import { RunSteps, type RunView } from "./RunSteps";
 import { latestStepRuns } from "./steps";
 
-/// How many of the newest dot runs the page reads to link its steps to their dot runs. A run in
-/// flight is among them; an older one's steps still link to the runs their hand-offs name.
-export const RECENT_DOT_RUNS = 100;
-
 /// A workflow run's page (teams spec section 10.3, option A): live from the run's events.
 export function WorkflowRunScreen() {
   const { runId = "" } = useParams();
@@ -53,8 +49,8 @@ function RunPage({ run }: { run: WorkflowRun }) {
     enabled: workflowId !== null,
   });
   const dotRuns = useQuery({
-    queryKey: keys.recentRuns,
-    queryFn: () => commands.listRuns(null, RECENT_DOT_RUNS),
+    queryKey: keys.workflowDotRuns(run.id),
+    queryFn: () => commands.workflowRunDotRuns(run.id),
   });
   const names = new Map((team.data?.members ?? []).map((m) => [m.dot_id, m.dot_name]));
   const view: RunView = {

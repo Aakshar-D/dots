@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Run, StepRun, WorkflowRun } from "@/api/types";
+import type { StepDotRun, StepRun, WorkflowRun } from "@/api/types";
 import { sample } from "@/test/fixtures";
 
 import {
@@ -22,14 +22,6 @@ const [waiting, done, held, , budget] = sample.workflowRuns as [
   WorkflowRun,
   WorkflowRun,
 ];
-const names: Record<string, string> = { "01J0DOT": "nightly-tests", "01J0DOT2": "reviewer" };
-const nameOf = (id: string) => names[id] ?? id;
-const run = (id: string, over: Partial<Run> = {}): Run => ({
-  ...sample.run,
-  id,
-  root_run_id: id,
-  ...over,
-});
 
 describe("the run page's steps", () => {
   it("shows each step's newest step run, a later attempt over an earlier one", () => {
@@ -84,24 +76,28 @@ describe("the run page's steps", () => {
 
   it("links a step to its dot runs by thread, and each member to the run of its branch", () => {
     const build = latestStepRuns(waiting).get("build") as StepRun;
-    const runs = [
-      run("01J0RUN7", { dot_id: "01J0DOT", root_run_id: "01J0RUN5", status: "succeeded" }),
-      run("01J0RUN5", { dot_id: "01J0DOT", workflow_step_run_id: build.id }),
-      run("01J0RUN6", { dot_id: "01J0DOT2", workflow_step_run_id: build.id }),
-      // Another step run's.
-      run("01J0RUN8", { workflow_step_run_id: "01J0STP2" }),
-    ];
-    const links = stepRunLinks(build, runs, nameOf);
-    // The lead's thread is its root, once; the member's run is linked from the member.
-    expect(links.step).toEqual([{ id: "01J0RUN5", label: "nightly-tests", status: "succeeded" }]);
-    expect([...links.members]).toEqual([["dots/reviewer/01J0RUN6", "01J0RUN6"]]);
-
-    // Runs that fell out of the newest still link from the hand-off, named by their branch.
-    const old = stepRunLinks(build, [], nameOf);
-    expect(old.step).toEqual([
-      { id: "01J0RUN5", label: "dots/nightly-tests/01J0RUN5", status: null },
+    // The lead's, a member's with a branch, a member's without, the lead's continuation.
+    const runs: StepDotRun[] = sample.stepDotRuns;
+    const links = stepRunLinks(build, runs);
+    // The lead's thread is its root, once, in the state of its newest run; the member with a
+    // branch is linked from the member, the one without from the step.
+    expect(links.step).toEqual([
+      { id: "01J0RUN5", label: "nightly-tests", status: "succeeded" },
+      { id: "01J0RUN8", label: "reviewer", status: "failed" },
     ]);
-    expect(stepRunLinks(latestStepRuns(waiting).get("review")!, runs, nameOf).step).toEqual([]);
+    expect([...links.members]).toEqual([["dots/reviewer/01J0RUN6", "01J0RUN6"]]);
+    const running: StepDotRun = { ...runs[3], run_id: "01J0RUN9", status: "running" };
+    expect(stepRunLinks(build, [...runs, running]).step[0]).toEqual({
+      id: "01J0RUN5",
+      label: "nightly-tests",
+      status: "running",
+    });
+
+    // A step links only its own runs: the check has none, though its hand-off names branches.
+    const other: StepDotRun = { ...runs[0], step_run_id: "01J0STP2", run_id: "01J0RUNA" };
+    expect(stepRunLinks(build, [other]).step).toEqual([]);
+    const review = { ...latestStepRuns(waiting).get("review")!, handoff: build.handoff };
+    expect(stepRunLinks(review, runs).step).toEqual([]);
   });
 
   it("lines up the chat card's steps along the path taken, else the path whose step ran", () => {

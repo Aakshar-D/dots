@@ -2,9 +2,9 @@ mod common;
 
 use common::{init_repo, spec, temp_store};
 use dots_core::model::{
-    Handoff, LastRun, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus, StepRunChange,
-    StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WaitingWorkflowRun, WorkflowRun,
-    WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
+    Handoff, LastRun, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, Run, RunStatus, StepDotRun,
+    StepRunChange, StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WaitingWorkflowRun,
+    WorkflowRun, WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use dots_core::store::Store;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
@@ -1004,4 +1004,145 @@ async fn a_step_s_runs_are_never_runs_to_review() {
         .await
         .unwrap();
     assert_eq!(f.store.dot_counts(&f.dot).await.unwrap(), (1, 1));
+}
+
+/// A dot run queued a moment after the one before (runs queued in one millisecond would sort by
+/// their random ids), working for `step_run_id`, continuing `parent` when one is given.
+async fn queued(store: &Store, dot: &str, step_run_id: &str, parent: Option<&Run>) -> Run {
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let mut new = NewRun::new(dot, TriggerKind::Workflow);
+    new.workflow_step_run_id = Some(step_run_id.to_string());
+    new.parent_run_id = parent.map(|p| p.id.clone());
+    new.root_run_id = parent.map(|p| p.root_run_id.clone());
+    store.create_run(&new).await.unwrap()
+}
+
+/// The run page's link to `run`, a run of the dot named `dot_name`, as the store reads it now.
+async fn link(store: &Store, run: &Run, dot_name: &str) -> StepDotRun {
+    let run = store.get_run(&run.id).await.unwrap();
+    StepDotRun {
+        step_run_id: run.workflow_step_run_id.clone().unwrap(),
+        run_id: run.id.clone(),
+        root_run_id: run.root_run_id.clone(),
+        dot_id: run.dot_id.clone(),
+        dot_name: dot_name.into(),
+        status: run.status,
+        started_at: run.started_at.clone(),
+    }
+}
+
+/// The run page links each step to its own dot runs: every run of the workflow run's step runs,
+/// across attempts, with a resume child in its parent's thread and a delegate member's run,
+/// oldest first, each with its dot's name and its state. Another workflow run's runs and a plain
+/// run are left out. A workflow run with no dot run gives none, an unknown one `NotFound`.
+#[tokio::test]
+async fn a_workflow_run_s_dot_runs_are_those_of_its_step_runs_oldest_first() {
+    let f = fixture().await;
+    let reviewer = f
+        .store
+        .create_dot(&spec("reviewer"), None, "default")
+        .await
+        .unwrap()
+        .id;
+    let wr = f.started(&f.new).await;
+    assert_eq!(f.store.workflow_run_dot_runs(&wr.id).await.unwrap(), []);
+    let first = f
+        .store
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    assert_eq!(f.store.workflow_run_dot_runs(&wr.id).await.unwrap(), []);
+
+    let lead = queued(&f.store, &f.dot, &first.id, None).await;
+    assert!(f.store.claim_run(&lead.id).await.unwrap());
+    let child = queued(&f.store, &f.dot, &first.id, Some(&lead)).await;
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let mut member = NewRun::new(&reviewer, TriggerKind::Workflow);
+    member.workflow_step_run_id = Some(first.id.clone());
+    let member = f
+        .store
+        .add_step_member(&member, "Check it on Windows 10.")
+        .await
+        .unwrap();
+    f.store
+        .set_step_run(
+            &first.id,
+            &StepRunChange {
+                status: Some(StepRunStatus::Failed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let second = f
+        .store
+        .create_step_run(&wr.id, "a", 2, StepRunStatus::Running)
+        .await
+        .unwrap();
+    let retry = queued(&f.store, &f.dot, &second.id, None).await;
+    f.store
+        .finish_run(&retry.id, RunStatus::Succeeded, None, None)
+        .await
+        .unwrap();
+
+    // Not the page's: another workflow run's step run, and a run of no step.
+    let other = f.started(&f.new).await;
+    let theirs = f
+        .store
+        .create_step_run(&other.id, "a", 1, StepRunStatus::Running)
+        .await
+        .unwrap();
+    let theirs = queued(&f.store, &f.dot, &theirs.id, None).await;
+    f.store
+        .create_run(&NewRun::new(&f.dot, TriggerKind::Manual))
+        .await
+        .unwrap();
+
+    let got = f.store.workflow_run_dot_runs(&wr.id).await.unwrap();
+    assert_eq!(
+        got,
+        [
+            link(&f.store, &lead, "dev").await,
+            link(&f.store, &child, "dev").await,
+            link(&f.store, &member, "reviewer").await,
+            link(&f.store, &retry, "dev").await,
+        ]
+    );
+    let states: Vec<_> = got
+        .iter()
+        .map(|r| (r.step_run_id.as_str(), r.root_run_id.as_str(), r.status))
+        .collect();
+    assert_eq!(
+        states,
+        [
+            (first.id.as_str(), lead.id.as_str(), RunStatus::Running),
+            (first.id.as_str(), lead.id.as_str(), RunStatus::Queued),
+            (first.id.as_str(), member.id.as_str(), RunStatus::Queued),
+            (second.id.as_str(), retry.id.as_str(), RunStatus::Succeeded),
+        ]
+    );
+    assert!(got[0].started_at.is_some());
+    assert_eq!(got[1].started_at, None);
+    assert_eq!(
+        serde_json::to_value(&got[2]).unwrap(),
+        json!({
+            "step_run_id": first.id,
+            "run_id": member.id,
+            "root_run_id": member.id,
+            "dot_id": reviewer,
+            "dot_name": "reviewer",
+            "status": "queued",
+            "started_at": null,
+        })
+    );
+    let theirs_too = f.store.workflow_run_dot_runs(&other.id).await.unwrap();
+    assert_eq!(
+        theirs_too.iter().map(|r| &r.run_id).collect::<Vec<_>>(),
+        [&theirs.id]
+    );
+    let err = f.store.workflow_run_dot_runs("nope").await.unwrap_err();
+    assert!(
+        matches!(&err, Error::NotFound(m) if m == "workflow run nope"),
+        "{err:?}"
+    );
 }

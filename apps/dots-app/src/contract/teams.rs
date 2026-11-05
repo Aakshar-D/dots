@@ -610,6 +610,29 @@ fn check_view() -> CheckView {
     }
 }
 
+/// The dot runs of the run waiting on its check, oldest first: the lead's run, the run of each
+/// member it started (one handed back a branch, one failed without), and the run that continued
+/// the lead with their results, in the lead's thread.
+fn step_dot_runs() -> Vec<StepDotRun> {
+    let lead = (DEV, "nightly-tests");
+    let member = (REVIEWER, "reviewer");
+    let run = |(dot, name): (&str, &str), run_id: &str, root: &str, status| StepDotRun {
+        step_run_id: "01J0STP1".into(),
+        run_id: run_id.into(),
+        root_run_id: root.into(),
+        dot_id: dot.into(),
+        dot_name: name.into(),
+        status,
+        started_at: Some(TS.into()),
+    };
+    vec![
+        run(lead, "01J0RUN5", "01J0RUN5", RunStatus::Succeeded),
+        run(member, "01J0RUN6", "01J0RUN6", RunStatus::Succeeded),
+        run(member, "01J0RUN8", "01J0RUN8", RunStatus::Failed),
+        run(lead, "01J0RUN7", "01J0RUN5", RunStatus::Succeeded),
+    ]
+}
+
 /// Adds the samples of teams, workflows and workflow runs, and their events.
 pub(super) fn teams_samples(samples: &mut Value) {
     samples["Team"] = to(teams());
@@ -649,6 +672,7 @@ pub(super) fn teams_samples(samples: &mut Value) {
     samples["WorkflowRun"] = to(&runs);
     samples["CheckView"] = to(check_view());
     samples["CheckTip"] = to(check_view().tips());
+    samples["StepDotRun"] = to(step_dot_runs());
     samples["Enums"]["WorkflowTrigger"] = to(WorkflowTrigger::ALL);
     samples["Enums"]["WorkflowRunStatus"] = to(WorkflowRunStatus::ALL);
     samples["Enums"]["StepRunStatus"] = to(StepRunStatus::ALL);

@@ -473,6 +473,8 @@ export const commands = {
   workflowRunsForOrigins: (runIds: string[]) =>
     call(T.WorkflowRun.array(), "workflow_runs_for_origins", { runIds }),
   workflowRunGet: (id: string) => call(T.WorkflowRun, "workflow_run_get", { id }),
+  /// The dot runs of the run's step runs, oldest first: the run page's links.
+  workflowRunDotRuns: (id: string) => call(T.StepDotRun.array(), "workflow_run_dot_runs", { id }),
   /// "Run now", or "Test run" with `test`: its deploys push nothing.
   workflowRunStart: (workflowId: string, projectId: string, task: string, test: boolean) =>
     call(T.WorkflowRun, "workflow_run_start", { workflowId, projectId, task, test }),

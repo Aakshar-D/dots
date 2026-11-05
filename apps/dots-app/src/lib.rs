@@ -227,6 +227,7 @@ command_list![
     workflow_runs_list,
     workflow_runs_for_origins,
     workflow_run_get,
+    workflow_run_dot_runs,
     workflow_run_start,
     workflow_check,
     workflow_branch_diff,

@@ -5441,3 +5441,77 @@ async fn deleting_a_team_announces_each_workflow_it_removes() {
         ["run cancelled", "workflow Fix", "workflow Ship", "team"]
     );
 }
+
+/// The run page's links: every dot run of the workflow run's steps, with the step run each works
+/// for, oldest first. A delegate step's lead, its member and the run that continues the lead
+/// with the member's result are all the delegate step's; the continuation is in the lead's
+/// thread, the member's run is its own. They are the runs the budget counts.
+#[tokio::test]
+async fn a_workflow_run_lists_its_steps_dot_runs_with_their_threads() {
+    let w = world().await;
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![
+            Act::Write("plan.txt", "The plan."),
+            Act::Start(
+                vec![("dev", "Make the menu dark.")],
+                Box::new(Act::Finish("Started one.")),
+            ),
+            Act::Finish("It is in."),
+        ],
+    );
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Write("part.txt", "Did my part.")],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("plan", "Plan it", &w.helper, "Plan."),
+                delegating("split", "Split it", &w.helper, &[&w.dev], 1, 1),
+            ],
+        )
+        .await;
+    let started = w.start(&flow).await;
+    let wr = w
+        .until(&started.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let (plan, split) = (&wr.steps[0].id, &wr.steps[1].id);
+    let got = w.workflows.dot_runs(&wr.id).await.unwrap();
+    let rows: Vec<_> = got
+        .iter()
+        .map(|r| {
+            let step = if &r.step_run_id == plan {
+                "plan"
+            } else {
+                "split"
+            };
+            (step, r.dot_name.as_str(), r.status)
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("plan", "helper", RunStatus::Succeeded),
+            ("split", "helper", RunStatus::Succeeded),
+            ("split", "dev", RunStatus::Succeeded),
+            ("split", "helper", RunStatus::Succeeded),
+        ]
+    );
+    assert_eq!(got[1].step_run_id, *split);
+    assert_eq!(got[3].root_run_id, got[1].run_id);
+    assert_eq!(got[2].root_run_id, got[2].run_id);
+    assert_eq!(got[2].dot_id, w.dev.id);
+    let mut own = w.store.runs_of_step_run(plan).await.unwrap();
+    own.extend(w.store.runs_of_step_run(split).await.unwrap());
+    assert_eq!(
+        got.iter().map(|r| &r.run_id).collect::<Vec<_>>(),
+        own.iter().map(|r| &r.id).collect::<Vec<_>>()
+    );
+    assert_eq!(wr.spent_runs as usize, got.len());
+    assert!(matches!(
+        w.workflows.dot_runs("nope").await,
+        Err(Error::NotFound(m)) if m == "workflow run nope"
+    ));
+}

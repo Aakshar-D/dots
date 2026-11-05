@@ -1,9 +1,9 @@
 import type {
   AgentStep,
   Budget,
-  Run,
   RunStatus,
   Step,
+  StepDotRun,
   StepRun,
   StepRunStatus,
   WorkflowRun,
@@ -175,39 +175,29 @@ export function joinAnd(items: string[]): string {
 }
 
 /// A link from a step's card to one of its dot runs' run screens.
-export type DotRunLink = { id: string; label: string; status: RunStatus | null };
+export type DotRunLink = { id: string; label: string; status: RunStatus };
 
 /// The dot runs of a step run and the run each delegate member's branch is from. `runs` are the
-/// newest dot runs (newest first): those of the step run are grouped by thread, one link per
-/// thread, to its root. A hand-off branch whose run is not among them still gets its link, to
-/// the run the branch names. Members' runs are linked from the members, not again from the step.
+/// workflow run's dot runs, oldest first: the step run's own are grouped by thread, one link per
+/// thread, to its root, named by its dot and in the state of its newest run. Members' runs are
+/// linked from the members, not again from the step; a member that handed back no branch is
+/// linked from the step.
 export function stepRunLinks(
   stepRun: StepRun,
-  runs: Run[],
-  nameOf: (dotId: string) => string,
+  runs: StepDotRun[],
 ): { step: DotRunLink[]; members: Map<string, string> } {
-  const byId = new Map(runs.map((r) => [r.id, r]));
   const threads = new Map<string, DotRunLink>();
   for (const r of runs) {
-    if (r.workflow_step_run_id !== stepRun.id || threads.has(r.root_run_id)) continue;
-    threads.set(r.root_run_id, { id: r.root_run_id, label: nameOf(r.dot_id), status: r.status });
+    if (r.step_run_id !== stepRun.id) continue;
+    // A thread keeps the place of its first run; a later one gives its state.
+    threads.set(r.root_run_id, { id: r.root_run_id, label: r.dot_name, status: r.status });
   }
-  const linkOf = (runId: string) => byId.get(runId)?.root_run_id ?? runId;
+  const rootOf = new Map(runs.map((r) => [r.run_id, r.root_run_id]));
   const handoff = stepRun.handoff;
-  for (const ref of handoff?.branches ?? []) {
-    const id = linkOf(ref.run_id);
-    const known = byId.get(ref.run_id);
-    if (threads.has(id)) continue;
-    threads.set(id, {
-      id,
-      label: known ? nameOf(known.dot_id) : ref.branch,
-      status: known?.status ?? null,
-    });
-  }
   const members = new Map<string, string>();
   for (const member of handoff?.members ?? []) {
     const ref = member.branch ? handoff?.branches.find((b) => b.branch === member.branch) : null;
-    if (ref) members.set(member.branch!, linkOf(ref.run_id));
+    if (ref) members.set(member.branch!, rootOf.get(ref.run_id) ?? ref.run_id);
   }
   const memberRuns = new Set(members.values());
   return { step: [...threads.values()].filter((l) => !memberRuns.has(l.id)), members };

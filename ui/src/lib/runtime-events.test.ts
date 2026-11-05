@@ -333,6 +333,7 @@ describe("runtime events and the query cache", () => {
       keys.workflowRun(run.id),
       keys.workflowCheck(run.id),
       keys.workflowBranchDiff(run.id, tip.branch, tip.commit ?? ""),
+      keys.workflowDotRuns(run.id),
       keys.workflowRuns({ team_id: run.team_id }),
       keys.workflowRuns({ workflow_id: "another-workflow" }),
       keys.workflowRunsForOrigins([run.origin_run_id ?? ""]),
@@ -346,6 +347,7 @@ describe("runtime events and the query cache", () => {
     ];
     const untouched = [
       keys.workflowRun("another-run"),
+      keys.workflowDotRuns("another-run"),
       keys.workflows("another-team"),
       keys.workflow("another-workflow"),
       keys.teams,
@@ -356,6 +358,20 @@ describe("runtime events and the query cache", () => {
     applyRuntimeEvent(qc, { type: "workflow_run_updated", run });
     for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("marks the run pages' dot runs stale when a step's run changes, not for another run", () => {
+    const qc = createQueryClient();
+    const pages = [keys.workflowDotRuns("01J0WFR"), keys.workflowDotRuns("01J0WFR2")];
+    for (const key of pages) qc.setQueryData(key, []);
+    expect(sample.run.workflow_step_run_id).toBeNull();
+    applyRuntimeEvent(qc, { type: "run_updated", run: sample.run });
+    expect(pages.map((key) => stale(qc, key))).toEqual([false, false]);
+
+    // The run names its step run, not the workflow run: every page's links are asked again.
+    const step = { ...sample.run, status: "succeeded" as const, workflow_step_run_id: "01J0STP1" };
+    applyRuntimeEvent(qc, { type: "run_updated", run: step });
+    expect(pages.map((key) => stale(qc, key))).toEqual([true, true]);
   });
 
   it("refreshes a run whose workflow was deleted without touching any workflow", () => {

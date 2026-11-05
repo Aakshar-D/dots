@@ -2,7 +2,7 @@ import { cn } from "cn";
 import { ArrowDown } from "lucide-react";
 import { Link } from "react-router";
 
-import type { Run, Step, StepRun, WorkflowRun } from "@/api/types";
+import type { Step, StepDotRun, StepRun, WorkflowRun } from "@/api/types";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 
@@ -14,12 +14,12 @@ import { DeployResult } from "./DeployResult";
 import { pathTaken, STEP_STATUS_LABEL, stepName, stepRunLinks } from "./steps";
 
 /// What every card of the run page reads: the run, the newest step run of each step, the team's
-/// names and the newest dot runs (to link each step to its dot runs).
+/// names and the run's dot runs (to link each step to its own).
 export type RunView = {
   run: WorkflowRun;
   latest: Map<string, StepRun>;
   nameOf: NameOf;
-  dotRuns: Run[];
+  dotRuns: StepDotRun[];
 };
 
 const MARK: Record<keyof typeof STEP_STATUS_LABEL, string> = {
@@ -84,7 +84,7 @@ function StepRunCard({ step, number, view }: { step: Step; number: string; view:
   const name = step.name.trim() || "(no name)";
   const delegate = step.kind === "agent" ? delegateLine(step, nameOf) : undefined;
   const current = run.status === "waiting" && run.current_step === step.id;
-  const links = stepRun ? stepRunLinks(stepRun, view.dotRuns, nameOf) : null;
+  const links = stepRun ? stepRunLinks(stepRun, view.dotRuns) : null;
   const decision = stepRun?.decision;
   const deployError = stepRun?.deploy_result?.error;
   const label =
@@ -173,7 +173,7 @@ function StepRunCard({ step, number, view }: { step: Step; number: string; view:
               <Link to={`/runs/${link.id}`} className="underline">
                 Run of {link.label}
               </Link>
-              {link.status && <StatusBadge status={link.status} />}
+              <StatusBadge status={link.status} />
             </li>
           ))}
         </ul>

@@ -87,6 +87,9 @@ export const sample = {
   workflowRuns: T.WorkflowRun.array().parse(contract.WorkflowRun),
   /// What the first run's check shows: the lead's branch at its tip, and a member's that is gone.
   check: T.CheckView.parse(contract.CheckView),
+  /// The first run's dot runs, oldest first: the lead's, its two members' (one handed back a
+  /// branch, one failed without), and the run that continued the lead, in the lead's thread.
+  stepDotRuns: T.StepDotRun.array().parse(contract.StepDotRun),
   /// The builder's live check: a step's problem, then the workflow name's.
   workflowProblems: T.WorkflowProblem.array().parse(contract.WorkflowProblem),
 };
@@ -207,6 +210,7 @@ export function installDefaults(): void {
   backend.on("teams_list", () => []);
   backend.on("workflow_runs_list", () => []);
   backend.on("workflow_runs_for_origins", () => []);
+  backend.on("workflow_run_dot_runs", () => []);
   backend.on(
     "workflow_webhook_url",
     (args) => `http://127.0.0.1:47321/workflows/${String(args.id)}/trigger`,

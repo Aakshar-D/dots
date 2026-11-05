@@ -31,8 +31,8 @@ use dots_core::library_service::{
 };
 use dots_core::model::{
     Approval, Dot, DotOverview, DotSpec, FollowUp, Inbox, Memory, Message, Project, ProjectSpec,
-    Run, RunEventRecord, SettingsSaved, Status, Team, TeamSpec, Watcher, WatcherConfig, Workflow,
-    WorkflowRun, WorkflowRunFilter, WorkflowSpec, WorkflowTrigger, WorktreeDiff,
+    Run, RunEventRecord, SettingsSaved, Status, StepDotRun, Team, TeamSpec, Watcher, WatcherConfig,
+    Workflow, WorkflowRun, WorkflowRunFilter, WorkflowSpec, WorkflowTrigger, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -1690,6 +1690,12 @@ pub async fn workflow_runs_for_origins(
 #[tauri::command]
 pub async fn workflow_run_get(state: State<'_, AppState>, id: String) -> Res<WorkflowRun> {
     Ok(state.rt()?.workflows().get(&id).await?)
+}
+
+/// The dot runs of the workflow run's step runs, oldest first: the run page's links to them.
+#[tauri::command]
+pub async fn workflow_run_dot_runs(state: State<'_, AppState>, id: String) -> Res<Vec<StepDotRun>> {
+    Ok(state.rt()?.workflows().dot_runs(&id).await?)
 }
 
 /// "Run now" (or "Test run" with `test`: its deploys push nothing): the person's task on one

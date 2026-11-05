@@ -89,6 +89,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   WorkflowRun: T.WorkflowRun.array(),
   CheckView: T.CheckView,
   CheckTip: T.CheckTip.array(),
+  StepDotRun: T.StepDotRun.array(),
 };
 
 // The UI parses live data with these schemas, so it must know every variant the core has.

@@ -7,9 +7,9 @@ use sqlx::Row;
 
 use super::{opt_json, Store};
 use crate::model::{
-    LastRun, Message, NewWorkflowRun, Run, StepRun, StepRunChange, StepRunStatus, WaitingOn,
-    WaitingWorkflowRun, WorkflowRun, WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus,
-    WorkflowTrigger,
+    LastRun, Message, NewWorkflowRun, Run, RunStatus, StepDotRun, StepRun, StepRunChange,
+    StepRunStatus, WaitingOn, WaitingWorkflowRun, WorkflowRun, WorkflowRunChange,
+    WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::util::{new_id, now};
 use crate::workflow::Definition;
@@ -598,6 +598,44 @@ impl Store {
         let mut out = Vec::new();
         for id in ids {
             out.push(self.get_run(&id).await?);
+        }
+        Ok(out)
+    }
+
+    /// The dot runs of every step run of the workflow run `id`, resume children and delegate
+    /// members' runs included, oldest first (by queue time, then id). `NotFound` for an unknown
+    /// workflow run; a run with no dot run yet gives none.
+    pub async fn workflow_run_dot_runs(&self, id: &str) -> Result<Vec<StepDotRun>> {
+        // One query: the workflow run's row always comes back, with no run when it has none,
+        // so an empty answer means the workflow run does not exist.
+        let rows = sqlx::query(
+            "SELECT r.id, r.root_run_id, r.workflow_step_run_id, r.dot_id, d.name AS dot_name, \
+             r.status, r.started_at FROM workflow_runs w \
+             LEFT JOIN workflow_step_runs s ON s.workflow_run_id = w.id \
+             LEFT JOIN runs r ON r.workflow_step_run_id = s.id \
+             LEFT JOIN dots d ON d.id = r.dot_id \
+             WHERE w.id = ? ORDER BY r.queued_at, r.id",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.is_empty() {
+            return Err(Error::NotFound(format!("workflow run {id}")));
+        }
+        let mut out = Vec::new();
+        for row in &rows {
+            let Some(run_id) = row.try_get::<Option<String>, _>("id")? else {
+                continue;
+            };
+            out.push(StepDotRun {
+                step_run_id: row.try_get("workflow_step_run_id")?,
+                run_id,
+                root_run_id: row.try_get("root_run_id")?,
+                dot_id: row.try_get("dot_id")?,
+                dot_name: row.try_get("dot_name")?,
+                status: RunStatus::parse(&row.try_get::<String, _>("status")?)?,
+                started_at: row.try_get("started_at")?,
+            });
         }
         Ok(out)
     }

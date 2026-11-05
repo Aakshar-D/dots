@@ -1041,6 +1041,18 @@ export const CheckView = z.strictObject({
   branches: z.array(ShownBranch),
 });
 export type CheckView = z.infer<typeof CheckView>;
+// A dot run that works for one of a workflow run's step runs, as the run page links it. A resume
+// or a reply continues a thread under the same `root_run_id`.
+export const StepDotRun = z.strictObject({
+  step_run_id: z.string(),
+  run_id: z.string(),
+  root_run_id: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  status: RunStatus,
+  started_at: nullable(z.string()),
+});
+export type StepDotRun = z.infer<typeof StepDotRun>;
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
 // reference: the core reads the environment when the server starts.

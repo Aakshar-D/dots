@@ -748,6 +748,7 @@
     "workflow_runs_list",
     "workflow_runs_for_origins",
     "workflow_run_get",
+    "workflow_run_dot_runs",
     "workflow_run_start",
     "workflow_check",
     "workflow_branch_diff",
@@ -4617,6 +4618,44 @@
     "schedules_paused": false,
     "server_error": null
   },
+  "StepDotRun": [
+    {
+      "dot_id": "01J0DOT",
+      "dot_name": "nightly-tests",
+      "root_run_id": "01J0RUN5",
+      "run_id": "01J0RUN5",
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "succeeded",
+      "step_run_id": "01J0STP1"
+    },
+    {
+      "dot_id": "01J0DOT2",
+      "dot_name": "reviewer",
+      "root_run_id": "01J0RUN6",
+      "run_id": "01J0RUN6",
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "succeeded",
+      "step_run_id": "01J0STP1"
+    },
+    {
+      "dot_id": "01J0DOT2",
+      "dot_name": "reviewer",
+      "root_run_id": "01J0RUN8",
+      "run_id": "01J0RUN8",
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "failed",
+      "step_run_id": "01J0STP1"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "dot_name": "nightly-tests",
+      "root_run_id": "01J0RUN5",
+      "run_id": "01J0RUN7",
+      "started_at": "2026-10-09T12:00:00.000Z",
+      "status": "succeeded",
+      "step_run_id": "01J0STP1"
+    }
+  ],
   "Team": [
     {
       "created_at": "2026-10-09T12:00:00.000Z",

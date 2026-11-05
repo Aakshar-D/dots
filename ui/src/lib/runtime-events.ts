@@ -22,6 +22,9 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       ]) {
         invalidate(qc, queryKey);
       }
+      // A run that works for a workflow step is linked from its workflow run's page. It names
+      // its step run, not the workflow run, so every such page's links are marked.
+      if (event.run.workflow_step_run_id !== null) invalidate(qc, ["workflow-dot-runs"]);
       break;
     case "run_quiet":
       // The quiet card of the run, and the dot's needs-you count. The run list comes with the
@@ -165,12 +168,13 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       break;
     case "workflow_run_updated": {
       const { run } = event;
-      // The run page with its check and diffs, every list of workflow runs (the team page's,
-      // a conversation's cards), and the workflow's runs in flight and last run, which no
+      // The run page with its check, diffs and dot runs, every list of workflow runs (the team
+      // page's, a conversation's cards), and the workflow's runs in flight and last run, which no
       // workflow event announces. A waiting run is in the Inbox and needs the dot whose chat
       // started it.
       for (const queryKey of [
         keys.workflowRun(run.id),
+        keys.workflowDotRuns(run.id),
         ["workflow-runs"],
         keys.workflows(run.team_id),
         keys.inbox,

@@ -40,9 +40,9 @@ use crate::accounts::Permission;
 use crate::deploy::Deployer;
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
-    BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepMember,
-    StepRun, StepRunChange, StepRunStatus, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
-    WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
+    BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepDotRun,
+    StepMember, StepRun, StepRunChange, StepRunStatus, TriggerKind, WaitingOn, WorkflowRun,
+    WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::runner::Runner;
 use crate::scheduler::Clock;
@@ -458,6 +458,12 @@ impl Workflows {
     /// chat shows each one's card after the turn that started it (section 10.4).
     pub async fn for_origins(&self, run_ids: &[String]) -> Result<Vec<WorkflowRun>> {
         self.store.workflow_runs_from(run_ids).await
+    }
+
+    /// The dot runs of the workflow run `id`'s step runs, oldest first: the run page links each
+    /// step to its own (section 10.3). `NotFound` for an unknown workflow run.
+    pub async fn dot_runs(&self, id: &str) -> Result<Vec<StepDotRun>> {
+        self.store.workflow_run_dot_runs(id).await
     }
 
     /// Starts a run of a workflow on one of its team's projects. Refused for a workflow that is

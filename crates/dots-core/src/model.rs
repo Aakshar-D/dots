@@ -1199,6 +1199,21 @@ pub struct StepRun {
     pub ended_at: Option<String>,
 }
 
+/// A dot run that works for one of a workflow run's step runs, as the run page links it (teams
+/// spec section 10.3): its step run, its thread, its dot by name and its state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepDotRun {
+    pub step_run_id: String,
+    pub run_id: String,
+    /// The thread the run is in: a resume or a reply continues a step's run under the same
+    /// root, and the page links each thread once, to its root.
+    pub root_run_id: String,
+    pub dot_id: String,
+    pub dot_name: String,
+    pub status: RunStatus,
+    pub started_at: Option<String>,
+}
+
 /// One execution of a workflow (teams spec section 4), with its step runs, oldest first, and
 /// what it has spent (section 9). Times are RFC 3339 UTC.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
