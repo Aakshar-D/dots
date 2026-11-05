@@ -10,6 +10,7 @@
 //! request fails at once with `McpError::Stopped`.
 
 mod http;
+pub mod oauth;
 mod rpc;
 mod stdio;
 mod tools;
