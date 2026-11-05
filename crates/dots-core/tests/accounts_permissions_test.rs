@@ -4,7 +4,7 @@
 
 use dots_core::accounts::{can, Access, Permission, Role};
 
-const ALL: [Permission; 10] = [
+const ALL: [Permission; 11] = [
     Permission::View,
     Permission::EditDots,
     Permission::RunDots,
@@ -15,6 +15,7 @@ const ALL: [Permission; 10] = [
     Permission::ManageMembers,
     Permission::ManageWorkspaces,
     Permission::SignRoster,
+    Permission::EditGoals,
 ];
 
 #[test]
@@ -32,6 +33,7 @@ fn can_matrix() {
         (ManageMembers, [false, false, true, true]),
         (ManageWorkspaces, [false, false, true, true]),
         (SignRoster, [false, false, true, true]),
+        (EditGoals, [false, true, true, true]),
     ];
     assert_eq!(table.len(), ALL.len());
     let roles = [Role::Viewer, Role::Member, Role::Admin, Role::Owner];
@@ -58,6 +60,7 @@ fn each_permission_names_its_action() {
             "manage members",
             "manage workspaces",
             "sign the member list",
+            "change goals",
         ]
     );
 }

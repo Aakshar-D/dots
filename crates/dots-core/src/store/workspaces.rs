@@ -51,14 +51,14 @@ fn rules_json(rules: &Option<UseRules>) -> Result<Option<String>> {
     Ok(rules.as_ref().map(serde_json::to_string).transpose()?)
 }
 
-/// Moves the dots and teams of `scope` that are in `workspace` to the Default workspace.
+/// Moves the dots, teams and goals of `scope` that are in `workspace` to the Default workspace.
 async fn move_to_default(
     tx: &mut Transaction<'_, Sqlite>,
     scope: &str,
     workspace: &str,
 ) -> Result<()> {
     let org = (scope != PERSONAL).then_some(scope);
-    for table in ["dots", "teams"] {
+    for table in ["dots", "teams", "intents"] {
         sqlx::query(&format!(
             "UPDATE {table} SET workspace_id = ? WHERE workspace_id = ? AND org_id IS ?"
         ))
@@ -217,7 +217,7 @@ impl Store {
             .map(|(id, _)| id)
             .filter(|id| id != DEFAULT_WORKSPACE && !roster.iter().any(|w| &w.id == id))
             .collect();
-        for table in ["dots", "teams"] {
+        for table in ["dots", "teams", "intents"] {
             sqlx::query(&format!(
                 "UPDATE {table} SET workspace_id = ? WHERE org_id = ? AND workspace_id NOT IN \
                  (SELECT id FROM workspaces WHERE scope = ?)"
