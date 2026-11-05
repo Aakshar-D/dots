@@ -159,6 +159,18 @@ impl Store {
         .await?)
     }
 
+    /// How many runs of the workflow have not ended (running or waiting).
+    pub async fn count_workflow_runs_in_flight(&self, workflow_id: &str) -> Result<u32> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = ? \
+             AND status IN ('running', 'waiting')",
+        )
+        .bind(workflow_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(u32::try_from(n).unwrap_or(u32::MAX))
+    }
+
     /// Whether a workflow run of `workflow_id` on `project_id` that a run of the thread
     /// `root_run_id` started (`start_workflow`) has not ended.
     pub async fn workflow_in_flight_from_thread(

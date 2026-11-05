@@ -103,6 +103,16 @@ fn ask_wins(tool: &str) -> bool {
         || tool == INSTRUCTIONS_TOOL
 }
 
+/// A `Workflow` call of a step's `report_outcome` or `send_back` (`team_tools::Tool::for_input`):
+/// it is allowed where the policy says ask, and a deny still refuses it (the person's decision,
+/// 2026-11-04). A policy cannot tell the person's own `Workflow: ask` from the one Sandboxed and
+/// Custom start with, so every ask of these two counts as allow; `start_workflow` and
+/// `start_member` still ask.
+fn never_asks(tool: &str, input: &Value) -> bool {
+    use crate::team_tools::Tool;
+    tool == WORKFLOW_TOOL && matches!(Tool::for_input(input), Tool::ReportOutcome | Tool::SendBack)
+}
+
 /// The refusal of a rule `Memory(...)`.
 pub const MEMORY_RULE: &str =
     "a Memory rule takes no argument: the rule Memory covers remember, forget and recall";
@@ -205,8 +215,9 @@ impl Policy {
         rules.push(Rule::new("Context", Action::Allow));
         rules.extend(CHECK_IN_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
         rules.push(Rule::new(MEMORY_TOOL, Action::Allow));
-        // And start its team's workflows from a chat, which Sandboxed and Custom ask before
-        // (teams spec section 7, as decided by the person).
+        // And start its team's workflows from a chat and members from a delegate step, which
+        // Sandboxed and Custom ask before (teams spec section 7, as decided by the person); a
+        // step's `report_outcome` and `send_back` do not ask (`never_asks`).
         let workflow = match preset {
             Preset::Sandboxed | Preset::Custom => Action::Ask,
             Preset::ReadOnly | Preset::Trusted => Action::Allow,
@@ -235,18 +246,21 @@ impl Policy {
         let ws = workspace_key(workspace);
         // A check-in tool or `Memory` set to ask means it, even under the preset's allow
         // (check-ins spec section 4, dot memory spec section 3); every other tool keeps
-        // deny > allow > ask, where a narrow allow beats a broad ask.
+        // deny > allow > ask, where a narrow allow beats a broad ask. A step's `report_outcome`
+        // and `send_back` never ask (`never_asks`).
         let order = if ask_wins(tool.trim()) {
             [Action::Deny, Action::Ask, Action::Allow]
         } else {
             [Action::Deny, Action::Allow, Action::Ask]
         };
-        for action in order {
-            if self.rule_matches(action, tool, input, ws.as_deref()) {
-                return action;
-            }
+        let action = order
+            .into_iter()
+            .find(|action| self.rule_matches(*action, tool, input, ws.as_deref()))
+            .unwrap_or(self.default);
+        if action == Action::Ask && never_asks(tool.trim(), input) {
+            return Action::Allow;
         }
-        self.default
+        action
     }
 
     /// The check of an MCP tool call (`tool` is `mcp__<server>__<tool>`). The first match wins:
