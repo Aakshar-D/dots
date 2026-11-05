@@ -14,6 +14,7 @@ import { ReleasesScreen } from "@/screens/ReleasesScreen";
 import { TeamScreen } from "@/screens/teams/TeamScreen";
 import { TeamsScreen } from "@/screens/teams/TeamsScreen";
 import { WorkflowBuilderScreen } from "@/screens/teams/builder/WorkflowBuilderScreen";
+import { WorkflowRunScreen } from "@/screens/teams/run/WorkflowRunScreen";
 import { UsageScreen } from "@/screens/UsageScreen";
 
 export const routes: RouteObject[] = [
@@ -40,6 +41,7 @@ export const routes: RouteObject[] = [
       { path: "teams", element: <TeamsScreen /> },
       { path: "teams/:teamId", element: <TeamScreen /> },
       { path: "teams/:teamId/workflows/:workflowId", element: <WorkflowBuilderScreen /> },
+      { path: "workflow-runs/:runId", element: <WorkflowRunScreen /> },
       { path: "settings", element: <SettingsScreen /> },
       { path: "usage", element: <UsageScreen /> },
       { path: "releases", element: <ReleasesScreen /> },

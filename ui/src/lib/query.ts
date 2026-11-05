@@ -119,6 +119,9 @@ export const keys = {
   workflowCheck: (id: string) => ["workflow-run", id, "check"] as const,
   workflowBranchDiff: (id: string, branch: string, commit: string) =>
     ["workflow-run", id, "diff", branch, commit] as const,
+  /// The newest dot runs of every dot: the run page finds its steps' dot runs among them. Under
+  /// the runs' key, so a run event marks it stale.
+  recentRuns: ["runs", "recent"] as const,
 };
 
 type DotSwitch = { id: string; enabled: boolean };
