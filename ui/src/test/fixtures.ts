@@ -165,6 +165,16 @@ export function installDefaults(): void {
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
+  // Usage counts are off and were never turned on.
+  backend.on("usage_counts_state", () => ({
+    enabled: false, url: null, install_id: null, first_hour: null,
+    last_sent_hour: null, last_sent_at: null, last_error: null,
+  }));
+  backend.on("usage_counts_preview", () => ({
+    schema: 1, install_id: null, app_version: "0.3.0", hour_start: "2026-10-09T13:00:00Z",
+    runs_started: 0, runs_succeeded: 0, runs_failed: 0, messages_sent: 0, approvals_asked: 0,
+    dots: 0,
+  }));
   backend.on("chatgpt_account", () => ({
     configured: false, signing_in: false, account: null, expires_at: null,
     setup_error: "ChatGPT sign-in needs a registered OpenAI client for Dots.",

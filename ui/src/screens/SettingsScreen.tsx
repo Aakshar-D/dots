@@ -23,6 +23,7 @@ import { ChatGptAccount } from "./ChatGptAccount";
 import { Accounts } from "./Accounts";
 import { ProfileSection } from "./ProfileSection";
 import { UpdatesSection } from "@/screens/UpdatesSection";
+import { UsageCountsSection } from "@/screens/UsageCountsSection";
 
 type Errors = {
   port?: string;
@@ -431,6 +432,8 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
       />
 
       <HelpSection />
+
+      <UsageCountsSection />
 
       <Section title="Claude Code CLI">
         <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1 text-xs">

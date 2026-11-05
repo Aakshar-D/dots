@@ -26,6 +26,9 @@ export const keys = {
   managedPolicy: ["managed-policy"] as const,
   update: ["update"] as const,
   settings: ["settings"] as const,
+  /// Settings › Share usage counts, and the next report under it.
+  usageCounts: ["usage-counts"] as const,
+  usageCountsPreview: ["usage-counts", "preview"] as const,
   chatGptAccount: ["chatgpt-account"] as const,
   overview: ["overview"] as const,
   /// The sum of the dots' unread counts (the Home link). Under the overview's key, so that
