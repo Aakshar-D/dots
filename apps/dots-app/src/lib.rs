@@ -102,6 +102,7 @@ command_list![
     policy_preset,
     rules_touch_private,
     new_dot_spec,
+    list_models,
     test_endpoint,
     run_now,
     chat,

@@ -772,6 +772,7 @@
     "policy_preset",
     "rules_touch_private",
     "new_dot_spec",
+    "list_models",
     "test_endpoint",
     "run_now",
     "chat",
@@ -3328,6 +3329,28 @@
       "text": "A follow-up was skipped because the dot is off. It was due Tue 21 Oct 09:00: check CI"
     }
   ],
+  "ModelOption": [
+    {
+      "hint": "Most capable, for hard work; slower and uses more of your limits.",
+      "id": "opus",
+      "label": "Opus"
+    },
+    {
+      "hint": "Balanced speed and capability; the usual choice.",
+      "id": "sonnet",
+      "label": "Sonnet"
+    },
+    {
+      "hint": "Fastest and lightest on your limits, for simple tasks.",
+      "id": "haiku",
+      "label": "Haiku"
+    },
+    {
+      "hint": "",
+      "id": "qwen2.5-coder-7b",
+      "label": "qwen2.5-coder-7b"
+    }
+  ],
   "NewDotSpec": {
     "approval_wait_secs": 240,
     "browser": false,
@@ -5029,6 +5052,7 @@
     "auto_install_updates": false,
     "autostart": true,
     "claude_path": null,
+    "default_model": "sonnet",
     "edge_path": null,
     "global_instructions": "Use British spelling.",
     "hold_enabled": true,
@@ -5052,6 +5076,7 @@
       "auto_install_updates": false,
       "autostart": true,
       "claude_path": null,
+      "default_model": "sonnet",
       "edge_path": null,
       "global_instructions": "Use British spelling.",
       "hold_enabled": true,
