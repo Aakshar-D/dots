@@ -25,6 +25,7 @@ import { ChatGptAccount } from "./ChatGptAccount";
 import { Accounts } from "./Accounts";
 import { ProfileSection } from "./ProfileSection";
 import { UpdatesSection } from "@/screens/UpdatesSection";
+import { UsageCountsSection } from "@/screens/UsageCountsSection";
 
 type Errors = {
   port?: string;
@@ -606,7 +607,13 @@ function Form({
         />
       </>
     ),
-    help: <HelpSection />,
+    help: (
+      <>
+        <HelpSection />
+
+        <UsageCountsSection />
+      </>
+    ),
   };
   return (
     <Page

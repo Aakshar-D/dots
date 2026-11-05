@@ -46,6 +46,7 @@ pub mod skill_creator;
 pub mod store;
 pub mod team_tools;
 pub mod teams;
+pub mod usage_counts;
 pub mod util;
 pub mod vault;
 pub mod watchers;
