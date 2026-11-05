@@ -5,6 +5,7 @@ import { useId, type ReactNode } from "react";
 
 import { commands } from "@/api/commands";
 import { Preset, type SetupProposal, type Uses } from "@/api/types";
+import { DotAvatar } from "@/components/DotAvatar";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -83,12 +84,15 @@ export function SetupCard(props: {
   return (
     <div className="flex flex-col gap-4">
       <Field label="Name" htmlFor={`${id}-name`} error={nameError(proposal.name)}>
-        <Input
-          id={`${id}-name`}
-          className="text-base font-medium"
-          value={proposal.name}
-          onChange={(e) => set("name", e.target.value)}
-        />
+        <div className="flex items-center gap-2">
+          {proposal.name.trim() !== "" && <DotAvatar seed={proposal.name.trim()} size="md" />}
+          <Input
+            id={`${id}-name`}
+            className="text-base font-medium"
+            value={proposal.name}
+            onChange={(e) => set("name", e.target.value)}
+          />
+        </div>
       </Field>
       {proposal.notes.trim() !== "" && (
         <p className="text-sm text-muted-foreground">{proposal.notes}</p>
