@@ -3085,11 +3085,6 @@
     "conflicts": [
       {
         "dot_rule": "everything else",
-        "kind": "ask",
-        "rule": "Bash(git push:*)"
-      },
-      {
-        "dot_rule": "everything else",
         "kind": "deny",
         "rule": "WebFetch"
       }

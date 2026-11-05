@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { commands } from "@/api/commands";
-import type { EngineKind, ManagedCheck, ManagedConflict, Policy, Preset } from "@/api/types";
+import type { EngineKind, ManagedCheck, Policy, Preset } from "@/api/types";
 import { describeAllowRule } from "@/lib/allow-rules";
 
 /// Where `policy` of a dot run by `engine` runs into the company's Claude Code policy. `null`
@@ -43,40 +43,34 @@ export function useManagedCheckForPreset(preset: Preset): ManagedCheck | null {
   return useManagedCheck("claude", policy);
 }
 
-function what(c: ManagedConflict): string {
-  return c.rule === "" ? "everything this dot is allowed" : describeAllowRule(c.rule);
-}
-
-/// Says, in plain words, what the company's policy keeps asking about or refuses. Nothing when
-/// there is no conflict.
+/// Says, in plain words, what the company's policy refuses whatever this dot's rules say.
+/// Nothing when no deny rule conflicts. A managed ask rule, or managed-rules-only, gets one calm
+/// line: Dots answers the CLI's permission prompts with the dot's own rules.
 export function ManagedPolicyNotice(props: { check: ManagedCheck | null }) {
   const { check } = props;
   if (!check || check.conflicts.length === 0) return null;
-  const path = check.managed.path;
-  const only = check.conflicts.some((c) => c.kind === "managed_rules_only");
-  const rules = check.conflicts.filter((c) => c.kind !== "managed_rules_only");
+  const { managed } = check;
+  const asks = managed.forced_ask.length > 0 || managed.managed_rules_only;
   return (
     <div role="note" className="flex flex-col gap-1 rounded-md border p-3 text-xs text-needs">
       <p>
-        Your company&apos;s Claude Code policy keeps asking turned on, so this dot will still ask
-        (or be refused)
-        {rules.length > 0 ? " for:" : "."}
+        Your company&apos;s Claude Code policy refuses these for every dot, whatever this
+        dot&apos;s rules say:
       </p>
-      {rules.length > 0 && (
-        <ul className="list-disc pl-5">
-          {rules.map((c) => (
-            <li key={`${c.kind}/${c.rule}`}>
-              {what(c)} {c.kind === "deny" ? "(refused)" : "(asks)"}
-            </li>
-          ))}
-        </ul>
+      <ul className="list-disc pl-5">
+        {check.conflicts.map((c) => (
+          <li key={c.rule}>{describeAllowRule(c.rule)}</li>
+        ))}
+      </ul>
+      {asks && (
+        <p className="text-muted-foreground">
+          Your company&apos;s policy also asks before some actions; in Dots, those requests go to
+          Dots&apos; own approval check, which follows this dot&apos;s rules.
+        </p>
       )}
-      {only && (
-        <p>The policy also ignores the allow rules set here: only the company&apos;s rules count.</p>
-      )}
-      {path && (
+      {managed.path && (
         <p>
-          Policy file: <span className="font-mono break-all">{path}</span>
+          Policy file: <span className="font-mono break-all">{managed.path}</span>
         </p>
       )}
     </div>

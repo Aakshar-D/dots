@@ -716,8 +716,8 @@ export const ManagedPolicy = z.strictObject({
   managed_rules_only: z.boolean(),
   error: nullable(z.string()),
 });
-export const ConflictKind = z.enum(["ask", "deny", "managed_rules_only"]);
-// One thing the dot's policy would do without asking that the company policy keeps.
+export const ConflictKind = z.enum(["deny"]);
+// One thing the dot's policy would allow that a company deny rule refuses.
 export const ManagedConflict = z.strictObject({
   kind: ConflictKind,
   rule: z.string(),

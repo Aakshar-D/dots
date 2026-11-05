@@ -221,19 +221,30 @@ describe("the company's Claude Code policy", () => {
     path: "C:/Program Files/ClaudeCode/managed-settings.json",
     blocks_skipping_asks: false,
     forced_ask: ["Bash(git push:*)"],
-    forced_deny: [],
+    forced_deny: ["WebFetch"],
     managed_rules_only: false,
     error: null,
   };
-  const conflict = { kind: "ask", rule: "Bash(git push:*)", dot_rule: "everything else" };
+  const conflict = { kind: "deny", rule: "WebFetch", dot_rule: "everything else" };
 
-  it("says what will still ask, with the policy file", async () => {
+  it("says what is refused, with the policy file and the ask line", async () => {
     backend.on("managed_policy_check", () => ({ managed, conflicts: [conflict] }));
     setup();
     const note = await screen.findByRole("note");
-    expect(note).toHaveTextContent("keeps asking turned on");
-    expect(note).toHaveTextContent("git push");
+    expect(note).toHaveTextContent("refuses these for every dot");
+    expect(note).toHaveTextContent("WebFetch");
+    expect(note).toHaveTextContent("Dots' own approval check");
     expect(note).toHaveTextContent(managed.path);
+  });
+
+  it("has no ask line when the policy has no ask rules", async () => {
+    backend.on("managed_policy_check", () => ({
+      managed: { ...managed, forced_ask: [] },
+      conflicts: [conflict],
+    }));
+    setup();
+    const note = await screen.findByRole("note");
+    expect(note).not.toHaveTextContent("approval check");
   });
 
   it("says nothing when the policy does not conflict", async () => {

@@ -22,8 +22,8 @@ const trusted: Policy = { preset: "trusted", rules: [], default: "allow", mcp_de
 const managed = {
   path: "C:/Program Files/ClaudeCode/managed-settings.json",
   blocks_skipping_asks: false,
-  forced_ask: ["Bash"],
-  forced_deny: [],
+  forced_ask: [],
+  forced_deny: ["Bash"],
   managed_rules_only: false,
   error: null,
 };
@@ -41,11 +41,11 @@ describe("the card and the company's Claude Code policy", () => {
     backend.on("policy_preset", () => trusted);
     backend.on("managed_policy_check", () => ({
       managed,
-      conflicts: [{ kind: "ask", rule: "Bash", dot_rule: "everything else" }],
+      conflicts: [{ kind: "deny", rule: "Bash", dot_rule: "everything else" }],
     }));
     card();
     const note = await screen.findByRole("note");
-    expect(note).toHaveTextContent("keeps asking turned on");
+    expect(note).toHaveTextContent("refuses these for every dot");
     expect(note).toHaveTextContent(managed.path);
     expect(backend.callsTo("managed_policy_check")[0]).toMatchObject({ engine: "claude" });
   });

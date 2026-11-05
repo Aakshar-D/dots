@@ -124,20 +124,18 @@ fn merge(out: &mut ManagedPolicy, v: &Value) {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConflictKind {
-    /// The company asks about it, so the dot cannot do it without asking.
-    Ask,
-    /// The company refuses it.
+    /// The company refuses it, whatever the dot's rules say. Only a managed deny rule is
+    /// enforced by the CLI itself: Dots answers the CLI's permission prompts (managed `ask`
+    /// rules, and every call once `allowManagedPermissionRulesOnly` drops Dots' allow list)
+    /// with the dot's own policy, so those change nothing for the dot.
     Deny,
-    /// The company's rules are the only ones the CLI reads: the dot's own allow rules do not
-    /// count.
-    ManagedRulesOnly,
 }
 
 /// One thing the dot's policy would do without asking that the company policy does not allow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Conflict {
     pub kind: ConflictKind,
-    /// The company's rule (`Bash(rm:*)`); empty for `managed_rules_only`.
+    /// The company's deny rule (`Bash(rm:*)`).
     pub rule: String,
     /// The dot's allowing rule, or `"everything else"` when its default allows.
     pub dot_rule: String,
@@ -157,9 +155,10 @@ pub fn check(dir: &Path, engine: EngineKind, policy: &Policy) -> ManagedCheck {
     ManagedCheck { managed, conflicts }
 }
 
-/// Where `policy` would skip an ask or a refusal that `managed` keeps. Only a dot run by the
-/// Claude Code CLI is affected. Bypass mode is not a conflict: Dots never passes it, so
-/// `blocks_skipping_asks` changes nothing for a dot.
+/// Where `policy` would allow what a managed deny rule refuses. Only a dot run by the Claude
+/// Code CLI is affected. Managed ask rules and `allowManagedPermissionRulesOnly` are not
+/// conflicts: the CLI's permission prompts go to Dots' `approve` tool, which follows the dot's
+/// policy. Bypass mode is not one either: Dots never passes it.
 pub fn conflicts(engine: EngineKind, policy: &Policy, managed: &ManagedPolicy) -> Vec<Conflict> {
     let mut out: Vec<Conflict> = Vec::new();
     if engine != EngineKind::Claude {
@@ -167,30 +166,14 @@ pub fn conflicts(engine: EngineKind, policy: &Policy, managed: &ManagedPolicy) -
     }
     let (allow, _) = policy.cli_lists();
     let default_allows = policy.default == Action::Allow;
-    if managed.managed_rules_only && (default_allows || !allow.is_empty()) {
-        out.push(Conflict {
-            kind: ConflictKind::ManagedRulesOnly,
-            rule: String::new(),
-            dot_rule: if allow.is_empty() {
-                "everything else".into()
-            } else {
-                allow.join(", ")
-            },
-        });
-    }
-    let managed_rules = managed
-        .forced_ask
-        .iter()
-        .map(|r| (ConflictKind::Ask, r))
-        .chain(managed.forced_deny.iter().map(|r| (ConflictKind::Deny, r)));
-    for (kind, rule) in managed_rules {
+    for rule in &managed.forced_deny {
         let dot_rule = match allow.iter().find(|a| rules_overlap(a, rule)) {
             Some(a) => a.clone(),
             None if default_allows => "everything else".to_string(),
             None => continue,
         };
         out.push(Conflict {
-            kind,
+            kind: ConflictKind::Deny,
             rule: rule.clone(),
             dot_rule,
         });
@@ -336,21 +319,26 @@ mod tests {
     }
 
     #[test]
-    fn a_trusted_dot_conflicts_with_every_company_ask_and_deny() {
+    fn a_trusted_dot_conflicts_with_every_company_deny() {
         let p = Policy::preset(Preset::Trusted);
-        let m = managed(&["Bash(rm:*)"], &["WebFetch"], false);
+        let m = managed(&["Bash(rm:*)"], &["WebFetch", "Read(./.env)"], false);
         let c = conflicts(EngineKind::Claude, &p, &m);
         assert_eq!(c.len(), 2);
-        assert_eq!(c[0].kind, ConflictKind::Ask);
-        assert_eq!(c[0].rule, "Bash(rm:*)");
+        assert!(c.iter().all(|c| c.kind == ConflictKind::Deny));
+        assert_eq!(c[0].rule, "WebFetch");
         assert_eq!(c[0].dot_rule, "everything else");
-        assert_eq!(c[1].kind, ConflictKind::Deny);
+    }
+
+    #[test]
+    fn company_ask_rules_are_no_conflict() {
+        let p = Policy::preset(Preset::Trusted);
+        assert!(conflicts(EngineKind::Claude, &p, &managed(&["Bash"], &[], false)).is_empty());
     }
 
     #[test]
     fn a_dot_that_asks_by_default_conflicts_only_where_it_allows() {
         let p = Policy::preset(Preset::Sandboxed);
-        let m = managed(&["Write(./**)", "Bash(rm:*)"], &[], false);
+        let m = managed(&[], &["Write(./**)", "Bash(rm:*)"], false);
         let c = conflicts(EngineKind::Claude, &p, &m);
         assert_eq!(c.len(), 1);
         assert_eq!(c[0].rule, "Write(./**)");
@@ -361,9 +349,9 @@ mod tests {
     fn a_rule_without_an_argument_covers_the_tool() {
         let mut p = Policy::preset(Preset::ReadOnly);
         p.rules.push(Rule::new("Bash(git status:*)", Action::Allow));
-        let c = conflicts(EngineKind::Claude, &p, &managed(&["Bash"], &[], false));
+        let c = conflicts(EngineKind::Claude, &p, &managed(&[], &["Bash"], false));
         assert_eq!(c.len(), 1);
-        let m = managed(&["Bash(git push:*)"], &[], false);
+        let m = managed(&[], &["Bash(git push:*)"], false);
         assert!(conflicts(EngineKind::Claude, &p, &m).is_empty());
     }
 
@@ -378,22 +366,9 @@ mod tests {
     }
 
     #[test]
-    fn managed_rules_only_ignores_the_dots_allow_rules() {
+    fn managed_rules_only_is_no_conflict() {
         let p = Policy::preset(Preset::Sandboxed);
-        let c = conflicts(EngineKind::Claude, &p, &managed(&[], &[], true));
-        assert_eq!(c.len(), 1);
-        assert_eq!(c[0].kind, ConflictKind::ManagedRulesOnly);
-    }
-
-    #[test]
-    fn a_dot_with_nothing_allowed_has_nothing_to_lose_to_managed_rules_only() {
-        let p = Policy {
-            preset: Preset::Custom,
-            rules: vec![Rule::new("Bash", Action::Deny)],
-            default: Action::Ask,
-            mcp_default: Action::Ask,
-        };
-        assert!(conflicts(EngineKind::Claude, &p, &managed(&["Bash"], &[], true)).is_empty());
+        assert!(conflicts(EngineKind::Claude, &p, &managed(&[], &[], true)).is_empty());
     }
 
     #[test]
@@ -415,7 +390,7 @@ mod tests {
 
     #[test]
     fn check_reads_and_judges() {
-        let d = dir_with(r#"{"permissions":{"ask":["Bash"]}}"#);
+        let d = dir_with(r#"{"permissions":{"deny":["Bash"]}}"#);
         let c = check(
             d.path(),
             EngineKind::Claude,
