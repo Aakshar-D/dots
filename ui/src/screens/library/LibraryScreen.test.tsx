@@ -447,8 +447,12 @@ describe("creating a skill", () => {
     backend.on("skill_check", () => summary);
     backend.on("skill_create", () => sample.libraryItems[1]);
     const { user, dialog } = await describeIdea();
-    await user.clear(within(dialog).getByLabelText("Model"));
-    await user.type(within(dialog).getByLabelText("Model"), "haiku");
+    // The picker starts on the default model of Settings and lists the Claude models.
+    expect(within(dialog).getByLabelText("Model")).toHaveValue("sonnet");
+    await user.selectOptions(
+      within(dialog).getByLabelText("Model"),
+      await within(dialog).findByRole("option", { name: "Haiku" }),
+    );
     await user.click(within(dialog).getByRole("button", { name: "Write it" }));
     expect(await within(dialog).findByLabelText("SKILL.md")).toHaveValue(DRAFT);
     expect(backend.callsTo("skill_draft")).toEqual([

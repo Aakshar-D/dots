@@ -77,6 +77,34 @@ describe("the Settings screen", () => {
     });
   });
 
+  it("saves the default model new dots start with", async () => {
+    saving();
+    const { user } = renderApp("/settings");
+    const model = await screen.findByLabelText("Default model");
+    await within(model).findByRole("option", { name: "Opus" });
+    expect(model).toHaveValue(stored.default_model);
+    await user.selectOptions(model, "Opus");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, default_model: "opus" } },
+    ]);
+    // Any id through Custom…, but not none.
+    await user.selectOptions(model, "Custom…");
+    const box = screen.getByRole("textbox", { name: "Custom model ID" });
+    await user.clear(box);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByText("Name the model new dots start with.")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toHaveLength(1);
+    await user.type(box, "claude-opus-4-1");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(backend.callsTo("update_settings")[1]).toEqual({
+        settings: { ...stored, default_model: "claude-opus-4-1" },
+      }),
+    );
+  });
+
   it("keeps numbers inside the core's bounds", async () => {
     expect(settingsErrors({ port: 47321, max_concurrent_runs: 16 })).toEqual({});
     expect(Object.keys(settingsErrors({ port: 0, max_concurrent_runs: 17 }))).toEqual([
