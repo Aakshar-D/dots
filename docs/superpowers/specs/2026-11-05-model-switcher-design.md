@@ -33,7 +33,10 @@ model can only be changed by opening the editor.
    dot, the endpoint's list, loaded when an endpoint is set) and **Custom…**, which shows a text
    box for any id (a full id such as `claude-opus-4-1`, or a local model the endpoint does not
    list). A dot whose model is not in the list shows as Custom with its id. The editor's check
-   (a model must be named) is unchanged; the core's is too.
+   (a model must be named) is unchanged; the core's is too. Changing the engine changes the
+   model to suit it: to Claude, a model that is neither a Claude alias nor a `claude-` id becomes
+   the default model; to local, a Claude alias or `claude-` id is cleared, so the person picks
+   one the endpoint lists.
 4. **Quick switcher in the conversation.** The header of a dot's conversation shows a compact
    model select with the dot's current model. Changing it saves the dot with the new model
    through `update_dot`, the same command the editor saves with, so every rule that applies to

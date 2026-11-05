@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Inbox, Schedule } from "@/api/types";
 import { CUSTOM } from "@/components/ModelPicker";
 import { specOf } from "@/lib/dot-rules";
+import { modelFor } from "@/screens/dot-editor/DotForm";
 import { localDateTime } from "@/lib/format";
 import { invalidateDots } from "@/lib/query";
 import { backend } from "@/test/backend";
@@ -458,6 +459,44 @@ describe("the dot editor, stored dot", () => {
   });
 
   const endpoint = "http://127.0.0.1:1234";
+  /// The model the local endpoint lists.
+  const local = sample.models.filter((m) => m.hint === "")[0];
+
+  it("drops a Claude model when the dot is switched to a local engine, and wants one", async () => {
+    stored();
+    const { user } = renderApp(path);
+    expect(await screen.findByLabelText("Model")).toHaveValue("sonnet");
+    await user.selectOptions(screen.getByLabelText("Engine"), "local");
+    expect(screen.getByLabelText("Model")).toHaveValue("");
+    await user.type(screen.getByLabelText("Endpoint"), endpoint);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(screen.getByText("Name the model to use.")).toBeVisible();
+    expect(backend.callsTo("update_dot")).toHaveLength(0);
+  });
+
+  it("keeps a local model on the way to Claude only if it is a Claude one", async () => {
+    const held = stored();
+    held.dot = { ...dot, engine: "local", endpoint_url: endpoint, model: "qwen2.5-coder-7b" };
+    const { user } = renderApp(path);
+    await screen.findByLabelText("Endpoint");
+    // The default model of Settings.
+    await user.selectOptions(screen.getByLabelText("Engine"), "claude");
+    expect(screen.getByLabelText("Model")).toHaveValue(sample.settings.default_model);
+    // Back to local: the default is a Claude model, so it goes.
+    await user.selectOptions(screen.getByLabelText("Engine"), "local");
+    expect(screen.getByLabelText("Model")).toHaveValue("");
+  });
+
+  it("keeps a model that suits the new engine", () => {
+    expect(modelFor("claude", "local", "claude-opus-4-1", "opus")).toBe("claude-opus-4-1");
+    expect(modelFor("claude", "local", "Haiku", "opus")).toBe("Haiku");
+    expect(modelFor("claude", "local", "llama-3.1-8b", "opus")).toBe("opus");
+    expect(modelFor("local", "claude", "llama-3.1-8b", "opus")).toBe("llama-3.1-8b");
+    expect(modelFor("local", "claude", "claude-sonnet-4-5", "opus")).toBe("");
+    // No change of engine changes nothing.
+    expect(modelFor("local", "local", "sonnet", "opus")).toBe("sonnet");
+    expect(modelFor("claude", "claude", "llama", "opus")).toBe("llama");
+  });
 
   it("shows a model not in the list as Custom with its id", async () => {
     const held = stored();
@@ -476,12 +515,17 @@ describe("the dot editor, stored dot", () => {
     const { user } = renderApp(path);
     await user.selectOptions(await screen.findByLabelText("Engine"), "local");
     await user.type(screen.getByLabelText("Endpoint"), endpoint);
+    const model = screen.getByLabelText("Model");
+    await user.selectOptions(model, await within(model).findByRole("option", { name: local.label }));
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByText("Saved")).toBeVisible();
     // Both engines use MCP servers, skills and plugins.
     expect(dot.uses.mcp_servers).not.toEqual([]);
     expect(backend.callsTo("update_dot")).toEqual([
-      { id: dot.id, spec: { ...specOf(dot), engine: "local", endpoint_url: endpoint } },
+      {
+        id: dot.id,
+        spec: { ...specOf(dot), engine: "local", endpoint_url: endpoint, model: local.id },
+      },
     ]);
     expect(backend.callsTo("update_dot")[0]).toMatchObject({ spec: { uses: dot.uses } });
   });

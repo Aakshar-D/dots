@@ -135,6 +135,27 @@ function QuietLimit(props: {
   );
 }
 
+/// The Claude CLI's model aliases (`dots_core::models::CLAUDE_MODELS`).
+const CLAUDE_ALIASES = ["opus", "sonnet", "haiku"];
+const isClaudeModel = (model: string) => {
+  const m = model.trim().toLowerCase();
+  return CLAUDE_ALIASES.includes(m) || m.startsWith("claude-");
+};
+
+/// The model a dot keeps when its engine changes from `from` to `to` (model switcher spec
+/// section 2.3): a Claude dot given a model no Claude engine runs starts with the default
+/// model; a local dot drops a Claude model, so the person picks one the endpoint lists.
+export function modelFor(
+  to: EngineKind,
+  from: EngineKind,
+  model: string,
+  defaultModel: string | undefined,
+): string {
+  if (to === from) return model;
+  if (to === "claude") return isClaudeModel(model) ? model : (defaultModel ?? "sonnet");
+  return isClaudeModel(model) ? "" : model;
+}
+
 /// Every field of a dot. `existing` is set once the dot is stored: only then does it have a
 /// webhook, and its org is fixed. `onEnabled`, when given, switches the dot on or off at once
 /// instead of with the next save: for a dot that can't be saved.
@@ -153,6 +174,7 @@ export function DotForm(props: {
   const set = <K extends keyof DotSpec>(key: K, value: DotSpec[K]) =>
     props.onChange({ ...draft, spec: { ...spec, [key]: value } });
   const models = useModels(spec.engine, spec.endpoint_url);
+  const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
 
   function browse() {
     open({ directory: true, title: "Choose the folder the dot works in" }).then((picked) => {
@@ -223,7 +245,17 @@ export function DotForm(props: {
           <NativeSelect
             id="dot-engine"
             value={spec.engine}
-            onChange={(e) => set("engine", EngineKind.parse(e.target.value))}
+            onChange={(e) => {
+              const engine = EngineKind.parse(e.target.value);
+              props.onChange({
+                ...draft,
+                spec: {
+                  ...spec,
+                  engine,
+                  model: modelFor(engine, spec.engine, spec.model, settings?.default_model),
+                },
+              });
+            }}
           >
             <option value="claude">Claude Code CLI (your subscription)</option>
             <option value="local">Local model (OpenAI-compatible endpoint)</option>
