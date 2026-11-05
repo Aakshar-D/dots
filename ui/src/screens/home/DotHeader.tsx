@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 
 import type { Dot } from "@/api/types";
 import type { DotStatus } from "@/lib/dot-status";
+import { DotAvatar } from "@/components/DotAvatar";
 import { DotMenu } from "@/screens/home/DotMenu";
 import { StatusMark } from "@/screens/home/StatusMark";
 
@@ -17,6 +18,7 @@ export function DotHeader(props: {
   return (
     // Wraps its actions onto a second line in a narrow window rather than scrolling sideways.
     <header className="flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-2">
+      <DotAvatar seed={props.dot.id} size="md" />
       <h1 className="flex min-w-0">
         <DotMenu dot={props.dot} />
       </h1>
