@@ -38,19 +38,21 @@ export function useModels(engine: EngineKind, endpoint: string | null) {
     retry: false,
     staleTime: engine === "claude" ? Infinity : 30_000,
   });
+  // While the endpoint is still being typed, the list of the one before is not offered.
+  const settling = engine === "local" && typed !== url;
   const note =
     engine !== "local"
       ? undefined
       : typed === null || !ENDPOINT.test(typed)
         ? "Set the endpoint to list its models, or pick Custom… to type a model ID."
-        : query.isPending
+        : settling || query.isPending
           ? "Loading the endpoint's models…"
           : query.isError
             ? `Could not list the endpoint's models: ${errorMessage(query.error)} Pick Custom… to type a model ID.`
             : query.data.length === 0
               ? "The endpoint lists no models. Pick Custom… to type a model ID."
               : undefined;
-  return { options: query.data ?? [], note };
+  return { options: settling ? [] : (query.data ?? []), note };
 }
 
 /// A model picker (model switcher spec section 2.3): a select of `options` and Custom…, which
@@ -75,12 +77,13 @@ export function ModelPicker(props: {
 }) {
   const { value, options } = props;
   const listed = options.find((o) => o.id === value);
-  // null follows the value: Custom when it is set and not in the list. Picking Custom…, or
-  // typing in its box, holds Custom even while the box is emptied.
-  const [picked, setPicked] = useState<boolean | null>(null);
+  // Custom when the value is set and not in the list, also after a listed one was picked and
+  // the list changed. Picking Custom…, or typing in its box, holds Custom even while the box
+  // is emptied.
+  const [picked, setPicked] = useState(false);
   // With no list (loading, or none to be had) the value stands as its own option.
   const unlisted = options.length === 0 && value !== "";
-  const custom = picked ?? (value !== "" && listed === undefined && !unlisted);
+  const custom = picked || (value !== "" && listed === undefined && !unlisted);
   const [draft, setDraft] = useState(value);
   const selected = custom ? CUSTOM : listed || unlisted ? value : "";
   function choose(next: string) {
@@ -160,7 +163,8 @@ export function ModelPicker(props: {
               value={value}
               onChange={(e) => {
                 setPicked(true);
-                props.onChange(e.target.value);
+                // A model id has no spaces around it.
+                props.onChange(e.target.value.trim());
               }}
             />
           ))}

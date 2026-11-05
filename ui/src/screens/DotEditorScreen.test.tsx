@@ -498,6 +498,21 @@ describe("the dot editor, stored dot", () => {
     expect(modelFor("claude", "claude", "llama", "opus")).toBe("llama");
   });
 
+  it("offers no model of the endpoint before while a new one is typed", async () => {
+    const held = stored();
+    held.dot = { ...dot, engine: "local", endpoint_url: endpoint, model: local.id };
+    const other = { id: "llama-3.1-8b", label: "llama-3.1-8b", hint: "" };
+    backend.on("list_models", (args) => (args.engine === "local" ? [local, other] : claudeModels));
+    const { user } = renderApp(path);
+    const model = await screen.findByLabelText("Model");
+    await within(model).findByRole("option", { name: other.label });
+    await user.type(screen.getByLabelText("Endpoint"), "0");
+    // Only the dot's own model stands until the new endpoint answers.
+    expect(within(model).queryByRole("option", { name: other.label })).toBeNull();
+    expect(model).toHaveValue(local.id);
+    expect(screen.getByText("Loading the endpoint's models…")).toBeVisible();
+  });
+
   it("shows a model not in the list as Custom with its id", async () => {
     const held = stored();
     held.dot = { ...dot, model: "claude-opus-4-1" };
