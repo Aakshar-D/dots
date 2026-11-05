@@ -340,6 +340,31 @@ describe("commands", () => {
     expect((await failure(commands.environmentVariables(["A"]))).kind).toBe("internal");
   });
 
+  it("sends the connector commands as the core names them", async () => {
+    reply = async () => fixture.ConnectorEntry;
+    expect(await commands.connectorList()).toEqual(fixture.ConnectorEntry);
+    reply = async () => fixture.ConnectorEntry[0];
+    await commands.connectorConnect("github", { token: "ghp_x" }, ["d1"]);
+    await commands.connectorSignIn("notion", ["d1"]);
+    await commands.connectorSetDots("notion", []);
+    await commands.connectorDisconnect("notion");
+    reply = async () => null;
+    await commands.connectorOpenPage("github", "instructions");
+    await commands.connectorSignInCancel("notion");
+    reply = async () => fixture.RuntimeCheck[2];
+    expect((await commands.connectorRuntime("slack")).ok).toBe(false);
+    expect(calls).toEqual([
+      ["connector_list", undefined],
+      ["connector_connect", { id: "github", values: { token: "ghp_x" }, dotIds: ["d1"] }],
+      ["connector_sign_in", { id: "notion", dotIds: ["d1"] }],
+      ["connector_set_dots", { id: "notion", dotIds: [] }],
+      ["connector_disconnect", { id: "notion" }],
+      ["connector_open_page", { id: "github", page: "instructions" }],
+      ["connector_sign_in_cancel", { id: "notion" }],
+      ["connector_runtime", { id: "slack" }],
+    ]);
+  });
+
   it("invokes exactly the commands the app registers", async () => {
     // A wrapper calls `invoke` before it first waits, so calling each one without arguments
     // lists the names with no backend. Their answers, mostly rejections here, do not matter.
