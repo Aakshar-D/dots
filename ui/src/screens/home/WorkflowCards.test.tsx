@@ -79,4 +79,33 @@ describe("a workflow started from a chat", () => {
     await waitFor(() => expect(card.queryByRole("region", { name: "Your check" })).toBeNull());
     expect(card.queryByRole("button", { name: "Stop" })).toBeNull();
   });
+
+  it("keeps the cards while a new run joins the conversation and its answer is pending", async () => {
+    const { started, view } = topic();
+    const shown = within(await conversation());
+    await shown.findByRole("article", { name: CARD });
+    await view.listening();
+    // The answer for the longer list of ids is held back.
+    let release: (runs: WorkflowRun[]) => void = () => {};
+    const held = new Promise<WorkflowRun[]>((resolve) => (release = resolve));
+    backend.on("workflow_runs_for_origins", (args) =>
+      (args.runIds as string[]).length > 2 ? held : started.runs,
+    );
+    const third = reply("current3", chat("current", "10:00"), "10:10");
+    backend.on("list_runs", () => [third, reply("current2", chat("current", "10:00"), "10:05"), chat("current", "10:00")]);
+    backend.on("run_thread", () => [
+      chat("current", "10:00"),
+      reply("current2", chat("current", "10:00"), "10:05"),
+      third,
+    ]);
+    act(() => backend.emit("runtime", { type: "run_updated", run: third }));
+    await waitFor(() =>
+      expect(backend.callsTo("workflow_runs_for_origins").at(-1)).toEqual({
+        runIds: ["current", "current2", "current3"],
+      }),
+    );
+    expect(shown.getByRole("article", { name: CARD })).toBeVisible();
+    await act(async () => release(started.runs));
+    expect(await shown.findByRole("article", { name: CARD })).toBeVisible();
+  });
 });

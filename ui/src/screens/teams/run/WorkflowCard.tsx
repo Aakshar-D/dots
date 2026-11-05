@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { LoaderCircle } from "lucide-react";
 import { Link } from "react-router";
@@ -27,6 +27,7 @@ export function useStartedWorkflows(runIds: string[]): {
     queryKey: keys.workflowRunsForOrigins(runIds),
     queryFn: () => commands.workflowRunsForOrigins(runIds),
     enabled: runIds.length > 0,
+    placeholderData: keepPreviousData,
   });
   const byRun = new Map<string, WorkflowRun[]>();
   for (const run of started.data ?? []) {
