@@ -1,7 +1,7 @@
 //! Forwards `RuntimeEvent`s to the webview, turns some into OS notifications, and keeps the
 //! tray's Inbox count current.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use dots_core::events::RuntimeEvent;
@@ -135,11 +135,18 @@ pub struct Notifier {
     active: HashMap<String, RunStatus>,
     /// Runs with an announced approval request that have neither parked nor ended since.
     asked: HashSet<String>,
-    /// Where each workflow run seen was last, ended runs included, so that an ended run
-    /// published again is not told twice. Workflow runs are few (each one waits on the
-    /// person's check or budget), so they are kept until a lag clears them.
+    /// Where each workflow run seen was last, so that an update that repeats it is quiet and
+    /// an ended run published again is not told twice. A run that has not ended is kept while
+    /// it runs or waits; of the ended ones the newest `ENDED_WORKFLOW_RUNS_KEPT` are kept (the
+    /// oldest, by when it was seen ended, is dropped past that), so the map stays bounded in
+    /// an app that lives for months. A lag clears all of it.
     workflows: HashMap<String, Moved>,
+    /// The ids of the ended runs in `workflows`, the one seen ended first at the front.
+    ended: VecDeque<String>,
 }
+
+/// How many ended workflow runs the notifier remembers.
+const ENDED_WORKFLOW_RUNS_KEPT: usize = 256;
 
 /// Where a workflow run is, as far as its notices go: its status, its wait, and the newest
 /// step run of its current step.
@@ -177,6 +184,7 @@ impl Notifier {
         self.active.clear();
         self.asked.clear();
         self.workflows.clear();
+        self.ended.clear();
     }
 
     pub fn decide(&mut self, ev: &RuntimeEvent) -> Option<Notice> {
@@ -253,6 +261,26 @@ impl Notifier {
             RuntimeEvent::WorkflowRunUpdated { run } => {
                 let now = Moved::of(run);
                 let prev = self.workflows.insert(run.id.clone(), now.clone());
+                let ended = matches!(
+                    run.status,
+                    WorkflowRunStatus::Succeeded
+                        | WorkflowRunStatus::Failed
+                        | WorkflowRunStatus::Cancelled
+                );
+                let listed = self.ended.iter().position(|id| *id == run.id);
+                match (ended, listed) {
+                    (true, None) => self.ended.push_back(run.id.clone()),
+                    // A run that runs again (a retried step) no longer counts as ended.
+                    (false, Some(at)) => {
+                        self.ended.remove(at);
+                    }
+                    _ => {}
+                }
+                while self.ended.len() > ENDED_WORKFLOW_RUNS_KEPT {
+                    if let Some(oldest) = self.ended.pop_front() {
+                        self.workflows.remove(&oldest);
+                    }
+                }
                 if prev.as_ref() == Some(&now) {
                     return None;
                 }
@@ -1417,7 +1445,7 @@ mod tests {
         );
         // After a lag the notifier starts again, workflow runs included.
         n.forget();
-        assert!(n.workflows.is_empty());
+        assert!(n.workflows.is_empty() && n.ended.is_empty());
         assert_eq!(
             workflow_told(&mut n, "w", &[(WSucceeded, None)]),
             [Some(W::Finished)]
@@ -1631,5 +1659,34 @@ mod tests {
             notified(&mut n, "own", TriggerKind::Manual, &[Running, Succeeded]),
             [false, true]
         );
+    }
+
+    #[test]
+    fn the_notifier_remembers_at_most_256_ended_workflow_runs() {
+        use WorkflowRunStatus::{Running as WRunning, Succeeded as WSucceeded};
+        let mut n = Notifier::default();
+        // A run seen running before them all, and still running.
+        assert_eq!(workflow_told(&mut n, "live", &[(WRunning, None)]), [None]);
+        for i in 0..=ENDED_WORKFLOW_RUNS_KEPT {
+            let id = format!("e{i}");
+            let seq = [(WRunning, None), (WSucceeded, None)];
+            assert_eq!(
+                workflow_told(&mut n, &id, &seq),
+                [None, Some(WorkflowNotice::Finished)]
+            );
+        }
+        assert_eq!(n.ended.len(), ENDED_WORKFLOW_RUNS_KEPT);
+        assert_eq!(n.workflows.len(), ENDED_WORKFLOW_RUNS_KEPT + 1);
+        // The first ended run was dropped: published again, it is told again.
+        assert_eq!(
+            workflow_told(&mut n, "e0", &[(WSucceeded, None)]),
+            [Some(WorkflowNotice::Finished)]
+        );
+        // The newest is remembered.
+        let last = format!("e{ENDED_WORKFLOW_RUNS_KEPT}");
+        assert_eq!(workflow_told(&mut n, &last, &[(WSucceeded, None)]), [None]);
+        // The run that never ended is still remembered: the same update is quiet.
+        assert_eq!(workflow_told(&mut n, "live", &[(WRunning, None)]), [None]);
+        assert!(n.workflows.contains_key("live"));
     }
 }
