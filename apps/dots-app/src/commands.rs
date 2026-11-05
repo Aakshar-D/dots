@@ -663,6 +663,22 @@ pub fn policy_preset(preset: Preset) -> Policy {
     Policy::preset(preset)
 }
 
+/// What the company's Claude Code managed settings say, read fresh each time.
+#[tauri::command]
+pub fn managed_policy() -> dots_core::managed_policy::ManagedPolicy {
+    dots_core::managed_policy::read()
+}
+
+/// The company's managed settings, and where `policy` (of a dot run by `engine`) would skip
+/// an ask or a refusal they keep.
+#[tauri::command]
+pub fn managed_policy_check(
+    engine: dots_core::model::EngineKind,
+    policy: Policy,
+) -> dots_core::managed_policy::ManagedCheck {
+    dots_core::managed_policy::check(&dots_core::managed_policy::system_dir(), engine, &policy)
+}
+
 /// For each rule pattern, whether it names or covers a private folder (approval guards spec
 /// section 4): such an allow rule never allows without asking, and the editor says so.
 #[tauri::command]

@@ -100,6 +100,8 @@ command_list![
     webhook_url,
     preview_schedule,
     policy_preset,
+    managed_policy,
+    managed_policy_check,
     rules_touch_private,
     new_dot_spec,
     test_endpoint,
