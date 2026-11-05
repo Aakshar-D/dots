@@ -78,6 +78,7 @@ describe("a workflow's card in the chat", () => {
       {
         id: "01J0WFR",
         note: null,
+        stepRunId: sample.check.step_run_id,
         tips: sample.check.branches.map(({ branch, commit }) => ({ branch, commit })),
       },
     ]);

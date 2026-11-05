@@ -27,11 +27,13 @@ pub struct ShownBranch {
     pub commit: Option<String>,
 }
 
-/// What the check a workflow run waits on shows (section 5.4): the check step, the summary of
-/// the hand-off it was shown on, and that hand-off's branches.
+/// What the check a workflow run waits on shows (section 5.4): the check step and its step run
+/// (the one the check waits on), the summary of the hand-off it was shown on, and that
+/// hand-off's branches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CheckView {
     pub step_id: String,
+    pub step_run_id: String,
     pub summary: String,
     pub branches: Vec<ShownBranch>,
 }
@@ -56,6 +58,11 @@ impl CheckView {
             .collect()
     }
 }
+
+/// Why an approval or a send-back is refused when the check the page showed is not the one the
+/// workflow run waits on now (another step run: the run went on to the next check, or the check
+/// waits again after a send-back).
+pub const CHECK_CHANGED: &str = "The check changed since it was shown. Look at the check again.";
 
 /// Why an approval is refused when what the page showed is not what git has now: `names` are
 /// the branches that differ.
@@ -164,6 +171,7 @@ impl Workflows {
         }
         Ok(CheckView {
             step_id: step_run.step_id.clone(),
+            step_run_id: step_run.id.clone(),
             summary: shown.summary,
             branches,
         })

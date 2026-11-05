@@ -135,6 +135,7 @@ describe("the workflow run page", () => {
       {
         id: "01J0WFR",
         note: null,
+        stepRunId: "01J0STP3",
         tips: [
           { branch: LEAD, commit: "2222222222222222222222222222222222222222" },
           { branch: MEMBER, commit: null },

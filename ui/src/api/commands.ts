@@ -483,12 +483,15 @@ export const commands = {
   /// A branch's committed work from the project's default branch, at `commit`.
   workflowBranchDiff: (id: string, branch: string, commit: string) =>
     call(T.WorktreeDiff, "workflow_branch_diff", { id, branch, commit }),
-  /// Approves with the tips the check showed. Rejects with kind `conflict` when a branch moved
-  /// since: the check is read again.
-  workflowApprove: (id: string, note: string | null, tips: T.CheckTip[]) =>
-    call(T.WorkflowRun, "workflow_approve", { id, note, tips }),
-  workflowSendBack: (id: string, note: string) =>
-    call(T.WorkflowRun, "workflow_send_back", { id, note }),
+  /// Approves the check's step run `stepRunId` with the tips it showed. Rejects with kind
+  /// `conflict` when a branch moved since or the run waits on another check: the check is read
+  /// again.
+  workflowApprove: (id: string, note: string | null, stepRunId: string, tips: T.CheckTip[]) =>
+    call(T.WorkflowRun, "workflow_approve", { id, note, stepRunId, tips }),
+  /// Sends the work of the check's step run `stepRunId` back. Rejects with kind `conflict` when
+  /// the run waits on another check.
+  workflowSendBack: (id: string, note: string, stepRunId: string) =>
+    call(T.WorkflowRun, "workflow_send_back", { id, note, stepRunId }),
   workflowAddBudget: (id: string) => call(T.WorkflowRun, "workflow_add_budget", { id }),
   /// Lets the send-back held at the cap go on.
   workflowAllowSendBack: (id: string) => call(T.WorkflowRun, "workflow_allow_send_back", { id }),

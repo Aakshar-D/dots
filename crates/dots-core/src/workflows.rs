@@ -20,7 +20,7 @@ mod jobs;
 mod send_back;
 mod tools;
 
-pub use check::{branches_changed, CheckTip, CheckView, ShownBranch};
+pub use check::{branches_changed, CheckTip, CheckView, ShownBranch, CHECK_CHANGED};
 pub use deploy_step::{INTERRUPTED, NO_APPROVAL, NO_DEFAULT_BRANCH};
 pub use tools::STEP_CLOSED;
 
@@ -719,13 +719,16 @@ impl Workflows {
 
     /// Approves the check the workflow run waits on (section 5.4): the check passes the hand-off
     /// it was shown on, with the tip of each of its branches (section 6.2), and the workflow
-    /// goes on. `tips` are the branches and commits the check page showed (`check`): when they
+    /// goes on. `step_run_id` is the step run the check page showed (`check`): when the run
+    /// waits on another one now, the approval is refused (`Conflict`, `CHECK_CHANGED`) and
+    /// nothing is recorded. `tips` are the branches and commits the check page showed: when they
     /// are not exactly the shown branches at their tips now, the approval is refused
     /// (`Conflict`, `branches_changed`) and nothing is recorded.
     pub async fn approve_check(
         &self,
         id: &str,
         note: Option<&str>,
+        step_run_id: &str,
         tips: &[CheckTip],
     ) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
@@ -738,6 +741,11 @@ impl Workflows {
                 "workflow run {id} is not waiting for a check"
             )));
         };
+        // The check the person saw, read again under the lock: two checks in a row can show the
+        // same tips, so only the step run tells the next check from the one approved.
+        if step_run.id != step_run_id {
+            return Err(Error::Conflict(CHECK_CHANGED.into()));
+        }
         let shown = shown_at(&wr, &step_run.step_id);
         // The tips the person approved, read again under the lock: a deploy after the check
         // pushes exactly these, so they must be what the page showed. Equal to the page's tips,

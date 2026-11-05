@@ -602,7 +602,7 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
     assert_eq!(refused(workflows.retry_step(&wr.id).await), run_text);
     assert_eq!(refused(workflows.add_budget(&wr.id).await), run_text);
     assert_eq!(
-        refused(workflows.approve_check(&wr.id, None, &[]).await),
+        refused(workflows.approve_check(&wr.id, None, "", &[]).await),
         answer
     );
     assert_eq!(refused(workflows.stop(&wr.id).await), run_text);

@@ -3,9 +3,9 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import type { WorkflowRun } from "@/api/types";
+import type { CheckView, WorkflowRun } from "@/api/types";
 import { createQueryClient, keys } from "@/lib/query";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
 import { CheckPanel } from "./CheckPanel";
@@ -14,6 +14,9 @@ const [waiting, done] = sample.workflowRuns as [WorkflowRun, WorkflowRun];
 const LEAD = "dots/nightly-tests/01J0RUN5";
 const MEMBER = "dots/reviewer/01J0RUN6";
 const TIP = "2222222222222222222222222222222222222222";
+/// The step run the sample check waits on, and the next check's.
+const STEP_RUN = "01J0STP3";
+const NEXT = "01J0STP4";
 const CHANGED = `The branches changed since the check was shown: ${LEAD}. Look at the check again.`;
 
 /// The check's actions on their own, as a conversation's workflow card shows them.
@@ -63,7 +66,7 @@ describe("the check's actions", () => {
     await user.type(screen.getByRole("textbox", { name: "Note" }), "  Keep the old icon.  ");
     await user.click(back);
     expect(backend.callsTo("workflow_send_back")).toEqual([
-      { id: "01J0WFR", note: "Keep the old icon." },
+      { id: "01J0WFR", note: "Keep the old icon.", stepRunId: STEP_RUN },
     ]);
     await waitFor(() => expect(screen.getByRole("textbox", { name: "Note" })).toHaveValue(""));
     expect(queryClient.getQueryData(keys.workflowRun("01J0WFR"))).toMatchObject({
@@ -81,12 +84,64 @@ describe("the check's actions", () => {
       {
         id: "01J0WFR",
         note: "Looks right.",
+        stepRunId: STEP_RUN,
         tips: [
           { branch: LEAD, commit: TIP },
           { branch: MEMBER, commit: null },
         ],
       },
     ]);
+  });
+
+  it("name the check on screen by its step run, and wait while the check is read again", async () => {
+    backend.on("workflow_approve", () => ({ ...done, id: waiting.id }));
+    const { user, queryClient } = show(waiting);
+    await screen.findByRole("listitem", { name: LEAD });
+    const approve = screen.getByRole("button", { name: "Approve" });
+    const back = screen.getByRole("button", { name: "Send back to Build" });
+    await user.type(screen.getByRole("textbox", { name: "Note" }), "Looks right.");
+    expect(approve).toBeEnabled();
+    expect(back).toBeEnabled();
+    // The check is read again (its run moved): the same branches, another step run.
+    const next = later<CheckView>();
+    backend.on("workflow_check", () => next.answer);
+    void queryClient.invalidateQueries({ queryKey: keys.workflowCheck(waiting.id) });
+    await waitFor(() => expect(approve).toBeDisabled());
+    expect(back).toBeDisabled();
+    next.give({ ...sample.check, step_run_id: NEXT });
+    await waitFor(() => expect(approve).toBeEnabled());
+    await user.click(approve);
+    expect(backend.callsTo("workflow_approve")).toEqual([
+      {
+        id: "01J0WFR",
+        note: "Looks right.",
+        stepRunId: NEXT,
+        tips: [
+          { branch: LEAD, commit: TIP },
+          { branch: MEMBER, commit: null },
+        ],
+      },
+    ]);
+  });
+
+  it("drop the check it showed once Approve answers, so the next check is read before Approve is offered", async () => {
+    // As on a conversation's card, the run shown still waits on a check after the answer.
+    const next = later<CheckView>();
+    backend.on("workflow_approve", () => {
+      backend.on("workflow_check", () => next.answer);
+      return { ...waiting, steps: [...waiting.steps] };
+    });
+    const { user } = show(waiting);
+    await screen.findByRole("listitem", { name: LEAD });
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(await screen.findByText("Reading the check…")).toBeVisible();
+    expect(screen.queryByRole("listitem", { name: LEAD })).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(backend.callsTo("workflow_approve")).toHaveLength(1);
+    next.give({ ...sample.check, step_run_id: NEXT });
+    await screen.findByRole("listitem", { name: LEAD });
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(backend.callsTo("workflow_approve").map((c) => c.stepRunId)).toEqual([STEP_RUN, NEXT]);
   });
 
   it("show the core's refusal when a branch moved, read the check again, and approve what it shows now", async () => {
@@ -111,6 +166,7 @@ describe("the check's actions", () => {
     expect(backend.callsTo("workflow_approve")[1]).toEqual({
       id: "01J0WFR",
       note: null,
+      stepRunId: STEP_RUN,
       tips: [{ branch: LEAD, commit: moved }],
     });
     await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());

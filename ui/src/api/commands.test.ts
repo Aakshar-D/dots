@@ -392,9 +392,9 @@ describe("commands", () => {
       fixture.WorktreeDiff,
     );
     reply = async () => fixture.WorkflowRun[1];
-    await commands.workflowApprove("w1", null, tips);
-    await commands.workflowApprove("w1", "Looks right.", []);
-    await commands.workflowSendBack("w1", "Keep the old icon.");
+    await commands.workflowApprove("w1", null, "s1", tips);
+    await commands.workflowApprove("w1", "Looks right.", "s1", []);
+    await commands.workflowSendBack("w1", "Keep the old icon.", "s1");
     await commands.workflowAddBudget("w1");
     await commands.workflowAllowSendBack("w1");
     await commands.workflowRetryStep("w1");
@@ -415,9 +415,9 @@ describe("commands", () => {
       ],
       ["workflow_check", { id: "w1" }],
       ["workflow_branch_diff", { id: "w1", branch: "dots/dev/01J0RUN", commit: "abc" }],
-      ["workflow_approve", { id: "w1", note: null, tips }],
-      ["workflow_approve", { id: "w1", note: "Looks right.", tips: [] }],
-      ["workflow_send_back", { id: "w1", note: "Keep the old icon." }],
+      ["workflow_approve", { id: "w1", note: null, stepRunId: "s1", tips }],
+      ["workflow_approve", { id: "w1", note: "Looks right.", stepRunId: "s1", tips: [] }],
+      ["workflow_send_back", { id: "w1", note: "Keep the old icon.", stepRunId: "s1" }],
       ["workflow_add_budget", { id: "w1" }],
       ["workflow_allow_send_back", { id: "w1" }],
       ["workflow_retry_step", { id: "w1" }],

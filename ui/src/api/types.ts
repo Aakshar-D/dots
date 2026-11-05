@@ -1034,9 +1034,11 @@ export const ShownBranch = z.strictObject({
   commit: nullable(z.string()),
 });
 export type ShownBranch = z.infer<typeof ShownBranch>;
-// What the check a workflow run waits on shows; Approve sends its branches back as `CheckTip`s.
+// What the check a workflow run waits on shows; Approve sends its branches back as `CheckTip`s,
+// and Approve and Send back name its step run (`step_run_id`, the one the check waits on).
 export const CheckView = z.strictObject({
   step_id: z.string(),
+  step_run_id: z.string(),
   summary: z.string(),
   branches: z.array(ShownBranch),
 });

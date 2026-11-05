@@ -536,8 +536,20 @@ impl World {
     /// Approves the check the workflow run `id` waits on as the check page does: with the tips
     /// its check shows now.
     async fn approve(&self, id: &str, note: Option<&str>) -> dots_core::Result<WorkflowRun> {
-        let tips = self.workflows.check(id).await?.tips();
-        self.workflows.approve_check(id, note, &tips).await
+        let view = self.workflows.check(id).await?;
+        self.workflows
+            .approve_check(id, note, &view.step_run_id, &view.tips())
+            .await
+    }
+
+    /// Sends the work back from the check the workflow run `id` waits on as the check page
+    /// does: naming the step run its check shows now (none when it waits on no check).
+    async fn send_back(&self, id: &str, note: &str) -> dots_core::Result<WorkflowRun> {
+        let step_run = match self.workflows.check(id).await {
+            Ok(view) => view.step_run_id,
+            Err(_) => String::new(),
+        };
+        self.workflows.send_back_check(id, note, &step_run).await
     }
 }
 
@@ -668,7 +680,7 @@ async fn a_failed_step_waits_and_can_be_retried() {
     assert_eq!(wr.error.as_deref(), Some("Fix it: compiler exploded"));
     assert_eq!(wr.steps[0].status, StepRunStatus::Failed);
     assert!(matches!(
-        w.workflows.approve_check(&wr.id, None, &[]).await,
+        w.workflows.approve_check(&wr.id, None, "", &[]).await,
         Err(Error::Conflict(_))
     ));
     let retried = w.workflows.retry_step(&wr.id).await.unwrap();
@@ -3040,8 +3052,7 @@ async fn the_person_sends_back_from_a_check_and_the_step_goes_on_in_its_own_sess
     let branch = first.branch.clone().unwrap();
 
     let sent = w
-        .workflows
-        .send_back_check(&wr.id, "  Use the light icon set.  ")
+        .send_back(&wr.id, "  Use the light icon set.  ")
         .await
         .unwrap();
     assert_eq!(sent.send_backs, 1);
@@ -3273,13 +3284,13 @@ async fn past_the_cap_a_send_back_waits_until_the_person_allows_one_more() {
     let wr = w.start(&flow).await;
     for (n, note) in ["One.", "Two.", "Three."].into_iter().enumerate() {
         w.until(&wr.id, at_check(n + 1)).await;
-        let sent = w.workflows.send_back_check(&wr.id, note).await.unwrap();
+        let sent = w.send_back(&wr.id, note).await.unwrap();
         assert_eq!(sent.send_backs, n as u32 + 1);
     }
     w.until(&wr.id, at_check(4)).await;
 
     // The fourth is held: nothing goes back, and a pass leaves it waiting.
-    let held = w.workflows.send_back_check(&wr.id, "Four.").await.unwrap();
+    let held = w.send_back(&wr.id, "Four.").await.unwrap();
     assert_eq!(held.status, WorkflowRunStatus::Waiting);
     assert_eq!(held.waiting_on, Some(WaitingOn::SendBacks));
     assert_eq!(
@@ -3295,7 +3306,7 @@ async fn past_the_cap_a_send_back_waits_until_the_person_allows_one_more() {
     assert_eq!(still.steps.iter().filter(|s| s.step_id == "dev").count(), 4);
     assert_eq!(w.engine.prompts_of("dev").len(), 4);
     assert!(matches!(
-        w.workflows.approve_check(&wr.id, None, &[]).await,
+        w.workflows.approve_check(&wr.id, None, "", &[]).await,
         Err(Error::Conflict(_))
     ));
 
@@ -3346,11 +3357,7 @@ async fn a_send_back_past_the_runs_limit_waits_on_budget_then_goes_on() {
         .await;
     let wr = w.start(&flow).await;
     w.until(&wr.id, at_check(1)).await;
-    let sent = w
-        .workflows
-        .send_back_check(&wr.id, "Use the light set.")
-        .await
-        .unwrap();
+    let sent = w.send_back(&wr.id, "Use the light set.").await.unwrap();
     assert_eq!(sent.waiting_on, Some(WaitingOn::Budget));
     assert_eq!(sent.error.as_deref(), Some("Budget reached: runs, 1 of 1"));
     assert_eq!(sent.send_backs, 1);
@@ -3402,10 +3409,7 @@ async fn a_step_whose_session_cannot_be_resumed_starts_again_and_says_so() {
 
     // The helper made no change: it starts again as it started the first time.
     let wr = w.until(&wr.id, at("task", 1)).await;
-    w.workflows
-        .send_back_check(&wr.id, "Say which icon.")
-        .await
-        .unwrap();
+    w.send_back(&wr.id, "Say which icon.").await.unwrap();
     let wr = w.until(&wr.id, at("task", 2)).await;
     let helper = newest(&wr, "helper");
     assert_eq!(
@@ -3434,10 +3438,7 @@ async fn a_step_whose_session_cannot_be_resumed_starts_again_and_says_so() {
     let wr = w.until(&wr.id, at_check(1)).await;
     let old = w.runs_of(&newest(&wr, "dev").id).await.remove(0);
     let old_branch = old.branch.clone().unwrap();
-    w.workflows
-        .send_back_check(&wr.id, "Use the light set.")
-        .await
-        .unwrap();
+    w.send_back(&wr.id, "Use the light set.").await.unwrap();
     let wr = w.until(&wr.id, at_check(2)).await;
     let dev = newest(&wr, "dev");
     assert_eq!(
@@ -3508,10 +3509,7 @@ async fn a_send_back_to_a_delegate_step_continues_the_delegating_run() {
         .rev()
         .find(|r| !members.iter().any(|m| m.run_id == r.root_run_id))
         .unwrap();
-    w.workflows
-        .send_back_check(&wr.id, "Split it finer.")
-        .await
-        .unwrap();
+    w.send_back(&wr.id, "Split it finer.").await.unwrap();
     let wr = w.until(&wr.id, at_check(2)).await;
     let again = newest(&wr, "split");
     let runs = w.runs_of(&again.id).await;
@@ -3539,12 +3537,12 @@ async fn send_back_check_refuses_a_bad_note_a_check_with_no_agent_before_it_and_
     let wr = w.until(&wr.id, at_check(1)).await;
     let long = "x".repeat(8_001);
     for note in ["", "   ", long.as_str()] {
-        match w.workflows.send_back_check(&wr.id, note).await {
+        match w.send_back(&wr.id, note).await {
             Err(Error::Invalid(m)) => assert_eq!(m, "the note must be 1 to 8,000 characters"),
             other => panic!("{other:?}"),
         }
     }
-    match w.workflows.send_back_check(&wr.id, "Redo it.").await {
+    match w.send_back(&wr.id, "Redo it.").await {
         Err(Error::Invalid(m)) => assert_eq!(
             m,
             "the check \"Your check\" has no agent step before it to send the work back to"
@@ -3558,7 +3556,7 @@ async fn send_back_check_refuses_a_bad_note_a_check_with_no_agent_before_it_and_
     assert_eq!((still.send_backs, still.send_back.clone()), (0, None));
 
     w.approve(&wr.id, None).await.unwrap();
-    match w.workflows.send_back_check(&wr.id, "Redo it.").await {
+    match w.send_back(&wr.id, "Redo it.").await {
         Err(Error::Conflict(m)) => assert_eq!(
             m,
             format!("workflow run {} is not waiting for a check", wr.id)
@@ -3732,10 +3730,7 @@ async fn a_delegate_step_sent_back_counts_its_total_over_every_attempt() {
         "{}",
         helper[1]
     );
-    w.workflows
-        .send_back_check(&wr.id, "Split it finer.")
-        .await
-        .unwrap();
+    w.send_back(&wr.id, "Split it finer.").await.unwrap();
     let wr = w.until(&wr.id, at_check(2)).await;
     // The member started in the first attempt counts: the second may start one more, and the
     // third is refused.
@@ -4779,10 +4774,7 @@ async fn an_outcome_step_sent_back_is_told_to_report_again_and_the_branch_takes_
     w.engine.gate.notify_one();
     let wr = w.until(&wr.id, at_check(1)).await;
     assert_eq!(chose(&wr, "route").as_deref(), Some("fixed"));
-    w.workflows
-        .send_back_check(&wr.id, "Ask the person first.")
-        .await
-        .unwrap();
+    w.send_back(&wr.id, "Ask the person first.").await.unwrap();
     let again = w
         .until(&wr.id, |wr| {
             wr.steps
@@ -5075,6 +5067,7 @@ async fn a_check_shows_its_branches_at_their_tips_and_the_approval_records_what_
         view,
         CheckView {
             step_id: "check".into(),
+            step_run_id: newest(&wr, "check").id.clone(),
             summary: "Fixed the icon.".into(),
             branches: vec![ShownBranch {
                 branch: branch.clone(),
@@ -5088,6 +5081,7 @@ async fn a_check_shows_its_branches_at_their_tips_and_the_approval_records_what_
         serde_json::to_value(&view).unwrap(),
         json!({
             "step_id": "check",
+            "step_run_id": newest(&wr, "check").id,
             "summary": "Fixed the icon.",
             "branches": [{"branch": branch, "run_id": run_id, "commit": tip}],
         })
@@ -5105,7 +5099,7 @@ async fn a_check_shows_its_branches_at_their_tips_and_the_approval_records_what_
     assert_eq!(newest(&still, "check").decision, None);
 
     w.workflows
-        .approve_check(&wr.id, Some("Ship it."), &view.tips())
+        .approve_check(&wr.id, Some("Ship it."), &view.step_run_id, &view.tips())
         .await
         .unwrap();
     let wr = w
@@ -5130,15 +5124,17 @@ async fn an_approval_of_tips_git_no_longer_has_is_refused_and_records_nothing() 
     let w = world().await;
     let flow = w.ship_flow(DeployMode::Branch).await;
     let (wr, branch, _) = w.at_the_check(&flow, false).await;
-    let seen = w.workflows.check(&wr.id).await.unwrap().tips();
+    let view = w.workflows.check(&wr.id).await.unwrap();
+    let seen = view.tips();
     // The branch moves on after the page read the check.
     let later = w.commit_after(&branch);
     let approve = |tips: Vec<CheckTip>| {
         let w = &w;
         let id = wr.id.clone();
+        let step_run = view.step_run_id.clone();
         async move {
             w.workflows
-                .approve_check(&id, Some("Ship it."), &tips)
+                .approve_check(&id, Some("Ship it."), &step_run, &tips)
                 .await
         }
     };
@@ -5180,6 +5176,129 @@ async fn an_approval_of_tips_git_no_longer_has_is_refused_and_records_nothing() 
     );
     let listed = newest(&wr, "ship").deploy_result.clone().unwrap();
     assert_eq!(listed.branches[0].commit, later);
+}
+
+/// Why an approval or a send-back is refused when the check the page showed no longer waits.
+const CHECK_CHANGED: &str = "The check changed since it was shown. Look at the check again.";
+
+#[tokio::test]
+async fn an_approval_of_a_check_that_no_longer_waits_is_refused_and_records_nothing() {
+    let w = world().await;
+    let flow = w
+        .workflow("Look twice", vec![check("check"), check("again")])
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w.until(&wr.id, at_check(1)).await;
+    let first = w.workflows.check(&wr.id).await.unwrap();
+    assert_eq!(first.step_run_id, newest(&wr, "check").id);
+    w.workflows
+        .approve_check(&wr.id, None, &first.step_run_id, &first.tips())
+        .await
+        .unwrap();
+    let wr = w.until(&wr.id, at("again", 1)).await;
+    let second = w.workflows.check(&wr.id).await.unwrap();
+    // The second check shows what the first showed: only its step run tells them apart.
+    assert_eq!(second.tips(), first.tips());
+    assert_eq!(second.summary, first.summary);
+    assert_eq!(second.step_run_id, newest(&wr, "again").id);
+    assert_ne!(second.step_run_id, first.step_run_id);
+
+    // A page still showing the first check is refused, before its tips are compared.
+    assert_eq!(
+        conflict(
+            w.workflows
+                .approve_check(&wr.id, Some("Twice."), &first.step_run_id, &first.tips())
+                .await
+        ),
+        CHECK_CHANGED
+    );
+    let other = vec![CheckTip {
+        branch: "main".into(),
+        commit: None,
+    }];
+    assert_eq!(
+        conflict(
+            w.workflows
+                .approve_check(&wr.id, None, &first.step_run_id, &other)
+                .await
+        ),
+        CHECK_CHANGED
+    );
+    // Nothing was recorded.
+    let still = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(still.status, WorkflowRunStatus::Waiting);
+    assert_eq!(still.waiting_on, Some(WaitingOn::Check));
+    assert_eq!(
+        attempts(&still),
+        [
+            ("check", 1, StepRunStatus::Succeeded),
+            ("again", 1, StepRunStatus::Waiting)
+        ]
+    );
+    assert_eq!(newest(&still, "again").decision, None);
+
+    // The second check's own view is approved.
+    w.workflows
+        .approve_check(&wr.id, None, &second.step_run_id, &second.tips())
+        .await
+        .unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(
+        newest(&wr, "again").decision,
+        Some(json!({"decision": "approved", "note": null, "branches": []}))
+    );
+}
+
+#[tokio::test]
+async fn a_send_back_from_a_check_that_no_longer_waits_is_refused_and_records_nothing() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Write("icon.txt", "Made the icon visible."),
+            Act::Finish("Kept it as it was."),
+        ],
+    );
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![
+                agent("dev", "Fix it", &w.dev, "Fix the bug."),
+                check("check"),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    w.until(&wr.id, at_check(1)).await;
+    let first = w.workflows.check(&wr.id).await.unwrap();
+    w.workflows
+        .send_back_check(&wr.id, "Use the light set.", &first.step_run_id)
+        .await
+        .unwrap();
+    let wr = w.until(&wr.id, at_check(2)).await;
+    let second = w.workflows.check(&wr.id).await.unwrap();
+    assert_eq!(second.step_run_id, newest(&wr, "check").id);
+    assert_ne!(second.step_run_id, first.step_run_id);
+
+    // A page still showing the first check is refused.
+    assert_eq!(
+        conflict(
+            w.workflows
+                .send_back_check(&wr.id, "Again.", &first.step_run_id)
+                .await
+        ),
+        CHECK_CHANGED
+    );
+    // Nothing was recorded.
+    let still = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(still.status, WorkflowRunStatus::Waiting);
+    assert_eq!(still.waiting_on, Some(WaitingOn::Check));
+    assert_eq!(still.send_backs, 1);
+    assert_eq!(attempts(&still), attempts(&wr));
+    assert_eq!(newest(&still, "check").decision, None);
+    assert_eq!(w.engine.prompts_of("dev").len(), 2);
 }
 
 #[tokio::test]

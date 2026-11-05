@@ -1743,29 +1743,37 @@ pub async fn workflow_branch_diff(
         .await?)
 }
 
-/// Approves the check with the tips the page showed; refused when they changed since.
+/// Approves the check's step run `step_run_id` with the tips the page showed; refused when the
+/// run waits on another check or the tips changed since.
 #[tauri::command]
 pub async fn workflow_approve(
     state: State<'_, AppState>,
     id: String,
     note: Option<String>,
+    step_run_id: String,
     tips: Vec<CheckTip>,
 ) -> Res<WorkflowRun> {
     Ok(state
         .rt()?
         .workflows()
-        .approve_check(&id, note.as_deref(), &tips)
+        .approve_check(&id, note.as_deref(), &step_run_id, &tips)
         .await?)
 }
 
-/// Sends the work the check waits on back, with the person's note.
+/// Sends the work of the check's step run `step_run_id` back, with the person's note; refused
+/// when the run waits on another check.
 #[tauri::command]
 pub async fn workflow_send_back(
     state: State<'_, AppState>,
     id: String,
     note: String,
+    step_run_id: String,
 ) -> Res<WorkflowRun> {
-    Ok(state.rt()?.workflows().send_back_check(&id, &note).await?)
+    Ok(state
+        .rt()?
+        .workflows()
+        .send_back_check(&id, &note, &step_run_id)
+        .await?)
 }
 
 /// Raises each limit the waiting run reached by its default amount, once.
