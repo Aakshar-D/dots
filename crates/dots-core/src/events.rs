@@ -161,6 +161,13 @@ pub enum RuntimeEvent {
     SnoozeEnded {
         items: Vec<InboxMark>,
     },
+    /// A goal of the workspace `workspace_id` of `org_id` (`None` is Personal) was added,
+    /// changed, marked done or undone, or deleted, or a deleted dot left it unlinked: the
+    /// Intents screen reads it again.
+    IntentsUpdated {
+        org_id: Option<String>,
+        workspace_id: String,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

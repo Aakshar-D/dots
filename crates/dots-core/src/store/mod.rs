@@ -18,6 +18,7 @@ mod follow_ups;
 mod held;
 mod inbox_marks;
 mod instructions;
+mod intents;
 mod invites;
 mod library;
 mod limits;

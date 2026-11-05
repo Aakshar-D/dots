@@ -5,6 +5,7 @@ import { useId, type ReactNode } from "react";
 
 import { commands } from "@/api/commands";
 import { Preset, type SetupProposal, type Uses } from "@/api/types";
+import { DotAvatar } from "@/components/DotAvatar";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +15,7 @@ import { PRESET_SENTENCES, folderName, nameError, scheduleError, scheduleOf } fr
 import { errorMessage, notifyError } from "@/lib/notify";
 import { keys } from "@/lib/query";
 import { useDebounced } from "@/lib/use-debounced";
+import { ManagedPolicyNotice, useManagedCheckForPreset } from "@/screens/ManagedPolicyNotice";
 import { ScheduleEditor } from "@/screens/dot-editor/ScheduleEditor";
 
 /// The presets the setup card offers, each in one plain sentence (setup agent spec §6).
@@ -78,17 +80,21 @@ export function SetupCard(props: {
     onChange({ ...proposal, uses, extras });
   }
 
+  const managed = useManagedCheckForPreset(proposal.preset);
   const preset = PRESETS.find(([p]) => p === proposal.preset);
   const used = USES.flatMap((kind) => proposal.uses[kind].map((item) => [kind, item] as const));
   return (
     <div className="flex flex-col gap-4">
       <Field label="Name" htmlFor={`${id}-name`} error={nameError(proposal.name)}>
-        <Input
-          id={`${id}-name`}
-          className="text-base font-medium"
-          value={proposal.name}
-          onChange={(e) => set("name", e.target.value)}
-        />
+        <div className="flex items-center gap-2">
+          {proposal.name.trim() !== "" && <DotAvatar seed={proposal.name.trim()} size="md" />}
+          <Input
+            id={`${id}-name`}
+            className="text-base font-medium"
+            value={proposal.name}
+            onChange={(e) => set("name", e.target.value)}
+          />
+        </div>
       </Field>
       {proposal.notes.trim() !== "" && (
         <p className="text-sm text-muted-foreground">{proposal.notes}</p>
@@ -159,6 +165,7 @@ export function SetupCard(props: {
             </option>
           ))}
         </NativeSelect>
+        <ManagedPolicyNotice check={managed} />
         {proposal.extras.length > 0 && (
           <ul className="flex flex-col gap-1">
             {proposal.extras.map((extra) => {

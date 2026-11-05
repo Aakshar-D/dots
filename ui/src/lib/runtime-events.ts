@@ -170,6 +170,10 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "snooze_ended":
       // For the notification; the `inbox_updated` sent with it refreshes the screens.
       break;
+    case "intents_updated":
+      // The Intents screen of that workspace.
+      invalidate(qc, keys.intents(event.org_id ?? "personal", event.workspace_id));
+      break;
     case "scheduled_message_updated":
       // The dot's scheduled cards and its menu's count. Once sent, its card gives way to the
       // chat run it became: the runs and threads are read again too.

@@ -24,6 +24,7 @@ use dots_core::library_service::{
     ContextDetail, ContextDocuments, EnvVariable, LibraryEntry, McpProbe, PluginDetail,
     ScannedSkill, ScopedCatalog, SkillDetail,
 };
+use dots_core::managed_policy::ManagedPolicy;
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
@@ -1522,6 +1523,30 @@ pub fn samples() -> Value {
         }),
         None,
     ]);
+    let managed = ManagedPolicy {
+        path: Some("C:/Program Files/ClaudeCode/managed-settings.json".into()),
+        blocks_skipping_asks: true,
+        forced_ask: vec!["Bash(git push:*)".into()],
+        forced_deny: vec!["WebFetch".into()],
+        managed_rules_only: false,
+        error: None,
+    };
+    samples["ManagedPolicy"] = to(&managed);
+    samples["ManagedPolicyUnread"] = to(ManagedPolicy {
+        path: Some("C:/Program Files/ClaudeCode/managed-settings.json".into()),
+        error: Some(
+            "Couldn't read your company's Claude Code policy at C:/Program Files/ClaudeCode/managed-settings.json: expected value at line 1 column 3".into(),
+        ),
+        ..Default::default()
+    });
+    samples["ManagedCheck"] = to(dots_core::managed_policy::ManagedCheck {
+        conflicts: dots_core::managed_policy::conflicts(
+            EngineKind::Claude,
+            &Policy::preset(Preset::Trusted),
+            &managed,
+        ),
+        managed,
+    });
     samples["BrowserStatus"] = to(BrowserStatus {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
         npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
@@ -1804,6 +1829,7 @@ pub fn samples() -> Value {
     inbox_marks_samples(&mut samples);
     send_later_samples(&mut samples);
     attachments_samples(&mut samples);
+    intents_samples(&mut samples);
     samples
 }
 
@@ -1964,6 +1990,56 @@ fn inbox_marks_samples(samples: &mut Value) {
             to(RuntimeEvent::InboxUpdated),
             to(RuntimeEvent::SnoozeEnded { items: vec![back] }),
         ]);
+}
+
+/// The person's goals: an urgent one handed to a dot, one with a due date, and a done one;
+/// the list a Viewer gets, read-only; and what the person writes for a goal.
+fn intents_samples(samples: &mut Value) {
+    use dots_core::intents::{IntentFields, IntentsView};
+
+    let urgent = Intent {
+        id: "01J0GOAL1".into(),
+        org_id: Some("acme-eng".into()),
+        workspace_id: "platform".into(),
+        text: "Ship the spring report".into(),
+        due_date: None,
+        urgent: true,
+        dot_id: Some("01J0DOT".into()),
+        created_at: TS.into(),
+        done_at: None,
+    };
+    let dated = Intent {
+        id: "01J0GOAL2".into(),
+        text: "Book the venue".into(),
+        due_date: Some("2026-10-14".into()),
+        urgent: false,
+        dot_id: None,
+        ..urgent.clone()
+    };
+    let done = Intent {
+        id: "01J0GOAL3".into(),
+        text: "Renew the passport".into(),
+        done_at: Some(TS.into()),
+        ..dated.clone()
+    };
+    samples["Intent"] = to([urgent.clone(), dated, done]);
+    samples["IntentsView"] = to(IntentsView {
+        intents: vec![urgent],
+        refusal: Some(viewer_in_platform("change goals")),
+    });
+    samples["IntentFields"] = to(IntentFields {
+        text: "Book the venue".into(),
+        due_date: Some("2026-10-14".into()),
+        urgent: false,
+        dot_id: Some("01J0DOT".into()),
+    });
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .push(to(RuntimeEvent::IntentsUpdated {
+            org_id: None,
+            workspace_id: "default".into(),
+        }));
 }
 
 /// Instructions a dot proposed (conversational chat spec section 4), with `status`.
