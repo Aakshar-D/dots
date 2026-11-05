@@ -125,7 +125,7 @@ Done by Dots itself after a check, never by an agent. Fields: `mode`, and per mo
 | `pr_merge` | `pr`, then `gh pr merge` with `merge_method` (`merge`, `squash` or `rebase`, default `squash`) |
 | `member` | Starts a member as an agent step with a deploy job, e.g. "tag a release" (for apps whose deploy is more than a push). Its run's policy applies as usual |
 
-A `push`, `pr` or `pr_merge` deploy whose check approved no branch fails with `Nothing to ship: the check approved no branch.`, before any scan or `gh` call, and the workflow waits as for any failed step (the person's decision, 2026-11-04). A `branch` deploy with no branch still succeeds, listing none. A `member` deploy with no approved branch starts from its usual start.
+A `push`, `pr` or `pr_merge` deploy whose check approved no branch fails with `Nothing to ship: the check approved no branch.`, before any scan or `gh` call, and the workflow waits as for any failed step (the person's decision, 2026-11-04). A `branch` deploy with no branch still succeeds, listing none. So does a Test run's deploy, which acts as `branch` (section 5.1). A `member` deploy with no approved branch starts from its usual start.
 
 Git and `gh` run as the person, with their existing credentials. Dots never reads or stores those credentials. A missing `gh`, a rejected push or a failed merge fails the deploy step with the tool's message. Nothing already pushed is undone. The workflow run then fails, and the person can retry the deploy step from the run page.
 
@@ -268,6 +268,7 @@ As built (plan C): the card is shown in the home conversation only, inside the s
   | The budget is reached | `<team> hit its budget` | the limit, e.g. `runs, 10 of 10` |
   | The send-back cap holds one | `<team> hit its send-back limit` | `send-backs, <n> of <max>` |
   | A step failed | `<team> failed` | the run's error, `<step name>: <error>` |
+  | The run failed, without waiting on a failed step | `<team> failed` | the task's first line |
   | The run succeeded | `<team> finished` | the task's first line |
 
   A Test run's title ends with ` (test)`. A cancelled run is not told: the person stopped it. A click opens `/workflow-runs/<id>`. A run a chat started is quiet while the person reads that dot's conversation, where its card is live.
@@ -367,7 +368,7 @@ Plan C (`docs/superpowers/plans/2026-11-04-teams-c.md`) built sections 10 and 11
 - Live validation does not see a name another workflow has, or a schedule that would never run; only Save refuses them.
 - The rail's Inbox badge keeps its muted tone for waiting workflow runs, a check included; only approvals, app reviews and open questions give it the needs tone.
 - An Inbox row of a waiting workflow run has no "Open the chat" link (the item carries the origin dot, not the origin run); the run page has one.
-- The notifier keeps each ended workflow run in its map until the event stream lags and it forgets them all, so the map grows by one entry per run until then.
+- The notifier keeps every workflow run that has not ended and the newest 256 ended ones (`ENDED_WORKFLOW_RUNS_KEPT`); past that the oldest ended run is dropped, so a run published again after 256 newer runs ended is told again.
 - A dot's `fresh` count (new since seen, part of its unread mark) still counts its ended step runs; only Runs to review and the notices leave them out.
 - The chat card shows no delegate members and no links to a step's dot runs; the run page has both. On the run page, an approved check's card still lists the delegate members of the hand-off it showed.
 - The builder has no drag handle and no move into or out of a branch's path, and nothing guards leaving it with an unsaved draft. A schedule switched inside the schedule editor from `once` to another kind can carry `catch_up: true`, which the core ignores. Field hints are not linked to their controls (`aria-describedby`). A disabled button's title, which says why Run now or Test run is off, does not show on hover.
