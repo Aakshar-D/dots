@@ -34,7 +34,9 @@ export const routes: RouteObject[] = [
       { path: "chat", element: <Navigate to="/home" replace /> },
       { path: "chat/:dotId", element: <ChatRedirect /> },
       { path: "chat/:dotId/:runId", element: <ChatRedirect /> },
-      { path: "settings", element: <SettingsScreen /> },
+      // Settings is one page per tab; the bare path opens the first tab.
+      { path: "settings", element: <Navigate to="/settings/general" replace /> },
+      { path: "settings/:tab", element: <SettingsScreen /> },
       { path: "usage", element: <UsageScreen /> },
       { path: "releases", element: <ReleasesScreen /> },
       { path: "*", element: <Navigate to="/home" replace /> },

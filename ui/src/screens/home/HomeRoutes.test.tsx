@@ -48,7 +48,7 @@ describe("the home's routes", () => {
 
   it("keeps the editor, the Inbox, the Library and Settings where they were", async () => {
     backend.on("get_dot", () => dot);
-    for (const path of [`/dots/${dot.id}`, "/dots/new", "/inbox", "/library", "/settings"]) {
+    for (const path of [`/dots/${dot.id}`, "/dots/new", "/inbox", "/library", "/settings/general"]) {
       const router = await lands(path, path);
       router.dispose();
     }
