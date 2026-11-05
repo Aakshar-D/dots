@@ -237,14 +237,30 @@ impl Store {
         self.get_team(id).await
     }
 
+    /// Deletes the team, with its workflows and workflow runs. The dot runs of its workflow runs'
+    /// steps are marked reviewed first, in the same transaction: the cascade clears their
+    /// `workflow_step_run_id`, and step runs stay out of Runs to review (teams spec section
+    /// 10.5). `NotFound` for an unknown team, and nothing is changed.
     pub async fn delete_team(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
+            "UPDATE runs SET reviewed_at = ? WHERE reviewed_at IS NULL AND workflow_step_run_id IN \
+             (SELECT s.id FROM workflow_step_runs s \
+              JOIN workflow_runs w ON w.id = s.workflow_run_id WHERE w.team_id = ?)",
+        )
+        .bind(now())
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
         let res = sqlx::query("DELETE FROM teams WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         if res.rows_affected() == 0 {
+            tx.rollback().await?;
             return Err(Error::NotFound(format!("team {id}")));
         }
+        tx.commit().await?;
         Ok(())
     }
 

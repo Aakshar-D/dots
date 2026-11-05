@@ -350,7 +350,8 @@ impl Store {
              + (SELECT COUNT(*) FROM runs q WHERE q.dot_id = d.id AND q.status = 'running' \
               AND q.quiet_since IS NOT NULL) \
              + (SELECT COUNT(*) FROM workflow_runs w JOIN runs o ON o.id = w.origin_run_id \
-              WHERE o.dot_id = d.id AND w.status = 'waiting') AS needs_you, \
+              WHERE o.dot_id = d.id AND w.status = 'waiting' AND w.waiting_on IS NOT NULL) \
+             AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
               AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at) \
