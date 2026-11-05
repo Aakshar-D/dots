@@ -45,13 +45,13 @@ function listing(entries: LibraryEntry[]) {
 }
 
 describe("the Library screen", () => {
-  it("has a place in the rail between Apps and Settings", async () => {
+  it("has a place in the rail between Apps and Connectors", async () => {
     renderApp("/library");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     const labels = within(nav)
       .getAllByRole("link")
       .map((l) => l.getAttribute("aria-label"));
-    expect(labels).toEqual(["Home", "Inbox", "Apps", "Library", "Settings"]);
+    expect(labels).toEqual(["Home", "Inbox", "Apps", "Library", "Connectors", "Settings"]);
     expect(await screen.findByRole("heading", { name: "Library" })).toBeVisible();
   });
 

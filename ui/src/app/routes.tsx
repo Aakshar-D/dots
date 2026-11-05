@@ -4,6 +4,7 @@ import { Root } from "@/app/Root";
 import { AppScreen } from "@/screens/apps/AppScreen";
 import { AppsScreen } from "@/screens/apps/AppsScreen";
 import { DotEditorScreen } from "@/screens/DotEditorScreen";
+import { ConnectorsScreen } from "@/screens/connectors/ConnectorsScreen";
 import { ChatRedirect } from "@/screens/home/ChatRedirect";
 import { HomeScreen } from "@/screens/home/HomeScreen";
 import { InboxScreen } from "@/screens/InboxScreen";
@@ -28,6 +29,7 @@ export const routes: RouteObject[] = [
       { path: "dots/:dotId", element: <DotEditorScreen /> },
       { path: "runs/:runId", element: <RunScreen /> },
       { path: "library", element: <LibraryScreen /> },
+      { path: "connectors", element: <ConnectorsScreen /> },
       { path: "inbox", element: <InboxScreen /> },
       { path: "apps", element: <AppsScreen /> },
       { path: "apps/:name", element: <AppScreen /> },

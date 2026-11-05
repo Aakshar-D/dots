@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router";
 import { toast } from "sonner";
 
 import { CommandError, commands } from "@/api/commands";
@@ -474,6 +475,18 @@ function Form({ stored, status }: { stored: Settings; status: Status | undefined
             }}
           />
         </Field>
+      </Section>
+
+      <Section title="Connectors">
+        <p className="text-xs text-muted-foreground">
+          Connect Gmail, GitHub, Notion and other apps so your dots can use them, with a key or a
+          sign-in.
+        </p>
+        <div>
+          <Button type="button" size="sm" variant="outline" asChild>
+            <Link to="/connectors">Open Connectors</Link>
+          </Button>
+        </div>
       </Section>
 
       <Section title="Browser">

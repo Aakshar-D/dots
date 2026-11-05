@@ -5,6 +5,7 @@ import {
   Inbox as InboxIcon,
   LayoutGrid,
   Library as LibraryIcon,
+  Plug,
   Rocket,
   Settings as SettingsIcon,
 } from "lucide-react";
@@ -28,6 +29,7 @@ const LINKS = [
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
   { to: "/apps", label: "Apps", icon: LayoutGrid },
   { to: "/library", label: "Library", icon: LibraryIcon },
+  { to: "/connectors", label: "Connectors", icon: Plug },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 /// Only a publisher sees it (updates UI spec section 5.1).

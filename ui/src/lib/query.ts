@@ -32,6 +32,10 @@ export const keys = {
   unreadTotal: ["overview", "unread"] as const,
   inbox: ["inbox"] as const,
   library: ["library"] as const,
+  /// The Connectors screen, under the Library's key: a Library or vault change marks it stale.
+  connectors: ["library", "connectors"] as const,
+  /// Whether this PC has the program a connector needs (Node.js).
+  connectorRuntime: (id: string) => ["connector-runtime", id] as const,
   installedPlugins: ["installed-plugins"] as const,
   /// The Claude Code agents on this PC, for the import dialog.
   claudeAgents: ["claude-agents"] as const,
