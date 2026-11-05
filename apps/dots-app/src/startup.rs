@@ -307,7 +307,9 @@ pub async fn start_runtime(data_dir: &Path) -> Result<(Arc<Runtime>, Settings), 
             data_dir.display()
         )
     })?;
-    let runtime = Runtime::start(Config::from_settings(data_dir, &settings))
+    let mut cfg = Config::from_settings(data_dir, &settings);
+    cfg.app_version = env!("CARGO_PKG_VERSION").to_string();
+    let runtime = Runtime::start(cfg)
         .await
         .map_err(|e| format!("Dots could not start: {e}"))?;
     Ok((Arc::new(runtime), settings))

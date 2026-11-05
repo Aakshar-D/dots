@@ -205,6 +205,34 @@ export const DeliveryCounts = z.strictObject({
 });
 export type DeliveryCounts = z.infer<typeof DeliveryCounts>;
 
+/// The hourly usage counts' state (usage counts spec): off until the person turns them on.
+export const UsageCountsState = z.strictObject({
+  enabled: z.boolean(),
+  url: z.string().nullable(),
+  install_id: z.string().nullable(),
+  first_hour: z.string().nullable(),
+  last_sent_hour: z.string().nullable(),
+  last_sent_at: z.string().nullable(),
+  last_error: z.string().nullable(),
+});
+export type UsageCountsState = z.infer<typeof UsageCountsState>;
+
+/// One usage counts report, exactly as it is posted: numbers only, besides the random install
+/// id (null before the counts were first turned on), the version of Dots and the hour.
+export const UsageCountsReport = z.strictObject({
+  schema: z.number().int(),
+  install_id: z.string().nullable(),
+  app_version: z.string(),
+  hour_start: z.string(),
+  runs_started: z.number().int(),
+  runs_succeeded: z.number().int(),
+  runs_failed: z.number().int(),
+  messages_sent: z.number().int(),
+  approvals_asked: z.number().int(),
+  dots: z.number().int(),
+});
+export type UsageCountsReport = z.infer<typeof UsageCountsReport>;
+
 export const RunEventRecord = z.strictObject({
   run_id: z.string(),
   seq: z.number().int(),
@@ -383,6 +411,35 @@ export const FollowUp = z.strictObject({
   attempts: z.number().int(),
   retry_at: nullable(z.string()),
   created_at: z.string(),
+});
+
+// One of the person's goals (Intents), in the account (`org_id`, null for Personal) and
+// workspace it was added in. `due_date` is a calendar date, YYYY-MM-DD; times are RFC 3339 UTC.
+export const Intent = z.strictObject({
+  id: z.string(),
+  org_id: nullable(z.string()),
+  workspace_id: z.string(),
+  text: z.string(),
+  due_date: nullable(z.string()),
+  // Shown under Now, whatever its date.
+  urgent: z.boolean(),
+  // The dot it is handed to; null when it has none, or that dot was deleted.
+  dot_id: nullable(z.string()),
+  created_at: z.string(),
+  // When it was marked done; null while it is open.
+  done_at: nullable(z.string()),
+});
+// The goals of one workspace, and why this PC may not change them (null when it may).
+export const IntentsView = z.strictObject({
+  intents: z.array(Intent),
+  refusal: nullable(z.string()),
+});
+// What the person writes for a goal, on create and on every change (a change replaces all four).
+export const IntentFields = z.strictObject({
+  text: z.string(),
+  due_date: nullable(z.string()),
+  urgent: z.boolean(),
+  dot_id: nullable(z.string()),
 });
 
 export const MemorySource = z.enum(["dot", "person"]);
@@ -643,6 +700,13 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("inbox_updated") }),
   // Snoozed items came back in one wake pass (the app notifies); an `inbox_updated` goes with it.
   z.strictObject({ type: z.literal("snooze_ended"), items: z.array(InboxMark) }),
+  // A goal of the workspace was added, changed, done or undone, or deleted, or a deleted dot
+  // left it unlinked: the Intents screen reads it again.
+  z.strictObject({
+    type: z.literal("intents_updated"),
+    org_id: nullable(z.string()),
+    workspace_id: z.string(),
+  }),
   // A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting reason
   // changed (the app notifies on a failure).
   z.strictObject({ type: z.literal("scheduled_message_updated"), message: ScheduledMessage }),
@@ -715,6 +779,28 @@ export const SettingsSaved = z.strictObject({
 export const BrowserStatus = z.strictObject({
   edge: nullable(z.string()),
   npx: nullable(z.string()),
+});
+
+// The company's Claude Code managed settings (managed policy). `path` is null when the machine
+// has none; `error` is set when a file could not be read.
+export const ManagedPolicy = z.strictObject({
+  path: nullable(z.string()),
+  blocks_skipping_asks: z.boolean(),
+  forced_ask: z.array(z.string()),
+  forced_deny: z.array(z.string()),
+  managed_rules_only: z.boolean(),
+  error: nullable(z.string()),
+});
+export const ConflictKind = z.enum(["deny"]);
+// One thing the dot's policy would allow that a company deny rule refuses.
+export const ManagedConflict = z.strictObject({
+  kind: ConflictKind,
+  rule: z.string(),
+  dot_rule: z.string(),
+});
+export const ManagedCheck = z.strictObject({
+  managed: ManagedPolicy,
+  conflicts: z.array(ManagedConflict),
 });
 
 // Where a dot's schedule stands (Scheduler v2 spec §8). Times are RFC 3339 local.
@@ -1758,6 +1844,10 @@ export type Status = z.infer<typeof Status>;
 export type Settings = z.infer<typeof Settings>;
 export type SettingsSaved = z.infer<typeof SettingsSaved>;
 export type BrowserStatus = z.infer<typeof BrowserStatus>;
+export type ManagedPolicy = z.infer<typeof ManagedPolicy>;
+export type ConflictKind = z.infer<typeof ConflictKind>;
+export type ManagedConflict = z.infer<typeof ManagedConflict>;
+export type ManagedCheck = z.infer<typeof ManagedCheck>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
 export type ScheduleSkip = z.infer<typeof ScheduleSkip>;
 export type ScheduledStatus = z.infer<typeof ScheduledStatus>;
@@ -1885,6 +1975,9 @@ export type Message = z.infer<typeof Message>;
 export type FollowUp = z.infer<typeof FollowUp>;
 export type MemorySource = z.infer<typeof MemorySource>;
 export type Memory = z.infer<typeof Memory>;
+export type Intent = z.infer<typeof Intent>;
+export type IntentsView = z.infer<typeof IntentsView>;
+export type IntentFields = z.infer<typeof IntentFields>;
 export type WatcherKind = z.infer<typeof WatcherKind>;
 export type PausedReason = z.infer<typeof PausedReason>;
 export type FolderEvent = z.infer<typeof FolderEvent>;

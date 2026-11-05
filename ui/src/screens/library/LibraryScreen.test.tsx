@@ -51,7 +51,7 @@ describe("the Library screen", () => {
     const labels = within(nav)
       .getAllByRole("link")
       .map((l) => l.getAttribute("aria-label"));
-    expect(labels).toEqual(["Home", "Inbox", "Apps", "Library", "Settings"]);
+    expect(labels).toEqual(["Home", "Inbox", "Intents", "Apps", "Library", "Settings"]);
     expect(await screen.findByRole("heading", { name: "Library" })).toBeVisible();
   });
 

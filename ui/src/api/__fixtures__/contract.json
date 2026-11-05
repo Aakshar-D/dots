@@ -708,6 +708,10 @@
     "status",
     "problem_report",
     "save_problem_report",
+    "usage_counts_state",
+    "set_usage_counts",
+    "reset_usage_counts_id",
+    "usage_counts_preview",
     "mark_claude_tested",
     "get_settings",
     "chatgpt_account",
@@ -770,6 +774,8 @@
     "webhook_url",
     "preview_schedule",
     "policy_preset",
+    "managed_policy",
+    "managed_policy_check",
     "rules_touch_private",
     "new_dot_spec",
     "list_models",
@@ -880,6 +886,11 @@
     "memory_add",
     "memory_update",
     "memory_delete",
+    "intents_list",
+    "intent_create",
+    "intent_update",
+    "intent_set_done",
+    "intent_delete",
     "apps_list",
     "app_call",
     "app_files",
@@ -2331,6 +2342,63 @@
       "status": "replaced"
     }
   ],
+  "Intent": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "due_date": null,
+      "id": "01J0GOAL1",
+      "org_id": "acme-eng",
+      "text": "Ship the spring report",
+      "urgent": true,
+      "workspace_id": "platform"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": null,
+      "due_date": "2026-10-14",
+      "id": "01J0GOAL2",
+      "org_id": "acme-eng",
+      "text": "Book the venue",
+      "urgent": false,
+      "workspace_id": "platform"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "due_date": "2026-10-14",
+      "id": "01J0GOAL3",
+      "org_id": "acme-eng",
+      "text": "Renew the passport",
+      "urgent": false,
+      "workspace_id": "platform"
+    }
+  ],
+  "IntentFields": {
+    "dot_id": "01J0DOT",
+    "due_date": "2026-10-14",
+    "text": "Book the venue",
+    "urgent": false
+  },
+  "IntentsView": {
+    "intents": [
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "due_date": null,
+        "id": "01J0GOAL1",
+        "org_id": "acme-eng",
+        "text": "Ship the spring report",
+        "urgent": true,
+        "workspace_id": "platform"
+      }
+    ],
+    "refusal": "Acme Engineering: a Viewer in the Platform workspace can't change goals. Ask an Admin or Owner."
+  },
   "JoinPreview": [
     {
       "address": "https://bao.acme.internal",
@@ -3080,6 +3148,47 @@
       ]
     }
   ],
+  "ManagedCheck": {
+    "conflicts": [
+      {
+        "dot_rule": "everything else",
+        "kind": "deny",
+        "rule": "WebFetch"
+      }
+    ],
+    "managed": {
+      "blocks_skipping_asks": true,
+      "error": null,
+      "forced_ask": [
+        "Bash(git push:*)"
+      ],
+      "forced_deny": [
+        "WebFetch"
+      ],
+      "managed_rules_only": false,
+      "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+    }
+  },
+  "ManagedPolicy": {
+    "blocks_skipping_asks": true,
+    "error": null,
+    "forced_ask": [
+      "Bash(git push:*)"
+    ],
+    "forced_deny": [
+      "WebFetch"
+    ],
+    "managed_rules_only": false,
+    "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+  },
+  "ManagedPolicyUnread": {
+    "blocks_skipping_asks": false,
+    "error": "Couldn't read your company's Claude Code policy at C:/Program Files/ClaudeCode/managed-settings.json: expected value at line 1 column 3",
+    "forced_ask": [],
+    "forced_deny": [],
+    "managed_rules_only": false,
+    "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+  },
   "McpCatalog": {
     "accepted_fingerprint": "fp-accepted",
     "accepted_tools": [
@@ -4873,6 +4982,11 @@
         "waiting": null
       },
       "type": "scheduled_message_updated"
+    },
+    {
+      "org_id": null,
+      "type": "intents_updated",
+      "workspace_id": "default"
     }
   ],
   "ScannedAgent": [
@@ -5680,6 +5794,52 @@
       "publisher": false,
       "ready": null,
       "version": "0.2.0"
+    }
+  ],
+  "UsageCountsReport": [
+    {
+      "app_version": "0.3.0",
+      "approvals_asked": 1,
+      "dots": 5,
+      "hour_start": "2026-10-09T11:00:00Z",
+      "install_id": "3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f",
+      "messages_sent": 2,
+      "runs_failed": 1,
+      "runs_started": 4,
+      "runs_succeeded": 3,
+      "schema": 1
+    },
+    {
+      "app_version": "0.3.0",
+      "approvals_asked": 0,
+      "dots": 5,
+      "hour_start": "2026-10-09T13:00:00Z",
+      "install_id": null,
+      "messages_sent": 0,
+      "runs_failed": 0,
+      "runs_started": 0,
+      "runs_succeeded": 0,
+      "schema": 1
+    }
+  ],
+  "UsageCountsState": [
+    {
+      "enabled": true,
+      "first_hour": "2026-10-09T11:00:00Z",
+      "install_id": "3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f",
+      "last_error": "the server answered 503",
+      "last_sent_at": "2026-10-09T12:02:00Z",
+      "last_sent_hour": "2026-10-09T11:00:00Z",
+      "url": "https://counts.example.com/v1/hourly"
+    },
+    {
+      "enabled": false,
+      "first_hour": null,
+      "install_id": null,
+      "last_error": null,
+      "last_sent_at": null,
+      "last_sent_hour": null,
+      "url": null
     }
   ],
   "UsageSummary": {

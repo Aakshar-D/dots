@@ -23,8 +23,12 @@ export function createQueryClient(): QueryClient {
 export const keys = {
   startupError: ["startup-error"] as const,
   status: ["status"] as const,
+  managedPolicy: ["managed-policy"] as const,
   update: ["update"] as const,
   settings: ["settings"] as const,
+  /// Settings › Share usage counts, and the next report under it.
+  usageCounts: ["usage-counts"] as const,
+  usageCountsPreview: ["usage-counts", "preview"] as const,
   chatGptAccount: ["chatgpt-account"] as const,
   overview: ["overview"] as const,
   /// The sum of the dots' unread counts (the Home link). Under the overview's key, so that
@@ -93,6 +97,8 @@ export const keys = {
   /// The rows of a dot's topics: names and archive marks.
   topics: (dotId: string) => ["topics", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
+  /// The goals of one workspace of an account (Intents).
+  intents: (scope: string, workspace: string) => ["intents", scope, workspace] as const,
   /// The instructions a dot proposed (conversational chat spec section 4).
   instructionProposals: (dotId: string) => ["instruction-proposals", dotId] as const,
   watchers: (dotId: string) => ["watchers", dotId] as const,

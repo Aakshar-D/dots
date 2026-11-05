@@ -12,7 +12,7 @@ const section = () => screen.findByRole("group", { name: "Profile" });
 describe("Settings, Profile", () => {
   it("is headed Profile and shows the fingerprint", async () => {
     backend.on("identity_get", () => identity);
-    renderApp("/settings");
+    renderApp("/settings/account");
     const profile = await section();
     expect(within(profile).getByText("Profile", { selector: "legend" })).toBeVisible();
     expect(await within(profile).findByText(identity.fingerprint)).toBeVisible();
@@ -20,7 +20,7 @@ describe("Settings, Profile", () => {
 
   it("copies the public key with Copy my Dots ID", async () => {
     backend.on("identity_get", () => identity);
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const profile = await section();
     await user.click(await within(profile).findByRole("button", { name: "Copy my Dots ID" }));
     expect(await navigator.clipboard.readText()).toBe(identity.public_key);
@@ -33,7 +33,7 @@ describe("Settings, Profile", () => {
       current = { ...current, name: String(args.name), email: String(args.email) };
       return current;
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const profile = await section();
     await user.type(await within(profile).findByLabelText("Name"), "Asha Rao");
     await user.type(within(profile).getByLabelText("Email"), "asha@acme.com");
@@ -47,7 +47,7 @@ describe("Settings, Profile", () => {
     backend.on("profile_set", () => {
       throw { kind: "invalid", message: "that email has nothing after the @" };
     });
-    const { user } = renderApp("/settings");
+    const { user } = renderApp("/settings/account");
     const profile = await section();
     await user.type(await within(profile).findByLabelText("Email"), "asha@");
     await user.click(within(profile).getByRole("button", { name: "Save profile" }));

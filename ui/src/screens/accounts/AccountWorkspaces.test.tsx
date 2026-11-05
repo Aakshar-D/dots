@@ -31,7 +31,7 @@ function account(opts: { org?: OrgSummary; view?: MembersView; manage?: boolean 
 }
 
 async function settings() {
-  const view = renderApp("/settings");
+  const view = renderApp("/settings/account");
   const section = await screen.findByRole("group", { name: "Accounts" });
   return { ...view, section };
 }

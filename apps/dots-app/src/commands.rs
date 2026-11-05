@@ -24,6 +24,7 @@ use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
 use dots_core::claude_agents::{AgentImport, ScannedAgent};
 use dots_core::inbox::InboxKey;
+use dots_core::intents::{IntentFields, IntentsView};
 use dots_core::kit::InstalledPlugin;
 use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig};
 use dots_core::library_service::{
@@ -31,14 +32,16 @@ use dots_core::library_service::{
 };
 use dots_core::model::{
     Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind, FollowUp,
-    Inbox, Memory, Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved,
-    StagedAttachment, Status, TopicInfo, WatchHours, Watcher, WatcherConfig, WorktreeDiff,
+    Inbox, Intent, Memory, Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage,
+    SettingsSaved, StagedAttachment, Status, TopicInfo, WatchHours, Watcher, WatcherConfig,
+    WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest};
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
+use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::org::{
     CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgEntry, OrgSummary, RequestPreview,
     SourceCreds,
@@ -83,6 +86,36 @@ pub async fn problem_report(
         include_logs,
     )
     .await?)
+}
+
+/// Settings › Share usage counts: on or off, the destination, the install id, the last send
+/// and the last error (usage counts spec).
+#[tauri::command]
+pub async fn usage_counts_state(state: State<'_, AppState>) -> Res<UsageCountsState> {
+    Ok(state.rt()?.usage_counts().state().await?)
+}
+
+/// Turns the usage counts on or off and sets their destination (when `url` is given). Turning
+/// on is refused without a valid `https://` destination; turning off stops sending at once.
+#[tauri::command]
+pub async fn set_usage_counts(
+    state: State<'_, AppState>,
+    enabled: bool,
+    url: Option<String>,
+) -> Res<UsageCountsState> {
+    Ok(state.rt()?.usage_counts().set(enabled, url).await?)
+}
+
+/// Makes a new random install id for the usage counts.
+#[tauri::command]
+pub async fn reset_usage_counts_id(state: State<'_, AppState>) -> Res<UsageCountsState> {
+    Ok(state.rt()?.usage_counts().reset_id().await?)
+}
+
+/// "Show what gets sent": the next usage counts report, exactly as it would be posted.
+#[tauri::command]
+pub async fn usage_counts_preview(state: State<'_, AppState>) -> Res<Report> {
+    Ok(state.rt()?.usage_counts().preview().await?)
 }
 
 /// Saves the previewed report where the person chooses in the native save dialog; the path, or
@@ -661,6 +694,22 @@ pub fn preview_schedule(schedule: Schedule, count: usize) -> Res<Vec<String>> {
 #[tauri::command]
 pub fn policy_preset(preset: Preset) -> Policy {
     Policy::preset(preset)
+}
+
+/// What the company's Claude Code managed settings say, read fresh each time.
+#[tauri::command]
+pub fn managed_policy() -> dots_core::managed_policy::ManagedPolicy {
+    dots_core::managed_policy::read()
+}
+
+/// The company's managed settings, and where `policy` (of a dot run by `engine`) would skip
+/// an ask or a refusal they keep.
+#[tauri::command]
+pub fn managed_policy_check(
+    engine: dots_core::model::EngineKind,
+    policy: Policy,
+) -> dots_core::managed_policy::ManagedCheck {
+    dots_core::managed_policy::check(&dots_core::managed_policy::system_dir(), engine, &policy)
 }
 
 /// For each rule pattern, whether it names or covers a private folder (approval guards spec
@@ -1703,6 +1752,53 @@ pub async fn memory_update(
 #[tauri::command]
 pub async fn memory_delete(state: State<'_, AppState>, id: String) -> Res<()> {
     Ok(state.rt()?.memory_delete(&id).await?)
+}
+
+/// The goals of the workspace `workspace` of `scope` (`personal` or an org id), and why this
+/// PC may not change them (Intents).
+#[tauri::command]
+pub async fn intents_list(
+    state: State<'_, AppState>,
+    scope: String,
+    workspace: String,
+) -> Res<IntentsView> {
+    Ok(state.rt()?.intents_list(&scope, &workspace).await?)
+}
+
+/// Adds a goal. Refused, with the core's sentence, for a blank or too long text, a date that
+/// isn't one, a dot that is gone or in another workspace, or a role that can't change goals.
+#[tauri::command]
+pub async fn intent_create(
+    state: State<'_, AppState>,
+    scope: String,
+    workspace: String,
+    fields: IntentFields,
+) -> Res<Intent> {
+    Ok(state
+        .rt()?
+        .intent_create(&scope, &workspace, fields)
+        .await?)
+}
+
+/// Replaces a goal's text, due date, urgency and dot; the rules of `intent_create` apply.
+#[tauri::command]
+pub async fn intent_update(
+    state: State<'_, AppState>,
+    id: String,
+    fields: IntentFields,
+) -> Res<Intent> {
+    Ok(state.rt()?.intent_update(&id, fields).await?)
+}
+
+/// Marks a goal done, or open again.
+#[tauri::command]
+pub async fn intent_set_done(state: State<'_, AppState>, id: String, done: bool) -> Res<Intent> {
+    Ok(state.rt()?.intent_set_done(&id, done).await?)
+}
+
+#[tauri::command]
+pub async fn intent_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.intent_delete(&id).await?)
 }
 
 /// The installed apps, with the dots that use each and the error that keeps one out of runs
