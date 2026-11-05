@@ -26,6 +26,8 @@ export const SCHEDULE_EMPTY = "Type a message to schedule.";
 /// `onRemove`), says why one was refused (`refusals`), and whether files can be added now
 /// (`canAttach`: not while answering a question). `dragging`: files are dragged over the window.
 export function Composer(props: {
+  /// What the box holds when it first shows: a draft, not sent until the person sends it.
+  initialText?: string;
   disabled: boolean;
   hint: string;
   onSend: (message: string) => Promise<unknown>;
@@ -38,7 +40,7 @@ export function Composer(props: {
   canAttach?: boolean;
   dragging?: boolean;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(props.initialText ?? "");
   const files = props.files ?? [];
   const canAttach = (props.canAttach ?? false) && !props.disabled;
   // Read when the picker closes: the box may have become unable to take files meanwhile.

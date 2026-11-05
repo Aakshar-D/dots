@@ -325,6 +325,55 @@ async fn a_viewer_sees_scheduled_messages_but_cannot_change_them() {
     t.rt.shutdown();
 }
 
+/// A Viewer sees the account's goals, read-only: the list says why, and every change is
+/// refused with that sentence and changes nothing.
+#[tokio::test]
+async fn a_viewer_sees_goals_but_cannot_change_them() {
+    use dots_core::intents::IntentFields;
+    let t = Rt::start().await;
+    t.join_as("member").await;
+    let fields = |text: &str| IntentFields {
+        text: text.into(),
+        due_date: None,
+        urgent: false,
+        dot_id: None,
+    };
+    let member_view = t.rt.intents_list(ACME, "default").await.unwrap();
+    assert_eq!(member_view.refusal, None);
+    let goal =
+        t.rt.intent_create(ACME, "default", fields("Close the quarter"))
+            .await
+            .unwrap();
+    assert_eq!(goal.org_id.as_deref(), Some(ACME));
+    t.become_(2, Some("viewer")).await;
+
+    let text = viewer_cant("change goals");
+    let view = t.rt.intents_list(ACME, "default").await.unwrap();
+    assert_eq!(view.intents, vec![goal.clone()]);
+    assert_eq!(view.refusal.as_deref(), Some(text.as_str()));
+    assert_eq!(
+        refused(t.rt.intent_create(ACME, "default", fields("Another")).await),
+        text
+    );
+    assert_eq!(
+        refused(t.rt.intent_update(&goal.id, fields("Changed")).await),
+        text
+    );
+    assert_eq!(refused(t.rt.intent_set_done(&goal.id, true).await), text);
+    assert_eq!(refused(t.rt.intent_delete(&goal.id).await), text);
+    assert_eq!(
+        t.rt.intents_list(ACME, "default").await.unwrap().intents,
+        vec![goal]
+    );
+    // Personal stays the person's own.
+    assert!(t
+        .rt
+        .intent_create("personal", "default", fields("Mine"))
+        .await
+        .is_ok());
+    t.rt.shutdown();
+}
+
 #[tokio::test]
 async fn member_can_create_and_run() {
     let t = Rt::start().await;

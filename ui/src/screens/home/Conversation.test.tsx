@@ -42,6 +42,18 @@ describe("a dot's conversation", () => {
     expect(view.queryByRole("article", { name: `Scheduled · ${localTime(early.queued_at)}` })).toBeNull();
   });
 
+  it("shows the working line while a chat reply is being written, and drops it once it ends", async () => {
+    const current = chat("a", "10:00", { status: "running", ended_at: null });
+    const runs = home([current]);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    expect(await view.findByText(`${dot.name} is working`)).toBeInTheDocument();
+
+    runs[0] = { ...current, status: "succeeded", ended_at: current.queued_at };
+    act(() => backend.emit("runtime", { type: "run_updated", run: runs[0] }));
+    await waitFor(() => expect(view.queryByText(`${dot.name} is working`)).toBeNull());
+  });
+
   it("shows a closed run card without loading its events", async () => {
     const run = scheduled("cron", "09:00", { summary: "Sent 3 invoices\nto the usual people" });
     home([run]);
