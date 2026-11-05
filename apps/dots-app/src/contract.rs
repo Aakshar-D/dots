@@ -32,6 +32,7 @@ use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
+use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::org::{
     BaoAuth, CreatedInvite, DraftView, EditOutcome, InviteOffer, InviteState, InviteView,
     JoinPreview, JoinsMember, KeyView, MemberView, MembersView, OrgEntry, OrgStatus, OrgSummary,
@@ -47,6 +48,12 @@ use crate::state::StartupError;
 use crate::update::UpdateNote;
 
 const TS: &str = "2026-10-09T12:00:00.000Z";
+
+fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .expect("a sample time parses")
+        .with_timezone(&chrono::Utc)
+}
 
 /// How the core refuses a Viewer in the Platform workspace of Acme Engineering.
 fn viewer_in_platform(action: &str) -> String {
@@ -1365,6 +1372,45 @@ pub fn samples() -> Value {
     // Usage and limits (spec sections 5 and 6).
     samples["LimitsState"] = to(limits_states());
     samples["UsageSummary"] = to(usage_summary());
+    // Hourly usage counts (usage counts spec): the state, on and never turned on, and a report.
+    samples["UsageCountsState"] = to(vec![
+        UsageCountsState {
+            enabled: true,
+            url: Some("https://counts.example.com/v1/hourly".into()),
+            install_id: Some("3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f".into()),
+            first_hour: Some(ts("2026-10-09T11:00:00Z")),
+            last_sent_hour: Some(ts("2026-10-09T11:00:00Z")),
+            last_sent_at: Some(ts("2026-10-09T12:02:00Z")),
+            last_error: Some("the server answered 503".into()),
+        },
+        UsageCountsState::default(),
+    ]);
+    samples["UsageCountsReport"] = to(vec![
+        Report {
+            schema: dots_core::usage_counts::SCHEMA,
+            install_id: Some("3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f".into()),
+            app_version: "0.3.0".into(),
+            hour_start: ts("2026-10-09T11:00:00Z"),
+            runs_started: 4,
+            runs_succeeded: 3,
+            runs_failed: 1,
+            messages_sent: 2,
+            approvals_asked: 1,
+            dots: 5,
+        },
+        Report {
+            schema: dots_core::usage_counts::SCHEMA,
+            install_id: None,
+            app_version: "0.3.0".into(),
+            hour_start: ts("2026-10-09T13:00:00Z"),
+            runs_started: 0,
+            runs_succeeded: 0,
+            runs_failed: 0,
+            messages_sent: 0,
+            approvals_asked: 0,
+            dots: 5,
+        },
+    ]);
     samples["Enums"]["MessageKind"] = to(MessageKind::ALL);
     samples["Enums"]["FollowUpStatus"] = to(FollowUpStatus::ALL);
     samples["Enums"]["MemorySource"] = to(MemorySource::ALL);

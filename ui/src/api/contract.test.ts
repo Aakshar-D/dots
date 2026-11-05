@@ -26,6 +26,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   RunWaiting: T.Run,
   RunNotDelivered: T.Run,
   DeliveryCounts: T.DeliveryCounts,
+  UsageCountsState: T.UsageCountsState.array(),
+  UsageCountsReport: T.UsageCountsReport.array(),
   RunEventRecord: T.RunEventRecord,
   RunEventData: T.RunEventData.array(),
   Approval: T.Approval,

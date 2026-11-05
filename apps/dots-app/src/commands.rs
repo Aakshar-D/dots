@@ -39,6 +39,7 @@ use dots_core::schedule::Schedule;
 use dots_core::settings::Settings;
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest};
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
+use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::org::{
     CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgEntry, OrgSummary, RequestPreview,
     SourceCreds,
@@ -83,6 +84,36 @@ pub async fn problem_report(
         include_logs,
     )
     .await?)
+}
+
+/// Settings › Share usage counts: on or off, the destination, the install id, the last send
+/// and the last error (usage counts spec).
+#[tauri::command]
+pub async fn usage_counts_state(state: State<'_, AppState>) -> Res<UsageCountsState> {
+    Ok(state.rt()?.usage_counts().state().await?)
+}
+
+/// Turns the usage counts on or off and sets their destination (when `url` is given). Turning
+/// on is refused without a valid `https://` destination; turning off stops sending at once.
+#[tauri::command]
+pub async fn set_usage_counts(
+    state: State<'_, AppState>,
+    enabled: bool,
+    url: Option<String>,
+) -> Res<UsageCountsState> {
+    Ok(state.rt()?.usage_counts().set(enabled, url).await?)
+}
+
+/// Makes a new random install id for the usage counts.
+#[tauri::command]
+pub async fn reset_usage_counts_id(state: State<'_, AppState>) -> Res<UsageCountsState> {
+    Ok(state.rt()?.usage_counts().reset_id().await?)
+}
+
+/// "Show what gets sent": the next usage counts report, exactly as it would be posted.
+#[tauri::command]
+pub async fn usage_counts_preview(state: State<'_, AppState>) -> Res<Report> {
+    Ok(state.rt()?.usage_counts().preview().await?)
 }
 
 /// Saves the previewed report where the person chooses in the native save dialog; the path, or

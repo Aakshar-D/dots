@@ -708,6 +708,10 @@
     "status",
     "problem_report",
     "save_problem_report",
+    "usage_counts_state",
+    "set_usage_counts",
+    "reset_usage_counts_id",
+    "usage_counts_preview",
     "mark_claude_tested",
     "get_settings",
     "chatgpt_account",
@@ -5655,6 +5659,52 @@
       "publisher": false,
       "ready": null,
       "version": "0.2.0"
+    }
+  ],
+  "UsageCountsReport": [
+    {
+      "app_version": "0.3.0",
+      "approvals_asked": 1,
+      "dots": 5,
+      "hour_start": "2026-10-09T11:00:00Z",
+      "install_id": "3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f",
+      "messages_sent": 2,
+      "runs_failed": 1,
+      "runs_started": 4,
+      "runs_succeeded": 3,
+      "schema": 1
+    },
+    {
+      "app_version": "0.3.0",
+      "approvals_asked": 0,
+      "dots": 5,
+      "hour_start": "2026-10-09T13:00:00Z",
+      "install_id": null,
+      "messages_sent": 0,
+      "runs_failed": 0,
+      "runs_started": 0,
+      "runs_succeeded": 0,
+      "schema": 1
+    }
+  ],
+  "UsageCountsState": [
+    {
+      "enabled": true,
+      "first_hour": "2026-10-09T11:00:00Z",
+      "install_id": "3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f",
+      "last_error": "the server answered 503",
+      "last_sent_at": "2026-10-09T12:02:00Z",
+      "last_sent_hour": "2026-10-09T11:00:00Z",
+      "url": "https://counts.example.com/v1/hourly"
+    },
+    {
+      "enabled": false,
+      "first_hour": null,
+      "install_id": null,
+      "last_error": null,
+      "last_sent_at": null,
+      "last_sent_hour": null,
+      "url": null
     }
   ],
   "UsageSummary": {

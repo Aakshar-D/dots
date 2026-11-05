@@ -103,6 +103,14 @@ export const commands = {
   /// Saves `text` where the person chooses in the native save dialog; the path, or null.
   saveProblemReport: (text: string) =>
     call(z.string().nullable(), "save_problem_report", { text }),
+  /// Settings › Share usage counts (usage counts spec).
+  usageCountsState: () => call(T.UsageCountsState, "usage_counts_state"),
+  /// Turns the usage counts on or off; `url`, when given, is the new destination.
+  setUsageCounts: (enabled: boolean, url: string | null) =>
+    call(T.UsageCountsState, "set_usage_counts", { enabled, url }),
+  resetUsageCountsId: () => call(T.UsageCountsState, "reset_usage_counts_id"),
+  /// The next report, exactly as it would be posted.
+  usageCountsPreview: () => call(T.UsageCountsReport, "usage_counts_preview"),
   chatGptAccount: () => call(T.ChatGptStatus, "chatgpt_account"),
   chatGptSignIn: () => call(T.ChatGptStatus, "chatgpt_sign_in"),
   chatGptSignOut: () => call(T.ChatGptStatus, "chatgpt_sign_out"),

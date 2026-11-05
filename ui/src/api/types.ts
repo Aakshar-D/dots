@@ -205,6 +205,34 @@ export const DeliveryCounts = z.strictObject({
 });
 export type DeliveryCounts = z.infer<typeof DeliveryCounts>;
 
+/// The hourly usage counts' state (usage counts spec): off until the person turns them on.
+export const UsageCountsState = z.strictObject({
+  enabled: z.boolean(),
+  url: z.string().nullable(),
+  install_id: z.string().nullable(),
+  first_hour: z.string().nullable(),
+  last_sent_hour: z.string().nullable(),
+  last_sent_at: z.string().nullable(),
+  last_error: z.string().nullable(),
+});
+export type UsageCountsState = z.infer<typeof UsageCountsState>;
+
+/// One usage counts report, exactly as it is posted: numbers only, besides the random install
+/// id (null before the counts were first turned on), the version of Dots and the hour.
+export const UsageCountsReport = z.strictObject({
+  schema: z.number().int(),
+  install_id: z.string().nullable(),
+  app_version: z.string(),
+  hour_start: z.string(),
+  runs_started: z.number().int(),
+  runs_succeeded: z.number().int(),
+  runs_failed: z.number().int(),
+  messages_sent: z.number().int(),
+  approvals_asked: z.number().int(),
+  dots: z.number().int(),
+});
+export type UsageCountsReport = z.infer<typeof UsageCountsReport>;
+
 export const RunEventRecord = z.strictObject({
   run_id: z.string(),
   seq: z.number().int(),
