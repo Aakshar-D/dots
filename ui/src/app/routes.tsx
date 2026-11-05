@@ -13,6 +13,7 @@ import { SettingsScreen } from "@/screens/SettingsScreen";
 import { ReleasesScreen } from "@/screens/ReleasesScreen";
 import { TeamScreen } from "@/screens/teams/TeamScreen";
 import { TeamsScreen } from "@/screens/teams/TeamsScreen";
+import { WorkflowBuilderScreen } from "@/screens/teams/builder/WorkflowBuilderScreen";
 import { UsageScreen } from "@/screens/UsageScreen";
 
 export const routes: RouteObject[] = [
@@ -38,6 +39,7 @@ export const routes: RouteObject[] = [
       { path: "chat/:dotId/:runId", element: <ChatRedirect /> },
       { path: "teams", element: <TeamsScreen /> },
       { path: "teams/:teamId", element: <TeamScreen /> },
+      { path: "teams/:teamId/workflows/:workflowId", element: <WorkflowBuilderScreen /> },
       { path: "settings", element: <SettingsScreen /> },
       { path: "usage", element: <UsageScreen /> },
       { path: "releases", element: <ReleasesScreen /> },
