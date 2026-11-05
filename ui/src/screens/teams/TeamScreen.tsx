@@ -20,9 +20,10 @@ import { TeamMembers } from "./TeamMembers";
 import { TeamProjects } from "./TeamProjects";
 import { TeamRuns } from "./TeamRuns";
 import { TeamWorkflows } from "./TeamWorkflows";
+import { TeamWaiting } from "./WaitingRuns";
 
-/// A team's page (teams spec section 10.1): its name and description, members, projects,
-/// workflows and recent workflow runs, and "Delete team".
+/// A team's page (teams spec section 10.1): its name and description, the runs that wait for
+/// the person, members, projects, workflows and recent workflow runs, and "Delete team".
 export function TeamScreen() {
   const { teamId = "" } = useParams();
   const team = useQuery({ queryKey: keys.team(teamId), queryFn: () => commands.teamGet(teamId) });
@@ -42,6 +43,7 @@ export function TeamScreen() {
   return (
     <Page title={team.data.name} actions={<DeleteTeam team={team.data} inFlight={inFlight} />}>
       <TeamDetails team={team.data} />
+      <TeamWaiting teamId={teamId} />
       <TeamMembers team={team.data} />
       <TeamProjects team={team.data} />
       {workflows.isError ? (

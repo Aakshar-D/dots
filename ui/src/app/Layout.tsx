@@ -64,7 +64,11 @@ export function Layout() {
         // Runs held for Claude usage wait as one line, however many.
         Math.min(inbox.held.length, 1) +
         // A waiting app review counts like an approval.
-        inbox.app_reviews.length
+        inbox.app_reviews.length +
+        // A team with a member outside its account or workspace.
+        inbox.team_scope.length +
+        // A workflow run waiting on the person: a check, a limit or a failed step.
+        inbox.workflows.length
       : 0) + (messages ?? []).filter(waits).length;
   // A pending approval or an open question needs the person: the counts take the needs colour
   // (deep-teal spec section 4).

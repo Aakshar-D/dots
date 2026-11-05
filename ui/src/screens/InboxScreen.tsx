@@ -33,6 +33,7 @@ import { onSingleClick } from "@/lib/single-click";
 import { toolPreview } from "@/lib/transcript";
 import { releasable } from "@/components/RunNumbers";
 import { resetTime } from "@/lib/usage-format";
+import { WaitingRunRow } from "@/screens/teams/WaitingRuns";
 
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
 function ReviewRow({ run }: { run: ReviewRun }) {
@@ -412,6 +413,7 @@ export function InboxScreen() {
     instructions,
     app_reviews: reviews,
     team_scope: teamScope,
+    workflows,
   } = inbox.data;
   const waiting = (messages.data ?? []).filter(waits);
   if (
@@ -425,14 +427,15 @@ export function InboxScreen() {
     watchers.length === 0 &&
     held.length === 0 &&
     instructions.length === 0 &&
-    reviews.length === 0
+    reviews.length === 0 &&
+    workflows.length === 0
   ) {
     return (
       <Page title="Inbox">
         <EmptyState icon={InboxIcon}>
           Nothing waits for you. Questions and notes from dots, approvals a dot asks for, apps
-          sent for review, schedules that need attention, paused watchers and finished runs to
-          review show up here.
+          sent for review, workflow runs that wait for you, schedules that need attention, paused
+          watchers and finished runs to review show up here.
         </EmptyState>
       </Page>
     );
@@ -470,6 +473,18 @@ export function InboxScreen() {
           <ul className="flex flex-col gap-2">
             {reviews.map((item) => (
               <AppReviewRow key={item.proposal.id} item={item} />
+            ))}
+          </ul>
+        </section>
+      )}
+      {workflows.length > 0 && (
+        <section aria-labelledby="inbox-workflows" className="flex flex-col gap-2">
+          <h2 id="inbox-workflows" className="font-semibold">
+            Workflows
+          </h2>
+          <ul className="flex flex-col gap-2">
+            {workflows.map((item) => (
+              <WaitingRunRow key={item.id} item={item} />
             ))}
           </ul>
         </section>

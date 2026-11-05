@@ -1,7 +1,7 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Dot, Team } from "@/api/types";
+import type { Dot, Inbox, Team, WaitingWorkflowRun } from "@/api/types";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -29,6 +29,20 @@ function crewPage(dots: Dot[] = DOTS) {
   backend.on("team_update", () => crew);
   return renderApp(`/teams/${crew.id}`);
 }
+
+/// An Inbox with nothing in it, for a test to fill.
+const emptyInbox: Inbox = {
+  approvals: [],
+  review_runs: [],
+  attention: [],
+  tools_changed: [],
+  watchers: [],
+  held: [],
+  instructions: [],
+  app_reviews: [],
+  team_scope: [],
+  workflows: [],
+};
 
 const members = [
   { dot_id: "01J0DOT", role: "dev agent" },
@@ -203,6 +217,55 @@ describe("the team page", () => {
     expect(await screen.findByRole("heading", { name: "Teams" })).toBeVisible();
     expect(router.state.location.pathname).toBe("/teams");
     expect(backend.callsTo("team_delete")).toEqual([{ id: "01J0TEAM" }]);
+  });
+
+  it("lists the runs that wait for the person, each opening its run page", async () => {
+    const [check] = sample.inbox.workflows as [WaitingWorkflowRun];
+    const failed: WaitingWorkflowRun = {
+      ...check,
+      id: "01J0WFR4",
+      task: "Ship the fix.",
+      waiting_on: "step_failed",
+      step_name: "Ship",
+      test: true,
+    };
+    const elsewhere: WaitingWorkflowRun = { ...check, id: "01J0WFR9", team_id: "01J0TEAM2" };
+    backend.on("inbox", () => ({ ...emptyInbox, workflows: [check, elsewhere, failed] }));
+    crewPage();
+    const section = await screen.findByRole("region", { name: "Waiting" });
+    // Before the members: what waits for the person comes first.
+    const groups = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
+    expect(groups.slice(0, 2)).toEqual(["Waiting", "Members"]);
+    // Only the crew's runs; the page is the team's, so the rows do not name it.
+    const [one, two] = within(section).getAllByRole("listitem");
+    expect(within(section).getAllByRole("listitem")).toHaveLength(2);
+    expect(one).toHaveTextContent(
+      /^The tray icon is invisible on a light taskbar\.Fix and ship · at Review · started /,
+    );
+    expect(within(one!).getByText("Needs your check")).toBeVisible();
+    expect(within(one!).queryByRole("link", { name: "crew" })).toBeNull();
+    expect(within(one!).getByRole("link", { name: "Open the run" })).toHaveAttribute(
+      "href",
+      "/workflow-runs/01J0WFR",
+    );
+    expect(within(two!).getByText("A step failed")).toBeVisible();
+    expect(within(two!).getByText("Test")).toBeVisible();
+    expect(within(two!).getByRole("link", { name: "Open the run" })).toHaveAttribute(
+      "href",
+      "/workflow-runs/01J0WFR4",
+    );
+  });
+
+  it("has no waiting list while none of its runs waits", async () => {
+    const [check] = sample.inbox.workflows as [WaitingWorkflowRun];
+    backend.on("inbox", () => ({
+      ...emptyInbox,
+      workflows: [{ ...check, team_id: "01J0TEAM2" }],
+    }));
+    crewPage();
+    await screen.findByRole("region", { name: "Members" });
+    await waitFor(() => expect(backend.callsTo("inbox").length).toBeGreaterThan(0));
+    expect(screen.queryByRole("region", { name: "Waiting" })).toBeNull();
   });
 
   it("shows why a team cannot be shown", async () => {

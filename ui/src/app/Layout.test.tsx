@@ -1,7 +1,8 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { Dot, DotOverview, Run, Status, UpdateNote } from "@/api/types";
+import { Inbox as InboxSchema } from "@/api/types";
+import type { Dot, DotOverview, Inbox, Run, Status, UpdateNote } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { keys } from "@/lib/query";
 import { backend, later } from "@/test/backend";
@@ -35,8 +36,9 @@ describe("the app frame", () => {
     }
     // One pending approval, one run to review, one schedule that needs attention, one MCP
     // server whose tools changed, one paused watcher, the runs held for Claude usage, one
-    // proposed instruction and one app sent for review.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 8 waiting" })).toBeVisible();
+    // proposed instruction, one app sent for review, one team with a member outside its
+    // workspace and one waiting workflow run.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
   });
 
   it("counts approvals of the dots of an account that is not the current one", async () => {
@@ -45,7 +47,40 @@ describe("the app frame", () => {
     backend.on("dot_overview", () => [{ ...idle, dot: { ...sample.dot, org_id: null } }]);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    expect(await within(nav).findByRole("link", { name: "Inbox, 8 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
+  });
+
+  // The rail's count is the tray's (core `inbox_count`): every list of the Inbox, the held runs
+  // as one line, and the messages that wait.
+  it("counts every kind of Inbox item as the core's inbox count does", async () => {
+    const box = sample.inbox;
+    const copies = <T,>(items: T[], n: number): T[] => Array.from({ length: n }, () => items[0]!);
+    const full: Inbox = {
+      approvals: copies(box.approvals, 1),
+      review_runs: copies(box.review_runs, 2),
+      attention: copies(box.attention, 3),
+      tools_changed: copies(box.tools_changed, 4),
+      watchers: copies(box.watchers, 5),
+      held: copies(box.held, 6),
+      instructions: copies(box.instructions, 7),
+      app_reviews: copies(box.app_reviews, 8),
+      team_scope: copies(box.team_scope, 9),
+      workflows: copies(box.workflows, 10),
+    };
+    // Every kind the Inbox has is here: a new one fails this test until the rail counts it.
+    expect(Object.keys(full).sort()).toEqual(Object.keys(InboxSchema.shape).sort());
+    const [question] = sample.messages;
+    const note = sample.messages.find((message) => message.kind === "note")!;
+    backend.on("inbox", () => full);
+    backend.on("messages_list", () => [
+      { ...question!, id: "open", answered_at: null, dismissed_at: null },
+      { ...note, id: "unread", read_at: null },
+      { ...note, id: "read", read_at: "2026-10-09T12:00:00.000Z" },
+    ]);
+    renderApp("/dots");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    // 1 + 2 + 3 + 4 + 5 + 1 (held) + 7 + 8 + 9 + 10, and 2 messages.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 52 waiting" })).toBeVisible();
   });
 
   it("shows why Dots could not start instead of the app", async () => {
@@ -361,7 +396,7 @@ describe("the app frame", () => {
     await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
-    expect(await within(nav).findByRole("link", { name: "Inbox, 8 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
   });
 });
 
