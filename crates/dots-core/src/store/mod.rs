@@ -36,6 +36,7 @@ mod topics;
 #[doc(hidden)]
 pub use teams::TEAM_ORG_BACKFILL_SQL;
 mod upgrade;
+mod usage_counts;
 mod watchers;
 mod workflow_runs;
 mod workflow_schedules;
@@ -58,6 +59,7 @@ pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;
 pub use memories::Added;
 pub use report::ReportCounts;
+pub use usage_counts::HourCounts;
 pub use workspaces::WorkspaceRow;
 
 impl Store {
