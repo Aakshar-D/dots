@@ -5,6 +5,7 @@ import { Link } from "react-router";
 import { commands } from "@/api/commands";
 import type { Message } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
+import { AutoLine } from "@/components/AutoLine";
 import { ErrorNote } from "@/components/ErrorNote";
 import { HeldNote, RunNumbers } from "@/components/RunNumbers";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -57,6 +58,7 @@ export function RunCard(props: {
       </div>
       {summary && <p className="text-muted-foreground">{summary}</p>}
       <RunNumbers run={run} />
+      <AutoLine run={run} />
       <HeldNote run={run} />
       <DeliveryLine run={run} />
       {error && <p className="text-destructive">{error}</p>}

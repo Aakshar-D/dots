@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { commands } from "@/api/commands";
 import type { DraftRequest, DraftSummary } from "@/api/types";
 import { Field } from "@/components/Field";
-import { ModelPicker, useModels } from "@/components/ModelPicker";
+import { ModelPicker, useModels, withoutAuto } from "@/components/ModelPicker";
+import { isAuto } from "@/lib/auto-model";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,7 +50,8 @@ export function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   const [picked, setModel] = useState<string | null>(null);
   const defaultModel = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data
     ?.default_model;
-  const model = picked ?? defaultModel ?? "sonnet";
+  // Auto picks per run of a dot; a draft is no such run, so it starts from Sonnet.
+  const model = picked ?? (defaultModel && !isAuto(defaultModel) ? defaultModel : "sonnet");
   const models = useModels("claude", null);
   const [text, setText] = useState("");
   const [change, setChange] = useState("");
@@ -174,7 +176,7 @@ export function CreateSkillDialog({ onClose }: { onClose: () => void }) {
                   id="skill-model"
                   value={model}
                   onChange={setModel}
-                  options={models.options}
+                  options={withoutAuto(models.options)}
                 />
               </Field>
             </>

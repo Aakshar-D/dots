@@ -7,8 +7,12 @@ import type { EngineKind, ModelOption } from "@/api/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
+import { isAuto } from "@/lib/auto-model";
 import { errorMessage } from "@/lib/notify";
 import { keys } from "@/lib/query";
+
+/// The list without Auto: for a picker of one fixed model, such as Auto's own sizes.
+export const withoutAuto = (options: ModelOption[]) => options.filter((o) => !isAuto(o.id));
 
 /// The select's value for "Custom…". Not a model id any engine lists.
 export const CUSTOM = "\u0000custom";
