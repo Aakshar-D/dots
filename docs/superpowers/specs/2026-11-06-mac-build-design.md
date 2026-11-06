@@ -24,6 +24,15 @@ behind `cfg(target_os = "macos")` or `cfg!(target_os = "macos")`.
 - **Claude Code CLI** (`engine/claude/args.rs`): after PATH, macOS also looks in `~/.local/bin`,
   `~/.claude/local`, `~/.npm-global/bin`, `~/.volta/bin`, `~/.bun/bin`, `/opt/homebrew/bin` and
   `/usr/local/bin`.
+- **Programs on PATH** (`mcp/stdio.rs`, `resolve_program`): outside Windows a bare name such as
+  `node` or `npx` is now looked up in PATH's folders. Before, it stayed a bare name, so the
+  "is it installed" check failed and browser use refused to start.
+- **Folder watchers** (`watchers/folder.rs`), for what macOS's FSEvents reports: events under a
+  folder's real path (`/private/var/...` for `/var/...`) are put back under the folder as the
+  watcher names it; a file already reported counts as changed, not created again, and as deleted
+  when it is gone (FSEvents keeps a file's "created" flag on every later event); and a rename
+  that the system does not pair up counts as a creation or a deletion, depending on whether the
+  path is still there.
 - Already portable before this change, so left as it was: the shell tool (`sh -c` in its own
   process group outside Windows), killing a process tree, the MCP program lookup, owner-only
   file modes (`0600`), and the managed Claude Code policy folder
@@ -74,6 +83,16 @@ them turns on signing and notarization without changing the workflow. Until then
 The updater signature (minisign, `TAURI_SIGNING_PRIVATE_KEY`) is separate from Apple signing and
 is applied to the Mac archive as it is to the Windows installer.
 
+## Tests on macOS
+
+The Mac check runs clippy and every core and app test on `macos-latest`, and all of them pass.
+Some tests were written for Windows. They now spell paths for the system they run on: a
+`C:/...` path in a test becomes `/...` elsewhere, a child's reported working folder is compared
+under `/private`, and the test of Windows-only network paths runs only on Windows. One test is
+skipped on macOS: `a_memory_hog_runs_out_of_memory`. There, QuickJS throws `null` when an app
+uses up its memory, instead of an "out of memory" error, so a mini-app that hits the limit
+reports a plain failure rather than "ran out of memory". This is still to be looked into.
+
 ## Not yet tried on a real Mac
 
 CI compiles Dots for macOS and runs its tests there. Nobody has used the app on a Mac yet. Still
@@ -88,3 +107,5 @@ to check by hand:
 - Autostart through the LaunchAgent, and an update installed by the updater from the
   `.app.tar.gz`.
 - The `.dmg` opening and installing by drag-and-drop on Apple silicon and on Intel.
+- The release workflow's `macos` job itself. It runs only for a version tag, so the universal
+  build, the `.dmg` and the signed archive are first made by the next release (or a trial tag).
