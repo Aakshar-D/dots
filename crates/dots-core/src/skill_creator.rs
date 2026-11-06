@@ -45,6 +45,16 @@ pub const MAX_REQUEST_CHARS: usize = 4000;
 /// The model a draft uses when the dialog names none.
 pub const DEFAULT_MODEL: &str = "sonnet";
 
+/// The model a draft is written with: the one picked, or the default for Auto, which picks per
+/// run of a dot and has no run here.
+pub fn draft_model(model: &str) -> &str {
+    if crate::auto_model::is_auto(model) {
+        DEFAULT_MODEL
+    } else {
+        model.trim()
+    }
+}
+
 /// What the dialog asks for (`skill_draft`): a first draft of `idea`, or, with `current` and
 /// `change`, the current text changed as asked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,7 +160,12 @@ impl SkillDrafts {
         };
         let asked = self
             .runner
-            .run(dialog, DRAFTING_INSTRUCTIONS, req.model.trim(), &prompt)
+            .run(
+                dialog,
+                DRAFTING_INSTRUCTIONS,
+                draft_model(&req.model),
+                &prompt,
+            )
             .await;
         match asked {
             Ok(answer) => {

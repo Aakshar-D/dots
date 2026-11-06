@@ -12,7 +12,8 @@ import { BrowserSettings } from "@/components/BrowserSettings";
 import { ErrorNote } from "@/components/ErrorNote";
 import { ReportProblemDialog } from "@/components/ReportProblemDialog";
 import { Field } from "@/components/Field";
-import { ModelPicker, useModels } from "@/components/ModelPicker";
+import { ModelPicker, useModels, withoutAuto } from "@/components/ModelPicker";
+import { isAuto } from "@/lib/auto-model";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,7 @@ type Errors = {
   quiet?: string;
   archive?: string;
   model?: string;
+  auto?: string;
 };
 
 /// The Settings tabs, in the order they are listed; each id is its URL, `/settings/<id>`.
@@ -64,7 +66,15 @@ const ERROR_TAB: Record<keyof Errors, TabId> = {
   global: "instructions",
   share: "claude",
   model: "claude",
+  auto: "claude",
 };
+
+/// The sizes Auto picks from, as Settings name them (auto model spec section 3).
+const TIERS = [
+  { id: "small", label: "Small" },
+  { id: "standard", label: "Standard" },
+  { id: "large", label: "Large" },
+] as const;
 
 /// The most days the idle-topic setting takes (`settings::MAX_AUTO_ARCHIVE_DAYS`).
 const MAX_AUTO_ARCHIVE_DAYS = 3650;
@@ -88,6 +98,7 @@ export function settingsErrors(
         | "quiet_limit_secs"
         | "auto_archive_days"
         | "default_model"
+        | "auto_models"
       >
     >,
 ): Errors {
@@ -117,6 +128,11 @@ export function settingsErrors(
   }
   if (draft.default_model !== undefined && draft.default_model.trim() === "") {
     errors.model = "Name the model new dots start with.";
+  }
+  // Mirrors `AutoModels::validate`: each size names a model, and not Auto.
+  const tiers = draft.auto_models ? Object.values(draft.auto_models) : [];
+  if (tiers.some((m) => m.trim() === "" || isAuto(m) || /\s/.test(m.trim()))) {
+    errors.auto = "Each size needs a model ID such as haiku, sonnet or opus.";
   }
   return errors;
 }
@@ -464,6 +480,29 @@ function Form({
               }}
             />
           </Field>
+        </Section>
+
+        <Section title="Auto model">
+          <p className="text-xs text-muted-foreground">
+            A dot set to Auto picks a size of model for each task: small for quick checks and
+            light requests, large for hard work such as building, refactoring or debugging code,
+            standard for the rest. Choose the model of each size.
+          </p>
+          {TIERS.map((tier) => (
+            <Field
+              key={tier.id}
+              label={tier.label}
+              htmlFor={`settings-auto-${tier.id}`}
+              error={tried ? errors.auto : undefined}
+            >
+              <ModelPicker
+                id={`settings-auto-${tier.id}`}
+                value={draft.auto_models[tier.id]}
+                onChange={(model) => set({ auto_models: { ...draft.auto_models, [tier.id]: model } })}
+                options={withoutAuto(claudeModels.options)}
+              />
+            </Field>
+          ))}
         </Section>
 
         <Section title="Claude usage">

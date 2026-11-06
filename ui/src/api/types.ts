@@ -64,6 +64,9 @@ export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unch
 export const Delivery = z.enum(["delivered", "waiting", "not_delivered"]);
 // Why a message is still waiting.
 export const WaitReason = z.enum(["busy", "usage_hold", "updating", "dot_busy", "queued"]);
+// The size of model Auto picks for a run (auto model spec section 2).
+export const ModelTier = z.enum(["small", "standard", "large"]);
+export type ModelTier = z.infer<typeof ModelTier>;
 
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
@@ -193,6 +196,13 @@ const runShape = {
   dismissed_at: nullable(z.string()),
   delivery: nullable(Delivery),
   wait_reason: nullable(WaitReason),
+  // The model the run's engine was started with; null before it starts.
+  model: nullable(z.string()),
+  // Auto's pick: the size and why ("code work: refactor"); null for a dot with its own model.
+  model_tier: nullable(ModelTier),
+  model_reason: nullable(z.string()),
+  // The model Auto tried first, when the CLI could not use it.
+  model_fallback_from: nullable(z.string()),
 };
 export const Run = z.strictObject(runShape);
 
@@ -818,6 +828,12 @@ export const Settings = z.strictObject({
   auto_archive_days: z.number().int(),
   // The model a new Claude dot starts with (model switcher spec section 2.2).
   default_model: z.string(),
+  // The model of each size Auto picks from (auto model spec section 3).
+  auto_models: z.strictObject({
+    small: z.string(),
+    standard: z.string(),
+    large: z.string(),
+  }),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,

@@ -135,8 +135,9 @@ function QuietLimit(props: {
   );
 }
 
-/// The Claude CLI's model aliases (`dots_core::models::CLAUDE_MODELS`).
-const CLAUDE_ALIASES = ["opus", "sonnet", "haiku"];
+/// The Claude CLI's model aliases (`dots_core::models::CLAUDE_MODELS`), and Auto, which only a
+/// Claude dot has.
+const CLAUDE_ALIASES = ["auto", "opus", "sonnet", "haiku"];
 const isClaudeModel = (model: string) => {
   const m = model.trim().toLowerCase();
   return CLAUDE_ALIASES.includes(m) || m.startsWith("claude-");

@@ -105,7 +105,7 @@ export const sample = {
   stepDotRuns: T.StepDotRun.array().parse(contract.StepDotRun),
   /// The builder's live check: a step's problem, then the workflow name's.
   workflowProblems: T.WorkflowProblem.array().parse(contract.WorkflowProblem),
-  /// The Claude models (Opus, Sonnet, Haiku), then one a local endpoint lists.
+  /// The Claude models (Auto, Opus, Sonnet, Haiku), then one a local endpoint lists.
   models: T.ModelOption.array().parse(contract.ModelOption),
 };
 

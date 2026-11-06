@@ -9,15 +9,15 @@ use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 #[tokio::test]
-async fn claude_lists_opus_sonnet_and_haiku_with_labels_and_hints() {
+async fn claude_lists_auto_opus_sonnet_and_haiku_with_labels_and_hints() {
     let models = list_models(EngineKind::Claude, None).await.unwrap();
     let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
-    assert_eq!(ids, ["opus", "sonnet", "haiku"]);
-    assert_eq!(models.len(), CLAUDE_MODELS.len());
+    assert_eq!(ids, ["auto", "opus", "sonnet", "haiku"]);
+    assert_eq!(models.len(), CLAUDE_MODELS.len() + 1);
     for m in &models {
         assert!(!m.label.is_empty() && !m.hint.is_empty(), "{m:?}");
     }
-    assert_eq!(models[0].label, "Opus");
+    assert_eq!(models[1].label, "Opus");
     assert!(ids.contains(&DEFAULT_CLAUDE_MODEL));
 }
 
@@ -26,7 +26,7 @@ async fn claude_ignores_an_endpoint() {
     let models = list_models(EngineKind::Claude, Some("not a url"))
         .await
         .unwrap();
-    assert_eq!(models.len(), 3);
+    assert_eq!(models.len(), 4);
 }
 
 #[test]

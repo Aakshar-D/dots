@@ -101,6 +101,18 @@ fn commit_message(step: &StepContext, summary: Option<&str>) -> String {
     format!("{}: {line}", step.step_name)
 }
 
+/// How long the first attempt of a run Auto starts again may take to end (`Runner::fall_back`).
+const FALLBACK_DRAIN: Duration = Duration::from_secs(15);
+
+/// Where Auto goes when the CLI cannot use its pick: the model it tried first, and the tier and
+/// model it tries next, for the same reason.
+struct Fallback {
+    first: String,
+    tier: crate::model::ModelTier,
+    model: String,
+    reason: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct RunnerConfig {
     pub max_concurrent: usize,
@@ -1575,9 +1587,47 @@ impl Runner {
             prompt.push_str("\n## Workflows you can start\n\n");
             prompt.push_str(&startable);
         }
+        // The model the engine starts with: the dot's own, or Auto's pick for a Claude dot set
+        // to Auto (auto model spec section 2). A thread keeps the tier its last run had, when
+        // Auto picked that one.
+        let thread_tier = match &run.parent_run_id {
+            Some(parent) => match self.store.get_run(parent).await {
+                Ok(parent) => parent.model_tier,
+                Err(e) => {
+                    tracing::warn!(run = %run.id, "reading the thread's model failed: {e}");
+                    None
+                }
+            },
+            None => None,
+        };
+        let choice = crate::auto_model::choose(&dot, run, thread_tier, &settings);
+        self.store
+            .set_run_model(
+                &run.id,
+                &choice.model,
+                choice.auto.as_ref().map(|r| (r.tier, r.reason.as_str())),
+                None,
+            )
+            .await?;
+        if choice.auto.is_some() {
+            self.announce(&run.id).await;
+        }
+        // Where Auto goes when the CLI cannot use its pick: once, to another tier's model.
+        let mut fallback = choice.auto.as_ref().and_then(|route| {
+            let tier = crate::auto_model::fallback_tier(route.tier);
+            let model = settings.auto_models.model(tier).to_string();
+            (model != choice.model).then(|| Fallback {
+                first: choice.model.clone(),
+                tier,
+                model,
+                reason: route.reason.clone(),
+            })
+        });
+        let mut engine_dot = dot.clone();
+        engine_dot.spec.model = choice.model.clone();
         let ctx = RunContext {
             run_id: run.id.clone(),
-            dot: dot.clone(),
+            dot: engine_dot,
             workspace: prepared.path.clone(),
             prompt,
             session_id: run.session_id.clone(),
@@ -1588,6 +1638,7 @@ impl Runner {
             tools: tools.clone(),
         };
         self.store.set_run_quiet_limit(&run.id, quiet_secs).await?;
+        let retry_ctx = fallback.as_ref().map(|_| ctx.clone());
         let mut rx = engine.start(ctx).await?;
         // The engine has the message: the run reached its dot (delivery tracking spec
         // section 2). Recorded once; a requeued run keeps its first delivery. A failed write
@@ -1649,6 +1700,25 @@ impl Runner {
                 }
                 ev = rx.recv() => {
                     let Some(ev) = ev else { break };
+                    // The CLI could not use Auto's pick and did nothing yet: started again,
+                    // once, with another tier's model (auto model spec section 4).
+                    if let (EngineEvent::Failed { error: e }, Some(ctx)) = (&ev, &retry_ctx) {
+                        if grace.is_none()
+                            && !saw_tool_call
+                            && fallback.is_some()
+                            && crate::auto_model::model_unavailable(e)
+                        {
+                            let next = fallback.take().expect("checked above");
+                            if let Some(again) = self
+                                .fall_back(run, &engine, ctx, &mut rx, &cancel, &next, e)
+                                .await?
+                            {
+                                rx = again;
+                                last_output = Instant::now();
+                                continue;
+                            }
+                        }
+                    }
                     self.record(&run.id, &ev).await?;
                     last_output = Instant::now();
                     if quiet_at.take().is_some() {
@@ -1797,6 +1867,63 @@ impl Runner {
         }
         self.emit_run(&finished);
         Ok(())
+    }
+
+    /// Announces the run's row as it is now. Only an announcement: a failed read is logged and
+    /// the run goes on.
+    async fn announce(&self, run_id: &str) {
+        match self.store.get_run(run_id).await {
+            Ok(row) => self.emit_run(&row),
+            Err(e) => tracing::warn!(run = %run_id, "announcing the run's model failed: {e}"),
+        }
+    }
+
+    /// Starts `run` again with `next`'s model after the CLI said it could not use the one Auto
+    /// picked (auto model spec section 4). The first attempt is let go first: its channel is
+    /// read to its end, so its process and files are gone before the second starts with the
+    /// same run id. `None` when it does not end in time or the run was cancelled meanwhile:
+    /// the run then ends with the first attempt's error.
+    #[allow(clippy::too_many_arguments)]
+    async fn fall_back(
+        &self,
+        run: &Run,
+        engine: &Arc<dyn Engine>,
+        ctx: &RunContext,
+        rx: &mut tokio::sync::mpsc::Receiver<EngineEvent>,
+        cancel: &CancellationToken,
+        next: &Fallback,
+        error: &str,
+    ) -> Result<Option<tokio::sync::mpsc::Receiver<EngineEvent>>> {
+        let drained =
+            tokio::time::timeout(FALLBACK_DRAIN, async { while rx.recv().await.is_some() {} })
+                .await;
+        if drained.is_err() || cancel.is_cancelled() {
+            return Ok(None);
+        }
+        let first = crate::auto_model::model_label(&next.first);
+        let then = crate::auto_model::model_label(&next.model);
+        let said: String = error
+            .lines()
+            .map(str::trim)
+            .find(|l| !l.is_empty())
+            .unwrap_or("unavailable")
+            .chars()
+            .take(200)
+            .collect();
+        let text = format!("{first} could not be used ({said}). Trying again with {then}.");
+        self.record(&run.id, &EngineEvent::Notice { text }).await?;
+        self.store
+            .set_run_model(
+                &run.id,
+                &next.model,
+                Some((next.tier, next.reason.as_str())),
+                Some(&next.first),
+            )
+            .await?;
+        self.announce(&run.id).await;
+        let mut again = ctx.clone();
+        again.dot.spec.model = next.model.clone();
+        Ok(Some(engine.start(again).await?))
     }
 
     /// Sets (`since`) or clears the run's quiet mark and announces it: a `RunQuiet` and the

@@ -15,6 +15,7 @@ import {
   type RunEventRecord,
 } from "@/api/types";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import { AutoLine } from "@/components/AutoLine";
 import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
 import { RunPlan } from "@/components/RunPlan";
@@ -550,6 +551,7 @@ export function Transcript(props: {
                   />
                 ),
               )}
+              <AutoLine run={run} />
               {conversation && run.trigger === "chat" && run.status === "cancelled" && !run.undelivered_at && (
                 <p className="text-xs text-muted-foreground">Cancelled</p>
               )}

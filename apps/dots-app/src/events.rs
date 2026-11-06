@@ -730,6 +730,10 @@ mod tests {
             dismissed_at: None,
             delivery: None,
             wait_reason: None,
+            model: None,
+            model_tier: None,
+            model_reason: None,
+            model_fallback_from: None,
         }
     }
 

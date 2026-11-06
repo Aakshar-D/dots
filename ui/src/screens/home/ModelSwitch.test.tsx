@@ -29,6 +29,19 @@ describe("the model switch above a dot's conversation", () => {
     expect(await screen.findByText(`${dot.name} will use Opus from its next reply.`)).toBeVisible();
   });
 
+  it("switches a Claude dot to Auto", async () => {
+    home([]);
+    backend.on("get_dot", () => dot);
+    backend.on("update_dot", (args) => ({ ...dot, ...(args.spec as object) }));
+    const { user } = renderApp(`/home/${dot.id}`);
+    const select = await switcher();
+    await user.selectOptions(select, await within(select).findByRole("option", { name: "Auto" }));
+    await waitFor(() =>
+      expect(backend.callsTo("update_dot")[0]?.spec).toMatchObject({ model: "auto" }),
+    );
+    expect(await screen.findByText(`${dot.name} will use Auto from its next reply.`)).toBeVisible();
+  });
+
   it("takes any model id through Custom…", async () => {
     home([]);
     backend.on("get_dot", () => dot);

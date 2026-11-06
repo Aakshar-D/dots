@@ -2149,6 +2149,10 @@
       "error": null,
       "hold_released": false,
       "id": "01J0RUN",
+      "model": "sonnet",
+      "model_fallback_from": "opus",
+      "model_reason": "code work: refactor",
+      "model_tier": "standard",
       "parent_run_id": null,
       "payload": {
         "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -2937,6 +2941,10 @@
         "error": "claude CLI not found",
         "hold_released": false,
         "id": "01J0RUN",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": null,
         "queued_at": "2026-10-09T12:00:00.000Z",
@@ -2975,6 +2983,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -4319,6 +4331,11 @@
   ],
   "ModelOption": [
     {
+      "hint": "Picks Haiku, Sonnet or Opus for each task, to spend less of your limits on easy ones.",
+      "id": "auto",
+      "label": "Auto"
+    },
+    {
       "hint": "Most capable, for hard work; slower and uses more of your limits.",
       "id": "opus",
       "label": "Opus"
@@ -5045,6 +5062,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -5169,6 +5190,10 @@
     "error": "claude CLI not found",
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": null,
     "queued_at": "2026-10-09T12:00:00.000Z",
@@ -5204,6 +5229,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN5",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "message": "Ship the release notes.",
@@ -5248,6 +5277,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": null,
     "queued_at": "2026-10-09T12:00:00.000Z",
@@ -5283,6 +5316,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN6",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "attachments": [
@@ -5357,6 +5394,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN2",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "attempt": 2,
@@ -5758,6 +5799,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN3",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "event": "created",
@@ -5818,6 +5863,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN4",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -6370,6 +6419,11 @@
   "Settings": {
     "auto_archive_days": 30,
     "auto_install_updates": false,
+    "auto_models": {
+      "large": "opus",
+      "small": "haiku",
+      "standard": "sonnet"
+    },
     "autostart": true,
     "claude_path": null,
     "default_model": "sonnet",
@@ -6394,6 +6448,11 @@
     "settings": {
       "auto_archive_days": 30,
       "auto_install_updates": false,
+      "auto_models": {
+        "large": "opus",
+        "small": "haiku",
+        "standard": "sonnet"
+      },
       "autostart": true,
       "claude_path": null,
       "default_model": "sonnet",

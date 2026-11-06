@@ -574,6 +574,10 @@ fn run() -> Run {
         dismissed_at: None,
         delivery: Some(dots_core::model::Delivery::Delivered),
         wait_reason: None,
+        model: Some("sonnet".into()),
+        model_tier: Some(ModelTier::Standard),
+        model_reason: Some("code work: refactor".into()),
+        model_fallback_from: Some("opus".into()),
     }
 }
 
@@ -1615,9 +1619,10 @@ pub fn samples() -> Value {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
         npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
     });
-    // The Claude list, then a model a local endpoint lists (no hint).
+    // The Claude list (Auto first), then a model a local endpoint lists (no hint).
     samples["ModelOption"] = to({
-        let mut models = dots_core::models::claude_models();
+        let mut models = vec![dots_core::models::auto_option()];
+        models.extend(dots_core::models::claude_models());
         models.push(dots_core::models::ModelOption {
             id: "qwen2.5-coder-7b".into(),
             label: "qwen2.5-coder-7b".into(),

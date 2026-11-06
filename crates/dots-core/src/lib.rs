@@ -4,6 +4,7 @@ mod macros;
 pub mod accounts;
 pub mod approvals;
 pub mod apps;
+pub mod auto_model;
 pub mod browser;
 pub mod chat_files;
 pub mod chatgpt;
