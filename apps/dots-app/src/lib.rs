@@ -262,6 +262,8 @@ command_list![
     limits_get,
     usage_summary,
     run_release_hold,
+    run_release_cap,
+    spend_today,
     teams_list,
     team_get,
     team_create,

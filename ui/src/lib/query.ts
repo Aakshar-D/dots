@@ -123,6 +123,8 @@ export const keys = {
   /// The apps that come with Dots and are not installed ("Install Projects").
   appsBundled: ["apps", "bundled"] as const,
   limits: ["limits"] as const,
+  /// Today's spend against the spending caps: what any run reports changes it.
+  spend: ["spend"] as const,
   updateStatus: ["update-status"] as const,
   publisher: ["publisher"] as const,
   releasesPage: ["releases-page"] as const,
@@ -225,6 +227,8 @@ export function invalidateDots(qc: QueryClient): void {
     ["runs"],
     keys.env,
     keys.library,
+    // A dot's caps are shown with today's spend.
+    keys.spend,
     ...orgEntries,
   ];
   for (const queryKey of stale) invalidate(qc, queryKey);

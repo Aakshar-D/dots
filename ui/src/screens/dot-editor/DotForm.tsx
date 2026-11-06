@@ -6,6 +6,7 @@ import { commands } from "@/api/commands";
 import { EngineKind, WorkspaceMode, type Dot, type DotSpec } from "@/api/types";
 import { Field } from "@/components/Field";
 import { ModelPicker, useModels } from "@/components/ModelPicker";
+import { CapInput, SpendLine, useSpendToday } from "@/components/SpendCaps";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import type { SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
+import { tokenCapError, usdCapError } from "@/lib/spend";
 import { keys } from "@/lib/query";
 import { BrowserSection } from "@/screens/dot-editor/BrowserSection";
 import { PERSONAL } from "@/lib/scope";
@@ -155,6 +157,54 @@ export function modelFor(
   if (to === from) return model;
   if (to === "claude") return isClaudeModel(model) ? model : (defaultModel ?? "sonnet");
   return isClaudeModel(model) ? "" : model;
+}
+
+/// The dot's daily caps (spend caps design) and what it spent today. Empty is no cap.
+function SpendingCaps(props: {
+  dotId: string | null;
+  spec: DotSpec;
+  onChange: (caps: DotSpec["spend_cap"]) => void;
+}) {
+  const caps = props.spec.spend_cap;
+  const spend = useSpendToday().data;
+  const today = spend?.dots.find((d) => d.dot_id === props.dotId)?.today ?? {
+    cost_usd: 0,
+    tokens: 0,
+  };
+  return (
+    <>
+      <p className="text-xs text-muted-foreground">
+        Once the dot reaches a cap, its new runs wait until local midnight or until you raise the
+        cap, and a run that goes over is stopped. Your own chats can run once anyway. Costs are
+        estimates: what the runs would cost on the API. Settings can cap all dots together.
+      </p>
+      {props.dotId !== null && spend && (
+        <SpendLine
+          label="Today"
+          spend={today}
+          usdCap={caps.daily_usd}
+          tokenCap={caps.daily_tokens}
+          showTokens
+        />
+      )}
+      <div className="flex flex-wrap gap-4">
+        <CapInput
+          id="dot-cap-usd"
+          label="Daily cost cap (USD)"
+          value={caps.daily_usd}
+          onChange={(daily_usd) => props.onChange({ ...caps, daily_usd })}
+          error={usdCapError(caps.daily_usd)}
+        />
+        <CapInput
+          id="dot-cap-tokens"
+          label="Daily token cap"
+          value={caps.daily_tokens}
+          onChange={(daily_tokens) => props.onChange({ ...caps, daily_tokens })}
+          error={tokenCapError(caps.daily_tokens)}
+        />
+      </div>
+    </>
+  );
 }
 
 /// Every field of a dot. `existing` is set once the dot is stored: only then does it have a
@@ -411,6 +461,14 @@ export function DotForm(props: {
           spec={spec}
           onChange={(secs) => set("quiet_limit_secs", secs)}
           error={errors.quiet_limit_secs}
+        />
+      </Section>
+
+      <Section title="Spending caps">
+        <SpendingCaps
+          dotId={props.existing?.id ?? null}
+          spec={spec}
+          onChange={(spend_cap) => set("spend_cap", spend_cap)}
         />
       </Section>
 

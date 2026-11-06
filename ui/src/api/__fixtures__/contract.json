@@ -140,6 +140,10 @@
           "until": null
         },
         "seen_at": "2026-10-09T12:00:00.000Z",
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
@@ -959,6 +963,8 @@
     "limits_get",
     "usage_summary",
     "run_release_hold",
+    "run_release_cap",
+    "spend_today",
     "teams_list",
     "team_get",
     "team_create",
@@ -1930,6 +1936,10 @@
       "until": null
     },
     "seen_at": "2026-10-09T12:00:00.000Z",
+    "spend_cap": {
+      "daily_tokens": null,
+      "daily_usd": 2.0
+    },
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
     "use_global_instructions": true,
@@ -2111,6 +2121,10 @@
         "until": null
       },
       "seen_at": "2026-10-09T12:00:00.000Z",
+      "spend_cap": {
+        "daily_tokens": null,
+        "daily_usd": 2.0
+      },
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
       "use_global_instructions": true,
@@ -2140,6 +2154,7 @@
     "last_run": {
       "base_commit": "0123abcd",
       "branch": "dots/nightly-tests/01J0RUN",
+      "cap_released": false,
       "cost_usd": 1.32,
       "delivered_at": "2026-10-09T12:00:00.000Z",
       "delivery": "delivered",
@@ -2174,6 +2189,7 @@
       "trigger": "schedule",
       "undelivered_at": null,
       "undelivered_reason": null,
+      "wait_detail": null,
       "wait_reason": null,
       "workflow_step_run_id": null,
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -2289,6 +2305,10 @@
     },
     "quiet_limit_secs": null,
     "schedule": null,
+    "spend_cap": {
+      "daily_tokens": null,
+      "daily_usd": null
+    },
     "timeout_secs": 1800,
     "use_global_instructions": true,
     "use_user_settings": false,
@@ -2611,7 +2631,8 @@
       "usage_hold",
       "updating",
       "dot_busy",
-      "queued"
+      "queued",
+      "spend_cap"
     ],
     "WaitingOn": [
       "check",
@@ -2904,6 +2925,19 @@
         "run_id": "01J0RUN5",
         "starts_after": null,
         "trigger": "watcher"
+      },
+      {
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "reason": {
+          "kind": "spend_cap",
+          "scope": "dot",
+          "text": "nightly-tests reached its $2.00 daily cap"
+        },
+        "run_id": "01J0RUN6",
+        "starts_after": null,
+        "trigger": "chat"
       }
     ],
     "hidden_messages": [
@@ -2931,6 +2965,7 @@
       {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": null,
         "delivery": "not_delivered",
@@ -2964,6 +2999,7 @@
         "trigger": "chat",
         "undelivered_at": "2026-10-09T12:00:00.000Z",
         "undelivered_reason": "claude CLI not found",
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -2973,6 +3009,7 @@
       {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -3008,6 +3045,7 @@
         "trigger": "schedule",
         "undelivered_at": null,
         "undelivered_reason": null,
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
@@ -3124,6 +3162,10 @@
     },
     {
       "id": "01J0RUN5",
+      "kind": "held"
+    },
+    {
+      "id": "01J0RUN6",
       "kind": "held"
     },
     {
@@ -3926,6 +3968,8 @@
   ],
   "Limits": {
     "max_approval_wait_secs": 280,
+    "max_cap_tokens": 10000000000,
+    "max_cap_usd": 100000.0,
     "max_concurrent_runs": 16,
     "max_global_instructions": 32768,
     "max_memories": 200,
@@ -3934,7 +3978,9 @@
     "max_schedule_attempts": 6,
     "max_timeout_secs": 604800,
     "max_watcher_name": 80,
-    "min_quiet_limit_secs": 60
+    "min_cap_usd": 0.01,
+    "min_quiet_limit_secs": 60,
+    "spend_warn_at": 0.8
   },
   "LimitsState": [
     {
@@ -4483,6 +4529,10 @@
     },
     "quiet_limit_secs": null,
     "schedule": null,
+    "spend_cap": {
+      "daily_tokens": null,
+      "daily_usd": null
+    },
     "timeout_secs": 1800,
     "use_global_instructions": true,
     "use_user_settings": false,
@@ -5053,6 +5103,7 @@
   "Run": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -5087,7 +5138,49 @@
     "trigger": "schedule",
     "undelivered_at": null,
     "undelivered_reason": null,
+    "wait_detail": null,
     "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunCapped": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
+    "cost_usd": 1.32,
+    "delivered_at": null,
+    "delivery": "waiting",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": null,
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
+    "parent_run_id": null,
+    "payload": null,
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": null,
+    "status": "queued",
+    "summary": null,
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_detail": "nightly-tests reached its $2.00 daily cap",
+    "wait_reason": "spend_cap",
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
@@ -5181,6 +5274,7 @@
   "RunNotDelivered": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": null,
     "delivery": "not_delivered",
@@ -5213,6 +5307,7 @@
     "trigger": "chat",
     "undelivered_at": "2026-10-09T12:00:00.000Z",
     "undelivered_reason": "claude CLI not found",
+    "wait_detail": null,
     "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5220,6 +5315,7 @@
   "RunSentLate": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -5261,6 +5357,7 @@
     "trigger": "chat",
     "undelivered_at": null,
     "undelivered_reason": null,
+    "wait_detail": null,
     "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5268,6 +5365,7 @@
   "RunWaiting": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": null,
     "delivery": "waiting",
@@ -5300,6 +5398,7 @@
     "trigger": "chat",
     "undelivered_at": null,
     "undelivered_reason": null,
+    "wait_detail": null,
     "wait_reason": "busy",
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5307,6 +5406,7 @@
   "RunWithAttachments": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -5349,6 +5449,7 @@
     "trigger": "chat",
     "undelivered_at": null,
     "undelivered_reason": null,
+    "wait_detail": null,
     "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5385,6 +5486,7 @@
       "run": {
         "base_commit": null,
         "branch": null,
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -5420,6 +5522,7 @@
         "trigger": "schedule",
         "undelivered_at": null,
         "undelivered_reason": null,
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": null
@@ -5790,6 +5893,7 @@
       "run": {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -5830,6 +5934,7 @@
         "trigger": "watcher",
         "undelivered_at": null,
         "undelivered_reason": null,
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5854,6 +5959,7 @@
       "run": {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -5888,6 +5994,7 @@
         "trigger": "schedule",
         "undelivered_at": null,
         "undelivered_reason": null,
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -6441,6 +6548,9 @@
     "publish_token": null,
     "quiet_limit_secs": 600,
     "schedules_paused": false,
+    "spend_daily_tokens": null,
+    "spend_daily_usd": 10.0,
+    "spend_monthly_usd": 200.0,
     "tested_claude_version": "2.1.295"
   },
   "SettingsSaved": {
@@ -6470,6 +6580,9 @@
       "publish_token": null,
       "quiet_limit_secs": 600,
       "schedules_paused": false,
+      "spend_daily_tokens": null,
+      "spend_daily_usd": 10.0,
+      "spend_monthly_usd": 200.0,
       "tested_claude_version": "2.1.295"
     }
   },
@@ -6656,6 +6769,10 @@
           "until": null
         },
         "seen_at": "2026-10-09T12:00:00.000Z",
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
@@ -6826,6 +6943,10 @@
           "until": null
         },
         "seen_at": "2026-10-09T12:00:00.000Z",
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
@@ -6930,6 +7051,50 @@
       "kind": "age"
     }
   ],
+  "SpendToday": {
+    "caps": {
+      "daily_tokens": null,
+      "daily_usd": 10.0,
+      "monthly_usd": 200.0
+    },
+    "day_end": "2026-10-09T23:00:00.000Z",
+    "day_start": "2026-10-08T23:00:00.000Z",
+    "dots": [
+      {
+        "caps": {
+          "daily_tokens": 1000000,
+          "daily_usd": 2.0
+        },
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "today": {
+          "cost_usd": 2.0,
+          "tokens": 400000
+        }
+      },
+      {
+        "caps": {
+          "daily_tokens": null,
+          "daily_usd": null
+        },
+        "dot_id": "01J0DOT2",
+        "dot_name": "local-summarizer",
+        "today": {
+          "cost_usd": 0.0,
+          "tokens": 850000
+        }
+      }
+    ],
+    "month": {
+      "cost_usd": 61.25,
+      "tokens": 9400000
+    },
+    "month_start": "2026-09-30T23:00:00.000Z",
+    "today": {
+      "cost_usd": 8.5,
+      "tokens": 1250000
+    }
+  },
   "StagedAttachment": {
     "id": "01J0ATT",
     "name": "report.pdf",

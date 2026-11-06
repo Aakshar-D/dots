@@ -24,6 +24,7 @@ use crate::model::{
 };
 use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
+use crate::spend::STOPPED_BY_CAP;
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
 use crate::vault::{DotScope, Vault};
@@ -65,6 +66,10 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
         Cow::Borrowed(tool)
     }
 }
+
+/// How long after the usage report that reached a spending cap the run is stopped: the
+/// engine's own end, reported with that usage, comes first.
+const CAP_STOP_AFTER: Duration = Duration::from_millis(500);
 
 /// How every resume prompt ends.
 const CONTINUE: &str = "Continue the task, then end with your summary.";
@@ -336,6 +341,19 @@ impl Runner {
         Ok(state.held_run_ids.into_iter().collect())
     }
 
+    /// The spending cap that keeps the queued `run` from starting (spend caps design): the
+    /// first cap reached for its dot, unless the person let it run once anyway. `None` when it
+    /// may start, or is no longer queued.
+    pub async fn cap_hold(&self, run: &Run) -> Result<Option<crate::spend::CapHit>> {
+        if run.status != RunStatus::Queued || run.cap_released {
+            return Ok(None);
+        }
+        crate::spend::Ledger::load(&self.store)
+            .await?
+            .hit_for(&self.store, &run.dot_id)
+            .await
+    }
+
     /// Sets why each waiting run waits (delivery tracking spec section 3): each `queued` run
     /// not yet delivered gets its reason, every other run `None`. The facts are read once.
     /// The slots in use and the busy dots are the runner's own, exactly what `dispatch_once`
@@ -346,10 +364,19 @@ impl Runner {
         if !runs.iter().any(waiting) {
             for run in runs.iter_mut() {
                 run.wait_reason = None;
+                run.wait_detail = None;
             }
             return Ok(());
         }
         let usage_held = self.usage_held_ids().await?;
+        // The spending caps, read once for every waiting run (spend caps design).
+        let mut ledger = crate::spend::Ledger::load(&self.store).await?;
+        let mut capped: HashMap<String, String> = HashMap::new();
+        for run in runs.iter().filter(|r| waiting(r) && !r.cap_released) {
+            if let Some(hit) = ledger.hit_for(&self.store, &run.dot_id).await? {
+                capped.insert(run.id.clone(), hit.text);
+            }
+        }
         let (running, busy_dots) = {
             let active = self.active.lock().unwrap();
             let busy: HashSet<String> = active
@@ -364,6 +391,7 @@ impl Runner {
             run.wait_reason = waiting(run).then(|| {
                 wait_reason(&WaitFacts {
                     usage_held: usage_held.contains(&run.id),
+                    spend_capped: capped.contains_key(&run.id),
                     runner_held,
                     // A run of a workflow step neither waits for its dot's other runs nor
                     // keeps them waiting (teams spec section 8).
@@ -373,6 +401,10 @@ impl Runner {
                     max_concurrent: self.cfg.max_concurrent,
                 })
             });
+            run.wait_detail = match run.wait_reason {
+                Some(crate::model::WaitReason::SpendCap) => capped.get(&run.id).cloned(),
+                _ => None,
+            };
         }
         Ok(())
     }
@@ -826,12 +858,25 @@ impl Runner {
         if let Some(limits) = &limits {
             limits.publish(&self.queued_runs().await?, running_background);
         }
+        // The spending caps, read once for the pass (spend caps design).
+        let mut ledger: Option<crate::spend::Ledger> = None;
         for (run, engine) in self.store.queued_with_engine(true).await? {
             let background_claude = engine == EngineKind::Claude && is_background(run.trigger);
             // A role that may not run dots keeps a background run queued, unstarted, until the
             // role returns (members spec section 6.3); the next pass looks again.
             if self.role_hold(&run).await?.is_some() {
                 continue;
+            }
+            // A reached spending cap keeps any run queued, unstarted, until the day rolls over
+            // or the cap is raised, unless the person let it run once anyway.
+            if !run.cap_released {
+                let ledger = match &mut ledger {
+                    Some(l) => l,
+                    None => ledger.insert(crate::spend::Ledger::load(&self.store).await?),
+                };
+                if ledger.hit_for(&self.store, &run.dot_id).await?.is_some() {
+                    continue;
+                }
             }
             if let Some(limits) = &limits {
                 if limits.admit(&queued_run(&run, engine), running_background) != Admit::Go {
@@ -1311,6 +1356,29 @@ impl Runner {
         Ok(())
     }
 
+    /// The spending cap the running `run` has reached, if any: read after each usage report.
+    /// A run let past a cap once is never stopped by one. A failed read is logged and stops
+    /// nothing.
+    async fn cap_reached(&self, run: &Run) -> Option<String> {
+        if run.cap_released {
+            return None;
+        }
+        let hit = async {
+            crate::spend::Ledger::load(&self.store)
+                .await?
+                .hit_for(&self.store, &run.dot_id)
+                .await
+        }
+        .await;
+        match hit {
+            Ok(hit) => hit.map(|h| h.text),
+            Err(e) => {
+                tracing::warn!(run = %run.id, "reading the spending caps failed: {e}");
+                None
+            }
+        }
+    }
+
     async fn execute_inner(
         &self,
         run: &Run,
@@ -1668,13 +1736,19 @@ impl Runner {
         let mut last_output = Instant::now();
         let mut quiet_at: Option<Instant> = None;
         let mut quiet_stopped = false;
+        // A spending cap the run's own usage reached while it ran (spend caps design).
+        let mut cap_stopped: Option<String> = None;
+        let mut cap_stop_at: Option<Instant> = None;
+        let mut cap_fired = false;
         let mut summary: Option<String> = None;
         let mut error: Option<String> = None;
         // Claude's `rejected` ending a background run (usage and limits spec section 4).
         let mut saw_tool_call = false;
         let mut saw_rejected = false;
         loop {
-            let limit = grace.unwrap_or(deadline);
+            // A reached cap stops the run a moment after the usage that reached it, so the end
+            // the engine reports with that usage is not cut off.
+            let limit = grace.unwrap_or(cap_stop_at.map_or(deadline, |c| c.min(deadline)));
             // Warn a limit after the last output; once quiet, stop a limit after the warning.
             // Off once the run is being stopped.
             let quiet_timer = quiet
@@ -1691,7 +1765,8 @@ impl Runner {
                         tracing::warn!(run = %run.id, "engine ignored cancellation; abandoning it");
                         break;
                     }
-                    timed_out = true;
+                    cap_fired = cap_stop_at.is_some();
+                    timed_out = !cap_fired;
                     cancel.cancel();
                     grace = Some(Instant::now() + self.cfg.cancel_grace);
                 }
@@ -1723,6 +1798,15 @@ impl Runner {
                     last_output = Instant::now();
                     if quiet_at.take().is_some() {
                         self.set_quiet(run, None, quiet_secs).await;
+                    }
+                    if matches!(ev, EngineEvent::Usage { .. })
+                        && cap_stopped.is_none()
+                        && grace.is_none()
+                    {
+                        if let Some(text) = self.cap_reached(run).await {
+                            cap_stopped = Some(text);
+                            cap_stop_at = Some(Instant::now() + CAP_STOP_AFTER);
+                        }
                     }
                     match ev {
                         EngineEvent::Finished { summary: s } => summary = Some(s),
@@ -1779,6 +1863,9 @@ impl Runner {
             .await;
 
         let user_cancelled = by_user.load(Ordering::SeqCst);
+        // A cap stopped the run, unless it had finished by then: the usage that reached the cap
+        // usually comes with the run's own end.
+        let cap_failed = cap_fired && (summary.is_none() || error.is_some());
         let waiting = self.store.has_pending_for_run(&run.id).await?
             || !self
                 .store
@@ -1792,6 +1879,8 @@ impl Runner {
                 RunStatus::Failed,
                 Some(format!("timeout after {}s", dot.spec.timeout_secs)),
             )
+        } else if let (true, Some(text)) = (cap_failed, &cap_stopped) {
+            (RunStatus::Failed, Some(format!("{STOPPED_BY_CAP}{text}")))
         } else if quiet_stopped {
             let minutes = 2 * quiet_secs.unwrap_or_default() / 60;
             (
@@ -1835,9 +1924,15 @@ impl Runner {
                 Some("engine exited without a result".to_string()),
             )
         };
+        // A run that reached a cap and ended by itself says so: the next run waits.
+        if let (false, Some(text)) = (cap_failed || user_cancelled || timed_out, &cap_stopped) {
+            let text = format!("{text}: the next run waits");
+            self.record(&run.id, &EngineEvent::Notice { text }).await?;
+        }
         // The watchdog names the ending only when nothing before it in the list above did.
-        let quiet_stopped = quiet_stopped && !user_cancelled && !timed_out;
-        if user_cancelled || timed_out || quiet_stopped {
+        let quiet_stopped = quiet_stopped && !user_cancelled && !timed_out && !cap_failed;
+        let cap_failed = cap_failed && !user_cancelled && !timed_out;
+        if user_cancelled || timed_out || quiet_stopped || cap_failed {
             self.store.expire_pending_for_run(&run.id).await?;
         }
         // Clean up before publishing the terminal status so observers that see

@@ -16,7 +16,8 @@ pub(super) const RUN_COLUMNS: &str =
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
     tokens_cache_read, cost_usd, hold_released, quiet_since, quiet_limit_secs, \
-    quiet_stopped, delivered_at, undelivered_at, undelivered_reason, dismissed_at, model,     model_tier, model_reason, model_fallback_from";
+    quiet_stopped, delivered_at, undelivered_at, undelivered_reason, dismissed_at, cap_released, \
+    model, model_tier, model_reason, model_fallback_from";
 
 /// The reason a run ended undelivered: the first non-empty line of its error, or `failed`.
 fn undelivered_reason(error: Option<&str>) -> String {
@@ -33,6 +34,8 @@ pub(super) fn run_from_row(row: &SqliteRow) -> Result<Run> {
     Ok(Run {
         delivery: Delivery::of(status, delivered_at.as_deref(), undelivered_at.as_deref()),
         wait_reason: None,
+        wait_detail: None,
+        cap_released: row.try_get::<i64, _>("cap_released")? != 0,
         delivered_at,
         undelivered_at,
         undelivered_reason: row.try_get("undelivered_reason")?,
@@ -921,6 +924,72 @@ impl Store {
                 .then_with(|| a.dot_name.cmp(&b.dot_name))
         });
         Ok(by_dot)
+    }
+
+    /// What runs started in `[start, end)` spent: their estimated API cost and their tokens,
+    /// in and out, of one dot or, with `None`, of every dot (spend caps design). A run still
+    /// going counts with what it has reported so far. Both bounds are written with
+    /// `util::timestamp`, as stored times are.
+    pub async fn spend_between(
+        &self,
+        dot_id: Option<&str>,
+        start: &str,
+        end: &str,
+    ) -> Result<crate::spend::Spend> {
+        let row = sqlx::query(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) AS cost,              COALESCE(SUM(tokens_in + tokens_out), 0) AS tokens              FROM runs WHERE started_at >= ? AND started_at < ?              AND (? IS NULL OR dot_id = ?)",
+        )
+        .bind(start)
+        .bind(end)
+        .bind(dot_id)
+        .bind(dot_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(crate::spend::Spend {
+            cost_usd: row.try_get("cost")?,
+            tokens: row.try_get("tokens")?,
+        })
+    }
+
+    /// `spend_between` for each dot with a run started in `[start, end)`.
+    pub async fn spend_by_dot(
+        &self,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<(String, crate::spend::Spend)>> {
+        let rows = sqlx::query(
+            "SELECT dot_id, COALESCE(SUM(cost_usd), 0.0) AS cost,              COALESCE(SUM(tokens_in + tokens_out), 0) AS tokens              FROM runs WHERE started_at >= ? AND started_at < ? GROUP BY dot_id",
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                Ok((
+                    row.try_get("dot_id")?,
+                    crate::spend::Spend {
+                        cost_usd: row.try_get("cost")?,
+                        tokens: row.try_get("tokens")?,
+                    },
+                ))
+            })
+            .collect()
+    }
+
+    /// Marks a queued run let past a reached spending cap by **Run once anyway** (spend caps
+    /// design). `Conflict` once it is no longer queued.
+    pub async fn set_cap_released(&self, id: &str) -> Result<Run> {
+        let done =
+            sqlx::query("UPDATE runs SET cap_released = 1 WHERE id = ? AND status = 'queued'")
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        if done.rows_affected() == 0 {
+            self.get_run(id).await?;
+            return Err(Error::Conflict("this run is no longer waiting".into()));
+        }
+        self.get_run(id).await
     }
 
     /// Marks a run released from the hold by **Run anyway** (usage and limits spec section 4).

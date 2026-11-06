@@ -1,5 +1,6 @@
 import { Fragment, type ReactNode } from "react";
 import { DeliveryLine } from "@/components/DeliveryLine";
+import { CapNote } from "@/components/SpendCaps";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Brain, ChevronRight, Info } from "lucide-react";
@@ -515,6 +516,7 @@ export function Transcript(props: {
                 <p className="self-end text-xs text-muted-foreground">Resent after Dots restarted</p>
               )}
               <DeliveryLine run={run} />
+              <CapNote run={run} className="self-end" />
               {/* The run's plan and timeline stand above the dot's reply (run plan spec 2). */}
               <RunPlan
                 run={run}

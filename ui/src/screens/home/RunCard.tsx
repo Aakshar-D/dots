@@ -8,6 +8,7 @@ import { ApprovalCard } from "@/components/ApprovalCard";
 import { AutoLine } from "@/components/AutoLine";
 import { ErrorNote } from "@/components/ErrorNote";
 import { HeldNote, RunNumbers } from "@/components/RunNumbers";
+import { CapNote } from "@/components/SpendCaps";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { oneLine, topicTitle, type Topic } from "@/lib/home-topics";
@@ -60,6 +61,7 @@ export function RunCard(props: {
       <RunNumbers run={run} />
       <AutoLine run={run} />
       <HeldNote run={run} />
+      <CapNote run={run} />
       <DeliveryLine run={run} />
       {error && <p className="text-destructive">{error}</p>}
       {waiting && approvals.isError && <ErrorNote error={approvals.error} />}
