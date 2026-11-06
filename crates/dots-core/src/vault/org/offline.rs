@@ -312,7 +312,7 @@ impl KeychainProtector {
         match get_generic_password(Self::SERVICE, Self::ACCOUNT) {
             Ok(stored) => {
                 let stored = Zeroizing::new(stored);
-                let bytes = Zeroizing::new(STANDARD.decode(&*stored).map_err(|_| {
+                let bytes = Zeroizing::new(STANDARD.decode(stored.as_slice()).map_err(|_| {
                     Error::Other("Keychain: the offline copy's key is damaged".into())
                 })?);
                 let mut key = Zeroizing::new([0u8; 32]);
@@ -327,7 +327,7 @@ impl KeychainProtector {
             Err(e) if e.code() == NOT_FOUND && create => {
                 let mut key = Zeroizing::new([0u8; 32]);
                 getrandom::fill(&mut *key).expect("OS random number generator unavailable");
-                let text = Zeroizing::new(STANDARD.encode(&*key));
+                let text = Zeroizing::new(STANDARD.encode(key.as_slice()));
                 set_generic_password(Self::SERVICE, Self::ACCOUNT, text.as_bytes())
                     .map_err(|e| failed("saving", e))?;
                 Ok(key)
