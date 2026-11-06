@@ -34,7 +34,17 @@ pub fn parse_line(line: &str) -> Vec<EngineEvent> {
             }
             out
         }
-        Some("assistant") => blocks(&v).iter().filter_map(assistant_block).collect(),
+        Some("assistant") => {
+            // A helper's calls (the `Task`/`Agent` tool's) name the call that started it.
+            let parent = v
+                .get("parent_tool_use_id")
+                .and_then(Value::as_str)
+                .filter(|p| !p.is_empty());
+            blocks(&v)
+                .iter()
+                .filter_map(|b| assistant_block(b, parent))
+                .collect()
+        }
         Some("user") => blocks(&v).iter().filter_map(tool_result_block).collect(),
         Some("result") => result_events(&v),
         Some("rate_limit_event") => limit_events(&v),
@@ -86,7 +96,7 @@ fn str_field(v: &Value, key: &str) -> String {
         .to_string()
 }
 
-fn assistant_block(b: &Value) -> Option<EngineEvent> {
+fn assistant_block(b: &Value, parent: Option<&str>) -> Option<EngineEvent> {
     match b.get("type")?.as_str()? {
         "text" => Some(EngineEvent::AssistantText {
             text: b.get("text")?.as_str()?.to_string(),
@@ -95,6 +105,7 @@ fn assistant_block(b: &Value) -> Option<EngineEvent> {
             id: str_field(b, "id"),
             tool: str_field(b, "name"),
             input: b.get("input").cloned().unwrap_or(Value::Null),
+            parent: parent.map(str::to_string),
         }),
         _ => None,
     }

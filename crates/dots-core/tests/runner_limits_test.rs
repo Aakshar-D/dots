@@ -320,6 +320,7 @@ async fn a_background_run_rejected_after_a_tool_call_fails_with_the_note() {
             id: "t1".into(),
             tool: "Read".into(),
             input: json!({"file_path": "a.txt"}),
+            parent: None,
         }),
         Step::Emit(rejected()),
         Step::Emit(EngineEvent::Failed {
