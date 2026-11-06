@@ -165,7 +165,10 @@ async fn happy_path_streams_events_and_passes_prompt_on_stdin() {
     assert!(args.windows(2).any(|w| w == ["--setting-sources", ""]));
     assert!(!args.iter().any(|a| a.contains("Do the thing")));
     assert_eq!(rec["mcp_tool_timeout"], "310000");
-    assert_eq!(PathBuf::from(rec["cwd"].as_str().unwrap()), e.dir.path());
+    assert_eq!(
+        PathBuf::from(rec["cwd"].as_str().unwrap()),
+        common::as_cwd(e.dir.path())
+    );
     assert!(
         std::fs::read_dir(&e.scratch).unwrap().next().is_none(),
         "mcp config not cleaned up"

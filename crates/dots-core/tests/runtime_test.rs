@@ -722,7 +722,10 @@ async fn chat_follow_up_restores_a_removed_worktree_at_the_same_path() {
     assert_eq!(follow.branch, first.branch);
     assert_eq!(follow.base_commit, first.base_commit);
     let rec: Value = serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
-    assert_eq!(PathBuf::from(rec["cwd"].as_str().unwrap()), path);
+    assert_eq!(
+        PathBuf::from(rec["cwd"].as_str().unwrap()),
+        common::as_cwd(&path)
+    );
     let args: Vec<String> = serde_json::from_value(rec["args"].clone()).unwrap();
     assert!(args.windows(2).any(|w| w == ["--resume", "fake-session"]));
     t.rt.shutdown();

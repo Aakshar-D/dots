@@ -395,7 +395,10 @@ async fn a_follow_up_fails_before_the_engine_starts_when_its_row_names_no_dots_w
     wait_status(t.rt.store(), &follow.id, RunStatus::Succeeded, 15).await;
     let rec: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&started).unwrap()).unwrap();
-    assert_eq!(PathBuf::from(rec["cwd"].as_str().unwrap()), ws);
+    assert_eq!(
+        PathBuf::from(rec["cwd"].as_str().unwrap()),
+        common::as_cwd(&ws)
+    );
     t.rt.shutdown();
 }
 

@@ -192,3 +192,29 @@ fn a_bare_command_is_found_on_the_path_with_its_extension() {
         dir.path().join("npx.cmd")
     );
 }
+
+#[cfg(not(windows))]
+#[test]
+fn a_bare_command_is_found_on_the_path() {
+    use dots_core::mcp::resolve_program;
+    use std::path::PathBuf;
+
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("npx"), "").unwrap();
+    std::fs::write(other.path().join("npx"), "").unwrap();
+    let path = std::env::join_paths([dir.path(), other.path()]).unwrap();
+
+    // The first folder with a match wins, as the shell finds a program.
+    assert_eq!(
+        resolve_program("npx", Some(&path), None),
+        dir.path().join("npx")
+    );
+    // A command with a folder, or one not found, is left as written.
+    for command in ["./npx", "/usr/bin/x", "missing"] {
+        assert_eq!(
+            resolve_program(command, Some(&path), None),
+            PathBuf::from(command)
+        );
+    }
+}

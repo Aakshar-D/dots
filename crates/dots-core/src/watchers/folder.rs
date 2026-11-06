@@ -137,6 +137,14 @@ pub(crate) fn start(
     if !root.is_dir() {
         return Err(Failure::Permanent(folder_gone(&config.path)));
     }
+    // macOS reports the folder's real path (`/private/var/...` for `/var/...`); events are put
+    // back under the folder as the watcher names it.
+    let real_root = if cfg!(target_os = "macos") {
+        std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone())
+    } else {
+        root.clone()
+    };
+    let named_root = root.clone();
     let (tx, mut rx) = mpsc::unbounded_channel::<(Seen, PathBuf)>();
     let dot_id = watcher.dot_id.clone();
     let mut os = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -147,8 +155,8 @@ pub(crate) fn start(
         if acting.is_acting(&dot_id, clock.now()) {
             return;
         }
-        for item in seen(&event.kind, &event.paths) {
-            let _ = tx.send(item);
+        for (kind, path) in seen(&event.kind, &event.paths) {
+            let _ = tx.send((kind, as_named(&named_root, &real_root, path)));
         }
     })
     .map_err(|e| Failure::Transient(format!("Could not watch {}: {e}", config.path)))?;
@@ -257,6 +265,17 @@ fn settle(
     }
 }
 
+/// `path` under `named` when it is under `real`, the same folder spelled another way.
+fn as_named(named: &Path, real: &Path, path: PathBuf) -> PathBuf {
+    if real == named || path.starts_with(named) {
+        return path;
+    }
+    match path.strip_prefix(real) {
+        Ok(rest) => named.join(rest),
+        Err(_) => path,
+    }
+}
+
 /// The run's payload for a settled path, unless the skip list, the subfolder rule, the pattern
 /// or the watcher's events leave it out.
 fn payload(
@@ -288,6 +307,24 @@ fn payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_event_under_the_real_path_is_put_under_the_named_folder() {
+        let named = Path::new("/var/w");
+        let real = Path::new("/private/var/w");
+        assert_eq!(
+            as_named(named, real, PathBuf::from("/private/var/w/a/b.txt")),
+            PathBuf::from("/var/w/a/b.txt")
+        );
+        assert_eq!(
+            as_named(named, real, PathBuf::from("/var/w/c.txt")),
+            PathBuf::from("/var/w/c.txt")
+        );
+        assert_eq!(
+            as_named(named, named, PathBuf::from("/elsewhere/d.txt")),
+            PathBuf::from("/elsewhere/d.txt")
+        );
+    }
 
     /// Deferred minor: a settled file reported again unchanged is dropped whatever the OS
     /// called it (a sync engine's replace can read as a creation).

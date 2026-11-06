@@ -178,8 +178,11 @@ async fn a_proposal_id_is_no_path() {
     let (_dir, _store, apps) = fixture().await;
     let (item, config) = apps.get("expenses").await.unwrap();
     let id = format!("../{}/code/{}", item.id, config.version);
-    // The folder is there: only the id check keeps the app's code out of the card.
-    assert!(apps.proposed_dir(&id).is_dir());
+    // The folder is there: only the id check keeps the app's code out of the card. (Windows
+    // reads `..` without looking; elsewhere `..` needs the proposals folder to exist first.)
+    if cfg!(windows) {
+        assert!(apps.proposed_dir(&id).is_dir());
+    }
     assert!(matches!(
         apps.proposal_files(&id).await,
         Err(Error::NotFound(_))
