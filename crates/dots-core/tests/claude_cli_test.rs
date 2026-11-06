@@ -43,8 +43,39 @@ fn parses_init_text_and_tool_use() {
             id: "toolu_1".into(),
             tool: "Bash".into(),
             input: json!({"command": "git status", "description": "Check"}),
+            parent: None,
         }]
     );
+}
+
+#[test]
+fn a_helpers_call_names_the_call_that_started_it() {
+    // A `Task` helper's TodoWrite (run plan spec section 3): its line carries the helper's call.
+    let helper = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_2","name":"TodoWrite","input":{"todos":[{"content":"Read the logs","status":"in_progress","activeForm":"Reading the logs"}]}}]},"parent_tool_use_id":"toolu_task"}"#;
+    assert_eq!(
+        parse_line(helper),
+        vec![EngineEvent::ToolCall {
+            id: "toolu_2".into(),
+            tool: "TodoWrite".into(),
+            input: json!({"todos": [{"content": "Read the logs", "status": "in_progress", "activeForm": "Reading the logs"}]}),
+            parent: Some("toolu_task".into()),
+        }]
+    );
+    // The dot's own call: `null`, or no field, names no helper, and the stored event has no key.
+    let own = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{}}]},"parent_tool_use_id":null}"#;
+    let events = parse_line(own);
+    assert!(matches!(
+        &events[..],
+        [EngineEvent::ToolCall { parent: None, .. }]
+    ));
+    let stored = serde_json::to_value(&events[0]).unwrap();
+    assert!(stored.get("parent").is_none(), "{stored}");
+    // An event stored before the field existed still reads.
+    let old: EngineEvent = serde_json::from_value(
+        json!({"kind": "tool_call", "id": "t", "tool": "Read", "input": {}}),
+    )
+    .unwrap();
+    assert!(matches!(old, EngineEvent::ToolCall { parent: None, .. }));
 }
 
 #[test]

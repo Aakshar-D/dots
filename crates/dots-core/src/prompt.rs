@@ -33,6 +33,12 @@ pub const CHAT_SUMMARY_RULE: &str = "- When you ran your instructions or changed
     a short summary: what you did, what changed, and what needs human review. Otherwise your \
     answer is your reply.\n";
 
+/// The standing rule that asks a Claude-engine dot to keep its plan where the person sees it
+/// (run plan spec section 5): the conversation shows its latest to-do list as the run's plan.
+pub const PLAN_RULE: &str = "- For a task of several steps, keep a short to-do list with \
+    TodoWrite and update it as each step starts and ends: the person sees it as your plan. \
+    Skip it for a quick answer.\n";
+
 /// The run carries a message the person typed in a chat, not one Dots wrote for them.
 pub fn is_typed(run: &Run) -> bool {
     run.trigger == TriggerKind::Chat
@@ -383,6 +389,10 @@ pub fn build_prompt_full(
     out.push_str(
         "- If a tool call is queued for human approval, do not retry it; finish the remaining work.\n",
     );
+    // Only the `claude` CLI has TodoWrite, and only a policy that does not deny it lets it run.
+    if dot.spec.engine == EngineKind::Claude && dot.spec.policy.plumbing_allowed("TodoWrite") {
+        out.push_str(PLAN_RULE);
+    }
     if typed {
         out.push_str(CHAT_SUMMARY_RULE);
     } else {

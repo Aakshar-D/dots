@@ -325,6 +325,9 @@ export const RunEventData = z.discriminatedUnion("kind", [
     id: z.string(),
     tool: z.string(),
     input: z.unknown(),
+    // The helper's call (the claude CLI's Task or Agent tool) that made this call; absent for
+    // the dot's own calls and from events stored before it existed.
+    parent: z.string().optional(),
   }),
   z.strictObject({
     kind: z.literal("tool_result"),

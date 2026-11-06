@@ -58,6 +58,7 @@ impl Session {
             id: call.id.clone(),
             tool: APP_POLICY.to_string(),
             input: checked.clone(),
+            parent: None,
         };
         if !self.emit(event).await {
             return None;
