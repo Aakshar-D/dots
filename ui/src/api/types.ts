@@ -335,6 +335,9 @@ export const RunEventData = z.discriminatedUnion("kind", [
     id: z.string(),
     tool: z.string(),
     input: z.unknown(),
+    // The helper's call (the claude CLI's Task or Agent tool) that made this call; absent for
+    // the dot's own calls and from events stored before it existed.
+    parent: z.string().optional(),
   }),
   z.strictObject({
     kind: z.literal("tool_result"),
@@ -450,6 +453,40 @@ export const IntentFields = z.strictObject({
   due_date: nullable(z.string()),
   urgent: z.boolean(),
   dot_id: nullable(z.string()),
+});
+
+// Search (search spec section 3): what a hit is, which says where it opens.
+export const SearchKind = z.enum(["chat", "reply", "note", "memory", "intent", "topic", "file"]);
+// What the search box asks: the text as typed, only hits of `kinds` (empty is every kind), of
+// one dot, and at most `limit`.
+export const SearchQuery = z.strictObject({
+  text: z.string(),
+  kinds: z.array(SearchKind),
+  dot_id: nullable(z.string()),
+  limit: nullable(z.number()),
+});
+// Where a hit opens: a chat topic on the home, a run's own page, a dot's conversation (a note of
+// Dots' own), a memory in its dot's Memory tab, or a goal on the Intents screen.
+export const SearchTarget = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("topic"),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+    run_id: nullable(z.string()),
+  }),
+  z.strictObject({ type: z.literal("run"), run_id: z.string() }),
+  z.strictObject({ type: z.literal("dot"), dot_id: z.string() }),
+  z.strictObject({ type: z.literal("memory"), dot_id: z.string(), memory_id: z.string() }),
+  z.strictObject({ type: z.literal("intent"), intent_id: z.string() }),
+]);
+// One hit. `snippet` is plain text with each matched word between U+E000 and U+E001.
+export const SearchHit = z.strictObject({
+  kind: SearchKind,
+  dot_id: nullable(z.string()),
+  dot_name: nullable(z.string()),
+  target: SearchTarget,
+  at: z.string(),
+  snippet: z.string(),
 });
 
 export const MemorySource = z.enum(["dot", "person"]);
@@ -2388,6 +2425,10 @@ export type Memory = z.infer<typeof Memory>;
 export type Intent = z.infer<typeof Intent>;
 export type IntentsView = z.infer<typeof IntentsView>;
 export type IntentFields = z.infer<typeof IntentFields>;
+export type SearchKind = z.infer<typeof SearchKind>;
+export type SearchQuery = z.infer<typeof SearchQuery>;
+export type SearchTarget = z.infer<typeof SearchTarget>;
+export type SearchHit = z.infer<typeof SearchHit>;
 export type WatcherKind = z.infer<typeof WatcherKind>;
 export type PausedReason = z.infer<typeof PausedReason>;
 export type FolderEvent = z.infer<typeof FolderEvent>;

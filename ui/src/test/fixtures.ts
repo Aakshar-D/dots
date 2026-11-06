@@ -255,6 +255,8 @@ export function installDefaults(): void {
   backend.on("memories_list", () => []);
   // No goals yet, and the person may change them.
   backend.on("intents_list", () => ({ intents: [], refusal: null }));
+  // A search finds nothing.
+  backend.on("search", () => []);
   backend.on("watchers_list", () => []);
   // Nothing is unread; looking at a dot and saying which one is viewed are taken.
   backend.on("unread_total", () => 0);

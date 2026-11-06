@@ -3541,6 +3541,24 @@ fn watch_viewing(store: Store, bus: Bus, viewing: Viewing, shutdown: Cancellatio
     });
 }
 
+/// Search (search spec 2026-11-06-search-design.md).
+impl Runtime {
+    /// The hits of `query` among the dots and goals of the workspace `workspace_id` of `scope`
+    /// (`personal` or an org id), best first; refused for a role that may not view it.
+    pub async fn search(
+        &self,
+        scope: &str,
+        workspace_id: &str,
+        query: &crate::search::SearchQuery,
+    ) -> Result<Vec<crate::search::SearchHit>> {
+        let org_id = org_of_scope(scope);
+        self.check_workspace(org_id, workspace_id).await?;
+        self.require_in(org_id, workspace_id, Permission::View)
+            .await?;
+        self.store.search(org_id, workspace_id, query).await
+    }
+}
+
 /// The person's goals (Intents). A goal lives in the account and workspace it was added in;
 /// changing one needs a role that may change goals there (`Permission::EditGoals`).
 impl Runtime {

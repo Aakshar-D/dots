@@ -16,7 +16,7 @@ use dots_core::model::{ApplyState, EngineKind, TriggerKind, WorkspaceMode};
 use dots_core::model::{Run, RunStatus};
 use dots_core::prompt::{
     build_prompt, build_prompt_full, context_tool_name, is_typed, recent_runs, PromptParts,
-    CHAT_SUMMARY_RULE, CONVERSATION, NO_INSTRUCTIONS_TOOL, RECENT_TEXT,
+    CHAT_SUMMARY_RULE, CONVERSATION, NO_INSTRUCTIONS_TOOL, PLAN_RULE, RECENT_TEXT,
 };
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
@@ -153,6 +153,29 @@ fn manual_prompt_has_instructions_trigger_and_rules() {
     assert!(p.contains("- payload: none"));
     assert!(p.contains("C:/ws/RUN1"));
     assert!(p.contains("do not retry it"));
+}
+
+#[test]
+fn a_claude_dot_is_asked_to_keep_its_plan_unless_its_policy_denies_todowrite() {
+    use dots_core::policy::{Action, Rule};
+    let run = fake_run(TriggerKind::Manual, None, None);
+    let mut dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    dot.spec.engine = EngineKind::Claude;
+    let p = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "", &[]);
+    assert!(p.contains(PLAN_RULE), "{p}");
+    assert!(p[p.find("## Standing rules").unwrap()..].contains("TodoWrite"));
+    // The local engine has no TodoWrite.
+    dot.spec.engine = EngineKind::Local;
+    let p = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "", &[]);
+    assert!(!p.contains("TodoWrite"), "{p}");
+    // A policy that denies it is not asked to call it.
+    dot.spec.engine = EngineKind::Claude;
+    dot.spec
+        .policy
+        .rules
+        .push(Rule::new("TodoWrite", Action::Deny));
+    let p = build_prompt(&dot, &run, Path::new("C:/ws"), at(), "", &[]);
+    assert!(!p.contains("TodoWrite"), "{p}");
 }
 
 #[test]

@@ -18,6 +18,7 @@ import type {
   Policy,
   Preset,
   Schedule,
+  SearchQuery,
   Settings,
   SetupProposal,
   SetupRequest,
@@ -537,6 +538,10 @@ export const commands = {
   memoryUpdate: (id: string, text: string | null, pinned: boolean | null) =>
     call(T.Memory, "memory_update", { id, text, pinned }),
   memoryDelete: (id: string) => call(nothing, "memory_delete", { id }),
+  /// The hits of `query` in the workspace `workspace` of `scope` ("personal" or an org id),
+  /// best first (search spec section 3).
+  search: (scope: string, workspace: string, query: SearchQuery) =>
+    call(T.SearchHit.array(), "search", { scope, workspace, query }),
   /// The goals of the workspace `workspace` of `scope` ("personal" or an org id), and why
   /// this PC may not change them (Intents).
   intentsList: (scope: string, workspace: string) =>
