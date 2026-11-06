@@ -46,6 +46,11 @@ async fn settings_round_trip() {
         quiet_limit_secs: 900,
         auto_archive_days: 7,
         default_model: "opus".into(),
+        auto_models: dots_core::auto_model::AutoModels {
+            small: "claude-haiku-4-5".into(),
+            standard: "sonnet".into(),
+            large: "opus".into(),
+        },
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);

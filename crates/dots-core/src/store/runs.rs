@@ -4,8 +4,8 @@ use sqlx::Row;
 
 use super::{opt_json, Store};
 use crate::model::{
-    Delivery, DeliveryCounts, EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind,
-    MAX_RESENDS, RESENT, RESENT_AFTER_RESTART,
+    Delivery, DeliveryCounts, EngineKind, ModelTier, NewRun, Run, RunEventRecord, RunStatus,
+    TriggerKind, MAX_RESENDS, RESENT, RESENT_AFTER_RESTART,
 };
 use crate::util::{new_id, now, timestamp};
 use crate::vault::redact::global;
@@ -16,7 +16,7 @@ pub(super) const RUN_COLUMNS: &str =
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
     tokens_cache_read, cost_usd, hold_released, quiet_since, quiet_limit_secs, \
-    quiet_stopped, delivered_at, undelivered_at, undelivered_reason, dismissed_at";
+    quiet_stopped, delivered_at, undelivered_at, undelivered_reason, dismissed_at, model,     model_tier, model_reason, model_fallback_from";
 
 /// The reason a run ended undelivered: the first non-empty line of its error, or `failed`.
 fn undelivered_reason(error: Option<&str>) -> String {
@@ -66,6 +66,13 @@ pub(super) fn run_from_row(row: &SqliteRow) -> Result<Run> {
             .try_get::<Option<i64>, _>("quiet_limit_secs")?
             .map(|n| n as u64),
         quiet_stopped: row.try_get::<i64, _>("quiet_stopped")? != 0,
+        model: row.try_get("model")?,
+        model_tier: row
+            .try_get::<Option<String>, _>("model_tier")?
+            .map(|t| ModelTier::parse(&t))
+            .transpose()?,
+        model_reason: row.try_get("model_reason")?,
+        model_fallback_from: row.try_get("model_fallback_from")?,
     })
 }
 
@@ -923,6 +930,29 @@ impl Store {
             .execute(&self.pool)
             .await?;
         self.get_run(id).await
+    }
+
+    /// Records the model the run's engine is started with, and Auto's pick when Auto made it
+    /// (auto model spec section 5): its tier, why, and the model tried first when the CLI could
+    /// not use that one.
+    pub async fn set_run_model(
+        &self,
+        id: &str,
+        model: &str,
+        auto: Option<(ModelTier, &str)>,
+        fallback_from: Option<&str>,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE runs SET model = ?, model_tier = ?, model_reason = ?,              model_fallback_from = ? WHERE id = ?",
+        )
+        .bind(model)
+        .bind(auto.map(|(tier, _)| tier.as_str()))
+        .bind(auto.map(|(_, reason)| reason))
+        .bind(fallback_from)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Records the quiet limit the run started with (stuck-run watchdog spec section 4.3).

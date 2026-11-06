@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::auto_model::AutoModels;
 use crate::model::{check_endpoint_url, MAX_QUIET_LIMIT_SECS, MIN_QUIET_LIMIT_SECS};
 use crate::models::DEFAULT_CLAUDE_MODEL;
 use crate::store::Store;
@@ -58,6 +59,8 @@ pub struct Settings {
     /// The model a new Claude dot starts with (model switcher spec section 2.2). Existing dots
     /// keep their own.
     pub default_model: String,
+    /// The model of each size Auto picks from (auto model spec section 3).
+    pub auto_models: AutoModels,
 }
 
 impl Default for Settings {
@@ -81,6 +84,7 @@ impl Default for Settings {
             quiet_limit_secs: 600,
             auto_archive_days: 30,
             default_model: DEFAULT_CLAUDE_MODEL.to_string(),
+            auto_models: AutoModels::default(),
         }
     }
 }
@@ -131,6 +135,7 @@ impl Settings {
         if self.default_model.trim().is_empty() {
             return invalid("default_model must not be empty");
         }
+        self.auto_models.validate()?;
         Ok(())
     }
 
