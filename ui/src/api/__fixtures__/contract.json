@@ -4,6 +4,7 @@
       {
         "approval_wait_secs": 240,
         "browser": false,
+        "check_results": true,
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,
@@ -810,6 +811,7 @@
     "run_now",
     "chat",
     "resend_run",
+    "result_check_fix",
     "attachment_add_path",
     "attachment_add_bytes",
     "attachment_remove",
@@ -1793,6 +1795,7 @@
   "Dot": {
     "approval_wait_secs": 240,
     "browser": false,
+    "check_results": true,
     "created_at": "2026-10-09T12:00:00.000Z",
     "enabled": true,
     "endpoint_url": null,
@@ -1974,6 +1977,7 @@
     "dot": {
       "approval_wait_secs": 240,
       "browser": false,
+      "check_results": true,
       "created_at": "2026-10-09T12:00:00.000Z",
       "enabled": true,
       "endpoint_url": null,
@@ -2156,6 +2160,15 @@
       "quiet_limit_secs": null,
       "quiet_since": null,
       "quiet_stopped": false,
+      "result_check": {
+        "concerns": [
+          "The summary says all tests pass, but two were skipped."
+        ],
+        "confidence": 0.7,
+        "model": "haiku",
+        "state": "done",
+        "verdict": "has_concerns"
+      },
       "retry_of": null,
       "reviewed_at": null,
       "root_run_id": "01J0RUN",
@@ -2192,6 +2205,7 @@
   "DotSpec": {
     "approval_wait_secs": 240,
     "browser": false,
+    "check_results": true,
     "enabled": true,
     "endpoint_url": "http://127.0.0.1:1234",
     "engine": "local",
@@ -2933,6 +2947,15 @@
         "quiet_limit_secs": null,
         "quiet_since": null,
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": null,
         "reviewed_at": null,
         "root_run_id": "01J0RUN",
@@ -2973,6 +2996,15 @@
         "quiet_limit_secs": null,
         "quiet_since": null,
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": null,
         "reviewed_at": null,
         "root_run_id": "01J0RUN",
@@ -4332,6 +4364,7 @@
   "NewDotSpec": {
     "approval_wait_secs": 240,
     "browser": false,
+    "check_results": true,
     "enabled": true,
     "endpoint_url": null,
     "engine": "claude",
@@ -4967,6 +5000,32 @@
       "role": "admin"
     }
   ],
+  "ResultCheck": [
+    {
+      "model": "haiku",
+      "state": "checking"
+    },
+    {
+      "concerns": [],
+      "confidence": null,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "looks_good"
+    },
+    {
+      "concerns": [
+        "No tests were run."
+      ],
+      "confidence": 0.9,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "failed_task"
+    },
+    {
+      "reason": "The check took too long.",
+      "state": "skipped"
+    }
+  ],
   "RosterEdit": [
     {
       "confirm_no_invite": false,
@@ -5043,6 +5102,15 @@
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5126,6 +5194,16 @@
     {
       "kind": "notice",
       "text": "skill pdf: folder not found"
+    },
+    {
+      "cache_read": 0,
+      "cost_usd": 0.002,
+      "kind": "result_check",
+      "model": "haiku",
+      "skipped": null,
+      "tokens_in": 900,
+      "tokens_out": 40,
+      "verdict": "looks_good"
     }
   ],
   "RunEventRecord": {
@@ -5164,6 +5242,15 @@
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5208,6 +5295,15 @@
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5243,6 +5339,15 @@
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5288,6 +5393,15 @@
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5355,6 +5469,15 @@
         "quiet_limit_secs": null,
         "quiet_since": null,
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": "01J0RUN",
         "reviewed_at": null,
         "root_run_id": "01J0RUN2",
@@ -5761,6 +5884,15 @@
         "quiet_limit_secs": null,
         "quiet_since": null,
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": null,
         "reviewed_at": null,
         "root_run_id": "01J0RUN3",
@@ -5815,6 +5947,15 @@
         "quiet_limit_secs": 600,
         "quiet_since": "2026-10-20T09:10:00Z",
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": null,
         "reviewed_at": null,
         "root_run_id": "01J0RUN4",
@@ -6291,6 +6432,8 @@
     "auto_archive_days": 30,
     "auto_install_updates": false,
     "autostart": true,
+    "check_results": true,
+    "checker_model": "haiku",
     "claude_path": null,
     "default_model": "sonnet",
     "edge_path": null,
@@ -6315,6 +6458,8 @@
       "auto_archive_days": 30,
       "auto_install_updates": false,
       "autostart": true,
+      "check_results": true,
+      "checker_model": "haiku",
       "claude_path": null,
       "default_model": "sonnet",
       "edge_path": null,
@@ -6381,6 +6526,7 @@
       "dot": {
         "approval_wait_secs": 240,
         "browser": false,
+        "check_results": true,
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,
@@ -6551,6 +6697,7 @@
       "dot": {
         "approval_wait_secs": 240,
         "browser": false,
+        "check_results": true,
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,

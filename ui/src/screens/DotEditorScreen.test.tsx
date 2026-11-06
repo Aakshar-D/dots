@@ -368,6 +368,19 @@ describe("the dot editor, stored dot", () => {
     ]);
   });
 
+  it("switches the result check off for this dot", async () => {
+    stored();
+    const { user } = renderApp(path);
+    const box = await screen.findByLabelText("Check its results");
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_dot")).toEqual([
+      { id: dot.id, spec: { ...specOf(dot), check_results: false } },
+    ]);
+  });
+
   it("shows the core's refusal when a save fails", async () => {
     stored();
     backend.on("update_dot", () => {

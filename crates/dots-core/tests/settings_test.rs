@@ -22,6 +22,7 @@ async fn an_empty_table_gives_the_defaults() {
     assert_eq!(s.quiet_limit_secs, 600);
     assert_eq!(s.auto_archive_days, 30);
     assert_eq!(s.default_model, "sonnet");
+    assert_eq!(s.checker_model, "haiku");
 }
 
 #[tokio::test]
@@ -46,6 +47,8 @@ async fn settings_round_trip() {
         quiet_limit_secs: 900,
         auto_archive_days: 7,
         default_model: "opus".into(),
+        check_results: false,
+        checker_model: "sonnet".into(),
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
@@ -73,6 +76,7 @@ async fn bad_and_unknown_rows_are_ignored_one_by_one() {
         ("claude_path", "\"\""),
         ("tested_claude_version", "\"\""),
         ("default_model", "\"\""),
+        ("checker_model", "\"\""),
     ] {
         sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
             .bind(k)

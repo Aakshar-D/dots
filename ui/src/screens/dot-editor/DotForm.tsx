@@ -290,6 +290,22 @@ export function DotForm(props: {
             </datalist>
           </Field>
         )}
+        {spec.engine === "claude" && (
+          <>
+            <div className="flex items-center gap-2">
+              <Switch
+                id="dot-check-results"
+                checked={spec.check_results}
+                onCheckedChange={(v) => set("check_results", v)}
+              />
+              <Label htmlFor="dot-check-results">Check its results</Label>
+            </div>
+            <p className="-mt-2 text-xs text-muted-foreground">
+              A quick automatic second look at each answer before it reaches you, while Check
+              every result is on in Settings.
+            </p>
+          </>
+        )}
       </Section>
 
       <Section title="Workspace">

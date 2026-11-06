@@ -113,6 +113,7 @@ command_list![
     run_now,
     chat,
     resend_run,
+    result_check_fix,
     attachment_add_path,
     attachment_add_bytes,
     attachment_remove,

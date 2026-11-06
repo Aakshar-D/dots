@@ -36,6 +36,7 @@ type Errors = {
   quiet?: string;
   archive?: string;
   model?: string;
+  checker?: string;
 };
 
 /// The Settings tabs, in the order they are listed; each id is its URL, `/settings/<id>`.
@@ -64,6 +65,7 @@ const ERROR_TAB: Record<keyof Errors, TabId> = {
   global: "instructions",
   share: "claude",
   model: "claude",
+  checker: "claude",
 };
 
 /// The most days the idle-topic setting takes (`settings::MAX_AUTO_ARCHIVE_DAYS`).
@@ -88,6 +90,7 @@ export function settingsErrors(
         | "quiet_limit_secs"
         | "auto_archive_days"
         | "default_model"
+        | "checker_model"
       >
     >,
 ): Errors {
@@ -117,6 +120,9 @@ export function settingsErrors(
   }
   if (draft.default_model !== undefined && draft.default_model.trim() === "") {
     errors.model = "Name the model new dots start with.";
+  }
+  if (draft.checker_model !== undefined && draft.checker_model.trim() === "") {
+    errors.checker = "Name the model that checks results.";
   }
   return errors;
 }
@@ -463,6 +469,38 @@ function Form({
                 if (declined) save.reset();
               }}
             />
+          </Field>
+        </Section>
+
+        <Section title="Result check">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="settings-check-results"
+              checked={draft.check_results}
+              onCheckedChange={(check_results) => set({ check_results })}
+            />
+            <Label htmlFor="settings-check-results">Check every result</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Before a Claude dot's answer reaches you, a quick second look checks it did what was
+            asked and flags concerns. It has no tools, takes a few seconds, and its usage counts
+            toward the run. Short replies, local-model dots and team workflow steps are not
+            checked. A dot can turn it off in its editor.
+          </p>
+          <Field
+            label="Checker model"
+            htmlFor="settings-checker-model"
+            error={tried ? errors.checker : undefined}
+          >
+            <ModelPicker
+              id="settings-checker-model"
+              value={draft.checker_model}
+              onChange={(checker_model) => set({ checker_model })}
+              options={claudeModels.options}
+            />
+            <p className="text-xs text-muted-foreground">
+              Haiku is the cheapest and fast enough for a second look.
+            </p>
           </Field>
         </Section>
 

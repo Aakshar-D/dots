@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use crate::approvals::grant_key;
 use crate::checkins::{CheckIns, Tool as CheckInTool};
 use crate::delivery::{wait_reason, WaitFacts};
+use crate::engine::claude::once::OnceUsage;
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
 use crate::limits::{is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
@@ -23,6 +24,7 @@ use crate::model::{
     TriggerKind, WorkspaceMode,
 };
 use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
+use crate::result_check::{CheckEvent, ResultCheck, ResultChecker};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::store::Store;
 use crate::util::{ct_eq, new_token};
@@ -166,6 +168,9 @@ pub struct Runner {
     /// Claude's usage limits (usage and limits spec section 4), set once by the runtime
     /// (`set_limits`). Without them no run is held.
     limits: OnceLock<Arc<Limits>>,
+    /// What gives a succeeded Claude run's answer its result check (result check spec), set
+    /// once by the runtime (`set_checker`). Without one no run is checked.
+    checker: OnceLock<Arc<dyn ResultChecker>>,
 }
 
 impl Runner {
@@ -196,7 +201,13 @@ impl Runner {
             watcher_files: OnceLock::new(),
             chat_files: OnceLock::new(),
             limits: OnceLock::new(),
+            checker: OnceLock::new(),
         })
+    }
+
+    /// What checks the runs' answers (result check spec). Set once, before any run starts.
+    pub fn set_checker(&self, checker: Arc<dyn ResultChecker>) {
+        let _ = self.checker.set(checker);
     }
 
     /// The usage limits the dispatcher asks before it starts a queued run. Set once, before
@@ -943,6 +954,9 @@ impl Runner {
         };
         // Whatever happened, never leave an engine running unsupervised.
         cancel.cancel();
+        if result.is_ok() {
+            self.start_check(&run_id).await;
+        }
         if let Err(e) = result {
             tracing::warn!(run = %run_id, "run failed: {e}");
             if let Err(e2) = self.store.expire_pending_for_run(&run_id).await {
@@ -1777,6 +1791,17 @@ impl Runner {
             self.finish_workspace(run, &ws_dot, step.as_ref(), &prepared, summary.as_deref())
                 .await;
         }
+        // A succeeded answer that gets a result check is stored as being checked before it is
+        // announced as ended, so whoever waits for the check (the notification) knows from the
+        // first announcement.
+        if status == RunStatus::Succeeded {
+            if let Some(model) = self.check_model(&dot, run, summary.as_deref()).await {
+                let checking = ResultCheck::Checking { model };
+                if let Err(e) = self.store.set_result_check(&run.id, Some(&checking)).await {
+                    tracing::warn!(run = %run.id, "marking the result check failed: {e}");
+                }
+            }
+        }
         let finished = self
             .store
             .finish_run_with(
@@ -1797,6 +1822,196 @@ impl Runner {
         }
         self.emit_run(&finished);
         Ok(())
+    }
+
+    /// The model a result check of this run's answer uses, `None` when it gets no check
+    /// (`result_check::should_check`, or no checker, or the settings cannot be read).
+    async fn check_model(&self, dot: &Dot, run: &Run, summary: Option<&str>) -> Option<String> {
+        self.checker.get()?;
+        let settings = match self.store.get_settings().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "reading the settings for a result check failed: {e}");
+                return None;
+            }
+        };
+        crate::result_check::should_check(
+            settings.check_results,
+            dot,
+            run,
+            RunStatus::Succeeded,
+            summary,
+        )
+        .ok()?;
+        Some(settings.checker_model)
+    }
+
+    /// Starts the result check of the run, when it ended succeeded and is marked as being
+    /// checked. The check runs on its own: the runner does not wait for it.
+    async fn start_check(self: &Arc<Self>, run_id: &str) {
+        let Some(checker) = self.checker.get().cloned() else {
+            return;
+        };
+        let run = match self.store.get_run(run_id).await {
+            Ok(run) => run,
+            Err(e) => {
+                tracing::warn!(run = %run_id, "reading the run to check failed: {e}");
+                return;
+            }
+        };
+        let Some(ResultCheck::Checking { model }) = run.result_check.clone() else {
+            return;
+        };
+        let this = self.clone();
+        tokio::spawn(async move {
+            this.check_result(checker, run, model).await;
+        });
+    }
+
+    /// Checks the run's answer and stores the verdict, or why there is none (result check spec
+    /// section 3). What the checker used is added to the run's usage and recorded as a
+    /// `result_check` event. A flagged answer leaves an Inbox note. Nothing here changes how the
+    /// run ended; every failure is logged and leaves the check skipped.
+    async fn check_result(&self, checker: Arc<dyn ResultChecker>, run: Run, model: String) {
+        let (check, usage) = self.ask_checker(checker, &run, &model).await;
+        let usage = usage.unwrap_or_default();
+        let (verdict, skipped) = match &check {
+            ResultCheck::Done { verdict, .. } => (Some(*verdict), None),
+            ResultCheck::Skipped { reason } => (None, Some(reason.clone())),
+            ResultCheck::Checking { .. } => (None, None),
+        };
+        if usage.tokens_in > 0 || usage.tokens_out > 0 || usage.cost_usd.is_some() {
+            let added = self
+                .store
+                .add_usage(
+                    &run.id,
+                    usage.tokens_in as i64,
+                    usage.tokens_out as i64,
+                    usage.cache_read as i64,
+                    usage.cost_usd,
+                )
+                .await;
+            if let Err(e) = added {
+                tracing::warn!(run = %run.id, "adding the result check's usage failed: {e}");
+            }
+        }
+        let event = CheckEvent {
+            kind: crate::result_check::EVENT_KIND.to_string(),
+            model: model.clone(),
+            verdict,
+            skipped,
+            tokens_in: usage.tokens_in,
+            tokens_out: usage.tokens_out,
+            cache_read: usage.cache_read,
+            cost_usd: usage.cost_usd,
+        };
+        let recorded = match serde_json::to_value(&event) {
+            Ok(data) => {
+                self.store
+                    .append_event(&run.id, crate::result_check::EVENT_KIND, &data)
+                    .await
+            }
+            Err(e) => Err(e.into()),
+        };
+        match recorded {
+            Ok(rec) => {
+                let _ = self.bus.send(RuntimeEvent::RunEvent { event: rec });
+            }
+            Err(e) => tracing::warn!(run = %run.id, "recording the result check failed: {e}"),
+        }
+        // The note first: whoever sees the verdict finds the note there too.
+        if let Some(text) = crate::result_check::note_text(&check) {
+            match self.store.add_note(&run.dot_id, Some(&run.id), &text).await {
+                Ok(message) => {
+                    let _ = self.bus.send(RuntimeEvent::MessagePosted { message });
+                }
+                Err(e) => tracing::warn!(run = %run.id, "leaving the check's note failed: {e}"),
+            }
+        }
+        match self.store.set_result_check(&run.id, Some(&check)).await {
+            Ok(row) => self.emit_run(&row),
+            Err(e) => {
+                tracing::warn!(run = %run.id, "storing the result check failed: {e}");
+            }
+        }
+    }
+
+    /// Asks `checker` about the run's answer: the verdict, or why there is none, and what the
+    /// checker used. Never longer than `CHECK_LIMIT` (and a little to end the CLI).
+    async fn ask_checker(
+        &self,
+        checker: Arc<dyn ResultChecker>,
+        run: &Run,
+        model: &str,
+    ) -> (ResultCheck, Option<OnceUsage>) {
+        let skipped = |reason: &str| ResultCheck::Skipped {
+            reason: reason.to_string(),
+        };
+        let answer = run.summary.clone().unwrap_or_default();
+        let dot = match self.store.get_dot(&run.dot_id).await {
+            Ok(dot) => dot,
+            Err(e) => return (skipped(&format!("The dot could not be read: {e}")), None),
+        };
+        let task = crate::result_check::task_text(&dot, run);
+        let diff = self.worktree_changes(run).await;
+        let id = crate::util::new_id();
+        let nonce = &id[id.len().saturating_sub(10)..];
+        let prompt = crate::result_check::build_prompt(&task, &answer, diff.as_deref(), nonce);
+        let limit = crate::result_check::CHECK_LIMIT + Duration::from_secs(5);
+        // On a task of its own, so a checker that panics leaves a skipped check, not one that
+        // never ends.
+        let owned_model = model.to_string();
+        let mut asking = tokio::spawn(async move {
+            checker
+                .ask(
+                    &owned_model,
+                    crate::result_check::CHECKER_INSTRUCTIONS,
+                    &prompt,
+                )
+                .await
+        });
+        let asked = tokio::time::timeout(limit, &mut asking).await;
+        if asked.is_err() {
+            asking.abort();
+        }
+        match asked {
+            Err(_) => (skipped("The check took too long."), None),
+            Ok(Err(_)) => (skipped("The checker stopped unexpectedly."), None),
+            Ok(Ok(Err(reason))) => (skipped(&reason), None),
+            Ok(Ok(Ok(reply))) => match crate::result_check::parse_verdict(&reply.text) {
+                Some(parsed) => (
+                    ResultCheck::Done {
+                        model: model.to_string(),
+                        verdict: parsed.verdict,
+                        concerns: parsed.concerns,
+                        confidence: parsed.confidence,
+                    },
+                    reply.usage,
+                ),
+                None => (
+                    skipped("The checker's answer could not be read."),
+                    reply.usage,
+                ),
+            },
+        }
+    }
+
+    /// A summary of what a worktree run changed, for the checker; `None` for a folder run, a
+    /// worktree that is gone or unchanged, or one whose changes cannot be read.
+    async fn worktree_changes(&self, run: &Run) -> Option<String> {
+        let prepared = Prepared::from_run(run).filter(|p| p.branch.is_some())?;
+        let base = prepared.base_commit.clone()?;
+        self.workspaces.check_owned(&prepared).ok()?;
+        if !prepared.path.is_dir() {
+            return None;
+        }
+        match crate::workspace::diff(&prepared.path, &base).await {
+            Ok(diff) => crate::result_check::diff_summary(&diff),
+            Err(e) => {
+                tracing::warn!(run = %run.id, "reading the changes to check failed: {e}");
+                None
+            }
+        }
     }
 
     /// Sets (`since`) or clears the run's quiet mark and announces it: a `RunQuiet` and the

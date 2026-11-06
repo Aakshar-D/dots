@@ -28,6 +28,7 @@ use dots_core::managed_policy::ManagedPolicy;
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
+use dots_core::result_check::{CheckEvent, ResultCheck, Verdict};
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
@@ -574,7 +575,37 @@ fn run() -> Run {
         dismissed_at: None,
         delivery: Some(dots_core::model::Delivery::Delivered),
         wait_reason: None,
+        result_check: Some(ResultCheck::Done {
+            model: "haiku".into(),
+            verdict: Verdict::HasConcerns,
+            concerns: vec!["The summary says all tests pass, but two were skipped.".into()],
+            confidence: Some(0.7),
+        }),
     }
+}
+
+/// Every state of a result check (result check spec).
+fn result_checks() -> Value {
+    to([
+        ResultCheck::Checking {
+            model: "haiku".into(),
+        },
+        ResultCheck::Done {
+            model: "haiku".into(),
+            verdict: Verdict::LooksGood,
+            concerns: vec![],
+            confidence: None,
+        },
+        ResultCheck::Done {
+            model: "haiku".into(),
+            verdict: Verdict::FailedTask,
+            concerns: vec!["No tests were run.".into()],
+            confidence: Some(0.9),
+        },
+        ResultCheck::Skipped {
+            reason: "The check took too long.".into(),
+        },
+    ])
 }
 
 /// A chat message that did not get there.
@@ -856,7 +887,23 @@ fn engine_events() -> Value {
             sample.kind()
         );
     }
-    to(samples)
+    let mut events = to(samples);
+    // Not an engine's event: the result check's record, with what the checker used.
+    let checked = CheckEvent {
+        kind: dots_core::result_check::EVENT_KIND.into(),
+        model: "haiku".into(),
+        verdict: Some(Verdict::LooksGood),
+        skipped: None,
+        tokens_in: 900,
+        tokens_out: 40,
+        cache_read: 0,
+        cost_usd: Some(0.002),
+    };
+    events
+        .as_array_mut()
+        .expect("the samples are a list")
+        .push(to(checked));
+    events
 }
 
 /// One schedule of every rule kind, with every kind of bound. The `every` without an anchor is
@@ -1904,6 +1951,7 @@ pub fn samples() -> Value {
     send_later_samples(&mut samples);
     attachments_samples(&mut samples);
     intents_samples(&mut samples);
+    samples["ResultCheck"] = result_checks();
     samples
 }
 

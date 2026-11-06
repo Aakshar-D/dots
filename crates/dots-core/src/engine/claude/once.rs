@@ -173,17 +173,43 @@ enum End {
     TimedOut,
 }
 
-/// What the output said: the result's text, the error, and the last assistant text.
+/// What the output said: the result's text, the error, the last assistant text and the usage
+/// the CLI reported last.
 #[derive(Default)]
 struct Read {
     answer: Option<String>,
     failure: Option<String>,
     last_text: Option<String>,
+    usage: Option<OnceUsage>,
+}
+
+/// What a request used, as the CLI's result reported it (`EngineEvent::Usage`).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct OnceUsage {
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cache_read: u64,
+    pub cost_usd: Option<f64>,
+}
+
+/// An answer with what it used; `usage` is `None` when the CLI reported none.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OnceAnswer {
+    pub text: String,
+    pub usage: Option<OnceUsage>,
 }
 
 /// Runs the request and returns the answer: the result's text, else the last assistant text.
 /// Cancelling `cancel`, or `limit` passing, ends the CLI and everything it started.
 pub async fn ask_once(req: &Once<'_>, cancel: &CancellationToken) -> Result<String, OnceFailure> {
+    ask_once_with_usage(req, cancel).await.map(|a| a.text)
+}
+
+/// `ask_once`, with the usage the CLI reported for the request.
+pub async fn ask_once_with_usage(
+    req: &Once<'_>,
+    cancel: &CancellationToken,
+) -> Result<OnceAnswer, OnceFailure> {
     let mut cmd = Command::new(req.program);
     crate::vault::child_env::start_clean(&mut cmd, crate::vault::child_env::Child::Cli);
     cmd.args(once_args(req.model, req.system_prompt))
@@ -229,6 +255,19 @@ pub async fn ask_once(req: &Once<'_>, cancel: &CancellationToken) -> Result<Stri
                     EngineEvent::Finished { summary } => read.answer = Some(summary),
                     EngineEvent::Failed { error } => read.failure = Some(error),
                     EngineEvent::AssistantText { text } => read.last_text = Some(text),
+                    EngineEvent::Usage {
+                        tokens_in,
+                        tokens_out,
+                        cache_read,
+                        cost_usd,
+                    } => {
+                        read.usage = Some(OnceUsage {
+                            tokens_in,
+                            tokens_out,
+                            cache_read,
+                            cost_usd,
+                        })
+                    }
                     _ => {}
                 }
             }
@@ -272,9 +311,11 @@ pub async fn ask_once(req: &Once<'_>, cancel: &CancellationToken) -> Result<Stri
     if let Some(error) = read.failure {
         return Err(OnceFailure::Failed(error));
     }
+    let usage = read.usage;
+    let answered = |text: String| Ok(OnceAnswer { text, usage });
     match (read.answer, read.last_text) {
-        (Some(answer), _) if !answer.trim().is_empty() => Ok(answer),
-        (Some(_), last) => Ok(last.unwrap_or_default()),
+        (Some(answer), _) if !answer.trim().is_empty() => answered(answer),
+        (Some(_), last) => answered(last.unwrap_or_default()),
         (None, _) => {
             let code = status
                 .and_then(|s| s.code())

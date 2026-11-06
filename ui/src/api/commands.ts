@@ -278,6 +278,9 @@ export const commands = {
     call(nothing, "conversation_file_reveal", { dotId, rootRunIds, path }),
   /// Send again: a failed chat message, queued once more in its topic.
   resendRun: (runId: string) => call(T.Run, "resend_run", { runId }),
+  /// "Ask the dot to fix this": the run's result check concerns, sent as the next message of its
+  /// conversation (result check spec section 4).
+  resultCheckFix: (runId: string) => call(T.Run, "result_check_fix", { runId }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
   keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
   /// Send a chat message that did not get there again; rejects with `conflict` when it just did.

@@ -779,6 +779,13 @@ pub async fn chat(
         .await?)
 }
 
+/// "Ask the dot to fix this": sends the concerns of the run's result check to the dot as the
+/// next message of its conversation (result check spec section 4).
+#[tauri::command]
+pub async fn result_check_fix(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.ask_to_fix(&run_id).await?)
+}
+
 /// "Send again": queues a failed chat message once more in its topic.
 #[tauri::command]
 pub async fn resend_run(state: State<'_, AppState>, run_id: String) -> Res<Run> {
