@@ -340,11 +340,13 @@ impl KeychainProtector {
 #[cfg(target_os = "macos")]
 impl Protector for KeychainProtector {
     fn protect(&self, data: &[u8], entropy: &[u8]) -> Result<Vec<u8>> {
-        sealed::seal(&Self::key(true)?, data, entropy)
+        let key = Self::key(true)?;
+        sealed::seal(&key, data, entropy)
     }
 
     fn unprotect(&self, data: &[u8], entropy: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
-        sealed::open(&Self::key(false)?, data, entropy)
+        let key = Self::key(false)?;
+        sealed::open(&key, data, entropy)
     }
 }
 
