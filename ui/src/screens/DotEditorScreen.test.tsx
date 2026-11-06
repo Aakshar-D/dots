@@ -124,7 +124,9 @@ describe("the dot editor, new dot", () => {
     const model = await screen.findByLabelText("Model");
     await within(model).findByRole("option", { name: "Sonnet" });
     expect(model).toHaveValue("opus");
-    expect(screen.getByText(claudeModels[0].hint)).toBeVisible();
+    expect(screen.getByText(claudeModels.find((m) => m.id === "opus")!.hint)).toBeVisible();
+    // Auto is offered first.
+    expect(within(model).getAllByRole("option")[0]).toHaveTextContent("Auto");
     await user.selectOptions(model, "Haiku");
     await user.type(screen.getByLabelText("Name"), "nightly");
     await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
@@ -493,6 +495,10 @@ describe("the dot editor, stored dot", () => {
     expect(modelFor("claude", "local", "llama-3.1-8b", "opus")).toBe("opus");
     expect(modelFor("local", "claude", "llama-3.1-8b", "opus")).toBe("llama-3.1-8b");
     expect(modelFor("local", "claude", "claude-sonnet-4-5", "opus")).toBe("");
+    // Auto is for Claude dots only.
+    expect(modelFor("local", "claude", "auto", "opus")).toBe("");
+    expect(modelFor("claude", "local", "auto", "opus")).toBe("auto");
+    expect(modelFor("claude", "local", "llama", "auto")).toBe("auto");
     // No change of engine changes nothing.
     expect(modelFor("local", "local", "sonnet", "opus")).toBe("sonnet");
     expect(modelFor("claude", "claude", "llama", "opus")).toBe("llama");

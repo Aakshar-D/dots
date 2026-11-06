@@ -18,6 +18,7 @@ import type {
   Policy,
   Preset,
   Schedule,
+  SearchQuery,
   Settings,
   SetupProposal,
   SetupRequest,
@@ -540,6 +541,10 @@ export const commands = {
   memoryUpdate: (id: string, text: string | null, pinned: boolean | null) =>
     call(T.Memory, "memory_update", { id, text, pinned }),
   memoryDelete: (id: string) => call(nothing, "memory_delete", { id }),
+  /// The hits of `query` in the workspace `workspace` of `scope` ("personal" or an org id),
+  /// best first (search spec section 3).
+  search: (scope: string, workspace: string, query: SearchQuery) =>
+    call(T.SearchHit.array(), "search", { scope, workspace, query }),
   /// The goals of the workspace `workspace` of `scope` ("personal" or an org id), and why
   /// this PC may not change them (Intents).
   intentsList: (scope: string, workspace: string) =>
@@ -627,6 +632,10 @@ export const commands = {
   limitsGet: () => call(T.LimitsState, "limits_get"),
   usageSummary: (period: T.UsagePeriod) => call(T.UsageSummary, "usage_summary", { period }),
   runReleaseHold: (runId: string) => call(T.Run, "run_release_hold", { runId }),
+  /// Run once anyway: one of the person's own runs starts past the spending cap holding it.
+  runReleaseCap: (runId: string) => call(T.Run, "run_release_cap", { runId }),
+  /// Today's spend against the spending caps.
+  spendToday: () => call(T.SpendToday, "spend_today"),
 
   // Teams, their projects and workflows (teams spec section 10). A refusal carries the core's
   // sentence: kind `invalid` for a rule broken, `conflict` for a taken name or a state that

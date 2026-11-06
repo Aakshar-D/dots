@@ -24,6 +24,25 @@ str_enum!(TriggerKind {
     // A run a caller with an API key started through `/v1` (accounts spec §10).
     Api => "api",
 });
+// The size of model Auto picks for a run (auto model spec section 2): Haiku, Sonnet and Opus by
+// default, as Settings map them.
+str_enum!(ModelTier {
+    Small => "small",
+    Standard => "standard",
+    Large => "large",
+});
+
+impl ModelTier {
+    /// Small < Standard < Large.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Small => 0,
+            Self::Standard => 1,
+            Self::Large => 2,
+        }
+    }
+}
+
 str_enum!(RunStatus {
     Queued => "queued",
     Running => "running",
@@ -43,6 +62,8 @@ str_enum!(WaitReason {
     Updating => "updating",
     DotBusy => "dot_busy",
     Queued => "queued",
+    // A spending cap is reached (spend caps design); `Run::wait_detail` names it.
+    SpendCap => "spend_cap",
 });
 
 impl Delivery {
@@ -158,6 +179,10 @@ pub struct DotSpec {
     /// dot. A spec written before it existed reads as `None`.
     #[serde(default)]
     pub quiet_limit_secs: Option<u64>,
+    /// The dot's daily spending caps (spend caps design); none by default. A spec written
+    /// before they existed reads as none.
+    #[serde(default)]
+    pub spend_cap: crate::spend::DotCaps,
     /// The first prompt starts with the global instructions of Settings (context library spec
     /// section 2).
     #[serde(default = "yes")]
@@ -206,6 +231,7 @@ impl DotSpec {
             variables: Grants::default(),
             browser: false,
             quiet_limit_secs: None,
+            spend_cap: crate::spend::DotCaps::default(),
             use_global_instructions: true,
             use_user_settings: false,
             max_turns: 40,
@@ -236,6 +262,10 @@ impl DotSpec {
         }
         if self.model.trim().is_empty() {
             return invalid("model must not be empty");
+        }
+        // Auto picks among Claude models; a local endpoint has its own (auto model spec 1).
+        if self.engine == EngineKind::Local && crate::auto_model::is_auto(&self.model) {
+            return invalid("Auto is only for Claude dots: pick a model the endpoint lists.");
         }
         if self.workdir.trim().is_empty() {
             return invalid("workdir must not be empty");
@@ -268,6 +298,7 @@ impl DotSpec {
                 return invalid("quiet_limit_secs must be between 60 and 86400");
             }
         }
+        self.spend_cap.validate()?;
         self.policy.validate()?;
         // Whether the Library has each item is checked by the store when the dot is saved.
         self.uses.validate()?;
@@ -359,6 +390,28 @@ pub struct Run {
     /// Why a waiting run has not started. The store leaves it `None`; the runtime fills it.
     #[serde(default)]
     pub wait_reason: Option<WaitReason>,
+    /// The words for a `spend_cap` wait: "Scout reached its $2.00 daily cap". Filled with
+    /// `wait_reason`; `None` for every other reason.
+    #[serde(default)]
+    pub wait_detail: Option<String>,
+    /// The person let this run start once past a reached spending cap (**Run once anyway**,
+    /// spend caps design): no cap holds it back or stops it.
+    #[serde(default)]
+    pub cap_released: bool,
+    /// The model the run's engine was started with (auto model spec section 5); `None` before
+    /// it starts, and for a run from before migration 0038.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// The size Auto picked for the run; `None` when its dot has a model of its own.
+    #[serde(default)]
+    pub model_tier: Option<ModelTier>,
+    /// Why Auto picked it, in a few words ("code work: refactor").
+    #[serde(default)]
+    pub model_reason: Option<String>,
+    /// The model Auto picked first, when the CLI could not use it and the run was started
+    /// again with `model` (auto model spec section 4).
+    #[serde(default)]
+    pub model_fallback_from: Option<String>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -972,6 +1025,13 @@ pub enum HoldReason {
     /// on the account's member list. `text` says which. The run stays queued and goes when
     /// the access returns.
     Role { account: String, text: String },
+    /// A spending cap is reached (spend caps design): `text` names it ("Scout reached its $2.00
+    /// daily cap"), `scope` says whether the dot's own cap or the one for all dots. The run
+    /// starts after local midnight (the 1st for the monthly cap) or once the cap is raised.
+    SpendCap {
+        text: String,
+        scope: crate::spend::CapScope,
+    },
 }
 
 str_enum!(UsagePeriod { FiveHours => "five_hours", Week => "week", Month => "month" });

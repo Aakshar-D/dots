@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::auto_model::AutoModels;
 use crate::model::{check_endpoint_url, MAX_QUIET_LIMIT_SECS, MIN_QUIET_LIMIT_SECS};
 use crate::models::DEFAULT_CLAUDE_MODEL;
 use crate::store::Store;
@@ -58,6 +59,15 @@ pub struct Settings {
     /// The model a new Claude dot starts with (model switcher spec section 2.2). Existing dots
     /// keep their own.
     pub default_model: String,
+    /// The most every dot together may spend in a local day, in estimated API USD (spend caps
+    /// design); `None` is no cap.
+    pub spend_daily_usd: Option<f64>,
+    /// The most tokens (in + out) every dot together may use in a local day; `None` is no cap.
+    pub spend_daily_tokens: Option<u64>,
+    /// The most every dot together may spend in a local calendar month, in estimated API USD.
+    pub spend_monthly_usd: Option<f64>,
+    /// The model of each size Auto picks from (auto model spec section 3).
+    pub auto_models: AutoModels,
 }
 
 impl Default for Settings {
@@ -81,6 +91,10 @@ impl Default for Settings {
             quiet_limit_secs: 600,
             auto_archive_days: 30,
             default_model: DEFAULT_CLAUDE_MODEL.to_string(),
+            spend_daily_usd: None,
+            spend_daily_tokens: None,
+            spend_monthly_usd: None,
+            auto_models: AutoModels::default(),
         }
     }
 }
@@ -131,6 +145,8 @@ impl Settings {
         if self.default_model.trim().is_empty() {
             return invalid("default_model must not be empty");
         }
+        crate::spend::GlobalCaps::from(self).validate()?;
+        self.auto_models.validate()?;
         Ok(())
     }
 

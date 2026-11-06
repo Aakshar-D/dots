@@ -77,6 +77,10 @@ fn spec() -> DotSpec {
         "C:/dev/app",
     );
     s.schedule = Some(Schedule::cron("0 0 2 * * *"));
+    s.spend_cap = dots_core::spend::DotCaps {
+        daily_usd: Some(2.0),
+        daily_tokens: None,
+    };
     s.uses = Uses {
         mcp_servers: vec!["github".into()],
         skills: vec!["pdf".into()],
@@ -575,6 +579,12 @@ fn run() -> Run {
         dismissed_at: None,
         delivery: Some(dots_core::model::Delivery::Delivered),
         wait_reason: None,
+        wait_detail: None,
+        cap_released: false,
+        model: Some("sonnet".into()),
+        model_tier: Some(ModelTier::Standard),
+        model_reason: Some("code work: refactor".into()),
+        model_fallback_from: Some("opus".into()),
     }
 }
 
@@ -607,6 +617,61 @@ fn run_waiting() -> Run {
         delivery: Some(Delivery::Waiting),
         wait_reason: Some(WaitReason::Busy),
         ..run()
+    }
+}
+
+/// A chat message waiting for its dot's spending cap (spend caps design).
+fn run_capped() -> Run {
+    Run {
+        wait_reason: Some(WaitReason::SpendCap),
+        wait_detail: Some("nightly-tests reached its $2.00 daily cap".into()),
+        ..run_waiting()
+    }
+}
+
+/// Today's spend: every dot under a $10.00 daily cap at 85%, one dot at its own cap.
+fn spend_today() -> dots_core::spend::SpendToday {
+    use dots_core::spend::{DotCaps, DotSpend, GlobalCaps, Spend, SpendToday};
+    SpendToday {
+        day_start: "2026-10-08T23:00:00.000Z".into(),
+        day_end: "2026-10-09T23:00:00.000Z".into(),
+        month_start: "2026-09-30T23:00:00.000Z".into(),
+        today: Spend {
+            cost_usd: 8.5,
+            tokens: 1_250_000,
+        },
+        month: Spend {
+            cost_usd: 61.25,
+            tokens: 9_400_000,
+        },
+        caps: GlobalCaps {
+            daily_usd: Some(10.0),
+            daily_tokens: None,
+            monthly_usd: Some(200.0),
+        },
+        dots: vec![
+            DotSpend {
+                dot_id: "01J0DOT".into(),
+                dot_name: "nightly-tests".into(),
+                today: Spend {
+                    cost_usd: 2.0,
+                    tokens: 400_000,
+                },
+                caps: DotCaps {
+                    daily_usd: Some(2.0),
+                    daily_tokens: Some(1_000_000),
+                },
+            },
+            DotSpend {
+                dot_id: "01J0DOT2".into(),
+                dot_name: "local-summarizer".into(),
+                today: Spend {
+                    cost_usd: 0.0,
+                    tokens: 850_000,
+                },
+                caps: DotCaps::default(),
+            },
+        ],
     }
 }
 
@@ -680,6 +745,18 @@ fn held_runs() -> Vec<HeldRun> {
             reason: HoldReason::Role {
                 account: "Acme Engineering".into(),
                 text: "Acme Engineering: your role no longer allows running dots".into(),
+            },
+        },
+        HeldRun {
+            run_id: "01J0RUN6".into(),
+            dot_id: "01J0DOT".into(),
+            dot_name: "nightly-tests".into(),
+            trigger: TriggerKind::Chat,
+            queued_at: TS.into(),
+            starts_after: None,
+            reason: HoldReason::SpendCap {
+                text: "nightly-tests reached its $2.00 daily cap".into(),
+                scope: dots_core::spend::CapScope::Dot,
             },
         },
     ]
@@ -811,6 +888,8 @@ fn engine_events() -> Value {
             id: "t1".into(),
             tool: "Bash".into(),
             input: json!({"command": "cargo test"}),
+            // A helper's call names the call that started it; the dot's own has no key.
+            parent: Some("task-1".into()),
         },
         EngineEvent::ToolResult {
             id: "t1".into(),
@@ -1108,6 +1187,8 @@ pub fn samples() -> Value {
     let settings = Settings {
         local_endpoints: vec!["http://127.0.0.1:1234".into()],
         global_instructions: "Use British spelling.".into(),
+        spend_daily_usd: Some(10.0),
+        spend_monthly_usd: Some(200.0),
         ..Settings::default()
     };
     let mut samples = json!({
@@ -1373,6 +1454,13 @@ pub fn samples() -> Value {
     });
     samples["RunNotDelivered"] = to(run_not_delivered());
     samples["RunWaiting"] = to(run_waiting());
+    samples["RunCapped"] = to(run_capped());
+    // The spending caps' limits (spend caps design), past the `json!` macro's recursion limit.
+    samples["Limits"]["min_cap_usd"] = json!(dots_core::spend::MIN_CAP_USD);
+    samples["Limits"]["max_cap_usd"] = json!(dots_core::spend::MAX_CAP_USD);
+    samples["Limits"]["max_cap_tokens"] = json!(dots_core::spend::MAX_CAP_TOKENS);
+    samples["Limits"]["spend_warn_at"] = json!(dots_core::spend::WARN_AT);
+    samples["SpendToday"] = to(spend_today());
     samples["DeliveryCounts"] = to(DeliveryCounts {
         sent: 5,
         delivered: 4,
@@ -1614,9 +1702,10 @@ pub fn samples() -> Value {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
         npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
     });
-    // The Claude list, then a model a local endpoint lists (no hint).
+    // The Claude list (Auto first), then a model a local endpoint lists (no hint).
     samples["ModelOption"] = to({
-        let mut models = dots_core::models::claude_models();
+        let mut models = vec![dots_core::models::auto_option()];
+        models.extend(dots_core::models::claude_models());
         models.push(dots_core::models::ModelOption {
             id: "qwen2.5-coder-7b".into(),
             label: "qwen2.5-coder-7b".into(),
@@ -1912,6 +2001,7 @@ pub fn samples() -> Value {
     send_later_samples(&mut samples);
     attachments_samples(&mut samples);
     intents_samples(&mut samples);
+    search_samples(&mut samples);
     samples
 }
 
@@ -2122,6 +2212,73 @@ fn intents_samples(samples: &mut Value) {
             org_id: None,
             workspace_id: "default".into(),
         }));
+}
+
+/// Search (search spec section 3): what the search box asks, and a hit of each place one
+/// opens, the matched words between the snippet's marks.
+fn search_samples(samples: &mut Value) {
+    use dots_core::search::{SearchHit, SearchKind, SearchQuery, SearchTarget};
+
+    samples["SearchQuery"] = to(SearchQuery {
+        text: "lisbon ho".into(),
+        kinds: vec![SearchKind::Chat, SearchKind::Reply],
+        dot_id: Some("01J0DOT".into()),
+        limit: Some(30),
+    });
+    let mark = |w: &str| format!("\u{E000}{w}\u{E001}");
+    let hit = |kind, target, snippet: String| SearchHit {
+        kind,
+        dot_id: Some("01J0DOT".into()),
+        dot_name: Some("planner".into()),
+        target,
+        at: TS.into(),
+        snippet,
+    };
+    samples["SearchHit"] = to([
+        hit(
+            SearchKind::Chat,
+            SearchTarget::Topic {
+                dot_id: "01J0DOT".into(),
+                root_run_id: "01J0ROOT".into(),
+                run_id: Some("01J0RUN".into()),
+            },
+            format!("Plan the {} trip", mark("Lisbon")),
+        ),
+        hit(
+            SearchKind::Reply,
+            SearchTarget::Run {
+                run_id: "01J0RUN2".into(),
+            },
+            format!("…booked a {} hotel by the river", mark("Lisbon")),
+        ),
+        hit(
+            SearchKind::Note,
+            SearchTarget::Dot {
+                dot_id: "01J0DOT".into(),
+            },
+            format!("{} restarted", mark("Lisbon")),
+        ),
+        hit(
+            SearchKind::Memory,
+            SearchTarget::Memory {
+                dot_id: "01J0DOT".into(),
+                memory_id: "01J0MEM".into(),
+            },
+            format!("Likes {} in spring", mark("Lisbon")),
+        ),
+        SearchHit {
+            dot_id: None,
+            dot_name: None,
+            ..hit(
+                SearchKind::Intent,
+                SearchTarget::Intent {
+                    intent_id: "01J0GOAL1".into(),
+                },
+                format!("Book the {} venue", mark("Lisbon")),
+            )
+        },
+    ]);
+    samples["Enums"]["SearchKind"] = to(SearchKind::ALL);
 }
 
 /// Instructions a dot proposed (conversational chat spec section 4), with `status`.

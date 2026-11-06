@@ -63,7 +63,17 @@ export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unch
 // Whether a chat message reached its dot (delivery tracking spec section 3).
 export const Delivery = z.enum(["delivered", "waiting", "not_delivered"]);
 // Why a message is still waiting.
-export const WaitReason = z.enum(["busy", "usage_hold", "updating", "dot_busy", "queued"]);
+export const WaitReason = z.enum([
+  "busy",
+  "usage_hold",
+  "updating",
+  "dot_busy",
+  "queued",
+  "spend_cap",
+]);
+// The size of model Auto picks for a run (auto model spec section 2).
+export const ModelTier = z.enum(["small", "standard", "large"]);
+export type ModelTier = z.infer<typeof ModelTier>;
 
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
@@ -110,6 +120,14 @@ export const Uses = z.strictObject({
   apps: z.array(z.string()),
 });
 
+/// A dot's daily spending caps (spend caps design): estimated API USD and tokens (in + out)
+/// since local midnight; null is no cap.
+export const DotCaps = z.strictObject({
+  daily_usd: nullable(z.number()),
+  daily_tokens: nullable(z.number().int()),
+});
+export type DotCaps = z.infer<typeof DotCaps>;
+
 const dotSpecShape = {
   name: z.string(),
   instructions: z.string(),
@@ -132,6 +150,7 @@ const dotSpecShape = {
   approval_wait_secs: z.number().int(),
   // Quiet limit in seconds: null follows the app default, 0 is off, else 60 to 86400.
   quiet_limit_secs: nullable(z.number().int()),
+  spend_cap: DotCaps,
   enabled: z.boolean(),
 };
 export const DotSpec = z.strictObject(dotSpecShape);
@@ -196,6 +215,17 @@ const runShape = {
   dismissed_at: nullable(z.string()),
   delivery: nullable(Delivery),
   wait_reason: nullable(WaitReason),
+  // The words for a spend_cap wait ("Scout reached its $2.00 daily cap"); null otherwise.
+  wait_detail: nullable(z.string()),
+  // The person let it start once past a reached spending cap (Run once anyway).
+  cap_released: z.boolean(),
+  // The model the run's engine was started with; null before it starts.
+  model: nullable(z.string()),
+  // Auto's pick: the size and why ("code work: refactor"); null for a dot with its own model.
+  model_tier: nullable(ModelTier),
+  model_reason: nullable(z.string()),
+  // The model Auto tried first, when the CLI could not use it.
+  model_fallback_from: nullable(z.string()),
 };
 export const Run = z.strictObject(runShape);
 
@@ -304,7 +334,45 @@ export const UsageSummary = z.strictObject({
 export const HoldReason = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("usage") }),
   z.strictObject({ kind: z.literal("role"), account: z.string(), text: z.string() }),
+  // A spending cap is reached: the dot's own, or the one for all dots.
+  z.strictObject({
+    kind: z.literal("spend_cap"),
+    text: z.string(),
+    scope: z.enum(["dot", "all"]),
+  }),
 ]);
+
+// Spending caps (spend caps design). Cost is the estimated API cost the engine reported;
+// tokens are in + out.
+export const Spend = z.strictObject({
+  cost_usd: z.number(),
+  tokens: z.number().int(),
+});
+export const GlobalCaps = z.strictObject({
+  daily_usd: nullable(z.number()),
+  daily_tokens: nullable(z.number().int()),
+  monthly_usd: nullable(z.number()),
+});
+export const DotSpend = z.strictObject({
+  dot_id: z.string(),
+  dot_name: z.string(),
+  today: Spend,
+  caps: DotCaps,
+});
+// Today's spend (local midnight to local midnight) and this month's, against the caps.
+export const SpendToday = z.strictObject({
+  day_start: z.string(),
+  day_end: z.string(),
+  month_start: z.string(),
+  today: Spend,
+  month: Spend,
+  caps: GlobalCaps,
+  dots: z.array(DotSpend),
+});
+export type Spend = z.infer<typeof Spend>;
+export type GlobalCaps = z.infer<typeof GlobalCaps>;
+export type DotSpend = z.infer<typeof DotSpend>;
+export type SpendToday = z.infer<typeof SpendToday>;
 // A run held for Claude usage or a role; starts_after is null while held runs start one at a
 // time, and for a role hold.
 export const HeldRun = z.strictObject({
@@ -328,6 +396,9 @@ export const RunEventData = z.discriminatedUnion("kind", [
     id: z.string(),
     tool: z.string(),
     input: z.unknown(),
+    // The helper's call (the claude CLI's Task or Agent tool) that made this call; absent for
+    // the dot's own calls and from events stored before it existed.
+    parent: z.string().optional(),
   }),
   z.strictObject({
     kind: z.literal("tool_result"),
@@ -453,6 +524,40 @@ export const IntentFields = z.strictObject({
   due_date: nullable(z.string()),
   urgent: z.boolean(),
   dot_id: nullable(z.string()),
+});
+
+// Search (search spec section 3): what a hit is, which says where it opens.
+export const SearchKind = z.enum(["chat", "reply", "note", "memory", "intent", "topic", "file"]);
+// What the search box asks: the text as typed, only hits of `kinds` (empty is every kind), of
+// one dot, and at most `limit`.
+export const SearchQuery = z.strictObject({
+  text: z.string(),
+  kinds: z.array(SearchKind),
+  dot_id: nullable(z.string()),
+  limit: nullable(z.number()),
+});
+// Where a hit opens: a chat topic on the home, a run's own page, a dot's conversation (a note of
+// Dots' own), a memory in its dot's Memory tab, or a goal on the Intents screen.
+export const SearchTarget = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("topic"),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+    run_id: nullable(z.string()),
+  }),
+  z.strictObject({ type: z.literal("run"), run_id: z.string() }),
+  z.strictObject({ type: z.literal("dot"), dot_id: z.string() }),
+  z.strictObject({ type: z.literal("memory"), dot_id: z.string(), memory_id: z.string() }),
+  z.strictObject({ type: z.literal("intent"), intent_id: z.string() }),
+]);
+// One hit. `snippet` is plain text with each matched word between U+E000 and U+E001.
+export const SearchHit = z.strictObject({
+  kind: SearchKind,
+  dot_id: nullable(z.string()),
+  dot_name: nullable(z.string()),
+  target: SearchTarget,
+  at: z.string(),
+  snippet: z.string(),
 });
 
 export const MemorySource = z.enum(["dot", "person"]);
@@ -794,6 +899,16 @@ export const Settings = z.strictObject({
   auto_archive_days: z.number().int(),
   // The model a new Claude dot starts with (model switcher spec section 2.2).
   default_model: z.string(),
+  // Caps for all dots together (spend caps design); null is no cap.
+  spend_daily_usd: nullable(z.number()),
+  spend_daily_tokens: nullable(z.number().int()),
+  spend_monthly_usd: nullable(z.number()),
+  // The model of each size Auto picks from (auto model spec section 3).
+  auto_models: z.strictObject({
+    small: z.string(),
+    standard: z.string(),
+    large: z.string(),
+  }),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -2208,6 +2323,10 @@ export const LIMITS = {
   max_memories: 200,
   max_memory_text: 500,
   max_watcher_name: 80,
+  min_cap_usd: 0.01,
+  max_cap_usd: 100000,
+  max_cap_tokens: 10000000000,
+  spend_warn_at: 0.8,
 } as const;
 
 export type EngineKind = z.infer<typeof EngineKind>;
@@ -2386,6 +2505,10 @@ export type Memory = z.infer<typeof Memory>;
 export type Intent = z.infer<typeof Intent>;
 export type IntentsView = z.infer<typeof IntentsView>;
 export type IntentFields = z.infer<typeof IntentFields>;
+export type SearchKind = z.infer<typeof SearchKind>;
+export type SearchQuery = z.infer<typeof SearchQuery>;
+export type SearchTarget = z.infer<typeof SearchTarget>;
+export type SearchHit = z.infer<typeof SearchHit>;
 export type WatcherKind = z.infer<typeof WatcherKind>;
 export type PausedReason = z.infer<typeof PausedReason>;
 export type FolderEvent = z.infer<typeof FolderEvent>;

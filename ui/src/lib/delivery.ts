@@ -6,6 +6,7 @@ export const WAIT_REASON_TEXT: Record<NonNullable<Run["wait_reason"]>, string> =
   updating: "Dots is updating",
   dot_busy: "this dot is busy with another run",
   queued: "next in line",
+  spend_cap: "a spending cap is reached",
 };
 
 const MINUTE_MS = 60_000;
@@ -30,7 +31,7 @@ export function deliveryLine(run: Run, now: number): DeliveryLineInfo | null {
     if (minutes >= WAIT_SHOWN_MIN) {
       return {
         kind: "waiting",
-        text: `Waiting ${minutes} min · ${WAIT_REASON_TEXT[run.wait_reason]}`,
+        text: `Waiting ${minutes} min · ${run.wait_detail ?? WAIT_REASON_TEXT[run.wait_reason]}`,
       };
     }
   }

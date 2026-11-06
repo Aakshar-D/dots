@@ -27,6 +27,7 @@ import { InstructionsCard } from "@/components/InstructionsCard";
 import { MessageCard } from "@/components/MessageCard";
 import { Page } from "@/components/Page";
 import { ReviewActions } from "@/components/ReviewActions";
+import { CapActions } from "@/components/SpendCaps";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -154,8 +155,32 @@ function PausedWatcherRow({ item, actions }: { item: PausedWatcher; actions?: Re
 
 /// A background run held for Claude usage (usage and limits spec section 5): when it starts,
 /// and **Run anyway**. One held for a role says why and has no button: it goes when the role
-/// returns (members spec section 6.3).
+/// returns (members spec section 6.3). One held by a spending cap names the cap, with **Raise
+/// cap** and, for the person's own runs, **Run once anyway** (spend caps design).
 function HeldRunRow({ item, actions }: { item: HeldRun; actions?: ReactNode }) {
+  if (item.reason.kind === "spend_cap") {
+    return (
+      <li
+        aria-label={`${item.dot_name} run held`}
+        className="flex items-center gap-3 rounded-lg border p-3"
+      >
+        <Link to={`/runs/${item.run_id}`} className="min-w-0 flex-1 truncate hover:underline">
+          {item.dot_name} · {triggerLabel(item)} · {item.reason.text}
+        </Link>
+        <CapActions
+          runId={item.run_id}
+          dotId={item.dot_id}
+          trigger={item.trigger}
+          text={item.reason.text}
+        />
+        {actions}
+      </li>
+    );
+  }
+  return <UsageHeldRow item={item} actions={actions} />;
+}
+
+function UsageHeldRow({ item, actions }: { item: HeldRun; actions?: ReactNode }) {
   const qc = useQueryClient();
   const limits = useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data;
   const release = useMutation({
