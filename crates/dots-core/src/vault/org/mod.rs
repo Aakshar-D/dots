@@ -21,6 +21,8 @@ pub use members::{
 };
 #[cfg(windows)]
 pub use offline::Dpapi;
+#[cfg(target_os = "macos")]
+pub use offline::KeychainProtector;
 #[cfg(feature = "test-support")]
 pub use offline::TestProtector;
 pub use offline::{

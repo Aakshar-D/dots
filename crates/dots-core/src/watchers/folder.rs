@@ -68,6 +68,9 @@ enum Seen {
     Created,
     Changed,
     Removed,
+    /// One side of a rename the OS did not pair up (macOS): a creation when the path is there
+    /// afterwards, a deletion when it is not.
+    Renamed,
 }
 
 /// The kinds a notify event stands for, per path.
@@ -89,6 +92,7 @@ fn seen(kind: &EventKind, paths: &[PathBuf]) -> Vec<(Seen, PathBuf)> {
             }
             out
         }
+        EventKind::Modify(ModifyKind::Name(_)) => all(Seen::Renamed),
         _ => all(Seen::Changed),
     }
 }
@@ -137,6 +141,14 @@ pub(crate) fn start(
     if !root.is_dir() {
         return Err(Failure::Permanent(folder_gone(&config.path)));
     }
+    // macOS reports the folder's real path (`/private/var/...` for `/var/...`); events are put
+    // back under the folder as the watcher names it.
+    let real_root = if cfg!(target_os = "macos") {
+        std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone())
+    } else {
+        root.clone()
+    };
+    let named_root = root.clone();
     let (tx, mut rx) = mpsc::unbounded_channel::<(Seen, PathBuf)>();
     let dot_id = watcher.dot_id.clone();
     let mut os = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -147,8 +159,8 @@ pub(crate) fn start(
         if acting.is_acting(&dot_id, clock.now()) {
             return;
         }
-        for item in seen(&event.kind, &event.paths) {
-            let _ = tx.send(item);
+        for (kind, path) in seen(&event.kind, &event.paths) {
+            let _ = tx.send((kind, as_named(&named_root, &real_root, path)));
         }
     })
     .map_err(|e| Failure::Transient(format!("Could not watch {}: {e}", config.path)))?;
@@ -234,10 +246,12 @@ fn settle(
         }
         Ok(meta) => {
             let now = (meta.len(), modified(&meta));
-            let event = if first == Seen::Created {
-                FolderEvent::Created
-            } else {
-                FolderEvent::Changed
+            // macOS keeps a file's "created" flag on its later events: a file already reported
+            // and not deleted since is changed, not created again.
+            let created_again = cfg!(target_os = "macos") && reported.contains_key(path);
+            let event = match first {
+                Seen::Created | Seen::Renamed if !created_again => FolderEvent::Created,
+                _ => FolderEvent::Changed,
             };
             // Unchanged since it was last reported, whatever the OS called the event: a sync
             // engine's touch or replace (Review Focus 1).
@@ -248,12 +262,27 @@ fn settle(
             Some((event, Some(meta.len())))
         }
         Err(_) => {
-            reported.remove(path);
-            if folders.remove(path) || first == Seen::Created {
+            // On macOS a file's events keep its "created" flag to the end, so a reported file
+            // that is gone was deleted, whatever the first event said.
+            let was_reported = reported.remove(path).is_some();
+            let created_and_gone =
+                first == Seen::Created && !(cfg!(target_os = "macos") && was_reported);
+            if folders.remove(path) || created_and_gone {
                 return None;
             }
             Some((FolderEvent::Deleted, None))
         }
+    }
+}
+
+/// `path` under `named` when it is under `real`, the same folder spelled another way.
+fn as_named(named: &Path, real: &Path, path: PathBuf) -> PathBuf {
+    if real == named || path.starts_with(named) {
+        return path;
+    }
+    match path.strip_prefix(real) {
+        Ok(rest) => named.join(rest),
+        Err(_) => path,
     }
 }
 
@@ -288,6 +317,24 @@ fn payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_event_under_the_real_path_is_put_under_the_named_folder() {
+        let named = Path::new("/var/w");
+        let real = Path::new("/private/var/w");
+        assert_eq!(
+            as_named(named, real, PathBuf::from("/private/var/w/a/b.txt")),
+            PathBuf::from("/var/w/a/b.txt")
+        );
+        assert_eq!(
+            as_named(named, real, PathBuf::from("/var/w/c.txt")),
+            PathBuf::from("/var/w/c.txt")
+        );
+        assert_eq!(
+            as_named(named, named, PathBuf::from("/elsewhere/d.txt")),
+            PathBuf::from("/elsewhere/d.txt")
+        );
+    }
 
     /// Deferred minor: a settled file reported again unchanged is dropped whatever the OS
     /// called it (a sync engine's replace can read as a creation).

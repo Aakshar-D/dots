@@ -47,6 +47,8 @@ Once, before the first release:
    `git fetch origin`, `git tag v0.2.0 origin/master` and `git push origin v0.2.0`. A plain tag that is not on `master` fails the workflow.
 4. The workflow builds the installer, signs it in a step of its own, and publishes the release "Dots 0.2.0" with the installer, its `.sig` and `latest.json`. Its notes are GitHub's generated notes; edit them on GitHub if you like. Within six hours every running Dots offers the update.
 
+The same workflow also builds the macOS app on a Mac runner: one universal build for Apple silicon and Intel Macs, published as `Dots_<version>_universal.dmg` beside the installer, with `Dots_<version>_universal.app.tar.gz` and its `.sig` for the updater (`latest.json` then offers the update to `darwin-aarch64` and `darwin-x86_64` too). If the Mac build fails, the release is published without the Mac files, and the Windows copies are not held back. The Mac app is not code-signed or notarized until the repository has the Apple secrets (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, and for notarization `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`); until then, the first time a person opens it they right-click it and choose **Open**, or run `xattr -d com.apple.quarantine /Applications/Dots.app`. To check the Mac build without releasing, run the **Mac check** workflow (`.github/workflows/mac-check.yml`); a pull request that changes the Rust code runs it too.
+
 If the workflow failed after it created the release, delete that release and its tag on GitHub, fix the cause, and tag again.
 
 ## Trying a version before it reaches everyone

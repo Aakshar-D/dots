@@ -60,6 +60,10 @@ qrcode = { version = "0.14.1", default-features = false }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
+# The login keychain holds the vault's secrets on macOS, as Credential Manager does on Windows.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
 [dev-dependencies]
 dots-core = { path = ".", features = ["test-support"] }
 futures-util = "0.3"

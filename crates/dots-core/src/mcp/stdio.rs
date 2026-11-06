@@ -334,8 +334,8 @@ async fn monitor(
 
 /// The program to start for `command`. On Windows a bare name (no folder, no extension) is
 /// looked up as cmd.exe does: in each folder of `path`, with each extension of `pathext`
-/// (default `.COM;.EXE;.BAT;.CMD`), so `npx` finds `npx.cmd`. Otherwise, and when nothing is
-/// found, the command as written.
+/// (default `.COM;.EXE;.BAT;.CMD`), so `npx` finds `npx.cmd`. Elsewhere a bare name is looked
+/// up in each folder of `path`. When nothing is found, the command as written.
 pub fn resolve_program(command: &str, path: Option<&OsStr>, pathext: Option<&OsStr>) -> PathBuf {
     #[cfg(windows)]
     {
@@ -355,8 +355,20 @@ pub fn resolve_program(command: &str, path: Option<&OsStr>, pathext: Option<&OsS
             }
         }
     }
+    // Elsewhere a bare name (no folder) is the first file of that name in a folder of `path`,
+    // as the shell finds it; Dots asks whether it is there before it starts it.
     #[cfg(not(windows))]
-    let _ = (path, pathext);
+    {
+        let _ = pathext;
+        if !command.is_empty() && !command.contains('/') {
+            for dir in path.map(std::env::split_paths).into_iter().flatten() {
+                let candidate = dir.join(command);
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
     PathBuf::from(command)
 }
 

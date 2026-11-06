@@ -438,8 +438,11 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
 pub fn run() {
     // First thing: a panic while Tauri builds the app or runs `setup` is logged too, and a
     // release build has no console to read it from.
+    // Before any thread starts: on macOS, the login shell's PATH (`adopt_login_shell_path`).
+    #[cfg(target_os = "macos")]
+    startup::adopt_login_shell_path();
     let early = startup::early_log_dir(
-        std::env::var_os("LOCALAPPDATA"),
+        startup::local_data_from_env(std::env::var_os("LOCALAPPDATA"), std::env::var_os("HOME")),
         std::env::var_os(startup::DATA_DIR_ENV),
     );
     let panics_logged = early.is_some();
@@ -507,6 +510,11 @@ pub fn run() {
             if let Some(rt) = state::runtime_of(app.try_state::<AppState>().as_deref()) {
                 rt.shutdown();
             }
+        }
+        // On macOS a click on the Dock icon brings back a window that closing hid.
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen { .. } = event {
+            show_main(app);
         }
     });
 }

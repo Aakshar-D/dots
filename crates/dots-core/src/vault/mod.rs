@@ -16,6 +16,8 @@ pub mod upgrade;
 pub use entries::{EntryKind, EnvEntry};
 pub use grants::{Consumer, Grants};
 pub use resolve::{org_removed_text, DotScope, Missing, Resolved, Unresolved, ValueSource};
+#[cfg(target_os = "macos")]
+pub use secrets::MacKeychain;
 #[cfg(windows)]
 pub use secrets::WindowsCredentials;
 pub use secrets::{os_secrets, MemorySecrets, SecretStore, MAX_SECRET_BYTES};

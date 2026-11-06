@@ -2,7 +2,8 @@
 # tag must be v<version> and agree with every version field (tools/release/release.mjs). A
 # tag with a suffix, such as v0.2.0-rc.1, is published as a prerelease, which no installed
 # Dots takes on its own; any other tag must be on master. The person steps are in
-# docs/releasing.md.
+# docs/releasing.md. Windows is the release; the macOS app joins it when its build succeeds
+# (docs/superpowers/specs/2026-11-06-mac-build-design.md).
 name: Release
 
 on:
@@ -54,8 +55,81 @@ jobs:
           bun run typecheck
           bun run test
 
-  release:
+  # The macOS app, one universal build for Apple silicon and Intel Macs: a .dmg to install from
+  # and the updater's .app.tar.gz with its signature. Without the Apple secrets the app is not
+  # code-signed or notarized, and a person opens it the first time with right-click → Open (or
+  # `xattr -d com.apple.quarantine /Applications/Dots.app`). A failure here never holds back
+  # the Windows release: it is published without the Mac files.
+  macos:
     needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check the tag against the version fields
+        shell: bash
+        run: node tools/release/release.mjs check "$GITHUB_REF_NAME"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install the UI's packages
+        run: bun install --frozen-lockfile
+
+      # Code signing and notarization only when the repository has the Apple secrets; an
+      # empty one is unset, so Tauri does not try to sign with nothing.
+      - name: Build the app
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then unset "$name"; fi
+          done
+          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            echo "release: no Apple signing secrets; the macOS app is not code-signed"
+          fi
+          bun run tauri build -- --locked --target universal-apple-darwin --bundles app,dmg
+
+      # The updater replaces the app from a .tar.gz of Dots.app, signed with the updater key
+      # as the Windows installer is.
+      - name: Pack and sign the updater archive
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          bundle="target/universal-apple-darwin/release/bundle"
+          mkdir mac-release
+          tar -czf "mac-release/Dots_${version}_universal.app.tar.gz" -C "$bundle/macos" Dots.app
+          cp "$bundle"/dmg/*.dmg "mac-release/Dots_${version}_universal.dmg"
+          bun run tauri signer sign --app-version "$version" "mac-release/Dots_${version}_universal.app.tar.gz"
+          test -s "mac-release/Dots_${version}_universal.app.tar.gz.sig"
+          ls -l mac-release
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mac-release
+          path: mac-release/
+          if-no-files-found: error
+
+  release:
+    needs: [test, macos]
+    # Runs when the tests passed, whether or not the macOS build did.
+    if: ${{ !cancelled() && needs.test.result == 'success' }}
     runs-on: windows-latest
     steps:
       # The whole history, so that a release tag can be checked against master.
@@ -121,18 +195,35 @@ jobs:
           bun run tauri signer sign --app-version "$version" "$installer"
           test -s "$installer.sig"
 
+      - name: Fetch the macOS app
+        if: ${{ needs.macos.result == 'success' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: mac-release
+          path: mac-release
+
       - name: Publish the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          MAC_RESULT: ${{ needs.macos.result }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           installer="target/release/bundle/nsis/Dots_${version}_x64-setup.exe"
+          # The macOS files, when their build succeeded; the manifest then offers Macs the update.
+          mac_archive=""
+          mac_files=()
+          if [ "$MAC_RESULT" = "success" ]; then
+            mac_archive="mac-release/Dots_${version}_universal.app.tar.gz"
+            mac_files=("$mac_archive" "$mac_archive.sig" "mac-release/Dots_${version}_universal.dmg")
+          else
+            echo "release: the macOS build gave '$MAC_RESULT'; publishing without the Mac files"
+          fi
           # The notes the Releases page wrote for this version, when the tag has them; else
           # GitHub's own. Notes left on master by an earlier version are never used.
           node tools/release/release.mjs notes "$GITHUB_REF_NAME" release-notes.md release-notes.out.md
-          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json release-notes.out.md
+          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json release-notes.out.md $mac_archive
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
           if [ -s release-notes.out.md ]; then
@@ -141,4 +232,4 @@ jobs:
             flags+=(--generate-notes)
           fi
           gh release create "$GITHUB_REF_NAME" --title "Dots $version" \
-            "${flags[@]}" "$installer" "$installer.sig" latest.json
+            "${flags[@]}" "$installer" "$installer.sig" latest.json "${mac_files[@]}"

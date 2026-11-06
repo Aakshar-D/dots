@@ -1,13 +1,11 @@
 mod common;
 
-use std::path::Path;
-#[cfg(not(windows))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::fake_dot;
 use dots_core::engine::claude::args::{
-    build_args, cli_settings, gateway_entry, mcp_config, resolve_claude, resolve_in_dirs,
-    settings_path,
+    build_args, cli_settings, gateway_entry, mac_claude_dirs, mcp_config, resolve_claude,
+    resolve_in_dirs, settings_path,
 };
 use dots_core::engine::claude::parse::parse_line;
 use dots_core::engine::{EngineEvent, RunContext};
@@ -386,6 +384,22 @@ fn resolve_finds_plain_binary_on_path() {
     assert_eq!(
         resolve_in_dirs(vec![PathBuf::from(tmp.path())]),
         Some(tmp.path().join("claude"))
+    );
+}
+
+#[test]
+fn macos_also_looks_where_the_cli_installers_put_it() {
+    let dirs = mac_claude_dirs(Some(PathBuf::from("/Users/u")));
+    assert_eq!(dirs[0], PathBuf::from("/Users/u/.local/bin"));
+    assert!(dirs.contains(&PathBuf::from("/Users/u/.claude/local")));
+    assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+    assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+    assert_eq!(
+        mac_claude_dirs(None),
+        [
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin")
+        ]
     );
 }
 

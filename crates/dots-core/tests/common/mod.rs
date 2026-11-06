@@ -15,7 +15,7 @@ pub mod secrets;
 pub mod tz;
 pub mod watchers;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use dots_core::model::{Dot, DotSpec, Run, RunStatus, TriggerKind, WorkspaceMode};
 use dots_core::store::Store;
@@ -208,5 +208,14 @@ impl Drop for Lingerer {
         while self.alive() && std::time::Instant::now() < deadline {
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+}
+
+/// `path` as a process started in it reports its working folder: on macOS the temp folder under
+/// `/var` is really under `/private/var`.
+pub fn as_cwd(path: &Path) -> PathBuf {
+    match path.strip_prefix("/var") {
+        Ok(rest) if cfg!(target_os = "macos") => Path::new("/private/var").join(rest),
+        _ => path.to_path_buf(),
     }
 }
