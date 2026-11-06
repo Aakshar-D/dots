@@ -46,6 +46,8 @@ async fn settings_round_trip() {
         quiet_limit_secs: 900,
         auto_archive_days: 7,
         default_model: "opus".into(),
+        phone_enabled: true,
+        phone_port: 50001,
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
@@ -53,6 +55,21 @@ async fn settings_round_trip() {
     let back = Settings::default();
     store.put_settings(&back).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), back);
+}
+
+#[test]
+fn the_phone_view_is_off_by_default_on_a_port_of_its_own() {
+    let s = Settings::default();
+    assert!(!s.phone_enabled);
+    assert_ne!(s.phone_port, s.port);
+    assert!(s.validate().is_ok());
+    for bad in [0, s.port] {
+        let s = Settings {
+            phone_port: bad,
+            ..Settings::default()
+        };
+        assert!(s.validate().is_err(), "{bad}");
+    }
 }
 
 #[tokio::test]
