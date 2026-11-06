@@ -31,6 +31,11 @@ const empty: Inbox = {
   app_reviews: [],
   team_scope: [],
   workflows: [],
+  not_delivered: [],
+  back: [],
+  snoozed: [],
+  done: [],
+  hidden_messages: [],
 };
 const only = (workflows: WaitingWorkflowRun[]): Inbox => ({ ...empty, workflows });
 
@@ -94,6 +99,7 @@ describe("waiting workflow runs in the Inbox", () => {
       watchers: [],
       held: [],
       team_scope: [],
+      not_delivered: [],
     }));
     renderApp("/inbox");
     await screen.findByRole("region", { name: "Workflows" });

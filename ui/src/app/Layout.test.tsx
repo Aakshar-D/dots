@@ -36,9 +36,9 @@ describe("the app frame", () => {
     }
     // One pending approval, one run to review, one schedule that needs attention, one MCP
     // server whose tools changed, one paused watcher, the runs held for Claude usage, one
-    // proposed instruction, one app sent for review, one team with a member outside its
-    // workspace and one waiting workflow run.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
+    // proposed instruction, one app sent for review, one team scope problem, one message that
+    // did not reach its dot and one waiting workflow run.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
   });
 
   it("counts approvals of the dots of an account that is not the current one", async () => {
@@ -47,7 +47,7 @@ describe("the app frame", () => {
     backend.on("dot_overview", () => [{ ...idle, dot: { ...sample.dot, org_id: null } }]);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
   });
 
   // The rail's count is the tray's (core `inbox_count`): every list of the Inbox, the held runs
@@ -66,6 +66,12 @@ describe("the app frame", () => {
       app_reviews: copies(box.app_reviews, 8),
       team_scope: copies(box.team_scope, 9),
       workflows: copies(box.workflows, 10),
+      not_delivered: copies(box.not_delivered, 11),
+      // Marks, not items: the items stay in (or leave) their sections.
+      back: [],
+      snoozed: [],
+      done: [],
+      hidden_messages: [],
     };
     // Every kind the Inbox has is here: a new one fails this test until the rail counts it.
     expect(Object.keys(full).sort()).toEqual(Object.keys(InboxSchema.shape).sort());
@@ -79,8 +85,8 @@ describe("the app frame", () => {
     ]);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    // 1 + 2 + 3 + 4 + 5 + 1 (held) + 7 + 8 + 9 + 10, and 2 messages.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 52 waiting" })).toBeVisible();
+    // 1 + 2 + 3 + 4 + 5 + 1 (held) + 7 + 8 + 9 + 10 + 11, and 2 messages.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 63 waiting" })).toBeVisible();
   });
 
   it("shows why Dots could not start instead of the app", async () => {
@@ -96,6 +102,7 @@ describe("the app frame", () => {
   });
 
   it("warns about a taken port, a missing or untested CLI, a restart and a pause", async () => {
+    backend.on("dot_overview", () => [idle]);
     backend.on("status", () => ({
       ...quietStatus,
       server_error: "could not listen on 127.0.0.1:47321: address in use",
@@ -112,6 +119,19 @@ describe("the app frame", () => {
     expect(screen.getAllByRole("link", { name: "Open Settings" })).toHaveLength(2);
   });
 
+  it("keeps the untested-CLI banner away until the person has a dot", async () => {
+    backend.on("status", () => ({
+      ...quietStatus,
+      claude: { ...quietStatus.claude, version: "2.1.300", mismatch: true },
+    }));
+    backend.on("dot_overview", () => []);
+    const { listening } = renderApp("/dots");
+    await screen.findByRole("navigation", { name: "Main" });
+    await listening();
+    await waitFor(() => expect(backend.callsTo("dot_overview").length).toBeGreaterThan(0));
+    expect(screen.queryByText(/has not been tested/)).toBeNull();
+  });
+
   it("shows no banner when nothing needs attention", async () => {
     const { listening } = renderApp("/dots");
     await screen.findByRole("navigation", { name: "Main" });
@@ -125,6 +145,7 @@ describe("the app frame", () => {
       ...quietStatus,
       claude: { ...quietStatus.claude, version: "2.1.300", mismatch: true },
     };
+    backend.on("dot_overview", () => [idle]);
     backend.on("status", () => untested);
     backend.on("mark_claude_tested", () => quietStatus);
     const { user } = renderApp("/dots");
@@ -139,6 +160,7 @@ describe("the app frame", () => {
       claude: { ...quietStatus.claude, version: "2.1.300", mismatch: true },
     };
     let now: Status = untested;
+    backend.on("dot_overview", () => [idle]);
     backend.on("status", () => now);
     backend.on("mark_claude_tested", () => (now = quietStatus));
     const { user, listening, queryClient } = renderApp("/dots");
@@ -396,7 +418,7 @@ describe("the app frame", () => {
     await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
-    expect(await within(nav).findByRole("link", { name: "Inbox, 10 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
   });
 });
 

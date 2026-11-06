@@ -1,4 +1,4 @@
-import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
 import type { InstructionProposal, Message, Run, RunEventRecord, WorkflowRun } from "@/api/types";
@@ -8,11 +8,14 @@ import { ApprovalCard } from "@/components/ApprovalCard";
 import { LoadErrors } from "@/components/ErrorNote";
 import { InstructionsCard } from "@/components/InstructionsCard";
 import { Failure, Transcript } from "@/components/Transcript";
-import { isActive } from "@/lib/home-topics";
-import { eventsQuery, keys } from "@/lib/query";
+import { Button } from "@/components/ui/button";
+import { isActive, type Topic } from "@/lib/home-topics";
+import { errorMessage } from "@/lib/notify";
+import { eventsQuery, invalidate, keys } from "@/lib/query";
 import { WorkflowCard } from "@/screens/teams/run/WorkflowCard";
 
 import { QuietCard } from "./QuietCard";
+import { MoveToTopic } from "./TopicTools";
 
 /// Runs of one topic as the chat shows a thread: each run's message, the dot's text, its tool
 /// steps, check-ins and browser calls (`Transcript`), the calls Dots performed, a card per
@@ -27,6 +30,8 @@ export function TopicRuns(props: {
   proposals?: InstructionProposal[];
   /// The workflow runs started by runs of the conversation, by the run that started each.
   workflows?: ReadonlyMap<string, WorkflowRun[]>;
+  /// The dot's topics a message the person sent may be moved to; none offers no move.
+  moveTargets?: Topic[];
 }) {
   const { runs, dotName } = props;
   const qc = useQueryClient();
@@ -65,6 +70,14 @@ export function TopicRuns(props: {
             ?.get(run.id)
             ?.map((workflowRun) => <WorkflowCard key={workflowRun.id} run={workflowRun} />)
         }
+        messageAction={
+          props.moveTargets &&
+          ((run) =>
+            // A topic's first message moves only with its whole topic (a merge).
+            run.id !== run.root_run_id && !isActive(run) ? (
+              <MoveToTopic run={run} topics={props.moveTargets!} />
+            ) : null)
+        }
       />
       <LoadErrors queries={[...events, ...approvals]} />
       <AppliedCalls approvals={asked} />
@@ -77,6 +90,43 @@ export function TopicRuns(props: {
         <InstructionsCard key={proposal.id} proposal={proposal} dotName={dotName} busy={busy} />
       ))}
       {failure && <Failure>{failure}</Failure>}
+      {/* A message that never got there has its own Retry on its delivery line instead. */}
+      {latest?.status === "failed" &&
+        latest.trigger === "chat" &&
+        latest.workflow_step_run_id === null &&
+        latest.delivery !== "not_delivered" && <SendAgain run={latest} />}
+    </div>
+  );
+}
+
+/// Send again (crash resend spec section 3.6): the failed message of the topic's last run,
+/// queued once more in the topic. The core refuses when the topic has moved on; its text shows.
+function SendAgain({ run }: { run: Run }) {
+  const qc = useQueryClient();
+  const send = useMutation({
+    mutationFn: commands.resendRun,
+    onSuccess: () => {
+      invalidate(qc, ["thread"]);
+      invalidate(qc, ["runs"]);
+      invalidate(qc, keys.overview);
+    },
+  });
+  return (
+    <div className="flex flex-col gap-1">
+      <Button
+        size="sm"
+        variant="outline"
+        className="self-start"
+        disabled={send.isPending}
+        onClick={() => send.mutate(run.id)}
+      >
+        Send again
+      </Button>
+      {send.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          {errorMessage(send.error)}
+        </p>
+      )}
     </div>
   );
 }

@@ -31,7 +31,7 @@ function settings(over: Partial<UpdateStatus> = {}) {
     return { settings: current, restart_required: false };
   });
   backend.on("update_status", () => status(over));
-  return renderApp("/settings");
+  return renderApp("/settings/updates");
 }
 
 const section = () => screen.findByRole("group", { name: "Updates" });
@@ -135,6 +135,8 @@ describe("the Updates settings", () => {
     await section();
     await user.click(await screen.findByRole("link", { name: "Home" }));
     await user.click(await screen.findByRole("link", { name: "Settings" }));
+    // The rail opens Settings at its first tab.
+    await user.click(await screen.findByRole("link", { name: "Updates" }));
     await section();
     expect(backend.callsTo("app_rendered")).toHaveLength(1);
   });

@@ -60,6 +60,11 @@ export const LibraryKind = z.enum(["mcp_server", "skill", "plugin", "context", "
 // accepted.
 export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unchecked"]);
 
+// Whether a chat message reached its dot (delivery tracking spec section 3).
+export const Delivery = z.enum(["delivered", "waiting", "not_delivered"]);
+// Why a message is still waiting.
+export const WaitReason = z.enum(["busy", "usage_hold", "updating", "dot_busy", "queued"]);
+
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
   preset: Preset,
@@ -179,8 +184,54 @@ const runShape = {
   quiet_limit_secs: nullable(z.number().int()),
   // The watchdog stopped the run for being quiet.
   quiet_stopped: z.boolean(),
+  // When the message reached its dot's engine; null until then.
+  delivered_at: nullable(z.string()),
+  // When the core marked it as not delivered, and why.
+  undelivered_at: nullable(z.string()),
+  undelivered_reason: nullable(z.string()),
+  // The person chose Retry or Discard for a message that did not get there.
+  dismissed_at: nullable(z.string()),
+  delivery: nullable(Delivery),
+  wait_reason: nullable(WaitReason),
 };
 export const Run = z.strictObject(runShape);
+
+/// Today's sends to a dot, whatever started them (resumes left out): sent, delivered and not
+/// delivered.
+export const DeliveryCounts = z.strictObject({
+  sent: z.number().int(),
+  delivered: z.number().int(),
+  not_delivered: z.number().int(),
+});
+export type DeliveryCounts = z.infer<typeof DeliveryCounts>;
+
+/// The hourly usage counts' state (usage counts spec): off until the person turns them on.
+export const UsageCountsState = z.strictObject({
+  enabled: z.boolean(),
+  url: z.string().nullable(),
+  install_id: z.string().nullable(),
+  first_hour: z.string().nullable(),
+  last_sent_hour: z.string().nullable(),
+  last_sent_at: z.string().nullable(),
+  last_error: z.string().nullable(),
+});
+export type UsageCountsState = z.infer<typeof UsageCountsState>;
+
+/// One usage counts report, exactly as it is posted: numbers only, besides the random install
+/// id (null before the counts were first turned on), the version of Dots and the hour.
+export const UsageCountsReport = z.strictObject({
+  schema: z.number().int(),
+  install_id: z.string().nullable(),
+  app_version: z.string(),
+  hour_start: z.string(),
+  runs_started: z.number().int(),
+  runs_succeeded: z.number().int(),
+  runs_failed: z.number().int(),
+  messages_sent: z.number().int(),
+  approvals_asked: z.number().int(),
+  dots: z.number().int(),
+});
+export type UsageCountsReport = z.infer<typeof UsageCountsReport>;
 
 export const RunEventRecord = z.strictObject({
   run_id: z.string(),
@@ -362,6 +413,35 @@ export const FollowUp = z.strictObject({
   created_at: z.string(),
 });
 
+// One of the person's goals (Intents), in the account (`org_id`, null for Personal) and
+// workspace it was added in. `due_date` is a calendar date, YYYY-MM-DD; times are RFC 3339 UTC.
+export const Intent = z.strictObject({
+  id: z.string(),
+  org_id: nullable(z.string()),
+  workspace_id: z.string(),
+  text: z.string(),
+  due_date: nullable(z.string()),
+  // Shown under Now, whatever its date.
+  urgent: z.boolean(),
+  // The dot it is handed to; null when it has none, or that dot was deleted.
+  dot_id: nullable(z.string()),
+  created_at: z.string(),
+  // When it was marked done; null while it is open.
+  done_at: nullable(z.string()),
+});
+// The goals of one workspace, and why this PC may not change them (null when it may).
+export const IntentsView = z.strictObject({
+  intents: z.array(Intent),
+  refusal: nullable(z.string()),
+});
+// What the person writes for a goal, on create and on every change (a change replaces all four).
+export const IntentFields = z.strictObject({
+  text: z.string(),
+  due_date: nullable(z.string()),
+  urgent: z.boolean(),
+  dot_id: nullable(z.string()),
+});
+
 export const MemorySource = z.enum(["dot", "person"]);
 // One thing a dot remembers across runs (dot memory spec section 2). Times are RFC 3339 UTC.
 export const Memory = z.strictObject({
@@ -414,6 +494,14 @@ export const GithubConfig = z.strictObject({
   branches: z.array(z.string()),
 });
 export const WatcherConfig = z.discriminatedUnion("kind", [FolderConfig, EmailConfig, GithubConfig]);
+export const WatchDay = z.enum(["mon", "tue", "wed", "thu", "fri", "sat", "sun"]);
+// The days and the times of day a watcher starts its dot; "HH:MM" local time, an end before the
+// start runs past midnight.
+export const WatchHours = z.strictObject({
+  days: z.array(WatchDay),
+  start: z.string(),
+  end: z.string(),
+});
 export const Watcher = z.strictObject({
   id: z.string(),
   dot_id: z.string(),
@@ -425,6 +513,11 @@ export const Watcher = z.strictObject({
   last_event_at: nullable(z.string()),
   created_at: z.string(),
   updated_at: z.string(),
+  hours: nullable(WatchHours),
+  // Events held outside the hours, waiting for the next opening.
+  held_count: z.number(),
+  // The next opening, RFC 3339 with offset; null when there are no hours or it is open now.
+  next_opening: nullable(z.string()),
 });
 // A watcher Dots paused, as the Inbox lists it.
 export const PausedWatcher = z.strictObject({
@@ -436,6 +529,104 @@ export const PausedWatcher = z.strictObject({
   reason: PausedReason,
   error: nullable(z.string()),
   at: z.string(),
+});
+
+// A slot that came due while the dot was busy with its previous run, and was skipped (UTC).
+export const ScheduleSkip = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  slot_at: z.string(),
+  reason: z.string(),
+  run_id: nullable(z.string()),
+  created_at: z.string(),
+});
+
+// What a topic has beyond its runs: a name the person gave it and when it was archived. A topic
+// without a row is active and untitled (topic tools spec section 4.2).
+export const TopicInfo = z.strictObject({
+  root_run_id: z.string(),
+  dot_id: z.string(),
+  title: nullable(z.string()),
+  archived_at: nullable(z.string()),
+});
+export type TopicInfo = z.infer<typeof TopicInfo>;
+
+// Send later (send later spec section 4.1): a chat message the person wrote for Dots to send
+// at `due_at` (RFC 3339 UTC) to the topic `root_run_id` (null: a new topic). Pending while
+// scheduled, sending or failed; `waiting` says why a due one has not gone yet.
+export const ScheduledStatus = z.enum(["scheduled", "sending", "sent", "failed", "cancelled"]);
+export const ScheduledWait = z.enum(["busy", "approval", "usage_limit"]);
+// Attachments in chat (attachments spec sections 4 and 5): a file in the chat box, staged in
+// Dots' data folder; a file a message carries (`payload.attachments`); and a row of the Files
+// panel.
+export const StagedAttachment = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  size: z.number().int(),
+});
+export type StagedAttachment = z.infer<typeof StagedAttachment>;
+export const MessageAttachment = z.object({
+  id: z.string(),
+  name: z.string(),
+  size: z.number().int(),
+});
+export type MessageAttachment = z.infer<typeof MessageAttachment>;
+export const FileSource = z.enum(["attached", "written"]);
+export type FileSource = z.infer<typeof FileSource>;
+export const ConversationFile = z.strictObject({
+  path: z.string(),
+  name: z.string(),
+  source: FileSource,
+  run_id: z.string(),
+  at: z.string(),
+  exists: z.boolean(),
+  can_open: z.boolean(),
+});
+export type ConversationFile = z.infer<typeof ConversationFile>;
+
+export const ScheduledMessage = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  root_run_id: nullable(z.string()),
+  text: z.string(),
+  due_at: z.string(),
+  status: ScheduledStatus,
+  waiting: nullable(ScheduledWait),
+  error: nullable(z.string()),
+  run_id: nullable(z.string()),
+  sent_at: nullable(z.string()),
+  created_at: z.string(),
+  updated_at: z.string(),
+  // The files it waits with (attachments spec section 4.6).
+  attachments: z.array(StagedAttachment),
+});
+
+// Snooze and Done on the Inbox (snooze and done spec section 4.1): an item's kind and its id
+// as it is now, so a mark never hides a later item with the same subject.
+export const InboxKind = z.enum([
+  "message",
+  "approval",
+  "review",
+  "not_delivered",
+  "attention",
+  "watcher",
+  "held",
+  "tools",
+  "instructions",
+  "app_review",
+  "team_scope",
+]);
+export const InboxKey = z.strictObject({ kind: InboxKind, id: z.string() });
+// A mark on an Inbox item, in exactly one state (RFC 3339 UTC times). `dot_id` is null for
+// tools that changed.
+export const InboxMark = z.strictObject({
+  kind: InboxKind,
+  id: z.string(),
+  title: z.string(),
+  dot_id: nullable(z.string()),
+  snoozed_until: nullable(z.string()),
+  done_at: nullable(z.string()),
+  back_at: nullable(z.string()),
 });
 
 export const RuntimeEvent = z.discriminatedUnion("type", [
@@ -454,6 +645,10 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("approval_updated"), approval: Approval }),
   // The dot's schedule row was made, changed or deleted.
   z.strictObject({ type: z.literal("schedule_updated"), dot_id: z.string() }),
+  // A slot was skipped because the dot was busy (sent with a `schedule_updated`).
+  z.strictObject({ type: z.literal("schedule_skipped"), dot_id: z.string(), skip: ScheduleSkip }),
+  // A topic of the dot was named, archived or unarchived, or runs moved between its topics.
+  z.strictObject({ type: z.literal("topics_changed"), dot_id: z.string() }),
   // A Library item was added, changed, removed or checked (an MCP server's catalog included).
   z.strictObject({ type: z.literal("library_updated"), item_id: z.string() }),
   // The dot's schedule needs attention now (sent once, with a `schedule_updated`).
@@ -501,6 +696,20 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   // An org was joined, updated, fetched (by Refresh, its timer or the start-up fetch) or
   // removed: its status, policy or values may have changed.
   z.strictObject({ type: z.literal("org_updated"), org_id: z.string() }),
+  // An Inbox item was snoozed, unsnoozed, marked done or undone, came back, or its mark went.
+  z.strictObject({ type: z.literal("inbox_updated") }),
+  // Snoozed items came back in one wake pass (the app notifies); an `inbox_updated` goes with it.
+  z.strictObject({ type: z.literal("snooze_ended"), items: z.array(InboxMark) }),
+  // A goal of the workspace was added, changed, done or undone, or deleted, or a deleted dot
+  // left it unlinked: the Intents screen reads it again.
+  z.strictObject({
+    type: z.literal("intents_updated"),
+    org_id: nullable(z.string()),
+    workspace_id: z.string(),
+  }),
+  // A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting reason
+  // changed (the app notifies on a failure).
+  z.strictObject({ type: z.literal("scheduled_message_updated"), message: ScheduledMessage }),
   // A new limit reading, or a hold that started, ended or changed what it holds; `change` is
   // set when a hold started or ended (the app notifies).
   z.strictObject({
@@ -536,6 +745,15 @@ export const Status = z.strictObject({
   data_dir: z.string(),
 });
 
+/// One model in a picker (model switcher spec section 2.1): the id a dot stores, the name shown
+/// and what it is for ("" for a model a local endpoint lists).
+export const ModelOption = z.strictObject({
+  id: z.string(),
+  label: z.string(),
+  hint: z.string(),
+});
+export type ModelOption = z.infer<typeof ModelOption>;
+
 export const Settings = z.strictObject({
   port: z.number().int(),
   max_concurrent_runs: z.number().int(),
@@ -559,6 +777,10 @@ export const Settings = z.strictObject({
   publish_token: nullable(z.string()),
   // Seconds a run may stay quiet before it is stopped (60 to 86400); a dot may override it.
   quiet_limit_secs: z.number().int(),
+  // A topic idle for this many days is archived; 0 never (topic tools spec section 3.3).
+  auto_archive_days: z.number().int(),
+  // The model a new Claude dot starts with (model switcher spec section 2.2).
+  default_model: z.string(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -568,6 +790,28 @@ export const SettingsSaved = z.strictObject({
 export const BrowserStatus = z.strictObject({
   edge: nullable(z.string()),
   npx: nullable(z.string()),
+});
+
+// The company's Claude Code managed settings (managed policy). `path` is null when the machine
+// has none; `error` is set when a file could not be read.
+export const ManagedPolicy = z.strictObject({
+  path: nullable(z.string()),
+  blocks_skipping_asks: z.boolean(),
+  forced_ask: z.array(z.string()),
+  forced_deny: z.array(z.string()),
+  managed_rules_only: z.boolean(),
+  error: nullable(z.string()),
+});
+export const ConflictKind = z.enum(["deny"]);
+// One thing the dot's policy would allow that a company deny rule refuses.
+export const ManagedConflict = z.strictObject({
+  kind: ConflictKind,
+  rule: z.string(),
+  dot_rule: z.string(),
+});
+export const ManagedCheck = z.strictObject({
+  managed: ManagedPolicy,
+  conflicts: z.array(ManagedConflict),
 });
 
 // Where a dot's schedule stands (Scheduler v2 spec §8). Times are RFC 3339 local.
@@ -580,6 +824,9 @@ export const ScheduleView = z.strictObject({
   retry_at: nullable(z.string()),
   retry_attempt: nullable(z.number().int()),
   attention: nullable(z.strictObject({ run_id: z.string(), error: nullable(z.string()) })),
+  // The last slot skipped because the dot was busy (UTC), and the skips since its last run.
+  last_skipped_at: nullable(z.string()),
+  skipped_since_run: z.number().int(),
 });
 
 export const DotOverview = z.strictObject({
@@ -603,6 +850,11 @@ export const ReviewRun = z.strictObject({
   ...runShape,
   dot_name: z.string(),
   worktree_exists: z.boolean(),
+});
+// A chat message that did not reach its dot, not retried or discarded yet.
+export const UndeliveredMessage = z.strictObject({
+  ...runShape,
+  dot_name: z.string(),
 });
 // A schedule whose occurrence failed in the end ("Needs attention").
 export const NeedsAttention = z.strictObject({
@@ -662,6 +914,17 @@ export const Inbox = z.strictObject({
   app_reviews: z.array(z.lazy(() => PendingAppReview)),
   // Teams with a member dot outside the team's account or workspace.
   team_scope: z.array(z.lazy(() => TeamScopeIssue)),
+  // Chat messages that did not reach their dot, newest first; not in `review_runs`.
+  not_delivered: z.array(UndeliveredMessage).default([]),
+  // Marks of items back from snooze, newest first. The items stay in their sections.
+  back: z.array(InboxMark).default([]),
+  // Marks of snoozed items, soonest back first. The items are left out of their sections.
+  snoozed: z.array(InboxMark).default([]),
+  // Marks of items done in the last 7 days, newest first. Left out of their sections too.
+  done: z.array(InboxMark).default([]),
+  // The waiting messages that are hidden (snoozed, or done however long ago): the questions
+  // and notes come with the messages, so the Inbox leaves these out.
+  hidden_messages: z.array(z.string()).default([]),
   // Workflow runs that wait for the person (a check, the budget, the send-back cap or a failed
   // step), newest first.
   workflows: z.array(z.lazy(() => WaitingWorkflowRun)),
@@ -1359,6 +1622,44 @@ export const DraftRequest = z.strictObject({
   current: nullable(z.string()),
   change: nullable(z.string()),
 });
+// The setup agent's view (setup agent spec §6).
+export const SetupRound = z.strictObject({
+  questions: z.array(z.string()),
+  answers: z.array(z.string()),
+});
+export const SetupProposal = z.strictObject({
+  name: z.string(),
+  instructions: z.string(),
+  folder: nullable(z.string()),
+  schedule: nullable(Schedule),
+  preset: Preset,
+  extras: z.array(z.string()),
+  uses: Uses,
+  first_message: z.string(),
+  notes: z.string(),
+});
+export const SetupRequest = z.strictObject({
+  description: z.string(),
+  rounds: z.array(SetupRound),
+  current: nullable(SetupProposal),
+  change: nullable(z.string()),
+  skip: z.boolean(),
+});
+export const SetupAnswer = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("questions"), questions: z.array(z.string()) }),
+  z.strictObject({
+    kind: z.literal("proposal"),
+    proposal: SetupProposal,
+    new_dot_root: z.string(),
+  }),
+]);
+export const SetupApplied = z.strictObject({
+  dot: Dot,
+  run_id: nullable(z.string()),
+  run_error: nullable(z.string()),
+  // What the check at apply time changed in the proposal; empty when nothing.
+  notes: z.string(),
+});
 // The name and description the Library will show for a draft that can be saved.
 export const DraftSummary = z.strictObject({
   name: z.string(),
@@ -1372,6 +1673,27 @@ export const InstalledPlugin = z.strictObject({
   install_path: z.string(),
   version: nullable(z.string()),
   exists: z.boolean(),
+});
+// A Claude Code agent file found on this PC and the dot it would become (import agents spec).
+export const AgentSourceKind = z.enum(["user", "project", "plugin"]);
+export const ScannedAgent = z.strictObject({
+  source: AgentSourceKind,
+  plugin: nullable(z.string()),
+  project: nullable(z.string()),
+  path: z.string(),
+  name: z.string(),
+  description: nullable(z.string()),
+  model: nullable(z.string()),
+  // null: the file lists no tools, so the agent has them all.
+  tools: nullable(z.array(z.string())),
+  warnings: z.array(z.string()),
+  already_imported: z.boolean(),
+  // Why the file can't be imported; null when it can.
+  error: nullable(z.string()),
+});
+export const AgentImport = z.strictObject({
+  created: z.array(Dot),
+  failed: z.array(z.strictObject({ path: z.string(), reason: z.string() })),
 });
 // Whether the environment of Dots sets a variable. Never its value.
 export const EnvVariable = z.strictObject({ name: z.string(), set: z.boolean() });
@@ -1916,7 +2238,15 @@ export type Status = z.infer<typeof Status>;
 export type Settings = z.infer<typeof Settings>;
 export type SettingsSaved = z.infer<typeof SettingsSaved>;
 export type BrowserStatus = z.infer<typeof BrowserStatus>;
+export type ManagedPolicy = z.infer<typeof ManagedPolicy>;
+export type ConflictKind = z.infer<typeof ConflictKind>;
+export type ManagedConflict = z.infer<typeof ManagedConflict>;
+export type ManagedCheck = z.infer<typeof ManagedCheck>;
 export type ScheduleView = z.infer<typeof ScheduleView>;
+export type ScheduleSkip = z.infer<typeof ScheduleSkip>;
+export type ScheduledStatus = z.infer<typeof ScheduledStatus>;
+export type ScheduledWait = z.infer<typeof ScheduledWait>;
+export type ScheduledMessage = z.infer<typeof ScheduledMessage>;
 export type DotOverview = z.infer<typeof DotOverview>;
 export type PendingApproval = z.infer<typeof PendingApproval>;
 export type ReviewRun = z.infer<typeof ReviewRun>;
@@ -1924,6 +2254,10 @@ export type NeedsAttention = z.infer<typeof NeedsAttention>;
 export type DotRef = z.infer<typeof DotRef>;
 export type ToolsChanged = z.infer<typeof ToolsChanged>;
 export type Inbox = z.infer<typeof Inbox>;
+export type InboxKind = z.infer<typeof InboxKind>;
+export type InboxKey = z.infer<typeof InboxKey>;
+export type InboxMark = z.infer<typeof InboxMark>;
+export type UndeliveredMessage = z.infer<typeof UndeliveredMessage>;
 export type InstructionProposal = z.infer<typeof InstructionProposal>;
 export type PendingInstructions = z.infer<typeof PendingInstructions>;
 export type McpServerConfig = z.infer<typeof McpServerConfig>;
@@ -1984,8 +2318,16 @@ export type ContextDocuments = z.infer<typeof ContextDocuments>;
 export type McpProbe = z.infer<typeof McpProbe>;
 export type ScannedSkill = z.infer<typeof ScannedSkill>;
 export type DraftRequest = z.infer<typeof DraftRequest>;
+export type SetupRound = z.infer<typeof SetupRound>;
+export type SetupProposal = z.infer<typeof SetupProposal>;
+export type SetupRequest = z.infer<typeof SetupRequest>;
+export type SetupAnswer = z.infer<typeof SetupAnswer>;
+export type SetupApplied = z.infer<typeof SetupApplied>;
 export type DraftSummary = z.infer<typeof DraftSummary>;
 export type InstalledPlugin = z.infer<typeof InstalledPlugin>;
+export type AgentSourceKind = z.infer<typeof AgentSourceKind>;
+export type ScannedAgent = z.infer<typeof ScannedAgent>;
+export type AgentImport = z.infer<typeof AgentImport>;
 export type EnvVariable = z.infer<typeof EnvVariable>;
 export type EntryKind = z.infer<typeof EntryKind>;
 export type EnvEntry = z.infer<typeof EnvEntry>;
@@ -2027,6 +2369,9 @@ export type Message = z.infer<typeof Message>;
 export type FollowUp = z.infer<typeof FollowUp>;
 export type MemorySource = z.infer<typeof MemorySource>;
 export type Memory = z.infer<typeof Memory>;
+export type Intent = z.infer<typeof Intent>;
+export type IntentsView = z.infer<typeof IntentsView>;
+export type IntentFields = z.infer<typeof IntentFields>;
 export type WatcherKind = z.infer<typeof WatcherKind>;
 export type PausedReason = z.infer<typeof PausedReason>;
 export type FolderEvent = z.infer<typeof FolderEvent>;
@@ -2035,6 +2380,8 @@ export type FolderConfig = z.infer<typeof FolderConfig>;
 export type EmailConfig = z.infer<typeof EmailConfig>;
 export type GithubConfig = z.infer<typeof GithubConfig>;
 export type WatcherConfig = z.infer<typeof WatcherConfig>;
+export type WatchDay = z.infer<typeof WatchDay>;
+export type WatchHours = z.infer<typeof WatchHours>;
 export type Watcher = z.infer<typeof Watcher>;
 export type PausedWatcher = z.infer<typeof PausedWatcher>;
 export type UpdateNote = z.infer<typeof UpdateNote>;
@@ -2045,3 +2392,86 @@ export type PublisherStatus = z.infer<typeof PublisherStatus>;
 export type PageState = z.infer<typeof PageState>;
 export type Stage = z.infer<typeof Stage>;
 export type Trial = z.infer<typeof Trial>;
+
+// Connectors (connectors spec §3, §6): the apps Dots connects with a key or a sign-in. An entry
+// never holds a value, a token or a grant.
+export const ConnectorState = z.enum([
+  "not_connected",
+  "connected",
+  "needs_sign_in",
+  "error",
+  "name_taken",
+  "coming_soon",
+]);
+export const AuthKind = z.enum(["key", "oauth", "coming_soon"]);
+export const Trust = z.enum(["official", "community"]);
+export const Category = z.enum(["communication", "work", "developer", "search", "files", "business"]);
+export const ServerTemplate = z.discriminatedUnion("transport", [
+  z.strictObject({ transport: z.literal("http"), url: z.string(), bearer: nullable(z.string()) }),
+  z.strictObject({
+    transport: z.literal("stdio"),
+    command: z.string(),
+    args: z.array(z.string()),
+    env: z.record(z.string(), z.string()),
+  }),
+]);
+export const RuntimeNeed = z.strictObject({
+  name: z.string(),
+  command: z.string(),
+  min_major: z.number().int(),
+  download_url: z.string(),
+});
+export const FieldFormat = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("any") }),
+  z.strictObject({ kind: z.literal("prefix"), prefixes: z.array(z.string()) }),
+  z.strictObject({ kind: z.literal("email") }),
+  z.strictObject({ kind: z.literal("letters"), length: z.number().int() }),
+]);
+export const KeyField = z.strictObject({
+  key: z.string(),
+  label: z.string(),
+  variable: z.string(),
+  secret: z.boolean(),
+  placeholder: z.string(),
+  hint: z.string(),
+  format: FieldFormat,
+  strip_spaces: z.boolean(),
+});
+export const ConnectorEntry = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  category: Category,
+  icon: z.string(),
+  // Who makes the MCP server, and whether that is the app's own company.
+  maker: z.string(),
+  trust: Trust,
+  source_url: z.string(),
+  auth: AuthKind,
+  server: nullable(ServerTemplate),
+  runtime: nullable(RuntimeNeed),
+  fields: z.array(KeyField),
+  instructions: z.strictObject({
+    steps: z.array(z.string()),
+    open_url: z.string(),
+    open_label: z.string(),
+  }),
+  abilities: z.array(z.string()),
+  note: nullable(z.string()),
+  state: ConnectorState,
+  // The Library server of a connected connector.
+  server_id: nullable(z.string()),
+  used_by: z.array(DotRef),
+  error: nullable(z.string()),
+  tools: nullable(z.number().int()),
+  catalog_status: nullable(CatalogStatus),
+});
+export const RuntimeCheck = z.strictObject({
+  needed: nullable(RuntimeNeed),
+  found: nullable(z.string()),
+  ok: z.boolean(),
+});
+export type ConnectorState = z.infer<typeof ConnectorState>;
+export type ConnectorEntry = z.infer<typeof ConnectorEntry>;
+export type KeyField = z.infer<typeof KeyField>;
+export type RuntimeCheck = z.infer<typeof RuntimeCheck>;

@@ -10,8 +10,8 @@ use common::{spec, temp_store};
 use dots_core::engine::Engine;
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::model::{
-    Dot, EngineKind, NewRun, PendingRetry, Run, RunStatus, ScheduleChange, ScheduleState,
-    ScheduleStatus, TriggerKind,
+    Dot, EngineKind, NewRun, PendingRetry, Run, RunStatus, ScheduleChange, ScheduleSkip,
+    ScheduleState, ScheduleStatus, TriggerKind,
 };
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::schedule::Schedule;
@@ -97,6 +97,7 @@ struct Seen {
     schedules: Vec<String>,
     runs: Vec<String>,
     notices: Vec<(String, String, Option<String>)>,
+    skipped: Vec<(String, ScheduleSkip)>,
 }
 
 /// The error of the runs the tests fail.
@@ -214,6 +215,9 @@ impl Harness {
                     run_id,
                     error,
                 } => self.seen.notices.push((dot_id, run_id, error)),
+                RuntimeEvent::ScheduleSkipped { dot_id, skip } => {
+                    self.seen.skipped.push((dot_id, skip))
+                }
                 _ => {}
             }
         }
@@ -233,6 +237,28 @@ impl Harness {
     fn notices(&mut self) -> Vec<(String, String, Option<String>)> {
         self.drain();
         std::mem::take(&mut self.seen.notices)
+    }
+
+    /// The `ScheduleSkipped` events since the last call, as (dot, skip).
+    fn skipped(&mut self) -> Vec<(String, ScheduleSkip)> {
+        self.drain();
+        std::mem::take(&mut self.seen.skipped)
+    }
+
+    /// A run of `dot` with `trigger` that is `status` (`running` or `awaiting_approval`), put
+    /// there behind the store's back instead of by an engine.
+    async fn busy_run(&self, dot: &Dot, trigger: TriggerKind, status: &str) -> Run {
+        let run = self
+            .store
+            .create_run(&NewRun::new(&dot.id, trigger))
+            .await
+            .unwrap();
+        self.exec(
+            "UPDATE runs SET status = ? WHERE id = ?",
+            &[status, &run.id],
+        )
+        .await;
+        run
     }
 
     /// Ends `run` with `status` at the clock's time, as the runner does, but without
@@ -845,9 +871,8 @@ async fn a_run_the_watchdog_stopped_needs_attention_at_once() {
     assert_eq!(h.runs(&dot).await.len(), 2);
 }
 
-/// Final review F1: a run still running when the next slot fires is no longer watched, so the
-/// scheduler never judges it. When it then fails before any tool call, it is a run to review.
-/// A scheduled run that failed before any tool call and that the scheduler judged into a
+/// Final review F1: a run that the scheduler does not watch (the person's) and that fails is a
+/// run to review, since the scheduler never judges it. A scheduled run that failed before any tool call and that the scheduler judged into a
 /// retry is marked reviewed with that write and is not listed. One that failed after a tool
 /// call may have changed something: it needs attention and stays a run to review.
 #[tokio::test]
@@ -856,14 +881,11 @@ async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
     let dot = h.dot("slow", Some(every(10, 60, true)), 0).await;
     h.start();
     h.settle().await;
+    // A run the scheduler does not watch (the person's) is still running when the slot comes:
+    // the slot is skipped (skip when busy), so it is not a scheduled run.
+    let overrun = h.busy_run(&dot, TriggerKind::Manual, "running").await;
     h.at(60).await;
-    let overrun = h.watched(&dot).await;
-    assert!(h.store.claim_run(&overrun.id).await.unwrap());
-
-    // The next slot comes while the run is still running: a new run is queued and watched.
-    h.at(660).await;
-    let next = h.watched(&dot).await;
-    assert_ne!(next.id, overrun.id);
+    assert_eq!(h.row(&dot).await.watch_run_id, None);
     h.end(&overrun.id, RunStatus::Failed).await;
     h.sched.reload();
     h.settle().await;
@@ -874,6 +896,10 @@ async fn an_overrun_run_that_fails_is_for_review_and_a_judged_one_is_not() {
             runs.into_iter().map(|r| r.id).collect::<Vec<_>>()
         }
     };
+    // The next slot fires a new run, which is queued and watched.
+    h.at(660).await;
+    let next = h.watched(&dot).await;
+    assert_ne!(next.id, overrun.id);
     assert_eq!(
         review(&h).await,
         [overrun.id.as_str()],
@@ -1636,4 +1662,283 @@ async fn a_frequent_schedule_that_keeps_failing_needs_attention_after_six_attemp
         })
     );
     assert!(h.notices().is_empty(), "announced once");
+}
+
+/// Skip when busy spec section 4: a repeating slot that comes due while the dot's run is
+/// running is not run and is recorded; the next slot after the run ended fires.
+#[tokio::test]
+async fn a_repeating_slot_is_skipped_while_the_dot_runs() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("hourly", Some(every(10, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    let running = h.busy_run(&dot, TriggerKind::Manual, "running").await;
+    h.events();
+
+    h.at(60).await;
+    assert_eq!(h.runs(&dot).await.len(), 1, "no run was added");
+    let skipped = h.skipped();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].0, dot.id);
+    assert_eq!(skipped[0].1.reason, "busy");
+    assert_eq!(skipped[0].1.slot_at, ts(60));
+    assert_eq!(skipped[0].1.run_id.as_deref(), Some(running.id.as_str()));
+    let row = h.row(&dot).await;
+    assert_eq!(row.last_slot_at, ts(60));
+    assert_eq!((row.fired_count, row.watch_run_id.clone()), (0, None));
+    assert_eq!(
+        h.events().0,
+        vec![dot.id.clone()],
+        "the row change is announced"
+    );
+    assert_eq!(h.store.schedule_skips(&dot.id, 10).await.unwrap().len(), 1);
+
+    h.end(&running.id, RunStatus::Succeeded).await;
+    h.at(660).await;
+    let runs = h.runs(&dot).await;
+    assert_eq!(runs.len(), 2);
+    assert_eq!(
+        runs.iter()
+            .filter(|r| r.trigger == TriggerKind::Schedule)
+            .count(),
+        1,
+        "the next slot fires"
+    );
+    assert_eq!(h.row(&dot).await.fired_count, 1);
+    assert!(h.skipped().is_empty());
+}
+
+/// Review focus 1: a run waiting on an approval keeps the dot busy.
+#[tokio::test]
+async fn a_run_waiting_on_an_approval_makes_it_busy() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("approvals", Some(every(10, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    let parked = h
+        .busy_run(&dot, TriggerKind::Manual, "awaiting_approval")
+        .await;
+    h.at(60).await;
+    assert_eq!(h.runs(&dot).await.len(), 1);
+    let skipped = h.skipped();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].1.run_id.as_deref(), Some(parked.id.as_str()));
+}
+
+/// Review focus 3: a chat reply in progress keeps the dot busy, and is left alone.
+#[tokio::test]
+async fn a_chat_reply_in_progress_makes_it_busy() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("chatty", Some(every(10, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    let chat = h.busy_run(&dot, TriggerKind::Chat, "running").await;
+    h.at(60).await;
+    assert_eq!(h.runs(&dot).await.len(), 1);
+    assert_eq!(h.skipped().len(), 1);
+    assert_eq!(
+        h.store.get_run(&chat.id).await.unwrap().status,
+        RunStatus::Running
+    );
+}
+
+/// A `Once` has no later slot to try, so it queues even while the dot is busy.
+#[tokio::test]
+async fn a_one_time_schedule_still_queues_while_busy() {
+    let mut h = Harness::new().await;
+    let once = schedule(json!({
+        "rule": {"kind": "once", "at": local(60)},
+        "catch_up": true,
+        "until": null
+    }));
+    let dot = h.dot("once", Some(once), 0).await;
+    h.start();
+    h.settle().await;
+    h.busy_run(&dot, TriggerKind::Manual, "running").await;
+    h.at(60).await;
+    let runs = h.runs(&dot).await;
+    assert_eq!(runs.len(), 2);
+    assert_eq!(
+        runs.iter()
+            .filter(|r| r.trigger == TriggerKind::Schedule)
+            .count(),
+        1
+    );
+    assert_eq!(h.row(&dot).await.fired_count, 1);
+    assert!(h.skipped().is_empty());
+}
+
+/// A retry that comes due starts even while another run of the dot is running.
+#[tokio::test]
+async fn a_due_retry_still_starts_while_busy() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("retry-busy", Some(every(1440, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let first = h.watched(&dot).await;
+    assert_eq!(h.judge(&first.id, RunStatus::Failed).await, 120);
+    let busy = h.busy_run(&dot, TriggerKind::Manual, "running").await;
+
+    h.at(120).await;
+    let row = h.row(&dot).await;
+    assert_eq!(row.retry, None);
+    let watched = row.watch_run_id.expect("the retry's run is watched");
+    assert_ne!(watched, busy.id);
+    assert_ne!(watched, first.id);
+    assert_eq!(h.runs(&dot).await.len(), 3);
+    assert!(h.skipped().is_empty());
+}
+
+/// Review focus 4: a skipped slot does not count against a `Count` limit.
+#[tokio::test]
+async fn skips_do_not_use_up_a_run_limit() {
+    let mut h = Harness::new().await;
+    let mut three = every(10, 60, true);
+    three.until = Some(dots_core::schedule::Until::Count(3));
+    let dot = h.dot("limited", Some(three), 0).await;
+    h.start();
+    h.settle().await;
+
+    for round in 0..3i64 {
+        let busy_slot = 60 + round * 1200;
+        let free_slot = busy_slot + 600;
+        let manual = h.busy_run(&dot, TriggerKind::Manual, "running").await;
+        h.at(busy_slot).await;
+        assert_eq!(
+            h.skipped().len(),
+            1,
+            "round {round}: the busy slot is skipped"
+        );
+        h.end(&manual.id, RunStatus::Succeeded).await;
+        h.at(free_slot).await;
+        let run = h.watched(&dot).await;
+        assert_eq!(run.trigger, TriggerKind::Schedule);
+        h.judge(&run.id, RunStatus::Succeeded).await;
+    }
+    let row = h.row(&dot).await;
+    assert_eq!(
+        (row.status, row.fired_count),
+        (ScheduleStatus::Completed, 3)
+    );
+    let scheduled = h
+        .store
+        .list_runs(Some(&dot.id), 20)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.trigger == TriggerKind::Schedule)
+        .count();
+    assert_eq!(scheduled, 3, "exactly the limit was run");
+    assert_eq!(h.store.schedule_skips(&dot.id, 10).await.unwrap().len(), 3);
+}
+
+/// A slot missed outright (no catch-up) is a plain skip, not a busy one.
+#[tokio::test]
+async fn a_missed_slot_is_not_recorded_as_busy() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("missed", Some(every(60, 0, false)), 0).await;
+    h.busy_run(&dot, TriggerKind::Manual, "running").await;
+    // The slot at 3600 is two minutes old when Dots starts.
+    h.clock.set(after(3600 + 120));
+    h.start();
+    h.settle().await;
+
+    assert_eq!(h.runs(&dot).await.len(), 1);
+    assert!(h.skipped().is_empty());
+    assert!(h
+        .store
+        .schedule_skips(&dot.id, 10)
+        .await
+        .unwrap()
+        .is_empty());
+    let row = h.row(&dot).await;
+    assert_eq!((row.last_slot_at, row.fired_count), (ts(3600), 0));
+}
+
+/// Skip when busy spec: the schedule's own watched run still running when its next slot comes
+/// is what keeps the dot busy. The slot is skipped, the run stays watched, and when it then
+/// fails before any tool call it is judged into a retry and marked reviewed.
+#[tokio::test]
+async fn the_schedules_own_run_overrunning_its_next_slot_stays_watched_and_is_judged() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("overrun", Some(every(10, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let own = h.watched(&dot).await;
+    assert_eq!(own.trigger, TriggerKind::Schedule);
+    h.exec(
+        "UPDATE runs SET status = 'running' WHERE id = ?",
+        &[&own.id],
+    )
+    .await;
+    h.skipped();
+
+    h.at(660).await;
+    let skipped = h.skipped();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].1.reason, "busy");
+    assert_eq!(skipped[0].1.slot_at, ts(660));
+    assert_eq!(skipped[0].1.run_id.as_deref(), Some(own.id.as_str()));
+    assert_eq!(h.runs(&dot).await.len(), 1, "no run was added");
+    let row = h.row(&dot).await;
+    assert_eq!(row.watch_run_id.as_deref(), Some(own.id.as_str()));
+    assert_eq!((row.last_slot_at, row.fired_count), (ts(660), 1));
+
+    // It then fails before any call: judged into a retry, and marked reviewed.
+    h.judge(&own.id, RunStatus::Failed).await;
+    assert!(h.row(&dot).await.retry.is_some(), "a pending retry");
+    assert!(h
+        .store
+        .get_run(&own.id)
+        .await
+        .unwrap()
+        .reviewed_at
+        .is_some());
+    assert!(h.store.unreviewed_thread_ends().await.unwrap().is_empty());
+}
+
+/// A retry that is pending when the next repeating slot comes due while the dot is busy is not
+/// dropped by the skip: it stays pending and starts when it is due.
+#[tokio::test]
+async fn a_pending_retry_survives_a_busy_skip() {
+    let mut h = Harness::new().await;
+    let dot = h.dot("retry-skip", Some(every(10, 60, true)), 0).await;
+    h.start();
+    h.settle().await;
+    h.at(60).await;
+    let first = h.watched(&dot).await;
+    // It failed at 630, so its retry is due at 690, after the slot at 660.
+    h.end(&first.id, RunStatus::Failed).await;
+    h.exec(
+        "UPDATE runs SET ended_at = ? WHERE id = ?",
+        &[&ts(630), &first.id],
+    )
+    .await;
+    h.sched.reload();
+    h.settle().await;
+    let pending = h.row(&dot).await.retry.expect("a pending retry");
+    assert_eq!(pending.at, ts(690));
+    h.skipped();
+
+    let busy = h.busy_run(&dot, TriggerKind::Manual, "running").await;
+    h.at(660).await;
+    let skipped = h.skipped();
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].1.run_id.as_deref(), Some(busy.id.as_str()));
+    let row = h.row(&dot).await;
+    assert_eq!(row.retry, Some(pending), "the skip left the retry alone");
+    assert_eq!(h.runs(&dot).await.len(), 2, "no run was added");
+
+    h.at(690).await;
+    let row = h.row(&dot).await;
+    assert_eq!(row.retry, None);
+    let retry = h
+        .store
+        .get_run(row.watch_run_id.as_deref().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(retry.retry_of.as_deref(), Some(first.id.as_str()));
+    assert_eq!(h.runs(&dot).await.len(), 3);
 }

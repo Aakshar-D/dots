@@ -2,6 +2,7 @@ import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { DotOverview, Message, Run } from "@/api/types";
+import { avatarFor } from "@/lib/dot-avatar";
 import { localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
 import { allowed, sample } from "@/test/fixtures";
@@ -39,6 +40,21 @@ const column = () => screen.getByRole("navigation", { name: "Dots" });
 const item = (name: string) => within(column()).getByRole("listitem", { name });
 
 describe("the home's dots column", () => {
+  it("shows each dot's generated avatar, seeded by its id", async () => {
+    backend.on("dot_overview", () => [reader, shopper]);
+    renderApp("/home");
+    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole(
+      "listitem",
+      { name: "shopper" },
+    );
+    for (const r of [reader, shopper]) {
+      const svg = item(r.dot.name).querySelector("svg[data-avatar]");
+      expect(svg).not.toBeNull();
+      expect(svg).toHaveAttribute("aria-hidden", "true");
+      expect(svg).toHaveAttribute("data-avatar", avatarFor(r.dot.id).shape);
+    }
+  });
+
   it("lists the dots newest activity first, with status, last line and next run", async () => {
     backend.on("dot_overview", () => [idle, nightly, reader, shopper]);
     renderApp("/home");
@@ -60,16 +76,15 @@ describe("the home's dots column", () => {
     expect(
       third.getByText(`next ${localTime(nightly.schedule_state!.next_fire)}`),
     ).toBeVisible();
-    expect(screen.getByRole("link", { name: "New dot" })).toHaveAttribute("href", "/dots/new");
+    expect(screen.getByRole("button", { name: "New dot" })).toBeVisible();
   });
 
   it("starts with New dot, then the heading over the list", async () => {
     backend.on("dot_overview", () => [reader, shopper]);
     renderApp(`/home/${reader.dot.id}`);
     const view = within(await screen.findByRole("navigation", { name: "Dots" }));
-    const create = view.getByRole("link", { name: "New dot" });
+    const create = view.getByRole("button", { name: "New dot" });
     expect(create).toHaveTextContent("New dot");
-    expect(create).toHaveAttribute("href", "/dots/new");
     const heading = view.getByRole("heading", { name: "Dots" });
     const list = view.getByRole("list");
     const before = (a: Node, b: Node) =>
@@ -158,10 +173,15 @@ describe("the home's dots column", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${shopper.dot.id}`));
   });
 
-  it("offers to create the first dot when there is none", async () => {
+  it("offers to set up the first dot when there is none", async () => {
     renderApp("/home");
-    const create = await screen.findByRole("link", { name: "Create your first dot" });
-    expect(create).toHaveAttribute("href", "/dots/new");
+    expect(
+      await screen.findByRole("heading", { name: "What should your first dot do?" }),
+    ).toBeVisible();
+    expect(screen.getByRole("link", { name: "Fill in the form instead" })).toHaveAttribute(
+      "href",
+      "/dots/new",
+    );
     expect(screen.getByRole("navigation", { name: "Main" })).toBeVisible();
   });
 
@@ -224,7 +244,7 @@ describe("the New dot button", () => {
     backend.on("dot_overview", () => []);
     spaces(title, ["default", "payments"]);
     renderApp("/home");
-    // The link is swapped for a disabled button once the account's role is known.
+    // The button is turned off once the account's role is known.
     const button = await waitFor(() => {
       const nav = within(screen.getByRole("navigation", { name: "Dots" }));
       const found = nav.getByRole("button", { name: "New dot" });
@@ -251,12 +271,24 @@ describe("the New dot button", () => {
     expect(button).toHaveAttribute("aria-disabled", "true");
   });
 
+  it("hides the setup composer on the empty home where the person is a Viewer", async () => {
+    const title = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+    backend.on("org_list", () => [viewer]);
+    backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
+    backend.on("dot_overview", () => []);
+    spaces(title, ["default", "payments"]);
+    renderApp("/home");
+    expect(await screen.findByText(title, { selector: "p" })).toBeVisible();
+    expect(screen.queryByRole("textbox", { name: "What should your first dot do?" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Set it up" })).toBeNull();
+  });
+
   it("is on in Personal", async () => {
     backend.on("dot_overview", () => []);
     renderApp("/home");
     const nav = within(await screen.findByRole("navigation", { name: "Dots" }));
-    const link = await nav.findByRole("link", { name: "New dot" });
-    expect(link).toHaveAttribute("href", "/dots/new");
-    expect(link).not.toHaveAttribute("aria-disabled");
+    const button = await nav.findByRole("button", { name: "New dot" });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveAttribute("aria-disabled");
   });
 });

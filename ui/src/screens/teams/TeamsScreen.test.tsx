@@ -9,13 +9,22 @@ import { renderApp } from "@/test/render";
 const [crew, platform] = sample.teams as [Team, Team];
 
 describe("the Teams screen", () => {
-  it("sits on the rail after Library, before Settings", async () => {
+  it("sits on the rail after Library, before Connectors", async () => {
     renderApp("/teams");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     const labels = within(nav)
       .getAllByRole("link")
       .map((link) => link.getAttribute("aria-label"));
-    expect(labels).toEqual(["Home", "Inbox", "Apps", "Library", "Teams", "Settings"]);
+    expect(labels).toEqual([
+      "Home",
+      "Inbox",
+      "Intents",
+      "Apps",
+      "Library",
+      "Teams",
+      "Connectors",
+      "Settings",
+    ]);
     expect(within(nav).getByRole("link", { name: "Teams" })).toHaveAttribute("href", "/teams");
     expect(within(nav).getByRole("link", { name: "Teams" })).toHaveAttribute(
       "aria-current",

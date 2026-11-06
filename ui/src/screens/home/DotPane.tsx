@@ -1,18 +1,23 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, Navigate } from "react-router";
+import { Link, Navigate, useLocation, useNavigate } from "react-router";
 
 import { CommandError, commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
 import { LoadErrors } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
-import { dotStatus } from "@/lib/dot-status";
+import { dotStatus, skipLine } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { DotHeader } from "@/screens/home/DotHeader";
+import { DotModelSwitch } from "@/screens/home/DotModelSwitch";
+import { FilesPanel, FilesToggle } from "@/screens/home/FilesPanel";
+import { filesHidden, setFilesHidden } from "@/screens/home/files-pref";
 import { HistoryMenu } from "@/screens/home/HistoryMenu";
+import { currentTopic } from "@/lib/home-topics";
 import { rememberDot } from "@/screens/home/last-dot";
 import { ReplyArea, type ReplyPick } from "@/screens/home/ReplyArea";
 import { Timeline } from "@/screens/home/Timeline";
+import { TopicMenu } from "@/screens/home/TopicTools";
 import { useConversation } from "@/screens/home/use-conversation";
 import { useViewing } from "@/screens/home/use-viewing";
 
@@ -33,6 +38,9 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
   ).filter((p) => p.status === "pending");
   const held =
     useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data?.held_run_ids ?? [];
+  // A question the person snoozed or marked done does not make the dot wait for them.
+  const hidden =
+    useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data?.hidden_messages ?? [];
   useEffect(() => rememberDot(dot.id), [dot.id]);
   useViewing(dot.id);
   const view = useConversation(dot.id, rootRunId);
@@ -42,19 +50,76 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
     older !== undefined &&
     ((older.error instanceof CommandError && older.error.kind === "not_found") ||
       (older.isSuccess && older.data.length === 0));
-  const [pick, setPick] = useState<ReplyPick>({ kind: "default" });
+  // A goal's Start (Intents) opens the dot with the goal as the draft of a new topic's first
+  // message. It is only a draft: nothing is sent until the person sends it. Taken once, then
+  // dropped from the history entry so that going back here does not bring it again.
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [draft] = useState(() => {
+    const state: unknown = location.state;
+    return typeof state === "object" && state !== null && "draft" in state
+      ? String(state.draft)
+      : undefined;
+  });
+  useEffect(() => {
+    if (draft !== undefined) void navigate(location.pathname, { replace: true, state: null });
+    // Once, on mount.
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [pick, setPick] = useState<ReplyPick>(
+    draft !== undefined ? { kind: "new" } : { kind: "default" },
+  );
   // The current conversation, loaded and with nothing in it, greets like a new chat
   // (conversational chat spec section 5). A failed load shows its errors instead.
+  // Scheduled messages wait as cards in the conversation, so a dot with one does not greet.
+  const scheduled = useQuery({
+    queryKey: keys.scheduledMessages(dot.id),
+    queryFn: () => commands.scheduledMessages(dot.id),
+  });
   const greeting =
-    rootRunId === undefined && !view.pending && view.list.isSuccess && view.shown.length === 0;
+    rootRunId === undefined &&
+    !view.pending &&
+    view.list.isSuccess &&
+    view.shown.length === 0 &&
+    (scheduled.data?.length ?? 0) === 0;
+  // The topic the header's topic menu acts on: the older topic shown alone, else the current
+  // topic of the conversation.
+  const viewed = rootRunId !== undefined ? view.shown[0] : currentTopic(view.shown);
+  // The Files panel (attachments spec section 6): the files of the topics shown.
+  const roots = view.shown.map((t) => t.rootId);
+  const files =
+    useQuery({
+      queryKey: keys.conversationFiles(dot.id, roots),
+      queryFn: () => commands.conversationFiles(dot.id, roots),
+      enabled: roots.length > 0,
+    }).data ?? [];
+  const hasFiles = roots.length > 0 && files.length > 0;
+  const [panelHidden, setPanelHidden] = useState(filesHidden);
+  const toggleFiles = () => {
+    setFilesHidden(!panelHidden);
+    setPanelHidden(!panelHidden);
+  };
   if (gone) return <Navigate to={`/home/${dot.id}`} replace />;
   return (
+    <div className="flex min-w-0 flex-1">
     <div className="flex min-w-0 flex-1 flex-col">
-      <DotHeader dot={dot} status={dotStatus(row, allMessages, held)}>
-        <HistoryMenu dotId={dot.id} topics={view.older} />
+      <DotHeader
+        dot={dot}
+        status={dotStatus(row, allMessages, held, hidden)}
+        skipLine={skipLine(row.schedule_state)}
+      >
+        <DotModelSwitch dot={dot} />
+        {hasFiles && <FilesToggle hidden={panelHidden} onToggle={toggleFiles} />}
+        <HistoryMenu dotId={dot.id} topics={view.older} archived={view.archived} />
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
         </Button>
+        {viewed && (
+          <TopicMenu
+            dotId={dot.id}
+            topic={viewed}
+            others={view.topics.filter((topic) => topic.rootId !== viewed.rootId)}
+          />
+        )}
       </DotHeader>
       {rootRunId !== undefined && (
         <p className="mx-auto w-full max-w-[720px] px-4 py-1.5 text-xs text-muted-foreground">
@@ -76,7 +141,10 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           topics={view.pending ? [] : view.shown}
           checkIns={view.checkIns}
           dotName={dot.name}
+          skipsDotId={rootRunId === undefined ? dot.id : undefined}
+          scheduledFor={{ dotId: dot.id, root: rootRunId }}
           proposals={proposals}
+          moveTargets={view.topics}
           onReply={(topic) => setPick({ kind: "topic", rootId: topic.rootId })}
         >
           <LoadErrors queries={[view.list, ...view.threads]} />
@@ -94,9 +162,14 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
           pick={pick}
           onPick={setPick}
           olderRoot={rootRunId}
+          draft={draft}
         />
       )}
       {greeting && <div aria-hidden className="flex-1" />}
+    </div>
+    {hasFiles && !panelHidden && (
+      <FilesPanel dotId={dot.id} dotName={dot.name} roots={roots} files={files} />
+    )}
     </div>
   );
 }

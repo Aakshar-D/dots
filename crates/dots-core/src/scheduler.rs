@@ -26,7 +26,7 @@ use crate::model::{
     SlotStart, TriggerKind,
 };
 use crate::runner::Runner;
-use crate::schedule::{due_slot, next_slot, Schedule, Until};
+use crate::schedule::{due_slot, next_slot, Rule, Schedule, Until};
 use crate::store::Store;
 use crate::util::timestamp;
 use crate::workflows::Workflows;
@@ -39,6 +39,8 @@ pub const CATCH_UP_WINDOW: TimeDelta = TimeDelta::hours(24);
 /// The longest sleep between passes. Timers do not follow the wall clock across system sleep
 /// or a clock change, so the loop looks at the clock again at least this often.
 pub const MAX_SLEEP: TimeDelta = TimeDelta::seconds(60);
+/// How often at most a pass archives idle topics (topic tools spec section 4.5).
+pub const TOPIC_SWEEP_EVERY: TimeDelta = TimeDelta::hours(1);
 /// The wait before a pass that failed is tried again.
 pub const ERROR_WAIT: TimeDelta = TimeDelta::seconds(30);
 /// The attempts an occurrence has at most: the run of its slot and five retries (spec §6).
@@ -101,6 +103,8 @@ pub struct Scheduler {
     resumed: AtomicBool,
     /// The runs the rows watched at the end of the last pass: the end of one wakes the loop.
     watched: Mutex<HashSet<String>>,
+    /// When the last pass archived idle topics.
+    swept_at: Mutex<Option<DateTime<Utc>>>,
     /// What scheduled workflows are started with (`set_workflows`); unset, the pass leaves
     /// workflows alone.
     workflows: OnceLock<Arc<Workflows>>,
@@ -122,6 +126,7 @@ impl Scheduler {
             paused: AtomicBool::new(false),
             resumed: AtomicBool::new(false),
             watched: Mutex::new(HashSet::new()),
+            swept_at: Mutex::new(None),
             workflows: OnceLock::new(),
         })
     }
@@ -276,10 +281,41 @@ impl Scheduler {
         }
         *self.watched.lock().unwrap() = watched;
         self.clear_attention(now).await?;
+        self.archive_idle_topics(now).await;
         if let Some(next) = self.workflow_pass(now).await? {
             wake = wake.min(next);
         }
         Ok(wake)
+    }
+
+    /// Archives the topics idle for `auto_archive_days` (topic tools spec section 4.5), at most
+    /// once every `TOPIC_SWEEP_EVERY`. A failure is logged and tried at the next sweep; it does
+    /// not hold up the schedules.
+    async fn archive_idle_topics(&self, now: DateTime<Utc>) {
+        {
+            let mut swept = self.swept_at.lock().unwrap();
+            if swept.is_some_and(|at| now - at < TOPIC_SWEEP_EVERY && now >= at) {
+                return;
+            }
+            *swept = Some(now);
+        }
+        let days = match self.store.get_settings().await {
+            Ok(settings) => settings.auto_archive_days,
+            Err(e) => {
+                tracing::warn!("reading the settings for the topic sweep failed: {e}");
+                return;
+            }
+        };
+        match self.store.archive_idle_topics(now, days).await {
+            Ok(archived) => {
+                let dots: HashSet<String> = archived.into_iter().map(|t| t.dot_id).collect();
+                for dot_id in dots {
+                    tracing::info!(dot = %dot_id, "idle topics archived");
+                    let _ = self.bus.send(RuntimeEvent::TopicsChanged { dot_id });
+                }
+            }
+            Err(e) => tracing::warn!("archiving idle topics failed: {e}"),
+        }
     }
 
     /// "Needs attention" also clears when a later manual or scheduled run of the dot succeeds
@@ -351,9 +387,11 @@ impl Scheduler {
             // A fired slot drops a pending retry; its run takes the retry's attempt over.
             let attempt = retry.as_ref().map(|r| r.attempt);
             let new = fire.then(|| scheduled_run(dot, due, late >= ON_TIME, attempt));
+            // A repeating slot is skipped while its dot is busy; a `Once` has no later slot.
+            let skip_when_busy = !matches!(schedule.rule, Rule::Once { .. });
             match self
                 .store
-                .record_slot(&dot.id, due, new.as_ref(), now)
+                .record_slot(&dot.id, due, new.as_ref(), skip_when_busy, now)
                 .await
             {
                 Ok(start) => {
@@ -362,6 +400,16 @@ impl Scheduler {
                     match start {
                         SlotStart::Skipped => {
                             tracing::info!(dot = %dot.spec.name, slot = %due, "missed slot skipped");
+                        }
+                        SlotStart::Busy(skip) => {
+                            tracing::info!(
+                                dot = %dot.spec.name, slot = %due, run = ?skip.run_id,
+                                "slot skipped: the dot is busy"
+                            );
+                            let _ = self.bus.send(RuntimeEvent::ScheduleSkipped {
+                                dot_id: dot.id.clone(),
+                                skip,
+                            });
                         }
                         SlotStart::Enqueued(run) => {
                             fired += 1;
@@ -425,7 +473,8 @@ impl Scheduler {
                                 );
                                 watch = Some(run.id);
                             }
-                            SlotStart::Skipped => {}
+                            // `start_retry` never reports a busy dot.
+                            SlotStart::Skipped | SlotStart::Busy(_) => {}
                         }
                         retry = None;
                         self.updated(&dot.id);

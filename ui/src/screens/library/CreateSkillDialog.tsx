@@ -1,9 +1,10 @@
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { DraftRequest, DraftSummary } from "@/api/types";
 import { Field } from "@/components/Field";
+import { ModelPicker, useModels } from "@/components/ModelPicker";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,7 +24,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { errorMessage } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
@@ -45,7 +45,12 @@ export function CreateSkillDialog({ onClose }: { onClose: () => void }) {
   // Where Writing goes back to when it fails or is cancelled.
   const [from, setFrom] = useState<"describe" | "draft">("describe");
   const [idea, setIdea] = useState("");
-  const [model, setModel] = useState("sonnet");
+  // The default model of Settings until one is picked.
+  const [picked, setModel] = useState<string | null>(null);
+  const defaultModel = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data
+    ?.default_model;
+  const model = picked ?? defaultModel ?? "sonnet";
+  const models = useModels("claude", null);
   const [text, setText] = useState("");
   const [change, setChange] = useState("");
   const [check, setCheck] = useState<Check>(null);
@@ -165,17 +170,12 @@ export function CreateSkillDialog({ onClose }: { onClose: () => void }) {
                 />
               </Field>
               <Field label="Model" htmlFor="skill-model">
-                <Input
+                <ModelPicker
                   id="skill-model"
-                  list="skill-models"
                   value={model}
-                  onChange={(e) => setModel(e.target.value)}
+                  onChange={setModel}
+                  options={models.options}
                 />
-                <datalist id="skill-models">
-                  <option value="sonnet" />
-                  <option value="opus" />
-                  <option value="haiku" />
-                </datalist>
               </Field>
             </>
           )}

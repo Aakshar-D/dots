@@ -562,6 +562,53 @@ where
     Ok(rt.library().update(id, config).await?)
 }
 
+/// `connector_connect` and `connector_sign_in` (connectors spec §4, §5): the Library's own
+/// question for the connector's server, as `library_add` asks it ("Dots will run: …" for a
+/// stdio program, "Dots will send the values of … to …" for a hosted one), after a line that
+/// names who makes it. Connecting again a server whose config is already stored asks nothing.
+/// A refusal is `cancelled`, and the caller stores and starts nothing. `ask` takes the
+/// dialog's title and text.
+pub async fn connector_confirmed<F, Fut>(
+    rt: &Runtime,
+    connector: &dots_core::connectors::Connector,
+    config: McpServerConfig,
+    ask: F,
+) -> Result<(), CmdError>
+where
+    F: FnOnce(&'static str, String) -> Fut,
+    Fut: Future<Output = bool>,
+{
+    let next = LibraryConfig::McpServer(config);
+    next.validate()?;
+    let stored = rt
+        .store()
+        .find_library_item(LibraryKind::McpServer, &connector.id)
+        .await?
+        .map(|item| item.config);
+    // A server of the person's own with the connector's name is the core's refusal, before
+    // any question.
+    if stored.as_ref().is_some_and(|stored| *stored != next) {
+        return Err(dots_core::Error::Conflict(format!(
+            "The Library already has an MCP server named {} of your own. Rename or remove it in              the Library to connect {}.",
+            connector.id, connector.name
+        ))
+        .into());
+    }
+    let maker = dots_core::connectors::maker_line(connector);
+    confirm_library(rt, stored.as_ref(), &next, |question| {
+        ask(
+            library_title(&question),
+            format!(
+                "{maker}
+
+{question}"
+            ),
+        )
+    })
+    .await?;
+    Ok(())
+}
+
 /// Asks `asked`'s question for the server `id` in `scope`, and records the origin after a yes.
 /// A no answers `cancelled`, with nothing sent or recorded.
 async fn confirm_asked<F, Fut>(
@@ -1466,6 +1513,88 @@ mod tests {
 
     /// A runtime on a temporary data folder: its server on a free port, and no Claude CLI, so
     /// nothing is spawned.
+    #[tokio::test]
+    async fn a_connector_names_its_maker_before_the_librarys_question() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        let slack = dots_core::connectors::find("slack").unwrap();
+        let config = slack.server.as_ref().unwrap().config();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let err = connector_confirmed(&rt, &slack, config.clone(), |title, text| {
+            asked.borrow_mut().push((title, text));
+            std::future::ready(false)
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Cancelled);
+        let (title, text) = asked.borrow()[0].clone();
+        assert_eq!(title, "Run this program?");
+        assert!(
+            text.starts_with("Slack connector, made by korotovsky (community)"),
+            "{text}"
+        );
+        assert!(text.contains("\"slack-mcp-server@1.3.0\""), "{text}");
+        assert!(text.contains("SLACK_MCP_XOXP_TOKEN"), "{text}");
+
+        let github = dots_core::connectors::find("github").unwrap();
+        let config = github.server.as_ref().unwrap().config();
+        let asked = std::cell::RefCell::new(Vec::new());
+        connector_confirmed(&rt, &github, config, |title, text| {
+            asked.borrow_mut().push((title, text));
+            std::future::ready(true)
+        })
+        .await
+        .unwrap();
+        let (title, text) = asked.borrow()[0].clone();
+        assert_eq!(title, "Send these variables?");
+        assert!(text.contains("GitHub (official)"), "{text}");
+        assert!(
+            text.contains("CONNECTOR_GITHUB_TOKEN to \"https://api.githubcopilot.com\""),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_of_the_persons_own_with_the_name_is_refused_before_any_question() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        rt.library()
+            .add("github", http_with("https://example.com/mcp", "x"), None)
+            .await
+            .unwrap();
+        let github = dots_core::connectors::find("github").unwrap();
+        let config = github.server.as_ref().unwrap().config();
+        let asked = std::cell::Cell::new(0);
+        let err = connector_confirmed(&rt, &github, config, |_, _| {
+            asked.set(asked.get() + 1);
+            std::future::ready(true)
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Conflict);
+        assert_eq!(asked.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn connecting_a_stored_connector_again_asks_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        let github = dots_core::connectors::find("github").unwrap();
+        let config = github.server.as_ref().unwrap().config();
+        rt.library()
+            .add("github", LibraryConfig::McpServer(config.clone()), None)
+            .await
+            .unwrap();
+        let asked = std::cell::Cell::new(0);
+        connector_confirmed(&rt, &github, config, |_, _| {
+            asked.set(asked.get() + 1);
+            std::future::ready(false)
+        })
+        .await
+        .unwrap();
+        assert_eq!(asked.get(), 0);
+    }
+
     async fn runtime(dir: &tempfile::TempDir) -> Runtime {
         let mut cfg = dots_core::Config::new(dir.path().join("data"));
         cfg.port = 0;

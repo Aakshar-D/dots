@@ -54,6 +54,11 @@ impl AppState {
         self.data_dir.as_deref()
     }
 
+    /// The log folder, for the problem report. `None` when no data folder was found.
+    pub fn log_dir(&self) -> Option<&Path> {
+        self.log_dir.as_deref()
+    }
+
     pub fn rt(&self) -> Result<Arc<Runtime>, CmdError> {
         self.runtime
             .clone()
@@ -96,6 +101,13 @@ impl AppState {
 mod tests {
     use super::*;
     use crate::error::CmdErrorKind;
+
+    #[test]
+    fn the_log_folder_is_kept_for_the_problem_report() {
+        let state = AppState::new(Err("x".into()), Some(PathBuf::from("C:/logs")));
+        assert_eq!(state.log_dir(), Some(Path::new("C:/logs")));
+        assert_eq!(AppState::new(Err("x".into()), None).log_dir(), None);
+    }
 
     #[test]
     fn closing_the_window_exits_after_a_failed_start() {

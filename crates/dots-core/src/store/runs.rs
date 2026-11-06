@@ -3,26 +3,47 @@ use sqlx::sqlite::{SqliteConnection, SqliteRow};
 use sqlx::Row;
 
 use super::{opt_json, Store};
-use crate::model::{EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind};
-use crate::util::{new_id, now};
+use crate::model::{
+    Delivery, DeliveryCounts, EngineKind, NewRun, Run, RunEventRecord, RunStatus, TriggerKind,
+    MAX_RESENDS, RESENT, RESENT_AFTER_RESTART,
+};
+use crate::util::{new_id, now, timestamp};
 use crate::vault::redact::global;
 use crate::{Error, Result};
 
-const RUN_COLUMNS: &str = "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
+pub(super) const RUN_COLUMNS: &str =
+    "id, dot_id, root_run_id, parent_run_id, trigger_kind, payload, status, \
     session_id, workspace_path, branch, base_commit, summary, error, tokens_in, tokens_out, \
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
     tokens_cache_read, cost_usd, hold_released, quiet_since, quiet_limit_secs, \
-    quiet_stopped";
+    quiet_stopped, delivered_at, undelivered_at, undelivered_reason, dismissed_at";
 
-fn run_from_row(row: &SqliteRow) -> Result<Run> {
+/// The reason a run ended undelivered: the first non-empty line of its error, or `failed`.
+fn undelivered_reason(error: Option<&str>) -> String {
+    error
+        .and_then(|e| e.lines().map(str::trim).find(|l| !l.is_empty()))
+        .unwrap_or("failed")
+        .to_string()
+}
+
+pub(super) fn run_from_row(row: &SqliteRow) -> Result<Run> {
+    let status = RunStatus::parse(&row.try_get::<String, _>("status")?)?;
+    let delivered_at: Option<String> = row.try_get("delivered_at")?;
+    let undelivered_at: Option<String> = row.try_get("undelivered_at")?;
     Ok(Run {
+        delivery: Delivery::of(status, delivered_at.as_deref(), undelivered_at.as_deref()),
+        wait_reason: None,
+        delivered_at,
+        undelivered_at,
+        undelivered_reason: row.try_get("undelivered_reason")?,
+        dismissed_at: row.try_get("dismissed_at")?,
         id: row.try_get("id")?,
         dot_id: row.try_get("dot_id")?,
         root_run_id: row.try_get("root_run_id")?,
         parent_run_id: row.try_get("parent_run_id")?,
         trigger: TriggerKind::parse(&row.try_get::<String, _>("trigger_kind")?)?,
         payload: opt_json(row.try_get("payload")?)?,
-        status: RunStatus::parse(&row.try_get::<String, _>("status")?)?,
+        status,
         session_id: row.try_get("session_id")?,
         workspace_path: row.try_get("workspace_path")?,
         branch: row.try_get("branch")?,
@@ -67,6 +88,48 @@ fn event_from_row(row: &SqliteRow) -> Result<RunEventRecord> {
     })
 }
 
+/// A topic's runs read along its line (topic tools spec section 7): each run after its parent,
+/// the children of one run by `queued_at`. A move or merge hangs older runs after newer ones,
+/// so time alone would put them in the middle. `runs` is in `queued_at` order; a run whose
+/// parent is not among them starts a line of its own, in that order.
+pub fn line_order(runs: Vec<Run>) -> Vec<Run> {
+    use std::collections::{HashMap, HashSet};
+    let ids: HashSet<&str> = runs.iter().map(|r| r.id.as_str()).collect();
+    let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+    let mut starts = Vec::new();
+    for (i, run) in runs.iter().enumerate() {
+        match run
+            .parent_run_id
+            .as_deref()
+            .filter(|p| ids.contains(p) && *p != run.id)
+        {
+            Some(parent) => children.entry(parent).or_default().push(i),
+            None => starts.push(i),
+        }
+    }
+    let mut order = Vec::with_capacity(runs.len());
+    let mut seen = vec![false; runs.len()];
+    let mut stack: Vec<usize> = starts.into_iter().rev().collect();
+    loop {
+        while let Some(i) = stack.pop() {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            order.push(i);
+            if let Some(kids) = children.get(runs[i].id.as_str()) {
+                stack.extend(kids.iter().rev());
+            }
+        }
+        // A cycle of parents (never written by Dots) would hide its runs: they follow by time.
+        match seen.iter().position(|s| !s) {
+            Some(i) => stack.push(i),
+            None => break,
+        }
+    }
+    let mut slots: Vec<Option<Run>> = runs.into_iter().map(Some).collect();
+    order.into_iter().filter_map(|i| slots[i].take()).collect()
+}
+
 pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Result<String> {
     let id = new.id.clone().unwrap_or_else(new_id);
     let root = new.root_run_id.clone().unwrap_or_else(|| id.clone());
@@ -101,9 +164,108 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
     .bind(&new.retry_of)
     .bind(&new.workflow_step_run_id)
     .bind(&new.parent_run_id)
-    .execute(conn)
+    .execute(&mut *conn)
+    .await?;
+    // A run added to an archived topic brings it back (topic tools spec section 3.2).
+    sqlx::query(
+        "UPDATE topics SET archived_at = NULL, unarchived_at = ? \
+         WHERE root_run_id = ? AND archived_at IS NOT NULL",
+    )
+    .bind(now())
+    .bind(&root)
+    .execute(&mut *conn)
     .await?;
     Ok(id)
+}
+
+/// The run `id` read in `conn`.
+async fn run_in(conn: &mut SqliteConnection, id: &str) -> Result<Run> {
+    let row = sqlx::query(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE id = ?"))
+        .bind(id)
+        .fetch_optional(conn)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("run {id}")))?;
+    run_from_row(&row)
+}
+
+/// How many times the message of `id` was sent before it: the `retry_of` links from `id` back
+/// to its first run (crash resend spec section 2).
+async fn tries_before(conn: &mut SqliteConnection, id: &str) -> Result<i64> {
+    let n = sqlx::query_scalar(
+        "WITH RECURSIVE chain(id, n) AS ( \
+           SELECT retry_of, 1 FROM runs WHERE id = ? AND retry_of IS NOT NULL \
+           UNION ALL SELECT r.retry_of, c.n + 1 FROM runs r JOIN chain c ON r.id = c.id \
+           WHERE r.retry_of IS NOT NULL AND c.n < 100) \
+         SELECT COALESCE(MAX(n), 0) FROM chain",
+    )
+    .bind(id)
+    .fetch_one(conn)
+    .await?;
+    Ok(n)
+}
+
+/// Sends again the interrupted run `id` when it carried a person's message (crash resend spec
+/// section 3): a chat run of no workflow step that made no tool call and has no approved call, sent
+/// fewer than `MAX_RESENDS` times before. One sent that often fails with the reason.
+async fn resend_interrupted(conn: &mut SqliteConnection, id: &str) -> Result<()> {
+    let run = run_in(conn, id).await?;
+    if run.trigger != TriggerKind::Chat || run.workflow_step_run_id.is_some() {
+        return Ok(());
+    }
+    // An approved call may have run: sending the message again could do it twice.
+    let approved: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM approvals WHERE run_id = ? \
+         AND (status = 'approved' OR apply_state = 'unknown'))",
+    )
+    .bind(id)
+    .fetch_one(&mut *conn)
+    .await?;
+    // So could any call it made, asked about or not: the scheduler's rule for a retry
+    // (Scheduler v2 spec §6). No run event says whether a call was read-only.
+    if approved || super::schedules::called_a_tool(conn, id).await? {
+        return Ok(());
+    }
+    if tries_before(conn, id).await? >= MAX_RESENDS {
+        // Left for the person: not delivered, it shows in Needs you with Retry and Discard.
+        sqlx::query(
+            "UPDATE runs SET error = ?1, undelivered_reason = CASE WHEN delivered_at IS NULL \
+             THEN ?1 ELSE undelivered_reason END WHERE id = ?2",
+        )
+        .bind(format!(
+            "interrupted; stopped resending after {MAX_RESENDS} tries"
+        ))
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+        return Ok(());
+    }
+    let parent = match &run.parent_run_id {
+        Some(pid) => Some(run_in(conn, pid).await?),
+        None => None,
+    };
+    let mut new = NewRun::resend_of(&run, parent.as_ref());
+    if let Some(Value::Object(payload)) = &mut new.payload {
+        payload.insert(RESENT.into(), Value::from(RESENT_AFTER_RESTART));
+    }
+    let resent = insert_run(conn, &new).await?;
+    // The resend is the message's Retry (delivery tracking spec section 3.9): its files go
+    // with it, and a run that never reached the dot is dismissed, so it waits on no one in
+    // Needs you.
+    sqlx::query("UPDATE chat_attachments SET run_id = ? WHERE run_id = ?")
+        .bind(&resent)
+        .bind(id)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "UPDATE runs SET dismissed_at = ? WHERE id = ? AND delivered_at IS NULL \
+         AND undelivered_at IS NOT NULL AND dismissed_at IS NULL",
+    )
+    .bind(now())
+    .bind(id)
+    .execute(&mut *conn)
+    .await?;
+    tracing::info!(run = %id, resent = %resent, "sent an interrupted message again");
+    Ok(())
 }
 
 impl Store {
@@ -249,7 +411,8 @@ impl Store {
         .bind(root_run_id)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(run_from_row).collect()
+        let runs = rows.iter().map(run_from_row).collect::<Result<Vec<_>>>()?;
+        Ok(line_order(runs))
     }
 
     /// The `limit` newest ended runs of `dot_id` outside the lineage `root_run_id`, latest end
@@ -307,9 +470,41 @@ impl Store {
              WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
              AND (r.status = 'failed' OR r.branch IS NOT NULL) \
              AND r.workflow_step_run_id IS NULL \
-             AND r.id = (SELECT x.id FROM runs x WHERE x.root_run_id = r.root_run_id \
-                         ORDER BY x.queued_at DESC, x.id DESC LIMIT 1) \
              ORDER BY r.ended_at DESC, r.id DESC"
+        ))
+        .fetch_all(&self.pool)
+        .await?;
+        let candidates = rows.iter().map(run_from_row).collect::<Result<Vec<_>>>()?;
+        // A thread's end is the last run along its line (`line_order`), not the newest by time:
+        // a move or merge hangs older runs after newer ones (topic tools spec section 4.6).
+        let mut ends: std::collections::HashMap<String, Option<String>> = Default::default();
+        let mut out = Vec::new();
+        for run in candidates {
+            if !ends.contains_key(&run.root_run_id) {
+                let end = self
+                    .list_thread(&run.root_run_id)
+                    .await?
+                    .pop()
+                    .map(|r| r.id);
+                ends.insert(run.root_run_id.clone(), end);
+            }
+            if ends[&run.root_run_id].as_deref() == Some(run.id.as_str()) {
+                out.push(run);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Chat runs marked not delivered that the person has not retried or discarded and that
+    /// were not delivered after all: the Inbox's "Not delivered" section, newest mark first.
+    /// A run of a workflow step is not listed: its workflow run waits on the failed step, and
+    /// the run page shows it (teams spec section 10).
+    pub async fn undelivered_chat_runs(&self) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE trigger_kind = 'chat' \
+             AND undelivered_at IS NOT NULL AND dismissed_at IS NULL AND delivered_at IS NULL \
+             AND workflow_step_run_id IS NULL \
+             ORDER BY undelivered_at DESC, id DESC"
         ))
         .fetch_all(&self.pool)
         .await?;
@@ -503,6 +698,158 @@ impl Store {
         Ok(())
     }
 
+    /// Sets an event's `ts`, for tests of the Files panel.
+    #[doc(hidden)]
+    pub async fn set_event_ts(&self, run_id: &str, seq: i64, ts: &str) -> Result<()> {
+        sqlx::query("UPDATE run_events SET ts = ? WHERE run_id = ? AND seq = ?")
+            .bind(ts)
+            .bind(run_id)
+            .bind(seq)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Sets a run's `queued_at`, for tests of delivery tracking.
+    #[doc(hidden)]
+    pub async fn set_run_queued_at(&self, id: &str, at: &str) -> Result<()> {
+        sqlx::query("UPDATE runs SET queued_at = ? WHERE id = ?")
+            .bind(at)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Records that the run's engine started on it (delivery tracking spec section 2), and
+    /// clears any not-delivered mark. `None` when it was already delivered (nothing changed).
+    pub async fn mark_delivered(
+        &self,
+        id: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<Run>> {
+        if !self.set_delivered(id, at).await? {
+            return Ok(None);
+        }
+        Ok(Some(self.get_run(id).await?))
+    }
+
+    /// `mark_delivered`'s write alone: whether it changed the row. For the runner, whose run
+    /// must not fail when only reading the row back for the announcement fails.
+    pub async fn set_delivered(&self, id: &str, at: chrono::DateTime<chrono::Utc>) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE runs SET delivered_at = ?, undelivered_at = NULL, undelivered_reason = NULL \
+             WHERE id = ? AND delivered_at IS NULL",
+        )
+        .bind(timestamp(at))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() == 1)
+    }
+
+    /// Marks a run not delivered, only while it is still queued and neither delivered, marked
+    /// nor dismissed: a run just cancelled or claimed by the dispatcher is never "not
+    /// delivered" (delivery tracking spec section 3.9.1). `None` otherwise (nothing changed).
+    pub async fn mark_undelivered(
+        &self,
+        id: &str,
+        reason: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<Run>> {
+        let res = sqlx::query(
+            "UPDATE runs SET undelivered_at = ?, undelivered_reason = ? WHERE id = ? \
+             AND status = 'queued' AND delivered_at IS NULL AND undelivered_at IS NULL \
+             AND dismissed_at IS NULL",
+        )
+        .bind(timestamp(at))
+        .bind(reason)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        Ok(Some(self.get_run(id).await?))
+    }
+
+    /// Marks a run dismissed (retried or discarded), only while it is queued or has ended: a
+    /// run the dispatcher has claimed is reaching its dot and stays. `None` if it already was
+    /// dismissed (which guards against a double Retry) or is running or awaiting an approval.
+    pub async fn dismiss_run(
+        &self,
+        id: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Option<Run>> {
+        let res = sqlx::query(
+            "UPDATE runs SET dismissed_at = ? WHERE id = ? AND dismissed_at IS NULL \
+             AND status NOT IN ('running', 'awaiting_approval')",
+        )
+        .bind(timestamp(at))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(None);
+        }
+        Ok(Some(self.get_run(id).await?))
+    }
+
+    /// Clears a run's dismissal (a refused Retry leaves the message retryable).
+    pub async fn undismiss_run(&self, id: &str) -> Result<Run> {
+        sqlx::query("UPDATE runs SET dismissed_at = NULL WHERE id = ?")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.get_run(id).await
+    }
+
+    /// Queued runs with no delivery mark and no dismissal that were queued at or before
+    /// `queued_before`, oldest first.
+    pub async fn overdue_undelivered(&self, queued_before: &str) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE status = 'queued' AND delivered_at IS NULL \
+             AND undelivered_at IS NULL AND dismissed_at IS NULL AND queued_at <= ? \
+             ORDER BY queued_at, id"
+        ))
+        .bind(queued_before)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
+    /// The dot's sends queued in `[day_start, day_end)`; a resume run continues a send and is
+    /// left out (delivery tracking spec section 3.9).
+    ///
+    /// `queued_at` is compared as text, so both bounds must be written as stored times are:
+    /// with `util::timestamp` (RFC 3339 UTC, milliseconds, `Z`). Any other spelling of the same
+    /// instant (`+00:00`, no milliseconds) sorts differently, and a run queued exactly at
+    /// midnight would land in the wrong day.
+    pub async fn delivery_counts(
+        &self,
+        dot_id: &str,
+        day_start: &str,
+        day_end: &str,
+    ) -> Result<DeliveryCounts> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS sent, \
+             COALESCE(SUM(delivered_at IS NOT NULL), 0) AS delivered, \
+             COALESCE(SUM(undelivered_at IS NOT NULL AND delivered_at IS NULL), 0) AS not_delivered \
+             FROM runs WHERE dot_id = ? AND trigger_kind <> 'resume' \
+             AND queued_at >= ? AND queued_at < ?",
+        )
+        .bind(dot_id)
+        .bind(day_start)
+        .bind(day_end)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(DeliveryCounts {
+            sent: row.try_get::<i64, _>("sent")? as u32,
+            delivered: row.try_get::<i64, _>("delivered")? as u32,
+            not_delivered: row.try_get::<i64, _>("not_delivered")? as u32,
+        })
+    }
+
     /// Each dot's runs started at or after `since` (usage and limits spec section 5), heaviest
     /// dot first, then by name.
     pub async fn usage_rows(&self, since: &str) -> Result<Vec<crate::model::UsageRow>> {
@@ -619,15 +966,26 @@ impl Store {
         error: Option<&str>,
         quiet_stopped: bool,
     ) -> Result<Run> {
+        let error = error.map(|e| global().scrub(e).into_owned());
+        // A run that fails before it was delivered is marked in this write; a cancelled one
+        // leaves Needs you if it was marked (delivery tracking spec section 3.9).
         sqlx::query(
-            "UPDATE runs SET status = ?, summary = COALESCE(?, summary), error = ?, ended_at = ?, \
-             quiet_since = NULL, quiet_stopped = ? WHERE id = ?",
+            "UPDATE runs SET status = ?1, summary = COALESCE(?2, summary), error = ?3, \
+             ended_at = ?4, quiet_since = NULL, quiet_stopped = ?5, \
+             undelivered_at = CASE WHEN ?1 = 'failed' AND delivered_at IS NULL \
+              THEN COALESCE(undelivered_at, ?4) ELSE undelivered_at END, \
+             undelivered_reason = CASE WHEN ?1 = 'failed' AND delivered_at IS NULL \
+              THEN ?6 ELSE undelivered_reason END, \
+             dismissed_at = CASE WHEN ?1 = 'cancelled' AND undelivered_at IS NOT NULL \
+              THEN COALESCE(dismissed_at, ?4) ELSE dismissed_at END \
+             WHERE id = ?7",
         )
         .bind(status.as_str())
         .bind(summary.map(|s| global().scrub(s).into_owned()))
-        .bind(error.map(|e| global().scrub(e).into_owned()))
+        .bind(&error)
         .bind(now())
         .bind(quiet_stopped as i64)
+        .bind(undelivered_reason(error.as_deref()))
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -637,11 +995,16 @@ impl Store {
     /// Marks a run `failed` with `error` only if it is still `running`; `None` otherwise.
     pub async fn fail_if_running(&self, id: &str, error: &str) -> Result<Option<Run>> {
         let res = sqlx::query(
-            "UPDATE runs SET status = 'failed', error = ?, ended_at = ?, quiet_since = NULL \
-             WHERE id = ? AND status = 'running'",
+            "UPDATE runs SET status = 'failed', error = ?1, ended_at = ?2, quiet_since = NULL, \
+             undelivered_at = CASE WHEN delivered_at IS NULL \
+              THEN COALESCE(undelivered_at, ?2) ELSE undelivered_at END, \
+             undelivered_reason = CASE WHEN delivered_at IS NULL \
+              THEN ?3 ELSE undelivered_reason END \
+             WHERE id = ?4 AND status = 'running'",
         )
         .bind(error)
         .bind(now())
+        .bind(undelivered_reason(Some(error)))
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -654,10 +1017,24 @@ impl Store {
     /// Atomically cancels a run that is `queued` or `awaiting_approval`.
     /// Returns `None` when the run is in any other state (nothing changed).
     pub async fn cancel_if_inactive(&self, id: &str) -> Result<Option<Run>> {
-        let res = sqlx::query(
-            "UPDATE runs SET status = 'cancelled', ended_at = ?, quiet_since = NULL \
-             WHERE id = ? AND status IN ('queued', 'awaiting_approval')",
-        )
+        self.cancel_if_status(id, "('queued', 'awaiting_approval')")
+            .await
+    }
+
+    /// `cancel_if_inactive` for a `queued` run only: one awaiting an approval reached its dot
+    /// and is left alone. `None` when the run is not queued (nothing changed).
+    pub async fn cancel_if_queued(&self, id: &str) -> Result<Option<Run>> {
+        self.cancel_if_status(id, "('queued')").await
+    }
+
+    /// Cancels the run if its status is in `statuses`, an SQL list of literals.
+    async fn cancel_if_status(&self, id: &str, statuses: &str) -> Result<Option<Run>> {
+        let res = sqlx::query(&format!(
+            "UPDATE runs SET status = 'cancelled', ended_at = ?1, quiet_since = NULL, \
+             dismissed_at = CASE WHEN undelivered_at IS NOT NULL \
+              THEN COALESCE(dismissed_at, ?1) ELSE dismissed_at END \
+             WHERE id = ?2 AND status IN {statuses}"
+        ))
         .bind(now())
         .bind(id)
         .execute(&self.pool)
@@ -681,12 +1058,19 @@ impl Store {
     /// same transaction, expires their pending approvals (no engine is left to act on them)
     /// and closes the approved calls they were performing (`applying` becomes `unknown`,
     /// `queued` becomes `skipped`). Also closes every call left `applying`, and every call left
-    /// `queued` whose resume run is neither queued nor running. Returns the interrupted runs.
+    /// `queued` whose resume run is neither queued nor running. A person's message among them
+    /// is queued again (`resend_interrupted`), in the same transaction, so a recovery cut short
+    /// does nothing and the next one does it all. Returns the interrupted runs.
     pub async fn recover_interrupted(&self) -> Result<Vec<String>> {
         let ts = now();
         let mut tx = self.pool.begin().await?;
         let ids: Vec<String> = sqlx::query_scalar(
-            "UPDATE runs SET status = 'failed', error = 'interrupted', ended_at = ?, quiet_since = NULL \
+            "UPDATE runs SET status = 'failed', error = 'interrupted', ended_at = ?1, \
+             quiet_since = NULL, \
+             undelivered_at = CASE WHEN delivered_at IS NULL \
+              THEN COALESCE(undelivered_at, ?1) ELSE undelivered_at END, \
+             undelivered_reason = CASE WHEN delivered_at IS NULL \
+              THEN 'interrupted' ELSE undelivered_reason END \
              WHERE status = 'running' RETURNING id",
         )
         .bind(&ts)
@@ -727,6 +1111,9 @@ impl Store {
         )
         .execute(&mut *tx)
         .await?;
+        for id in &ids {
+            resend_interrupted(&mut tx, id).await?;
+        }
         tx.commit().await?;
         Ok(ids)
     }

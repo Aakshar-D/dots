@@ -1,15 +1,13 @@
 //! The skill creator (skill creator spec): drafting a `SKILL.md` with the `claude` CLI, what a
 //! draft must hold to be saved, and the folder Dots keeps the skills it makes in.
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::claude::once::{ask_once, Once, OnceFailure};
+use crate::engine::claude::once::{OnceFailure, OnceRunner, NO_CLI};
 use crate::kit::parse_frontmatter;
 use crate::library::{check_name, LibraryKind};
 use crate::{Error, Result};
@@ -118,21 +116,14 @@ pub fn unwrap_fence(answer: &str) -> String {
     format!("{}\n", inner.unwrap_or(text))
 }
 
-/// The drafts being written, at most one per dialog.
+/// The drafts being written, at most one per dialog (`OnceRunner`, by dialog id).
 pub struct SkillDrafts {
-    program: Option<PathBuf>,
-    env: Vec<(String, String)>,
-    /// Each draft's CLI starts in a new empty folder in here.
-    dir: PathBuf,
-    limit: Duration,
-    shutdown: CancellationToken,
-    /// By dialog id: a number for the draft, and what cancels it.
-    running: Mutex<HashMap<String, (u64, CancellationToken)>>,
-    next: Mutex<u64>,
+    runner: OnceRunner,
 }
 
 impl SkillDrafts {
-    /// `program` is the CLI the runtime found, `None` when there is none.
+    /// `program` is the CLI the runtime found, `None` when there is none. Each draft's CLI
+    /// starts in a new empty folder in `dir`.
     pub fn new(
         program: Option<PathBuf>,
         env: Vec<(String, String)>,
@@ -141,67 +132,26 @@ impl SkillDrafts {
         shutdown: CancellationToken,
     ) -> SkillDrafts {
         SkillDrafts {
-            program,
-            env,
-            dir,
-            limit,
-            shutdown,
-            running: Mutex::new(HashMap::new()),
-            next: Mutex::new(0),
+            runner: OnceRunner::new(program, env, dir, limit, shutdown),
         }
     }
 
     /// Writes a draft for the dialog `dialog` (`skill_draft`, spec §5) and returns its text. A
-    /// draft the same dialog asked for before is cancelled first. Fails with the CLI's error,
-    /// when the answer holds no text, when `cancel` is called, or after the time limit.
+    /// draft the same dialog asked for before is cancelled first, also when this one is
+    /// refused. Fails with the CLI's error, when the answer holds no text, when `cancel` is
+    /// called, or after the time limit.
     pub async fn draft(&self, dialog: &str, req: &DraftRequest) -> Result<String> {
-        let prompt = draft_prompt(req)?;
-        let Some(program) = self.program.clone() else {
-            return Err(Error::Other(
-                "claude CLI not found: install Claude Code or set its path in Settings".into(),
-            ));
-        };
-        let token = self.shutdown.child_token();
-        let number = {
-            let mut next = self.next.lock().unwrap();
-            *next += 1;
-            *next
-        };
-        let previous = self
-            .running
-            .lock()
-            .unwrap()
-            .insert(dialog.to_string(), (number, token.clone()));
-        if let Some((_, previous)) = previous {
-            previous.cancel();
-        }
-        let cwd = self.dir.join(crate::util::new_id());
-        let asked = match std::fs::create_dir_all(&cwd) {
-            Ok(()) => {
-                let once = Once {
-                    program: &program,
-                    env: &self.env,
-                    cwd: &cwd,
-                    model: req.model.trim(),
-                    system_prompt: DRAFTING_INSTRUCTIONS,
-                    prompt: &prompt,
-                    limit: self.limit,
-                };
-                let asked = ask_once(&once, &token).await;
-                let _ = std::fs::remove_dir_all(&cwd);
-                asked
+        let prompt = match draft_prompt(req) {
+            Ok(prompt) => prompt,
+            Err(e) => {
+                self.runner.cancel(dialog);
+                return Err(e);
             }
-            Err(e) => Err(OnceFailure::Failed(format!(
-                "could not make {}: {e}",
-                cwd.display()
-            ))),
         };
-        {
-            let mut running = self.running.lock().unwrap();
-            if running.get(dialog).is_some_and(|(n, _)| *n == number) {
-                running.remove(dialog);
-            }
-        }
+        let asked = self
+            .runner
+            .run(dialog, DRAFTING_INSTRUCTIONS, req.model.trim(), &prompt)
+            .await;
         match asked {
             Ok(answer) => {
                 let text = unwrap_fence(&answer);
@@ -213,6 +163,7 @@ impl SkillDrafts {
                     Ok(text)
                 }
             }
+            Err(OnceFailure::NoCli) => Err(Error::Other(NO_CLI.into())),
             Err(OnceFailure::Cancelled) => Err(Error::Other("The draft was cancelled.".into())),
             Err(OnceFailure::TimedOut) => Err(Error::Other(
                 "Claude took too long to write the skill.".into(),
@@ -225,9 +176,7 @@ impl SkillDrafts {
 
     /// Cancels the dialog's draft, if one is being written (`skill_draft_cancel`).
     pub fn cancel(&self, dialog: &str) {
-        if let Some((_, token)) = self.running.lock().unwrap().remove(dialog) {
-            token.cancel();
-        }
+        self.runner.cancel(dialog);
     }
 }
 

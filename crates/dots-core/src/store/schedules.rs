@@ -11,6 +11,7 @@ use sqlx::sqlite::{SqliteConnection, SqliteRow};
 use sqlx::Row;
 
 use super::runs::insert_run;
+use super::skips::{busy_run_id, insert_skip};
 use super::Store;
 use crate::model::{
     NeedsAttention, NewRun, PendingRetry, ScheduleChange, ScheduleState, ScheduleStatus, SlotStart,
@@ -168,6 +169,8 @@ impl Store {
     /// is inserted otherwise. Either way `last_slot_at = at`; a fired slot also counts, its
     /// run becomes the watched run, and a pending retry of an older slot is dropped (the
     /// caller gives `new` the dropped retry's `attempt`, so the count runs on).
+    /// With `skip_when_busy`, a fired slot whose dot has a running or approval-waiting run is
+    /// recorded as a skip instead (`SlotStart::Busy`): no run, no count, the retry kept.
     /// `Conflict`, and nothing is written, when the dot has no row or its `last_slot_at` is
     /// not before `at` (the row was reset or handled the slot after the caller read it).
     pub async fn record_slot(
@@ -175,6 +178,7 @@ impl Store {
         dot_id: &str,
         at: DateTime<Utc>,
         fire: Option<&NewRun>,
+        skip_when_busy: bool,
         now: DateTime<Utc>,
     ) -> Result<SlotStart> {
         let slot = timestamp(at);
@@ -201,6 +205,15 @@ impl Store {
             tx.commit().await?;
             return Ok(SlotStart::Skipped);
         };
+        if skip_when_busy {
+            // Inside the transaction, after the guarded update took the write lock: the busy
+            // check and the slot are one step. A pending retry and `fired_count` stay as they are.
+            if let Some(busy_run) = busy_run_id(&mut tx, dot_id).await? {
+                let skip = insert_skip(&mut tx, dot_id, &slot, &busy_run, now).await?;
+                tx.commit().await?;
+                return Ok(SlotStart::Busy(skip));
+            }
+        }
         let (run_id, joined) = start_or_join(&mut tx, new).await?;
         sqlx::query(
             "UPDATE schedule_state SET fired_count = fired_count + 1, watch_run_id = ?, \
@@ -275,18 +288,8 @@ impl Store {
     /// Whether `run_id`, or a run it resumes (up its chain of parked parents), has a
     /// `tool_call` event: it may have changed something, so it is not retried (spec §6).
     pub async fn called_a_tool(&self, run_id: &str) -> Result<bool> {
-        let called = sqlx::query_scalar(
-            "WITH RECURSIVE chain(id) AS ( \
-               SELECT ? \
-               UNION SELECT r.parent_run_id FROM runs r JOIN chain c ON r.id = c.id \
-               WHERE r.trigger_kind = 'resume' AND r.parent_run_id IS NOT NULL) \
-             SELECT EXISTS (SELECT 1 FROM run_events \
-               WHERE kind = 'tool_call' AND run_id IN (SELECT id FROM chain))",
-        )
-        .bind(run_id)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(called)
+        let mut conn = self.pool.acquire().await?;
+        called_a_tool(&mut conn, run_id).await
     }
 
     /// Whether a manual or scheduled run of `dot_id` queued after `run_id` has succeeded. A
@@ -397,4 +400,21 @@ impl Store {
         tx.commit().await?;
         state_from_row(&row).map(Some)
     }
+}
+
+/// `Store::called_a_tool` read in `conn`; recovery asks it inside its transaction (crash
+/// resend spec section 3.2).
+pub(super) async fn called_a_tool(conn: &mut sqlx::SqliteConnection, run_id: &str) -> Result<bool> {
+    let called = sqlx::query_scalar(
+        "WITH RECURSIVE chain(id) AS ( \
+           SELECT ? \
+           UNION SELECT r.parent_run_id FROM runs r JOIN chain c ON r.id = c.id \
+           WHERE r.trigger_kind = 'resume' AND r.parent_run_id IS NOT NULL) \
+         SELECT EXISTS (SELECT 1 FROM run_events \
+           WHERE kind = 'tool_call' AND run_id IN (SELECT id FROM chain))",
+    )
+    .bind(run_id)
+    .fetch_one(conn)
+    .await?;
+    Ok(called)
 }

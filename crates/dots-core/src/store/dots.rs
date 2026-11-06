@@ -4,6 +4,7 @@ use sqlx::Row;
 
 use super::library::check_uses;
 use super::Store;
+use crate::inbox::{hidden_sql, InboxKind};
 use crate::library::{LibraryConfig, Uses};
 use crate::model::{Dot, DotSpec, EngineKind, WorkspaceMode};
 use crate::schedule::Schedule;
@@ -61,6 +62,8 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
 fn prepared(spec: &DotSpec, previous: Option<&Schedule>) -> Result<DotSpec> {
     spec.validate()?;
     let mut spec = spec.clone();
+    // A model id is stored without the spaces around it (model switcher spec section 2.3).
+    spec.model = spec.model.trim().to_string();
     if let Some(schedule) = &mut spec.schedule {
         // Whole milliseconds, as `util::now()`: the stored anchor reads back the same.
         schedule.prepare_save(previous, Utc::now().trunc_subsecs(3), &Local)?;
@@ -79,10 +82,27 @@ fn schedule_json(spec: &DotSpec) -> Result<Option<String>> {
 fn map_unique(e: sqlx::Error, name: &str) -> Error {
     if let sqlx::Error::Database(db) = &e {
         if db.is_unique_violation() {
-            return Error::Conflict(format!("a dot named {name:?} already exists"));
+            return name_taken(name);
         }
     }
     e.into()
+}
+
+fn name_taken(name: &str) -> Error {
+    Error::Conflict(format!("a dot named {name:?} already exists"))
+}
+
+/// Whether another dot (not `id`) has `name` in any letter case. The UNIQUE index on `name`
+/// is case-sensitive, so this is checked apart.
+async fn clashes_in_case(tx: &mut sqlx::SqliteConnection, name: &str, id: &str) -> Result<bool> {
+    Ok(
+        sqlx::query("SELECT 1 FROM dots WHERE name = ? COLLATE NOCASE AND id != ?")
+            .bind(name)
+            .bind(id)
+            .fetch_optional(tx)
+            .await?
+            .is_some(),
+    )
 }
 
 impl Store {
@@ -130,7 +150,13 @@ impl Store {
         let spec = &spec;
         let id = new_id();
         let ts = now();
-        let mut tx = self.pool.begin().await?;
+        // The write lock up front: the clash check reads before the insert, and a deferred
+        // transaction that reads and then writes fails at once (busy) when another writer
+        // committed in between.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if clashes_in_case(&mut tx, &spec.name, &id).await? {
+            return Err(name_taken(&spec.name));
+        }
         sqlx::query(
             "INSERT INTO dots (id, name, instructions, engine, model, endpoint_url, workdir, \
              workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
@@ -214,7 +240,11 @@ impl Store {
         let mut spec = prepared(spec, stored.schedule.as_ref())?;
         spec.variables = self.synced_grants(Some(&stored.uses), &spec).await?;
         let spec = &spec;
-        let mut tx = self.pool.begin().await?;
+        // The write lock up front, as in `create_dot`: the clash check reads before the update.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        if spec.name != stored.name && clashes_in_case(&mut tx, &spec.name, id).await? {
+            return Err(name_taken(&spec.name));
+        }
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \
@@ -335,34 +365,51 @@ impl Store {
     /// its open questions, pending approvals, paused watchers, app proposals waiting for review
     /// and the workflow runs its chats started that wait for the person (teams spec section
     /// 10); and those plus its runs that ended and its notes posted after its `seen_at` (none
-    /// without one). `NotFound` for an unknown dot.
+    /// without one). Items the person snoozed or marked done are left out.
+    /// `NotFound` for an unknown dot.
     pub async fn dot_counts(&self, id: &str) -> Result<(u32, u32)> {
-        let row = sqlx::query(
+        // An item the person snoozed or marked done is left out of every term that is an
+        // Inbox item (snooze and done spec section 4.2). Quiet runs are not Inbox items.
+        let sql = format!(
             "SELECT \
              (SELECT COUNT(*) FROM messages m WHERE m.dot_id = d.id AND m.kind = 'question' \
-              AND m.answered_at IS NULL AND m.dismissed_at IS NULL) \
+              AND m.answered_at IS NULL AND m.dismissed_at IS NULL AND {question}) \
              + (SELECT COUNT(*) FROM approvals a JOIN runs r ON r.id = a.run_id \
-              WHERE r.dot_id = d.id AND a.status = 'pending') \
+              WHERE r.dot_id = d.id AND a.status = 'pending' AND {approval}) \
              + (SELECT COUNT(*) FROM watchers w WHERE w.dot_id = d.id \
-              AND w.paused_reason IS NOT NULL) \
+              AND w.paused_reason IS NOT NULL AND {watcher}) \
              + (SELECT COUNT(*) FROM app_proposals p WHERE p.dot_id = d.id \
-              AND p.status = 'pending') \
+              AND p.status = 'pending' AND {app_review}) \
              + (SELECT COUNT(*) FROM runs q WHERE q.dot_id = d.id AND q.status = 'running' \
               AND q.quiet_since IS NOT NULL) \
+             + (SELECT COUNT(*) FROM runs u WHERE u.dot_id = d.id AND u.trigger_kind = 'chat' \
+              AND u.undelivered_at IS NOT NULL AND u.dismissed_at IS NULL \
+              AND u.delivered_at IS NULL AND u.workflow_step_run_id IS NULL \
+              AND {not_delivered}) \
              + (SELECT COUNT(*) FROM workflow_runs w JOIN runs o ON o.id = w.origin_run_id \
               WHERE o.dot_id = d.id AND w.status = 'waiting' AND w.waiting_on IS NOT NULL) \
              AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
-              AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at) \
+              AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at \
+              AND {review} AND {ended_not_delivered}) \
              + (SELECT COUNT(*) FROM messages m WHERE m.dot_id = d.id AND m.kind = 'note' \
-              AND m.created_at > d.seen_at) END AS fresh \
+              AND m.created_at > d.seen_at AND {note}) END AS fresh \
              FROM dots d WHERE d.id = ?",
-        )
-        .bind(id)
-        .fetch_optional(&self.pool)
-        .await?
-        .ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
+            question = hidden_sql(InboxKind::Message, "m.id"),
+            approval = hidden_sql(InboxKind::Approval, "a.id"),
+            watcher = hidden_sql(InboxKind::Watcher, "w.id || '@' || w.paused_at"),
+            app_review = hidden_sql(InboxKind::AppReview, "p.id"),
+            not_delivered = hidden_sql(InboxKind::NotDelivered, "u.id"),
+            review = hidden_sql(InboxKind::Review, "r.id"),
+            ended_not_delivered = hidden_sql(InboxKind::NotDelivered, "r.id"),
+            note = hidden_sql(InboxKind::Message, "m.id"),
+        );
+        let row = sqlx::query(&sql)
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
         let needs_you = row.try_get::<i64, _>("needs_you")? as u32;
         let fresh = row.try_get::<i64, _>("fresh")? as u32;
         Ok((needs_you, needs_you + fresh))

@@ -5,8 +5,10 @@ import {
   Inbox as InboxIcon,
   LayoutGrid,
   Library as LibraryIcon,
+  Plug,
   Rocket,
   Settings as SettingsIcon,
+  Target,
   UsersRound,
 } from "lucide-react";
 import { useEffect } from "react";
@@ -18,7 +20,8 @@ import { Banners } from "@/app/Banners";
 import { LimitsMeter } from "@/components/LimitsMeter";
 import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
-import { isOpenQuestion, waits } from "@/lib/messages";
+import { inboxWaiting, shownMessages } from "@/lib/inbox";
+import { isOpenQuestion } from "@/lib/messages";
 import { keys } from "@/lib/query";
 import { useRuntimeEvents } from "@/lib/runtime-events";
 import { useActivity } from "@/lib/use-activity";
@@ -26,9 +29,11 @@ import { useActivity } from "@/lib/use-activity";
 const LINKS = [
   { to: "/home", label: "Home", icon: House },
   { to: "/inbox", label: "Inbox", icon: InboxIcon },
+  { to: "/intents", label: "Intents", icon: Target },
   { to: "/apps", label: "Apps", icon: LayoutGrid },
   { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/teams", label: "Teams", icon: UsersRound },
+  { to: "/connectors", label: "Connectors", icon: Plug },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 /// Only a publisher sees it (updates UI spec section 5.1).
@@ -51,31 +56,15 @@ export function Layout() {
   }).data;
   // What the dots have for the person, read or not (needs-you spec section 5).
   const unread = useQuery({ queryKey: keys.unreadTotal, queryFn: commands.unreadTotal }).data ?? 0;
-  // The same count as the tray's (`inbox_count`), the open questions and unread notes included.
-  const waiting =
-    (inbox
-      ? inbox.approvals.length +
-        inbox.review_runs.length +
-        inbox.attention.length +
-        inbox.tools_changed.length +
-        inbox.watchers.length +
-        // Proposed instructions wait for the person's answer.
-        inbox.instructions.length +
-        // Runs held for Claude usage wait as one line, however many.
-        Math.min(inbox.held.length, 1) +
-        // A waiting app review counts like an approval.
-        inbox.app_reviews.length +
-        // A team with a member outside its account or workspace.
-        inbox.team_scope.length +
-        // A workflow run waiting on the person: a check, a limit or a failed step.
-        inbox.workflows.length
-      : 0) + (messages ?? []).filter(waits).length;
+  // The same count as the tray's (`inbox_count`), the open questions and unread notes included,
+  // and what the person snoozed or marked done left out.
+  const waiting = inboxWaiting(inbox, messages);
   // A pending approval or an open question needs the person: the counts take the needs colour
   // (deep-teal spec section 4).
   const needs =
     (inbox?.approvals.length ?? 0) > 0 ||
     (inbox?.app_reviews.length ?? 0) > 0 ||
-    (messages ?? []).some(isOpenQuestion);
+    shownMessages(inbox, messages ?? []).some(isOpenQuestion);
   return (
     <div className="flex h-screen bg-background text-sm text-foreground">
       <nav

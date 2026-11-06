@@ -22,6 +22,8 @@ pub enum Permission {
     ManageMembers,
     ManageWorkspaces,
     SignRoster,
+    /// Add, change, complete or delete the account's goals (Intents).
+    EditGoals,
 }
 
 impl Permission {
@@ -38,6 +40,7 @@ impl Permission {
             Self::ManageMembers => "manage members",
             Self::ManageWorkspaces => "manage workspaces",
             Self::SignRoster => "sign the member list",
+            Self::EditGoals => "change goals",
         }
     }
 }
@@ -52,7 +55,8 @@ pub fn can(role: Role, p: Permission) -> bool {
         | Permission::AnswerApprovals
         | Permission::GrantEntries
         | Permission::AddMcp
-        | Permission::CreateApiKeys => role != Role::Viewer,
+        | Permission::CreateApiKeys
+        | Permission::EditGoals => role != Role::Viewer,
         Permission::ManageMembers | Permission::ManageWorkspaces | Permission::SignRoster => {
             matches!(role, Role::Owner | Role::Admin)
         }

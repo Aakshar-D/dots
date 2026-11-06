@@ -6,10 +6,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, NaiveTime, TimeDelta, Utc, Weekday};
 use dots_core::engine::Engine;
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
-use dots_core::model::{Dot, EngineKind, Run, TriggerKind, Watcher, WatcherConfig};
+use dots_core::model::{Dot, EngineKind, Run, TriggerKind, WatchHours, Watcher, WatcherConfig};
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::store::Store;
 use dots_core::vault::{EntryKind, Vault};
@@ -19,6 +19,7 @@ use tokio::sync::broadcast::Receiver;
 use tokio_util::sync::CancellationToken;
 
 use super::clock::FakeClock;
+use super::tz::TestTz;
 use super::{spec, temp_store};
 
 pub fn t0() -> DateTime<Utc> {
@@ -29,6 +30,36 @@ pub fn t0() -> DateTime<Utc> {
 
 pub fn after(secs: i64) -> DateTime<Utc> {
     t0() + TimeDelta::seconds(secs)
+}
+
+/// Monday to Friday, 09:00 to 18:00. `t0` (Friday 11:00 in `TestTz`) is inside.
+pub fn weekdays_9_to_18() -> WatchHours {
+    WatchHours {
+        days: vec![
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ],
+        start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+        end: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+    }
+}
+
+/// Saturday 24 October 2026, 10:00 in `TestTz` (UTC+2 that day): outside `weekdays_9_to_18`.
+pub fn saturday_10() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-10-24T08:00:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc)
+}
+
+/// Monday 26 October 2026, 09:00 in `TestTz` (UTC+1 from 25 October): `weekdays_9_to_18`
+/// opens, the first time after `saturday_10`.
+pub fn monday_9() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2026-10-26T08:00:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc)
 }
 
 pub struct Harness {
@@ -108,6 +139,7 @@ impl Harness {
             acting: acting.clone(),
             data_dir: dir.path().join("data"),
             sources: sources.clone(),
+            zone: Arc::new(TestTz),
         })
     }
 
@@ -147,7 +179,34 @@ impl Harness {
     }
 
     pub async fn watcher(&self, dot: &Dot, name: &str, config: WatcherConfig) -> Watcher {
-        self.watchers.add(&dot.id, name, config).await.unwrap()
+        self.watchers
+            .add(&dot.id, name, config, None)
+            .await
+            .unwrap()
+    }
+
+    pub async fn watcher_with_hours(
+        &self,
+        dot: &Dot,
+        name: &str,
+        config: WatcherConfig,
+        hours: WatchHours,
+    ) -> Watcher {
+        self.watchers
+            .add(&dot.id, name, config, Some(hours))
+            .await
+            .unwrap()
+    }
+
+    /// The `WatcherUpdated` events since the last call: their watcher ids.
+    pub fn updated(&mut self) -> Vec<String> {
+        let mut out = Vec::new();
+        while let Ok(event) = self.events.try_recv() {
+            if let RuntimeEvent::WatcherUpdated { watcher_id, .. } = event {
+                out.push(watcher_id);
+            }
+        }
+        out
     }
 
     /// A folder under the harness's temp folder, made now.
@@ -220,6 +279,16 @@ impl Harness {
             }
         }
         out
+    }
+
+    /// Runs `sql` behind the store's back (a trigger that makes a write fail, say).
+    pub async fn exec(&self, sql: &str) {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(self.dir.path().join("dots.db"))
+            .foreign_keys(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query(sql).execute(&pool).await.unwrap();
+        pool.close().await;
     }
 
     pub fn path_text(path: &Path) -> String {

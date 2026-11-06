@@ -383,6 +383,8 @@ fn a_schedule_view_says_what_comes_next() {
             retry_at: None,
             retry_attempt: None,
             attention: None,
+            last_skipped_at: None,
+            skipped_since_run: 0,
         }
     );
     // A slot the pass has not handled yet is past: it is not the next one.
@@ -517,6 +519,8 @@ async fn the_overview_shows_where_each_schedule_stands() {
                 run_id: failed.id,
                 error: Some("model server down".into()),
             }),
+            last_skipped_at: None,
+            skipped_since_run: 0,
         })
     );
     assert_eq!(

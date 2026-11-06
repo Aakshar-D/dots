@@ -995,6 +995,9 @@ async fn a_step_s_runs_are_never_runs_to_review() {
         .map(|r| r.id)
         .collect();
     assert_eq!(listed, vec![own.id]);
+    // The step's chat reply that failed before it was delivered is not listed as Not delivered
+    // either: the workflow run waits on its failed step.
+    assert!(f.store.undelivered_chat_runs().await.unwrap().is_empty());
 
     let mut parked = NewRun::new(&f.dot, TriggerKind::Manual);
     parked.workflow_step_run_id = Some(step.id.clone());

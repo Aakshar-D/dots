@@ -48,7 +48,7 @@ describe("the home's routes", () => {
 
   it("keeps the editor, the Inbox, the Library and Settings where they were", async () => {
     backend.on("get_dot", () => dot);
-    for (const path of [`/dots/${dot.id}`, "/dots/new", "/inbox", "/library", "/settings"]) {
+    for (const path of [`/dots/${dot.id}`, "/dots/new", "/inbox", "/library", "/settings/general"]) {
       const router = await lands(path, path);
       router.dispose();
     }
@@ -58,11 +58,13 @@ describe("the home's routes", () => {
     backend.on("inbox", () => sample.inbox);
     const { user, router } = renderApp("/settings");
     const rail = await screen.findByRole("navigation", { name: "Main" });
-    const inbox = await within(rail).findByRole("link", { name: "Inbox, 10 waiting" });
-    expect(inbox).toHaveAttribute("title", "Inbox, 10 waiting");
-    expect(within(inbox).getByText("10")).toBeVisible();
+    const inbox = await within(rail).findByRole("link", { name: "Inbox, 11 waiting" });
+    expect(inbox).toHaveAttribute("title", "Inbox, 11 waiting");
+    expect(within(inbox).getByText("11")).toBeVisible();
     await user.click(within(rail).getByRole("link", { name: "Home" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
-    expect(await screen.findByRole("link", { name: "Create your first dot" })).toBeVisible();
+    expect(
+      await screen.findByRole("heading", { name: "What should your first dot do?" }),
+    ).toBeVisible();
   });
 });

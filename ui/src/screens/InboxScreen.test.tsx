@@ -21,16 +21,40 @@ const failedRun = {
 
 /// An Inbox as a test writes it: without paused watchers, held runs, proposed instructions,
 /// apps to review, team scope problems or waiting workflow runs unless it says so.
-type InboxSpec = Omit<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope" | "workflows"> &
-  Partial<Pick<Inbox, "watchers" | "held" | "instructions" | "app_reviews" | "team_scope" | "workflows">>;
+type Optional =
+  | "watchers"
+  | "held"
+  | "instructions"
+  | "app_reviews"
+  | "team_scope"
+  | "workflows"
+  | "not_delivered"
+  | "back"
+  | "snoozed"
+  | "done"
+  | "hidden_messages";
+type InboxSpec = Omit<Inbox, Optional> & Partial<Pick<Inbox, Optional>>;
+const none = {
+  watchers: [],
+  held: [],
+  instructions: [],
+  app_reviews: [],
+  team_scope: [],
+  workflows: [],
+  not_delivered: [],
+  back: [],
+  snoozed: [],
+  done: [],
+  hidden_messages: [],
+};
 
 /// An inbox the test can empty, the way a decision or a review does.
 function inbox(initial: InboxSpec) {
-  let current: Inbox = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], ...initial };
+  let current: Inbox = { ...none, ...initial };
   backend.on("inbox", () => current);
   return {
     set: (next: InboxSpec) => {
-      current = { watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], ...next };
+      current = { ...none, ...next };
     },
   };
 }
@@ -498,6 +522,50 @@ describe("saving a rule with an approval", () => {
     expect(within(shown).getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 
+  it("says why a call that touches a private folder offers no rule", async () => {
+    waiting([]);
+    backend.on("approval_touches_private", () => true);
+    const { user } = renderApp("/inbox");
+    const shown = await card();
+    expect(
+      await within(shown).findByText("This touches a private folder, so it always asks."),
+    ).toBeVisible();
+    expect(backend.callsTo("approval_touches_private")[0]).toEqual({ id: approval.id });
+    expect(within(shown).queryByRole("button", opener)).toBeNull();
+    // The one call can still be approved.
+    await user.click(within(shown).getByRole("button", { name: "Approve" }));
+    await waitFor(() =>
+      expect(backend.callsTo("decide_approval")).toEqual([
+        { id: approval.id, approved: true, note: null, allowRule: null },
+      ]),
+    );
+  });
+
+  it("keeps the card whole when the private-folder check fails", async () => {
+    waiting();
+    backend.on("approval_touches_private", () => {
+      throw { kind: "internal", message: "database is locked" };
+    });
+    const { user, listening } = renderApp("/inbox");
+    const shown = await card();
+    await listening();
+    await waitFor(() => expect(backend.callsTo("approval_touches_private").length).toBe(1));
+    expect(within(shown).queryByText(/private folder/)).toBeNull();
+    // The core still refuses a rule for a private call, so the rules are offered as usual.
+    await within(shown).findByRole("button", opener);
+    await user.click(within(shown).getByRole("button", { name: "Approve" }));
+    await waitFor(() => expect(backend.callsTo("decide_approval")).toHaveLength(1));
+  });
+
+  it("says nothing of private folders for an ordinary call", async () => {
+    waiting([]);
+    const { listening } = renderApp("/inbox");
+    const shown = await card();
+    await listening();
+    await waitFor(() => expect(backend.callsTo("approval_touches_private").length).toBeGreaterThan(0));
+    expect(within(shown).queryByText(/private folder/)).toBeNull();
+  });
+
   it("says that the rules could not be loaded, and the call can still be decided", async () => {
     waiting();
     backend.on("approval_rule_candidates", () => {
@@ -537,6 +605,7 @@ describe("the approvals of one run", () => {
     app_reviews: [],
     team_scope: [],
     workflows: [],
+    not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
@@ -601,7 +670,8 @@ describe("the approvals of one run", () => {
     await user.click(await screen.findByRole("button", { name: confirm }));
     expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
     expect(backend.callsTo("decide_run_approvals")).toEqual([
-      { runId: approval.run_id, approved, note: null },
+      // Only the calls the confirmation listed: never a snoozed call of the same run.
+      { runId: approval.run_id, ids: [approval.id, second.id], approved, note: null },
     ]);
     // One command for the run, and none per call.
     expect(backend.callsTo("decide_approval")).toEqual([]);
@@ -713,6 +783,7 @@ describe("a schedule that needs attention", () => {
     app_reviews: [],
     team_scope: [],
     workflows: [],
+    not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });
   const item = () => screen.findByRole("listitem", { name: `${flagged.dot_name} needs attention` });

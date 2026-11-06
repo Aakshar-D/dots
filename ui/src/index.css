@@ -168,6 +168,38 @@
     }
 }
 
+/* The working line's phrase: a soft light that sweeps across the words while a dot works. */
+.working-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted-foreground) 0%,
+    var(--muted-foreground) 35%,
+    var(--foreground) 50%,
+    var(--muted-foreground) 65%,
+    var(--muted-foreground) 100%
+  );
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: working-shimmer 2.2s linear infinite;
+}
+@keyframes working-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .working-shimmer {
+    animation: none;
+    background: none;
+    color: var(--muted-foreground);
+  }
+}
+
 /* Reduced motion: the running pulse and every transition stop (spec section 6). */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -177,4 +209,25 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     }
+}
+/* A dot's generated avatar (lib/dot-avatar.ts): its hue is set per avatar, its lightness per
+   theme, so it keeps contrast against both backgrounds and its inner mark against its body. */
+.dot-avatar {
+  --avatar-body: hsl(var(--avatar-hue) 55% 38%);
+  --avatar-ink: #ffffff;
+}
+.dark .dot-avatar {
+  --avatar-body: hsl(var(--avatar-hue) 65% 66%);
+  --avatar-ink: #101418;
+}
+.dot-avatar-body {
+  fill: var(--avatar-body);
+  stroke: var(--avatar-body);
+  stroke-width: 1;
+}
+.dot-avatar-mark {
+  fill: var(--avatar-ink);
+}
+.dot-avatar-mark-line {
+  stroke: var(--avatar-ink);
 }

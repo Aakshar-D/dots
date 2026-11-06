@@ -341,7 +341,7 @@ fn local_instants<Tz: TimeZone>(tz: &Tz, local: NaiveDateTime) -> LocalResult<Da
 /// occurs twice is its earlier instant; a time in a gap moves forward by the length of the gap
 /// (02:30 on a night when clocks go from 02:00 to 03:00 becomes 03:30). Only an instant that
 /// reads back as `local` counts (`local_instants`).
-fn resolve<Tz: TimeZone>(tz: &Tz, local: NaiveDateTime) -> Option<DateTime<Tz>> {
+pub(crate) fn resolve<Tz: TimeZone>(tz: &Tz, local: NaiveDateTime) -> Option<DateTime<Tz>> {
     match local_instants(tz, local) {
         LocalResult::Single(t) => Some(t),
         LocalResult::Ambiguous(earliest, _) => Some(earliest),
@@ -444,7 +444,7 @@ fn newest_wall_clock<Tz: TimeZone>(
         .find(|t| t <= upto)
 }
 
-mod local_time {
+pub(crate) mod local_time {
     use chrono::NaiveTime;
     use serde::de::Error as _;
     use serde::{Deserialize, Deserializer, Serializer};
@@ -476,7 +476,7 @@ mod local_date_time {
     }
 }
 
-mod weekdays {
+pub(crate) mod weekdays {
     use chrono::Weekday;
     use serde::de::Error as _;
     use serde::ser::SerializeSeq;

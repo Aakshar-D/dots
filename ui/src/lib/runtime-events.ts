@@ -12,9 +12,11 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
     case "run_updated":
       // Lists and views a run shows up in. The prefixes cover every dot's and thread's key. The
       // run's approvals are among them: a run that ends takes its pending ones with it.
+      // The topic rows too: a run added to an archived topic brings it back.
       for (const queryKey of [
         ["thread"],
         ["runs"],
+        ["topics"],
         ["diff"],
         keys.overview,
         keys.inbox,
@@ -67,6 +69,19 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // Where the dot's schedule stands: its next run, retry and "Needs attention", which the
       // Dots list and the Inbox show.
       for (const queryKey of [keys.dots, keys.overview, keys.inbox]) invalidate(qc, queryKey);
+      break;
+    case "schedule_skipped":
+      // The skip line in the conversation, and the header's count (the dots' schedule state).
+      for (const queryKey of [keys.scheduleSkips(event.dot_id), keys.overview, keys.dots]) {
+        invalidate(qc, queryKey);
+      }
+      break;
+    case "topics_changed":
+      // The dot's topic rows, and its runs and threads: a move or merge changes which topic a
+      // run is in, and no `run_updated` says so.
+      for (const queryKey of [keys.topics(event.dot_id), ["thread"], ["runs"]]) {
+        invalidate(qc, queryKey);
+      }
       break;
     case "library_updated":
       // The Library lists, the Inbox group of a changed tool list, and what shows the dots that
@@ -148,6 +163,28 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       invalidate(qc, ["app-proposals"]);
       invalidate(qc, keys.inbox);
       invalidate(qc, keys.overview);
+      break;
+    case "inbox_updated":
+      // An item was snoozed, unsnoozed, marked done or undone, or came back: the Inbox, and
+      // the counts under the overview (the dots' badges and the Home total).
+      invalidate(qc, keys.inbox);
+      invalidate(qc, keys.overview);
+      break;
+    case "snooze_ended":
+      // For the notification; the `inbox_updated` sent with it refreshes the screens.
+      break;
+    case "intents_updated":
+      // The Intents screen of that workspace.
+      invalidate(qc, keys.intents(event.org_id ?? "personal", event.workspace_id));
+      break;
+    case "scheduled_message_updated":
+      // The dot's scheduled cards and its menu's count. Once sent, its card gives way to the
+      // chat run it became: the runs and threads are read again too.
+      invalidate(qc, keys.scheduledMessages(event.message.dot_id));
+      if (event.message.status === "sent") {
+        invalidate(qc, ["runs"]);
+        invalidate(qc, ["thread"]);
+      }
       break;
     case "limits_updated":
       // The rail's bars read the limits; the Inbox's held runs and the Usage page follow.

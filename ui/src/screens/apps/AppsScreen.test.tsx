@@ -52,7 +52,7 @@ function expenses(over: Partial<{ every_dot: boolean; previous: number | null; d
 }
 
 describe("the Apps screen", () => {
-  it("sits on the rail between Inbox and Library", async () => {
+  it("sits on the rail between Intents and Library", async () => {
     backend.on("apps_list", () => []);
     backend.on("apps_kept_list", () => []);
     renderApp("/apps");
@@ -60,7 +60,7 @@ describe("the Apps screen", () => {
     const names = within(nav)
       .getAllByRole("link")
       .map((link) => link.getAttribute("aria-label"));
-    expect(names.indexOf("Apps")).toBe(names.indexOf("Inbox") + 1);
+    expect(names.indexOf("Apps")).toBe(names.indexOf("Intents") + 1);
     expect(names.indexOf("Library")).toBe(names.indexOf("Apps") + 1);
     expect(await screen.findByText(/No apps yet/)).toBeVisible();
   });

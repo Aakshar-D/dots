@@ -294,8 +294,9 @@ export function Banners() {
   });
   if (!status) return null;
   const { claude } = status;
-  const settings = (
-    <Link to="/settings" className="underline">
+  // Each banner opens the Settings tab that can fix it.
+  const settings = (tab: "runs" | "claude") => (
+    <Link to={`/settings/${tab}`} className="underline">
       Open Settings
     </Link>
   );
@@ -307,7 +308,7 @@ export function Banners() {
             The local server is not running: {status.server_error}. Webhooks are off and Claude
             dots cannot run.
           </span>
-          {settings}
+          {settings("runs")}
         </Banner>
       )}
       {!claude.program && (
@@ -316,10 +317,10 @@ export function Banners() {
             The claude CLI was not found. Claude dots cannot run until it is installed or its
             path is set.
           </span>
-          {settings}
+          {settings("claude")}
         </Banner>
       )}
-      {claude.mismatch && (
+      {claude.mismatch && !!overview.data?.length && (
         <Banner tone="warning">
           <span className="flex-1">
             Claude CLI {claude.version} has not been tested with Dots (tested:{" "}

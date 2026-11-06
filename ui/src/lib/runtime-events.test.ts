@@ -64,6 +64,8 @@ describe("runtime events and the query cache", () => {
       keys.thread(run.root_run_id),
       keys.runs(run.dot_id),
       [...keys.runs(run.dot_id), "chat"],
+      // A run added to an archived topic brings it back.
+      keys.topics(run.dot_id),
       keys.diff(run.id),
       keys.overview,
       keys.inbox,
@@ -109,6 +111,24 @@ describe("runtime events and the query cache", () => {
     ]);
   });
 
+  it("marks the inbox and the overview stale when the Inbox's marks change", () => {
+    const qc = createQueryClient();
+    for (const key of [keys.inbox, keys.overview, keys.dots]) qc.setQueryData(key, []);
+    applyRuntimeEvent(qc, { type: "inbox_updated" });
+    expect([stale(qc, keys.inbox), stale(qc, keys.overview), stale(qc, keys.dots)]).toEqual([
+      true,
+      true,
+      false,
+    ]);
+  });
+
+  it("leaves the caches to the inbox update that comes with items back from snooze", () => {
+    const qc = createQueryClient();
+    for (const key of [keys.inbox, keys.overview]) qc.setQueryData(key, []);
+    applyRuntimeEvent(qc, { type: "snooze_ended", items: [] });
+    expect([stale(qc, keys.inbox), stale(qc, keys.overview)]).toEqual([false, false]);
+  });
+
   it("marks the dots, the overview and the inbox stale on a schedule update", () => {
     const qc = createQueryClient();
     const lists = [keys.dots, keys.overview, keys.inbox];
@@ -118,6 +138,54 @@ describe("runtime events and the query cache", () => {
     applyRuntimeEvent(qc, { type: "schedule_updated", dot_id: sample.dot.id });
     for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("marks the dot's skips, the overview and the dots stale when a slot is skipped", () => {
+    const qc = createQueryClient();
+    const lists = [keys.scheduleSkips(sample.dot.id), keys.overview, keys.dots];
+    const untouched = [keys.scheduleSkips("other"), keys.inbox, keys.runs(sample.dot.id)];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, {
+      type: "schedule_skipped",
+      dot_id: sample.dot.id,
+      skip: sample.scheduleSkip,
+    });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("marks the dot's topics, runs and threads stale when its topics change", () => {
+    const qc = createQueryClient();
+    const lists = [keys.topics(sample.dot.id), keys.runs(sample.dot.id), keys.thread("r1")];
+    const untouched = [keys.topics("other"), keys.inbox, keys.overview];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "topics_changed", dot_id: sample.dot.id });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("marks a dot's scheduled messages stale when one changes, and the runs once it is sent", () => {
+    const qc = createQueryClient();
+    const dotId = sample.scheduledMessage.dot_id;
+    const mine = keys.scheduledMessages(dotId);
+    const runs = keys.runs(dotId);
+    const others = [keys.scheduledMessages("other"), keys.inbox];
+    for (const key of [mine, runs, ...others]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "scheduled_message_updated", message: sample.scheduledMessage });
+    expect(stale(qc, mine)).toBe(true);
+    expect(stale(qc, runs)).toBe(false);
+    for (const key of others) expect(stale(qc, key), key.join("/")).toBe(false);
+
+    qc.setQueryData(mine, []);
+    applyRuntimeEvent(qc, {
+      type: "scheduled_message_updated",
+      message: { ...sample.scheduledMessage, status: "sent", run_id: "01J0RUN5" },
+    });
+    expect(stale(qc, mine)).toBe(true);
+    expect(stale(qc, runs)).toBe(true);
   });
 
   it("marks the dot's proposed instructions and the inbox stale when a proposal changes", () => {
@@ -521,7 +589,7 @@ describe("a run's events while their list loads or refetches", () => {
 });
 
 describe("a change announced while a fetch is in flight", () => {
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [] };
   /// Shows the Inbox as the app's frame does.
   const watchInbox = (qc: Client) =>
     new QueryObserver(qc, { queryKey: keys.inbox, queryFn: commands.inbox }).subscribe(() => {});

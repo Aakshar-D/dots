@@ -1,4 +1,4 @@
-use chrono::{DateTime, TimeZone, Utc};
+use chrono::{DateTime, NaiveTime, TimeZone, Utc, Weekday};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -32,6 +32,49 @@ str_enum!(RunStatus {
     Failed => "failed",
     Cancelled => "cancelled",
 });
+str_enum!(Delivery {
+    Delivered => "delivered",
+    Waiting => "waiting",
+    NotDelivered => "not_delivered",
+});
+str_enum!(WaitReason {
+    Busy => "busy",
+    UsageHold => "usage_hold",
+    Updating => "updating",
+    DotBusy => "dot_busy",
+    Queued => "queued",
+});
+
+impl Delivery {
+    /// Whether a run reached its dot (delivery tracking spec section 2): `delivered_at` means
+    /// delivered; else `undelivered_at` means not delivered; else a run still to end is waiting.
+    /// `None` for a run that ended with neither mark (cancelled before it started, or history
+    /// from before migration 0030).
+    pub fn of(
+        status: RunStatus,
+        delivered_at: Option<&str>,
+        undelivered_at: Option<&str>,
+    ) -> Option<Delivery> {
+        if delivered_at.is_some() {
+            Some(Delivery::Delivered)
+        } else if undelivered_at.is_some() {
+            Some(Delivery::NotDelivered)
+        } else if !status.is_terminal() {
+            Some(Delivery::Waiting)
+        } else {
+            None
+        }
+    }
+}
+
+/// A dot's sends for one day (delivery tracking spec section 3.9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeliveryCounts {
+    pub sent: u32,
+    pub delivered: u32,
+    pub not_delivered: u32,
+}
+
 str_enum!(ApprovalStatus {
     Pending => "pending",
     Approved => "approved",
@@ -126,6 +169,27 @@ pub struct DotSpec {
     pub enabled: bool,
 }
 
+/// A dot's name as a folder or branch name: lower case, each run of characters that are not
+/// ASCII letters or digits one `-`, trimmed of `-`, cut to 40 characters; `dot` when nothing
+/// is left.
+pub fn folder_name(name: &str) -> String {
+    let mut out = String::new();
+    for c in name.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let cut: String = out.trim_matches('-').chars().take(40).collect();
+    let cut = cut.trim_matches('-');
+    if cut.is_empty() {
+        "dot".to_string()
+    } else {
+        cut.to_string()
+    }
+}
+
 impl DotSpec {
     pub fn new(name: &str, instructions: &str, workdir: &str) -> Self {
         Self {
@@ -157,12 +221,15 @@ impl DotSpec {
         }
         let name_ok = !self.name.is_empty()
             && self.name.len() <= 64
+            && !self.name.starts_with(' ')
+            && !self.name.ends_with(' ')
+            && !self.name.contains("  ")
             && self
                 .name
                 .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '-' | '_' | '.'));
         if !name_ok {
-            return invalid("name must be 1-64 characters of A-Z, a-z, 0-9, '-' or '_'");
+            return invalid("Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.");
         }
         if self.instructions.trim().is_empty() {
             return invalid("instructions must not be empty");
@@ -255,7 +322,8 @@ pub struct Run {
     pub ended_at: Option<String>,
     /// Set when the user marked the run reviewed or discarded its worktree.
     pub reviewed_at: Option<String>,
-    /// The failed scheduled run that this run retries.
+    /// The failed run that this run retries: a scheduled run's, or a person's message sent
+    /// again (crash resend spec).
     pub retry_of: Option<String>,
     /// What the run would cost on the API, as the `claude` CLI reported it; `None` for a local
     /// run and for a Claude run whose CLI gave none (usage and limits spec section 5).
@@ -274,6 +342,23 @@ pub struct Run {
     pub quiet_limit_secs: Option<u64>,
     /// The watchdog stopped this run for being quiet too long.
     pub quiet_stopped: bool,
+    /// When the run's engine started on it (delivery tracking spec section 2).
+    #[serde(default)]
+    pub delivered_at: Option<String>,
+    /// When the run was marked not delivered; cleared if it is delivered later.
+    #[serde(default)]
+    pub undelivered_at: Option<String>,
+    #[serde(default)]
+    pub undelivered_reason: Option<String>,
+    /// When the person retried or discarded the run, or it was cancelled after its mark.
+    #[serde(default)]
+    pub dismissed_at: Option<String>,
+    /// Computed from the columns above and the status; see `Delivery::of`.
+    #[serde(default)]
+    pub delivery: Option<Delivery>,
+    /// Why a waiting run has not started. The store leaves it `None`; the runtime fills it.
+    #[serde(default)]
+    pub wait_reason: Option<WaitReason>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -313,7 +398,39 @@ impl NewRun {
             workflow_step_run_id: None,
         }
     }
+
+    /// The run that sends `run`'s message again (crash resend spec section 2): the same
+    /// trigger, payload, parent and topic, `retry_of` = `run`. Its session is the parent's, as
+    /// when the message was first sent (none without a parent). It works in `run`'s folder when
+    /// `run` had one, so a worktree `run` made is used again, not left where no review lists it
+    /// (spec section 4.1); else in the parent's.
+    pub fn resend_of(run: &Run, parent: Option<&Run>) -> Self {
+        let mut new = Self::new(&run.dot_id, run.trigger);
+        new.payload = run.payload.clone();
+        new.parent_run_id = run.parent_run_id.clone();
+        new.root_run_id = Some(run.root_run_id.clone());
+        new.session_id = parent.and_then(|p| p.session_id.clone());
+        let parent_base = parent.and_then(|p| p.base_commit.clone());
+        if run.workspace_path.is_some() {
+            new.workspace_path = run.workspace_path.clone();
+            new.branch = run.branch.clone();
+            new.base_commit = run.base_commit.clone().or(parent_base);
+        } else if let Some(parent) = parent {
+            new.workspace_path = parent.workspace_path.clone();
+            new.branch = parent.branch.clone();
+            new.base_commit = parent_base;
+        }
+        new.retry_of = Some(run.id.clone());
+        new
+    }
 }
+
+/// The payload key of a message Dots sent again after it restarted, and its value (crash
+/// resend spec section 3.4).
+pub const RESENT: &str = "resent";
+pub const RESENT_AFTER_RESTART: &str = "restart";
+/// How many times Dots sends a message again after restarts (crash resend spec section 3.3).
+pub const MAX_RESENDS: i64 = 3;
 
 str_enum!(ScheduleStatus {
     Active => "active",
@@ -395,6 +512,142 @@ pub enum SlotStart {
     Enqueued(Run),
     /// The dot's queued run serves it.
     Coalesced(Run),
+    /// The dot was busy with a run, so a repeating slot was skipped and recorded: no run.
+    Busy(ScheduleSkip),
+}
+
+/// What a topic has beyond its runs (topic tools spec section 4.2): a `topics` row. A topic
+/// with none is active and untitled.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TopicInfo {
+    /// The topic's root run: its identity.
+    pub root_run_id: String,
+    pub dot_id: String,
+    /// The name the person gave it, shown instead of the one taken from its first message.
+    pub title: Option<String>,
+    /// When it was archived, by the person or by the idle sweep.
+    pub archived_at: Option<String>,
+}
+
+str_enum!(ScheduledStatus {
+    Scheduled => "scheduled",
+    Sending => "sending",
+    Sent => "sent",
+    Failed => "failed",
+    Cancelled => "cancelled",
+});
+str_enum!(ScheduledWait {
+    Busy => "busy",
+    Approval => "approval",
+    UsageLimit => "usage_limit",
+});
+
+/// A message the person wrote for Dots to send later (`scheduled_messages`, send later spec
+/// section 4.1).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduledMessage {
+    pub id: String,
+    pub dot_id: String,
+    /// The topic it was written in; `None` starts a new topic.
+    pub root_run_id: Option<String>,
+    pub text: String,
+    /// When it is due, RFC 3339 UTC.
+    pub due_at: String,
+    pub status: ScheduledStatus,
+    /// Why a due message has not gone yet.
+    pub waiting: Option<ScheduledWait>,
+    /// Why it was not sent (`failed`).
+    pub error: Option<String>,
+    /// The chat run it became (`sent`).
+    pub run_id: Option<String>,
+    pub sent_at: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    /// The files it waits with (attachments spec section 4.6), as its card shows them. Filled
+    /// where the person sees it (`Runtime::scheduled_messages`); empty elsewhere.
+    #[serde(default)]
+    pub attachments: Vec<StagedAttachment>,
+}
+
+/// The note in the payload of a chat run that a scheduled message became (send later spec
+/// section 4.3).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SentLater {
+    /// The scheduled message's id.
+    pub id: String,
+    pub due_at: String,
+    /// Sent more than a minute after `due_at`.
+    pub late: bool,
+    /// Sent as a new topic because the one it was written in could not be continued.
+    pub new_topic: bool,
+}
+
+/// A file the person attached to a chat message (`chat_attachments`, attachments spec section
+/// 4.1). Staged while `run_id` and `scheduled_id` are both `None`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatAttachment {
+    pub id: String,
+    pub dot_id: String,
+    /// The chat run it went with.
+    pub run_id: Option<String>,
+    /// The scheduled message it waits with (send later).
+    pub scheduled_id: Option<String>,
+    /// Its safe name as added: Dots' copy is `<data>/chat-files/<id>/<file_name>`.
+    pub file_name: String,
+    /// Its name in `attachments/<topic>/`, fixed when it is sent.
+    pub name: Option<String>,
+    pub size: u64,
+    pub created_at: String,
+    /// When Dots first put it in its topic's folder (`None` until then). A placed file is
+    /// taken as it is there from then on: the dot or the person may have edited it.
+    #[serde(default)]
+    pub placed_at: Option<String>,
+}
+
+str_enum!(FileSource {
+    Attached => "attached",
+    Written => "written",
+});
+
+/// A row of the Files panel (attachments spec section 4.5): a file the person attached in the
+/// conversation, or one the dot wrote or edited there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationFile {
+    /// Where it is now: an attachment's workspace copy, else Dots' own copy.
+    pub path: String,
+    pub name: String,
+    pub source: FileSource,
+    /// The run it came with (the newest, for a file listed more than once).
+    pub run_id: String,
+    /// When: the message's queue time, or the tool call's time; the newest.
+    pub at: String,
+    /// The path is a file now.
+    pub exists: bool,
+    /// Dots may open it: it is a document, image or media file, by the name it really has
+    /// (attachments spec section 4.5.1).
+    pub can_open: bool,
+}
+
+/// A file just added to a chat box: what the chip shows, and the id the send passes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StagedAttachment {
+    pub id: String,
+    pub name: String,
+    pub size: u64,
+}
+
+/// A slot that was not run (`schedule_skips`): the dot was still busy with an earlier run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleSkip {
+    pub id: String,
+    pub dot_id: String,
+    /// The slot's time, RFC 3339 UTC.
+    pub slot_at: String,
+    /// `"busy"`, the only reason for now.
+    pub reason: String,
+    /// The run that made the dot busy, if known.
+    pub run_id: Option<String>,
+    pub created_at: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -478,11 +731,16 @@ pub struct ScheduleView {
     pub retry_at: Option<String>,
     pub retry_attempt: Option<u32>,
     pub attention: Option<AttentionRun>,
+    /// The slot time of the newest kept skip, RFC 3339; `None` when none was skipped.
+    pub last_skipped_at: Option<String>,
+    /// How many kept skips came after the dot's newest scheduled run was queued.
+    pub skipped_since_run: u32,
 }
 
 impl ScheduleView {
     /// The view of `state`, the row of a dot with `schedule`, at `now`, with times in `tz`.
-    /// `attention` is the run the row's `attention_run_id` names.
+    /// `attention` is the run the row's `attention_run_id` names. The skip fields start empty;
+    /// the runtime fills them from the skips it reads.
     pub fn new<Tz>(
         state: &ScheduleState,
         schedule: &Schedule,
@@ -518,6 +776,8 @@ impl ScheduleView {
             }),
             retry_attempt: retry.map(|r| r.attempt),
             attention,
+            last_skipped_at: None,
+            skipped_since_run: 0,
         }
     }
 }
@@ -611,10 +871,40 @@ pub struct Inbox {
     /// a team's members had to share them (accounts design section 6.3).
     #[serde(default)]
     pub team_scope: Vec<TeamScopeIssue>,
+    /// Chat messages that did not reach their dot and that the person has not retried or
+    /// discarded, newest mark first (snooze and done spec section 3.9.7). They are not in
+    /// `review_runs`.
+    #[serde(default)]
+    pub not_delivered: Vec<UndeliveredMessage>,
+    /// Marks of items back from snooze, still in the Inbox, newest first (snooze and done spec
+    /// section 4.3). The items stay in their sections.
+    #[serde(default)]
+    pub back: Vec<crate::inbox::InboxMark>,
+    /// Marks of snoozed items still in the Inbox, soonest back first. The items are left out
+    /// of their sections.
+    #[serde(default)]
+    pub snoozed: Vec<crate::inbox::InboxMark>,
+    /// Marks of items done in the last 7 days and still in the Inbox, newest first. The items
+    /// are left out of their sections.
+    #[serde(default)]
+    pub done: Vec<crate::inbox::InboxMark>,
+    /// The waiting messages that are hidden (snoozed, or done however long ago). The questions
+    /// and notes are listed with the messages, not here, so this tells the UI which to leave
+    /// out once a done one is no longer in `done`.
+    #[serde(default)]
+    pub hidden_messages: Vec<String>,
     /// Workflow runs that wait for the person (on a check, the budget, the send-back cap or a
     /// failed step), newest first (teams spec section 10).
     #[serde(default)]
     pub workflows: Vec<WaitingWorkflowRun>,
+}
+
+/// A chat run that did not reach its dot, as the Inbox lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UndeliveredMessage {
+    #[serde(flatten)]
+    pub run: Run,
+    pub dot_name: String,
 }
 
 /// A workflow run that waits for the person, as the Inbox lists it.
@@ -862,6 +1152,25 @@ pub struct Memory {
     pub run_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+}
+
+/// One of the person's goals (Intents): 1 to 500 characters, in the account (`org_id`, `None`
+/// for Personal) and workspace it was added in. `due_date` is a calendar date, `YYYY-MM-DD`;
+/// times are RFC 3339 UTC (`util::now`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Intent {
+    pub id: String,
+    pub org_id: Option<String>,
+    pub workspace_id: String,
+    pub text: String,
+    pub due_date: Option<String>,
+    /// Shown under Now, whatever its date.
+    pub urgent: bool,
+    /// The dot it is handed to; `None` when it has none, or that dot was deleted.
+    pub dot_id: Option<String>,
+    pub created_at: String,
+    /// When it was marked done; `None` while it is open.
+    pub done_at: Option<String>,
 }
 
 /// The longest team, project or workflow name, in characters after trimming.
@@ -1473,6 +1782,18 @@ impl WatcherConfig {
     }
 }
 
+/// The days and the time range a watcher listens in, in this computer's local time. A range
+/// whose `start` is after its `end` runs overnight and belongs to the day it starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WatchHours {
+    #[serde(with = "crate::schedule::weekdays")]
+    pub days: Vec<Weekday>,
+    #[serde(with = "crate::schedule::local_time")]
+    pub start: NaiveTime,
+    #[serde(with = "crate::schedule::local_time")]
+    pub end: NaiveTime,
+}
+
 /// A watcher of a dot (watchers spec section 3). `enabled` is the person's switch;
 /// `paused_reason` is set when Dots paused it. Times are RFC 3339 UTC (`util::now`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1481,12 +1802,20 @@ pub struct Watcher {
     pub dot_id: String,
     pub name: String,
     pub config: WatcherConfig,
+    /// When it listens; `None` is any time.
+    pub hours: Option<WatchHours>,
     pub enabled: bool,
     pub paused_reason: Option<PausedReason>,
     pub last_error: Option<String>,
     pub last_event_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Events held for its next opening (the store counts them).
+    pub held_count: u32,
+    /// The next opening, RFC 3339 in local time with its offset (as `2026-10-26T09:00:00+01:00`),
+    /// set only while the watcher is outside its hours; the store leaves it `None` and the
+    /// service fills it.
+    pub next_opening: Option<String>,
 }
 
 impl Watcher {

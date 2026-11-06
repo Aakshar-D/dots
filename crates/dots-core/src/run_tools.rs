@@ -22,6 +22,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
 use zeroize::Zeroizing;
 
+use crate::connectors::{refresh_if_due, signs_in, token_variable, Freshness};
 use crate::context::{self, Collection};
 use crate::events::Bus;
 use crate::kit::{self, KitPlugin, KitSkill, PluginInfo, RunKit, SkillInfo};
@@ -408,6 +409,20 @@ impl RunTools {
             let LibraryConfig::McpServer(config) = &item.config else {
                 continue;
             };
+            // A sign-in connector's token is refreshed first when it is about to expire; one
+            // whose refresh was refused is left out, with what to do (connectors spec §5).
+            match refresh_if_due(vault, &item, None).await {
+                Ok(Freshness::Fresh) => {}
+                Ok(Freshness::NeedsSignIn(notice)) => {
+                    notices.push(notice);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("{}: checking its sign-in failed: {e}", item.name);
+                    notices.push(format!("{}: its sign-in could not be read: {e}", item.name));
+                    continue;
+                }
+            }
             let consumer = Consumer::Mcp(item.name.clone());
             match vault
                 .resolve_in(scope, workspace_id, grants, &consumer, &config.variables())
@@ -422,9 +437,49 @@ impl RunTools {
         }
         let shell_env =
             shell_env(vault, scope, workspace_id, grants, dot_name, &mut notices).await?;
-        let Some(opened) = open_sessions(&items, workspace, cancel).await else {
+        let Some(mut opened) = open_sessions(&items, workspace, cancel).await else {
             return Ok((RunTools::default(), Vec::new()));
         };
+        // A sign-in connector whose server refused its token at the start: the token is
+        // refreshed and the server opened once more.
+        for i in 0..items.len() {
+            let refused = matches!(&opened[i], Err(McpError::Unauthorized));
+            let item = items[i].0.clone();
+            if !refused || !signs_in(&item) {
+                continue;
+            }
+            let sent = items[i].1.get(&token_variable(&item)).unwrap_or_default();
+            match refresh_if_due(vault, &item, Some(&sent)).await {
+                Ok(Freshness::Fresh) => {}
+                Ok(Freshness::NeedsSignIn(notice)) => {
+                    notices.push(notice);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("{}: refreshing its sign-in failed: {e}", item.name);
+                    continue;
+                }
+            }
+            let LibraryConfig::McpServer(config) = &item.config else {
+                continue;
+            };
+            let consumer = Consumer::Mcp(item.name.clone());
+            let Ok(env) = vault
+                .resolve_in(scope, workspace_id, grants, &consumer, &config.variables())
+                .await?
+            else {
+                continue;
+            };
+            let retry = vec![(item, env)];
+            let Some(mut again) = open_sessions(&retry, workspace, cancel).await else {
+                for (session, _, _) in opened.into_iter().flatten() {
+                    session.close().await;
+                }
+                return Ok((RunTools::default(), Vec::new()));
+            };
+            opened[i] = again.remove(0);
+            items[i] = retry.into_iter().next().expect("one item");
+        }
         let mut tools = RunTools::default();
         tools.shell_env = shell_env;
         for ((item, _), outcome) in items.into_iter().zip(opened) {

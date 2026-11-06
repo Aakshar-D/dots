@@ -1,10 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { Link, Navigate, useNavigate, useParams } from "react-router";
+import { Navigate, useNavigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
 import { ErrorNote } from "@/components/ErrorNote";
-import { Button } from "@/components/ui/button";
+import { useScopeRefusal } from "@/lib/access";
 import { sortDots } from "@/lib/dot-status";
 import { keys } from "@/lib/query";
 import { notifyError } from "@/lib/notify";
@@ -18,18 +18,16 @@ import {
 import { DotPane } from "@/screens/home/DotPane";
 import { DotsColumn } from "@/screens/home/DotsColumn";
 import { lastDot } from "@/screens/home/last-dot";
+import { StagedFilesProvider } from "@/screens/home/staged-files";
+import { SetupFlow } from "@/screens/setup/SetupFlow";
 
-/// No dot yet: what a dot is, and the way to make one.
+/// No dot yet: the setup view, to describe the first one (setup agent spec §4). Where the role
+/// in the account in view refuses making dots, the reason New dot gives instead.
 function EmptyHome() {
+  const refusal = useScopeRefusal("edit");
   return (
-    <div className="m-auto flex max-w-sm flex-col items-center gap-3 p-6 text-center">
-      <p className="text-muted-foreground">
-        A dot is an agent with instructions, a folder to work in, and a schedule or a webhook
-        that starts it. You talk to it here.
-      </p>
-      <Button asChild>
-        <Link to="/dots/new">Create your first dot</Link>
-      </Button>
+    <div className="m-auto flex w-full max-w-xl flex-col gap-3 p-6">
+      {refusal ? <p className="text-muted-foreground">{refusal}</p> : <SetupFlow />}
     </div>
   );
 }
@@ -120,7 +118,12 @@ export function HomeScreen() {
     const row = rows.find((r) => r.dot.id === dotId);
     if (row) {
       // An older topic, or the conversation again, opens with its own reply target and scroll.
-      pane = <DotPane key={`${row.dot.id}/${rootRunId ?? ""}`} row={row} rootRunId={rootRunId} />;
+      // The files in the chat box stay with the dot (attachments spec section 3.1.8).
+      pane = (
+        <StagedFilesProvider key={row.dot.id} dotId={row.dot.id}>
+          <DotPane key={`${row.dot.id}/${rootRunId ?? ""}`} row={row} rootRunId={rootRunId} />
+        </StagedFilesProvider>
+      );
     } else if (waiting && handled !== dotId && orgs === undefined && orgList.isError) {
       // The dot's account can't be told without the joined accounts.
       pane = (

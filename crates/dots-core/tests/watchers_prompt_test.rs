@@ -12,8 +12,10 @@ use common::{fake_dot, fake_run};
 use dots_core::model::{EmailConfig, TriggerKind, WatcherConfig, WorkspaceMode};
 use dots_core::prompt::build_prompt;
 use dots_core::watchers::describe::{
-    trigger_line, ATTACHMENTS_NOTE, EMAIL_PREFIX, GITHUB_PREFIX, OUTSIDE_HEADING,
+    section, trigger_line, ATTACHMENTS_NOTE, EMAIL_PREFIX, GITHUB_PREFIX, OPENING_LINE,
+    OUTSIDE_HEADING, SHORTENED,
 };
+use dots_core::watchers::MAX_OPENING_BODY_CHARS;
 use dots_core::watchers::{Failure, Sources};
 use serde_json::{json, Value};
 
@@ -207,4 +209,116 @@ async fn the_app_password_never_appears_in_an_error_a_payload_a_prompt_or_an_eve
     }
     assert!(all.contains("watcher_updated"));
     assert!(!all.contains(PASS));
+}
+
+/// Watch hours: the opening run's prompt says the events came while the watcher was outside
+/// its hours, describes each as a single event's is, and counts the ones it does not carry.
+#[test]
+fn an_opening_runs_prompt_lists_the_held_events_and_counts_the_rest() {
+    let payload = json!({
+        "watcher_id": "W2", "watcher_name": "Billing mail",
+        "held": [email("Please pay by Friday."), folder("created")],
+        "held_more": 30, "held_since": "2026-10-24T08:00:00.000Z",
+        "attachments": [{"name": "1-a.pdf", "size": 4, "path": "C:/w/attachments/R/1-a.pdf", "event": 1}],
+    });
+    let p = prompt(payload);
+    let time = now().format("%Y-%m-%d %H:%M:%S %:z").to_string();
+    let first = format!(
+        "## Trigger\n\n- kind: watcher\n- watcher: Billing mail\n- time: {time}\n\n{OPENING_LINE}\n\n### Event 1\n\n- what: Email from billing@acme.com: Invoice 12\n- event:\n\n```json\n"
+    );
+    assert!(p.contains(&first), "{p}");
+    assert_eq!(
+        OPENING_LINE,
+        "While you were away (outside this watcher's hours), these came in:"
+    );
+    // The email's text, under its heading and prefix.
+    assert!(p.contains(&format!(
+        "{OUTSIDE_HEADING}\n\n{EMAIL_PREFIX}\n\nSubject: Invoice 12\n\n```text\nPlease pay by Friday.\n```\n\n### Event 2\n\n- what: New file in Invoices folder: invoice-12.pdf\n"
+    )), "{p}");
+    // The attachments, with their note, and the count of the rest last.
+    assert!(p.contains(ATTACHMENTS_NOTE), "{p}");
+    assert!(p.contains("C:/w/attachments/R/1-a.pdf"), "{p}");
+    assert!(p.contains("…and 30 more.\n\n## Standing rules"), "{p}");
+    assert!(!p.contains("held_since"), "{p}");
+    // Nothing more held: no count.
+    let payload = json!({
+        "watcher_id": "W1", "watcher_name": "Invoices folder",
+        "held": [folder("created")], "held_more": 0,
+        "held_since": "2026-10-24T08:00:00.000Z", "attachments": [],
+    });
+    let p = prompt(payload);
+    assert!(!p.contains("more."), "{p}");
+    assert!(!p.contains(ATTACHMENTS_NOTE), "{p}");
+}
+
+/// The text of every ```text fence in `section`.
+fn fenced_bodies(section: &str) -> Vec<&str> {
+    section
+        .split(
+            "```text
+",
+        )
+        .skip(1)
+        .map(|rest| {
+            rest.split_once(
+                "
+```",
+            )
+            .expect("a closed fence")
+            .0
+        })
+        .collect()
+}
+
+fn opening(bodies: &[String]) -> Value {
+    let held: Vec<Value> = bodies.iter().map(|b| email(b)).collect();
+    json!({
+        "watcher_id": "W2", "watcher_name": "Billing mail", "held": held, "held_more": 0,
+        "held_since": "2026-10-24T08:00:00.000Z", "attachments": [],
+    })
+}
+
+/// Final review I4: an opening's outside text has a total budget. 100 bodies of 20,000
+/// characters each get an equal share; each is cut on a character boundary and marked, and
+/// every event is still listed.
+#[test]
+fn an_openings_outside_text_is_cut_to_its_budget_and_marked() {
+    assert_eq!(MAX_OPENING_BODY_CHARS, 150_000);
+    // Multi-byte characters: a cut on a byte would panic or split one.
+    let bodies: Vec<String> = (0..100).map(|_| "é".repeat(20_000)).collect();
+    let s = section(&opening(&bodies), now());
+    let fenced = fenced_bodies(&s);
+    assert_eq!(fenced.len(), 100);
+    let total: usize = fenced.iter().map(|b| b.chars().count()).sum();
+    assert!(total <= MAX_OPENING_BODY_CHARS, "{total}");
+    assert!(fenced.iter().all(|b| b.chars().count() == 1_500));
+    assert_eq!(s.matches(SHORTENED).count(), 100);
+    assert_eq!(s.matches("### Event ").count(), 100);
+    assert!(s.contains(
+        "### Event 100
+"
+    ));
+}
+
+/// Final review I4: short bodies keep their text and leave their unused share to the long ones.
+#[test]
+fn short_bodies_are_kept_whole_and_leave_their_share_to_the_long_ones() {
+    let mut bodies: Vec<String> = (0..50).map(|i| format!("short {i}")).collect();
+    bodies.extend((0..50).map(|_| "a".repeat(20_000)));
+    let s = section(&opening(&bodies), now());
+    let fenced = fenced_bodies(&s);
+    assert_eq!(fenced.len(), 100);
+    for (i, body) in fenced.iter().take(50).enumerate() {
+        assert_eq!(*body, format!("short {i}"));
+    }
+    let short: usize = bodies[..50].iter().map(|b| b.chars().count()).sum();
+    let share = (MAX_OPENING_BODY_CHARS - short) / 50;
+    assert!(fenced[50..].iter().all(|b| b.chars().count() == share));
+    let total: usize = fenced.iter().map(|b| b.chars().count()).sum();
+    assert!(total <= MAX_OPENING_BODY_CHARS, "{total}");
+    assert_eq!(s.matches(SHORTENED).count(), 50);
+    // Within the budget, nothing is cut.
+    let s = section(&opening(&["a".repeat(20_000), "b".repeat(20_000)]), now());
+    assert!(!s.contains(SHORTENED));
+    assert_eq!(fenced_bodies(&s)[1], "b".repeat(20_000));
 }

@@ -1,7 +1,11 @@
 use serde::Serialize;
 use tokio::sync::broadcast;
 
-use crate::model::{Approval, Message, PausedReason, Run, RunEventRecord, WorkflowRun};
+use crate::inbox::InboxMark;
+use crate::model::{
+    Approval, Message, PausedReason, Run, RunEventRecord, ScheduleSkip, ScheduledMessage,
+    WorkflowRun,
+};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -34,6 +38,23 @@ pub enum RuntimeEvent {
     /// The dot's schedule row (`schedule_state`) was made, changed or deleted.
     ScheduleUpdated {
         dot_id: String,
+    },
+    /// A repeating slot came due while the dot was busy with a run and was not run (skip when
+    /// busy spec section 4). A `ScheduleUpdated` for the row follows.
+    ScheduleSkipped {
+        dot_id: String,
+        skip: ScheduleSkip,
+    },
+    /// The dot's topics changed beyond a run (topic tools spec section 4.3): a topic was
+    /// named, archived or unarchived, or runs moved between topics. Its runs, threads and topic
+    /// rows are read again.
+    TopicsChanged {
+        dot_id: String,
+    },
+    /// A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting
+    /// reason changed (send later spec section 4.5). The app notifies on a new failure.
+    ScheduledMessageUpdated {
+        message: ScheduledMessage,
     },
     /// The dot's schedule needs attention: an occurrence failed in the end (Scheduler v2 spec
     /// §6). Published once, when the flag goes from clear to set, with the failed run and its
@@ -130,6 +151,22 @@ pub enum RuntimeEvent {
     /// what Settings, the Env tab and the Library show of it.
     OrgUpdated {
         org_id: String,
+    },
+    /// An Inbox item was snoozed, unsnoozed, marked done or undone, came back from snooze, or
+    /// its mark went because it left (snooze and done spec section 4.4): the Inbox and the
+    /// counts read again.
+    InboxUpdated,
+    /// Snoozed items came back at their time, in one wake pass (spec section 4.5). The app
+    /// notifies once for them all. An `InboxUpdated` goes with it.
+    SnoozeEnded {
+        items: Vec<InboxMark>,
+    },
+    /// A goal of the workspace `workspace_id` of `org_id` (`None` is Personal) was added,
+    /// changed, marked done or undone, or deleted, or a deleted dot left it unlinked: the
+    /// Intents screen reads it again.
+    IntentsUpdated {
+        org_id: Option<String>,
+        workspace_id: String,
     },
 }
 

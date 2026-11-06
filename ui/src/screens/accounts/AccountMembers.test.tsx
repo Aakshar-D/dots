@@ -32,7 +32,7 @@ function account(view: MembersView, org: OrgSummary = acme) {
 
 /// Opens Settings, then the Members tab of Acme Engineering.
 async function membersTab() {
-  const view = renderApp("/settings");
+  const view = renderApp("/settings/account");
   const section = await screen.findByRole("group", { name: "Accounts" });
   const row = await within(section).findByRole("listitem", {
     name: "Acme Engineering",
@@ -453,7 +453,7 @@ describe("Settings, Accounts, Members", () => {
 
   it("shows no Members tab for an account this PC is not on", async () => {
     backend.on("org_list", () => [sample.orgs[2]]); // waiting
-    renderApp("/settings");
+    renderApp("/settings/account");
     const section = await screen.findByRole("group", { name: "Accounts" });
     const row = await within(section).findByRole("listitem", {
       name: "Acme Engineering",

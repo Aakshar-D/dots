@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { commands } from "@/api/commands";
 import type { Dot, DotSpec } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
+import { DotAvatar } from "@/components/DotAvatar";
 import { ErrorNote } from "@/components/ErrorNote";
 import { FollowUpsList } from "@/components/FollowUpsList";
 import { Page } from "@/components/Page";
@@ -101,7 +102,7 @@ function Editor(props: {
   const changed = hashKey([schedule]) !== hashKey([scheduleOf(stored)]);
   const objection = sendable && preview.isError ? errorMessage(preview.error) : undefined;
 
-  const errors = specErrors(draft.spec);
+  const errors = specErrors(draft.spec, isNew);
   if (objection && changed) errors.schedule ??= objection;
 
   function submit() {
@@ -151,6 +152,12 @@ function Editor(props: {
   return (
     <Page
       title={props.title}
+      // A stored dot keeps its avatar through a rename; a new one takes it from the name so far.
+      leading={
+        (props.existing?.id ?? draft.spec.name.trim()) !== "" && (
+          <DotAvatar seed={props.existing?.id ?? draft.spec.name.trim()} size="md" />
+        )
+      }
       actions={
         <>
           {props.actions}
@@ -193,7 +200,11 @@ function NewDot() {
         const dot = await commands.createDot(spec, org, workspace);
         invalidateDots(qc);
         qc.setQueryData(keys.dot(dot.id), dot);
-        toast.success("Dot created");
+        toast.success(
+          spec.workspace_mode === "worktree" && dot.workspace_mode === "folder"
+            ? "Dot created. Runs in the folder itself, because it is not a git repository."
+            : "Dot created",
+        );
         void navigate(`/dots/${dot.id}`);
       }}
     />

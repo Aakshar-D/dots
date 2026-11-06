@@ -11,6 +11,7 @@ use dots_core::accounts::{
     CurrentScope, DotAccess, Identity, Membership, Refusals, Role, WorkspaceRole, WorkspaceView,
 };
 use dots_core::browser::BrowserStatus;
+use dots_core::claude_agents::{AgentImport, AgentSourceKind, ImportFailure, ScannedAgent};
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
@@ -23,13 +24,16 @@ use dots_core::library_service::{
     ContextDetail, ContextDocuments, EnvVariable, LibraryEntry, McpProbe, PluginDetail,
     ScannedSkill, ScopedCatalog, SkillDetail,
 };
+use dots_core::managed_policy::ManagedPolicy;
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
 use dots_core::policy::{allow_candidates, Action, Policy, Preset};
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
+use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
+use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::org::{
     BaoAuth, CreatedInvite, DraftView, EditOutcome, InviteOffer, InviteState, InviteView,
     JoinPreview, JoinsMember, KeyView, MemberView, MembersView, OrgEntry, OrgStatus, OrgSummary,
@@ -47,6 +51,12 @@ use crate::update::UpdateNote;
 mod teams;
 
 const TS: &str = "2026-10-09T12:00:00.000Z";
+
+fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .expect("a sample time parses")
+        .with_timezone(&chrono::Utc)
+}
 
 /// How the core refuses a Viewer in the Platform workspace of Acme Engineering.
 fn viewer_in_platform(action: &str) -> String {
@@ -409,6 +419,22 @@ fn memories() -> Vec<Memory> {
     ]
 }
 
+/// Weekdays, nine to six, in the computer's local time.
+fn watch_hours() -> WatchHours {
+    use chrono::{NaiveTime, Weekday};
+    WatchHours {
+        days: vec![
+            Weekday::Mon,
+            Weekday::Tue,
+            Weekday::Wed,
+            Weekday::Thu,
+            Weekday::Fri,
+        ],
+        start: NaiveTime::from_hms_opt(9, 0, 0).unwrap(),
+        end: NaiveTime::from_hms_opt(18, 0, 0).unwrap(),
+    }
+}
+
 /// A folder watcher that is on, an email one Dots paused on an error, a GitHub one it paused on
 /// a flood (watchers spec sections 3 and 4).
 fn watchers() -> Vec<Watcher> {
@@ -422,15 +448,23 @@ fn watchers() -> Vec<Watcher> {
             events: FolderEvent::ALL.to_vec(),
             recursive: true,
         }),
+        hours: None,
         enabled: true,
         paused_reason: None,
         last_error: None,
         last_event_at: Some(TS.into()),
         created_at: TS.into(),
         updated_at: TS.into(),
+        held_count: 0,
+        next_opening: None,
     };
     vec![
-        folder.clone(),
+        Watcher {
+            hours: Some(watch_hours()),
+            held_count: 4,
+            next_opening: Some("2026-10-26T09:00:00+01:00".into()),
+            ..folder.clone()
+        },
         Watcher {
             id: "01J0WAT2".into(),
             name: "Billing mail".into(),
@@ -494,6 +528,17 @@ fn follow_ups() -> Vec<FollowUp> {
     ]
 }
 
+fn schedule_skip() -> ScheduleSkip {
+    ScheduleSkip {
+        id: "01J0SKIP".into(),
+        dot_id: "01J0DOT".into(),
+        slot_at: "2026-10-09T11:00:00Z".into(),
+        reason: "busy".into(),
+        run_id: Some("01J0RUN".into()),
+        created_at: "2026-10-09T11:00:01Z".into(),
+    }
+}
+
 fn run() -> Run {
     Run {
         id: "01J0RUN".into(),
@@ -523,6 +568,44 @@ fn run() -> Run {
         quiet_since: None,
         quiet_limit_secs: None,
         quiet_stopped: false,
+        delivered_at: Some(TS.into()),
+        undelivered_at: None,
+        undelivered_reason: None,
+        dismissed_at: None,
+        delivery: Some(dots_core::model::Delivery::Delivered),
+        wait_reason: None,
+    }
+}
+
+/// A chat message that did not get there.
+fn run_not_delivered() -> Run {
+    Run {
+        trigger: TriggerKind::Chat,
+        payload: None,
+        status: RunStatus::Failed,
+        error: Some("claude CLI not found".into()),
+        summary: None,
+        delivered_at: None,
+        undelivered_at: Some(TS.into()),
+        undelivered_reason: Some("claude CLI not found".into()),
+        delivery: Some(Delivery::NotDelivered),
+        ..run()
+    }
+}
+
+/// A chat message still waiting because the dot is busy.
+fn run_waiting() -> Run {
+    Run {
+        trigger: TriggerKind::Chat,
+        payload: None,
+        status: RunStatus::Queued,
+        summary: None,
+        started_at: None,
+        ended_at: None,
+        delivered_at: None,
+        delivery: Some(Delivery::Waiting),
+        wait_reason: Some(WaitReason::Busy),
+        ..run()
     }
 }
 
@@ -1103,6 +1186,8 @@ pub fn samples() -> Value {
                     run_id: "01J0RUN0".into(),
                     error: Some("model server unreachable".into()),
                 }),
+                last_skipped_at: Some("2026-10-09T11:00:00Z".into()),
+                skipped_since_run: 2,
             }),
             needs_you: 0,
             unread: 0,
@@ -1156,6 +1241,11 @@ pub fn samples() -> Value {
                 dot_name: "nightly-tests".into(),
                 reason: "nightly-tests is in another workspace than the crew team.".into(),
             }],
+            not_delivered: vec![],
+            back: vec![],
+            snoozed: vec![],
+            done: vec![],
+            hidden_messages: vec![],
             workflows: vec![WaitingWorkflowRun {
                 id: "01J0WFR".into(),
                 team_id: "01J0TEAM".into(),
@@ -1228,7 +1318,7 @@ pub fn samples() -> Value {
         }),
         "CmdError": to(CmdError { kind: CmdErrorKind::Conflict, message: "run 01J0RUN is already succeeded".into() }),
         "RunEventData": engine_events(),
-        "NewDotSpec": to(crate::commands::new_dot_spec()),
+        "NewDotSpec": to(dots_core::models::new_dot_spec(&Settings::default(), "", "", "")),
         "Commands": crate::COMMANDS,
         "Enums": {
             "EngineKind": EngineKind::ALL,
@@ -1265,14 +1355,78 @@ pub fn samples() -> Value {
         }),
     });
     // Past the `json!` macro's recursion limit, so added here.
+    samples["ScheduleSkip"] = to(schedule_skip());
+    samples["TopicInfo"] = to(TopicInfo {
+        root_run_id: "01J0RUN".into(),
+        dot_id: "01J0DOT".into(),
+        title: Some("Trip plans".into()),
+        archived_at: Some("2026-11-04T09:00:00.000Z".into()),
+    });
+    samples["ScannedAgent"] = to(scanned_agents());
+    samples["AgentImport"] = to(AgentImport {
+        created: vec![dot()],
+        failed: vec![ImportFailure {
+            path: "C:/Users/u/.claude/agents/empty.md".into(),
+            reason: "it has no instructions".into(),
+        }],
+    });
+    samples["RunNotDelivered"] = to(run_not_delivered());
+    samples["RunWaiting"] = to(run_waiting());
+    samples["DeliveryCounts"] = to(DeliveryCounts {
+        sent: 5,
+        delivered: 4,
+        not_delivered: 1,
+    });
+    samples["Enums"]["Delivery"] = to(Delivery::ALL);
+    samples["Enums"]["WaitReason"] = to(WaitReason::ALL);
     samples["ContextDocuments"] = to(context_documents());
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());
     samples["Memory"] = to(memories());
     samples["Watcher"] = to(watchers());
+    samples["WatchHours"] = to(watch_hours());
     // Usage and limits (spec sections 5 and 6).
     samples["LimitsState"] = to(limits_states());
     samples["UsageSummary"] = to(usage_summary());
+    // Hourly usage counts (usage counts spec): the state, on and never turned on, and a report.
+    samples["UsageCountsState"] = to(vec![
+        UsageCountsState {
+            enabled: true,
+            url: Some("https://counts.example.com/v1/hourly".into()),
+            install_id: Some("3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f".into()),
+            first_hour: Some(ts("2026-10-09T11:00:00Z")),
+            last_sent_hour: Some(ts("2026-10-09T11:00:00Z")),
+            last_sent_at: Some(ts("2026-10-09T12:02:00Z")),
+            last_error: Some("the server answered 503".into()),
+        },
+        UsageCountsState::default(),
+    ]);
+    samples["UsageCountsReport"] = to(vec![
+        Report {
+            schema: dots_core::usage_counts::SCHEMA,
+            install_id: Some("3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f".into()),
+            app_version: "0.3.0".into(),
+            hour_start: ts("2026-10-09T11:00:00Z"),
+            runs_started: 4,
+            runs_succeeded: 3,
+            runs_failed: 1,
+            messages_sent: 2,
+            approvals_asked: 1,
+            dots: 5,
+        },
+        Report {
+            schema: dots_core::usage_counts::SCHEMA,
+            install_id: None,
+            app_version: "0.3.0".into(),
+            hour_start: ts("2026-10-09T13:00:00Z"),
+            runs_started: 0,
+            runs_succeeded: 0,
+            runs_failed: 0,
+            messages_sent: 0,
+            approvals_asked: 0,
+            dots: 5,
+        },
+    ]);
     samples["Enums"]["MessageKind"] = to(MessageKind::ALL);
     samples["Enums"]["FollowUpStatus"] = to(FollowUpStatus::ALL);
     samples["Enums"]["MemorySource"] = to(MemorySource::ALL);
@@ -1293,6 +1447,13 @@ pub fn samples() -> Value {
                 message: messages()[1].clone(),
             }),
             to(RuntimeEvent::FollowUpsUpdated {
+                dot_id: "01J0DOT".into(),
+            }),
+            to(RuntimeEvent::ScheduleSkipped {
+                dot_id: "01J0DOT".into(),
+                skip: schedule_skip(),
+            }),
+            to(RuntimeEvent::TopicsChanged {
                 dot_id: "01J0DOT".into(),
             }),
             to(RuntimeEvent::DotSeen {
@@ -1424,9 +1585,43 @@ pub fn samples() -> Value {
         }),
         None,
     ]);
+    let managed = ManagedPolicy {
+        path: Some("C:/Program Files/ClaudeCode/managed-settings.json".into()),
+        blocks_skipping_asks: true,
+        forced_ask: vec!["Bash(git push:*)".into()],
+        forced_deny: vec!["WebFetch".into()],
+        managed_rules_only: false,
+        error: None,
+    };
+    samples["ManagedPolicy"] = to(&managed);
+    samples["ManagedPolicyUnread"] = to(ManagedPolicy {
+        path: Some("C:/Program Files/ClaudeCode/managed-settings.json".into()),
+        error: Some(
+            "Couldn't read your company's Claude Code policy at C:/Program Files/ClaudeCode/managed-settings.json: expected value at line 1 column 3".into(),
+        ),
+        ..Default::default()
+    });
+    samples["ManagedCheck"] = to(dots_core::managed_policy::ManagedCheck {
+        conflicts: dots_core::managed_policy::conflicts(
+            EngineKind::Claude,
+            &Policy::preset(Preset::Trusted),
+            &managed,
+        ),
+        managed,
+    });
     samples["BrowserStatus"] = to(BrowserStatus {
         edge: Some("C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe".into()),
         npx: Some("C:/Program Files/nodejs/npx.cmd".into()),
+    });
+    // The Claude list, then a model a local endpoint lists (no hint).
+    samples["ModelOption"] = to({
+        let mut models = dots_core::models::claude_models();
+        models.push(dots_core::models::ModelOption {
+            id: "qwen2.5-coder-7b".into(),
+            label: "qwen2.5-coder-7b".into(),
+            hint: String::new(),
+        });
+        models
     });
     samples["DraftRequest"] = to([
         DraftRequest {
@@ -1440,6 +1635,62 @@ pub fn samples() -> Value {
             model: "sonnet".into(),
             current: Some("---\nname: pr-tests\n---\nList the changed functions.\n".into()),
             change: Some("Mention snapshot tests".into()),
+        },
+    ]);
+    let proposal = SetupProposal {
+        name: "Downloads digest".into(),
+        instructions: "Read the Downloads folder and tell me what is new.".into(),
+        folder: Some("C:/Users/me/Dots/downloads-digest".into()),
+        schedule: Some(Schedule::cron("0 0 9 * * 1-5")),
+        preset: Preset::ReadOnly,
+        extras: vec!["web".into(), "mcp:github".into()],
+        uses: Uses {
+            mcp_servers: vec!["github".into()],
+            ..Uses::default()
+        },
+        first_message: "Start with today's new files.".into(),
+        notes: "Runs on weekdays at 9.".into(),
+    };
+    samples["SetupRequest"] = to([
+        SetupRequest {
+            description: "Every weekday at 9, read my Downloads folder".into(),
+            rounds: vec![SetupRound {
+                questions: vec!["Which folder?".into()],
+                answers: vec!["Downloads".into()],
+            }],
+            current: None,
+            change: None,
+            skip: false,
+        },
+        SetupRequest {
+            description: "Every weekday at 9, read my Downloads folder".into(),
+            rounds: vec![],
+            current: Some(proposal.clone()),
+            change: Some("Run at 8 instead".into()),
+            skip: true,
+        },
+    ]);
+    samples["SetupAnswer"] = to([
+        SetupAnswer::Questions {
+            questions: vec!["Which folder?".into(), "How often?".into()],
+        },
+        SetupAnswer::Proposal {
+            proposal,
+            new_dot_root: "C:/Users/me/Dots".into(),
+        },
+    ]);
+    samples["SetupApplied"] = to([
+        SetupApplied {
+            dot: dot(),
+            run_id: Some("01J0RUN".into()),
+            run_error: None,
+            notes: String::new(),
+        },
+        SetupApplied {
+            dot: dot(),
+            run_id: None,
+            run_error: Some("The first run could not start.".into()),
+            notes: "Left out the extra telepathy: Dots does not know it.".into(),
         },
     ]);
     samples["EnvEntry"] = to([
@@ -1476,6 +1727,7 @@ pub fn samples() -> Value {
         },
     ]);
     samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
+    connector_samples(&mut samples);
     apps_samples(&mut samples);
     teams::teams_samples(&mut samples);
     samples["InstructionProposal"] = to(dots_core::instructions::InstructionStatus::ALL
@@ -1648,7 +1900,220 @@ pub fn samples() -> Value {
             workspaces: BTreeMap::from([("platform".to_string(), WorkspaceRole::Admin)]),
         },
     ]);
+    inbox_marks_samples(&mut samples);
+    send_later_samples(&mut samples);
+    attachments_samples(&mut samples);
+    intents_samples(&mut samples);
     samples
+}
+
+/// Attachments in chat (attachments spec section 5): a staged file, a chat run with a file,
+/// two rows of the Files panel (one gone) and their source.
+fn attachments_samples(samples: &mut Value) {
+    samples["StagedAttachment"] = to(StagedAttachment {
+        id: "01J0ATT".into(),
+        name: "report.pdf".into(),
+        size: 2458,
+    });
+    samples["RunWithAttachments"] = to(Run {
+        id: "01J0RUN6".into(),
+        trigger: TriggerKind::Chat,
+        payload: Some(json!({
+            "message": "Shorten the report.",
+            "typed": true,
+            "attachments": [{ "id": "01J0ATT", "name": "report.pdf", "size": 2458 }],
+        })),
+        ..run()
+    });
+    samples["ConversationFile"] = to(ConversationFile {
+        path: "C:\\work\\attachments\\01J0RUN6\\report.pdf".into(),
+        name: "report.pdf".into(),
+        source: FileSource::Attached,
+        run_id: "01J0RUN6".into(),
+        at: TS.into(),
+        exists: true,
+        can_open: true,
+    });
+    samples["ConversationFileGone"] = to(ConversationFile {
+        path: "C:\\work\\out\\summary.md".into(),
+        name: "summary.md".into(),
+        source: FileSource::Written,
+        run_id: "01J0RUN6".into(),
+        at: TS.into(),
+        exists: false,
+        can_open: true,
+    });
+    samples["Enums"]["FileSource"] = to(FileSource::ALL);
+}
+
+/// Send later (send later spec section 5): a scheduled message waiting for its topic, one that
+/// failed, their enums and event, and a chat run a scheduled message became, sent late.
+fn send_later_samples(samples: &mut Value) {
+    let waiting = ScheduledMessage {
+        id: "01J0SCHED".into(),
+        dot_id: "01J0DOT".into(),
+        root_run_id: Some("01J0RUN".into()),
+        text: "Ship the release notes.".into(),
+        due_at: "2026-11-05T09:00:00.000Z".into(),
+        status: ScheduledStatus::Scheduled,
+        waiting: Some(ScheduledWait::Busy),
+        error: None,
+        run_id: None,
+        sent_at: None,
+        created_at: TS.into(),
+        updated_at: TS.into(),
+        attachments: vec![StagedAttachment {
+            id: "01J0ATT2".into(),
+            name: "notes.pdf".into(),
+            size: 31_457,
+        }],
+    };
+    let failed = ScheduledMessage {
+        id: "01J0SCHED2".into(),
+        root_run_id: None,
+        status: ScheduledStatus::Failed,
+        waiting: None,
+        error: Some("dot 'builder': its org 'acme' was removed".into()),
+        ..waiting.clone()
+    };
+    let sent_late = Run {
+        id: "01J0RUN5".into(),
+        trigger: TriggerKind::Chat,
+        payload: Some(json!({
+            "message": "Ship the release notes.",
+            "typed": true,
+            "send_later": to(SentLater {
+                id: "01J0SCHED".into(),
+                due_at: "2026-11-05T09:00:00.000Z".into(),
+                late: true,
+                new_topic: false,
+            }),
+        })),
+        ..run()
+    };
+    samples["ScheduledMessage"] = to(&waiting);
+    samples["ScheduledMessageFailed"] = to(&failed);
+    samples["RunSentLate"] = to(sent_late);
+    samples["Enums"]["ScheduledStatus"] = to(ScheduledStatus::ALL);
+    samples["Enums"]["ScheduledWait"] = to(ScheduledWait::ALL);
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .extend([
+            to(RuntimeEvent::ScheduledMessageUpdated { message: waiting }),
+            to(RuntimeEvent::ScheduledMessageUpdated { message: failed }),
+        ]);
+}
+
+/// Snooze and Done (snooze and done spec section 5): the Inbox's new sections, its marks and
+/// keys, the two events, and `InboxKeys`, the keys the core gives the Inbox and messages of
+/// these samples, so the UI's own key rules are checked against the core's. Last, because
+/// the Inbox sample is complete only once `apps_samples` added its app review.
+fn inbox_marks_samples(samples: &mut Value) {
+    use dots_core::inbox::{entries, InboxKind, InboxMark};
+
+    let mut inbox: Inbox =
+        serde_json::from_value(samples["Inbox"].clone()).expect("the Inbox sample");
+    inbox.not_delivered = vec![UndeliveredMessage {
+        run: run_not_delivered(),
+        dot_name: "nightly-tests".into(),
+    }];
+    let messages = messages();
+    let all = entries(&inbox, &messages);
+    let mark = |kind: InboxKind| {
+        let e = all
+            .iter()
+            .find(|e| e.key.kind == kind)
+            .expect("an item of the kind");
+        InboxMark {
+            kind,
+            id: e.key.id.clone(),
+            title: e.title.clone(),
+            dot_id: e.dot_id.clone(),
+            snoozed_until: None,
+            done_at: None,
+            back_at: None,
+        }
+    };
+    let back = InboxMark {
+        back_at: Some(TS.into()),
+        ..mark(InboxKind::Review)
+    };
+    let snoozed = InboxMark {
+        snoozed_until: Some("2026-10-21T09:00:00Z".into()),
+        ..mark(InboxKind::Message)
+    };
+    // A mark of an item that has no dot.
+    let done = InboxMark {
+        done_at: Some(TS.into()),
+        ..mark(InboxKind::Tools)
+    };
+    inbox.hidden_messages = vec![snoozed.id.clone()];
+    inbox.back = vec![back.clone()];
+    inbox.snoozed = vec![snoozed.clone()];
+    inbox.done = vec![done.clone()];
+    samples["InboxKeys"] = to(all.iter().map(|e| &e.key).collect::<Vec<_>>());
+    samples["InboxKey"] = to([back.key(), snoozed.key(), done.key()]);
+    samples["InboxMark"] = to([back.clone(), snoozed, done]);
+    samples["Inbox"] = to(&inbox);
+    samples["Enums"]["InboxKind"] = to(InboxKind::ALL);
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .extend([
+            to(RuntimeEvent::InboxUpdated),
+            to(RuntimeEvent::SnoozeEnded { items: vec![back] }),
+        ]);
+}
+
+/// The person's goals: an urgent one handed to a dot, one with a due date, and a done one;
+/// the list a Viewer gets, read-only; and what the person writes for a goal.
+fn intents_samples(samples: &mut Value) {
+    use dots_core::intents::{IntentFields, IntentsView};
+
+    let urgent = Intent {
+        id: "01J0GOAL1".into(),
+        org_id: Some("acme-eng".into()),
+        workspace_id: "platform".into(),
+        text: "Ship the spring report".into(),
+        due_date: None,
+        urgent: true,
+        dot_id: Some("01J0DOT".into()),
+        created_at: TS.into(),
+        done_at: None,
+    };
+    let dated = Intent {
+        id: "01J0GOAL2".into(),
+        text: "Book the venue".into(),
+        due_date: Some("2026-10-14".into()),
+        urgent: false,
+        dot_id: None,
+        ..urgent.clone()
+    };
+    let done = Intent {
+        id: "01J0GOAL3".into(),
+        text: "Renew the passport".into(),
+        done_at: Some(TS.into()),
+        ..dated.clone()
+    };
+    samples["Intent"] = to([urgent.clone(), dated, done]);
+    samples["IntentsView"] = to(IntentsView {
+        intents: vec![urgent],
+        refusal: Some(viewer_in_platform("change goals")),
+    });
+    samples["IntentFields"] = to(IntentFields {
+        text: "Book the venue".into(),
+        due_date: Some("2026-10-14".into()),
+        urgent: false,
+        dot_id: Some("01J0DOT".into()),
+    });
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .push(to(RuntimeEvent::IntentsUpdated {
+            org_id: None,
+            workspace_id: "default".into(),
+        }));
 }
 
 /// Instructions a dot proposed (conversational chat spec section 4), with `status`.
@@ -2240,6 +2705,57 @@ fn edit_outcomes() -> Vec<EditOutcome> {
     ]
 }
 
+/// An agent of each source, one with warnings, one already a dot and one that can't be read.
+fn scanned_agents() -> Vec<ScannedAgent> {
+    let agent = |source, path: &str, name: &str| ScannedAgent {
+        source,
+        plugin: None,
+        project: None,
+        path: path.into(),
+        name: name.into(),
+        description: Some(format!("The {name} agent")),
+        model: Some("sonnet".into()),
+        tools: None,
+        warnings: Vec::new(),
+        already_imported: false,
+        error: None,
+    };
+    vec![
+        ScannedAgent {
+            tools: Some(vec!["Read".into(), "Bash".into(), "Frob".into()]),
+            warnings: vec![
+                "Bash asks before each use.".into(),
+                "Frob is left out: Dots does not know this tool.".into(),
+            ],
+            ..agent(
+                AgentSourceKind::User,
+                "C:/Users/u/.claude/agents/reviewer.md",
+                "reviewer",
+            )
+        },
+        ScannedAgent {
+            project: Some("C:/code/app".into()),
+            already_imported: true,
+            ..agent(
+                AgentSourceKind::Project,
+                "C:/code/app/.claude/agents/tester.md",
+                "tester",
+            )
+        },
+        ScannedAgent {
+            plugin: Some("pdf-tools".into()),
+            description: None,
+            model: None,
+            error: Some("it has no instructions".into()),
+            ..agent(
+                AgentSourceKind::Plugin,
+                "C:/plugins/pdf-tools/agents/pdf.md",
+                "pdf",
+            )
+        },
+    ]
+}
+
 /// Sign-in details of every kind, as `org_join` and `org_update` take them. Read through the
 /// core's type, so a sample in a form the core does not accept fails here. No value is real.
 fn source_creds() -> Value {
@@ -2254,6 +2770,84 @@ fn source_creds() -> Value {
         .map(|v| serde_json::from_value(v).expect("sample sign-in details"))
         .collect();
     to(read)
+}
+
+/// Every connector of the catalog, in every state the screen shows, and the runtime checks.
+fn connector_samples(samples: &mut Value) {
+    use dots_core::connectors::{
+        catalog, AuthKind, Category, ConnectorEntry, ConnectorState, RuntimeCheck, Trust,
+    };
+    let dot = DotRef {
+        id: "01J0DOT".into(),
+        name: "nightly-tests".into(),
+    };
+    let entries: Vec<ConnectorEntry> = catalog()
+        .into_iter()
+        .map(|connector| {
+            let (state, error) = match connector.id.as_str() {
+                _ if connector.auth == AuthKind::ComingSoon => (ConnectorState::ComingSoon, None),
+                "gmail" | "linear" => (ConnectorState::Connected, None),
+                "github" => (
+                    ConnectorState::Error,
+                    Some("the server answered HTTP 401 Unauthorized".to_string()),
+                ),
+                "notion" => (
+                    ConnectorState::NeedsSignIn,
+                    Some("Notion needs you to sign in again.".to_string()),
+                ),
+                "slack" => (
+                    ConnectorState::NameTaken,
+                    Some("The Library already has an MCP server named slack of your own.".into()),
+                ),
+                _ => (ConnectorState::NotConnected, None),
+            };
+            let connected = !matches!(
+                state,
+                ConnectorState::NotConnected
+                    | ConnectorState::ComingSoon
+                    | ConnectorState::NameTaken
+            );
+            ConnectorEntry {
+                server_id: connected.then(|| format!("01J0C{}", connector.id.len())),
+                used_by: if connected { vec![dot.clone()] } else { vec![] },
+                tools: connected.then_some(12),
+                catalog_status: connected.then_some(if state == ConnectorState::Error {
+                    CatalogStatus::Unreachable
+                } else {
+                    CatalogStatus::Accepted
+                }),
+                state,
+                error,
+                connector,
+            }
+        })
+        .collect();
+    samples["ConnectorEntry"] = to(entries);
+    let node = catalog()
+        .into_iter()
+        .find_map(|c| c.runtime)
+        .expect("a connector needs Node.js");
+    samples["RuntimeCheck"] = to([
+        RuntimeCheck {
+            needed: None,
+            found: None,
+            ok: true,
+        },
+        RuntimeCheck {
+            needed: Some(node.clone()),
+            found: Some("v24.18.0".into()),
+            ok: true,
+        },
+        RuntimeCheck {
+            needed: Some(node),
+            found: None,
+            ok: false,
+        },
+    ]);
+    samples["Enums"]["ConnectorState"] = to(ConnectorState::ALL);
+    samples["Enums"]["AuthKind"] = to(AuthKind::ALL);
+    samples["Enums"]["Trust"] = to(Trust::ALL);
+    samples["Enums"]["Category"] = to(Category::ALL);
 }
 
 #[cfg(test)]

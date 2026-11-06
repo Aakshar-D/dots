@@ -1,4 +1,179 @@
 {
+  "AgentImport": {
+    "created": [
+      {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "has_webhook_token": true,
+        "id": "01J0DOT",
+        "instructions": "Run the tests and summarize failures.",
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "nightly-tests",
+        "org_id": null,
+        "policy": {
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "seen_at": "2026-10-09T12:00:00.000Z",
+        "timeout_secs": 1800,
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "use_global_instructions": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_id": "default",
+        "workspace_mode": "worktree"
+      }
+    ],
+    "failed": [
+      {
+        "path": "C:/Users/u/.claude/agents/empty.md",
+        "reason": "it has no instructions"
+      }
+    ]
+  },
   "ApiKeyView": [
     {
       "created_at": "2026-10-09T12:00:00.000Z",
@@ -558,6 +733,12 @@
   "Commands": [
     "startup_error",
     "status",
+    "problem_report",
+    "save_problem_report",
+    "usage_counts_state",
+    "set_usage_counts",
+    "reset_usage_counts_id",
+    "usage_counts_preview",
     "mark_claude_tested",
     "get_settings",
     "chatgpt_account",
@@ -598,6 +779,11 @@
     "get_dot",
     "dot_variables",
     "create_dot",
+    "scan_claude_agents",
+    "import_claude_agents",
+    "setup_ask",
+    "setup_cancel",
+    "setup_apply",
     "dot_move",
     "dot_access",
     "workspace_list",
@@ -615,27 +801,65 @@
     "webhook_url",
     "preview_schedule",
     "policy_preset",
+    "managed_policy",
+    "managed_policy_check",
+    "rules_touch_private",
     "new_dot_spec",
+    "list_models",
     "test_endpoint",
     "run_now",
     "chat",
+    "resend_run",
+    "attachment_add_path",
+    "attachment_add_bytes",
+    "attachment_remove",
+    "conversation_files",
+    "conversation_file_open",
+    "conversation_file_reveal",
     "cancel_run",
     "keep_waiting",
+    "retry_delivery",
+    "discard_delivery",
+    "delivery_today",
+    "schedule_message",
+    "scheduled_messages",
+    "send_scheduled_now",
+    "edit_scheduled_message",
+    "cancel_scheduled_message",
     "list_runs",
+    "schedule_skips",
     "get_run",
     "run_thread",
+    "list_topics",
+    "rename_topic",
+    "set_topic_archived",
+    "move_run",
+    "merge_topics",
     "list_run_events",
     "approvals_for_run",
     "decide_approval",
     "approval_rule_candidates",
+    "approval_touches_private",
     "decide_run_approvals",
     "inbox",
     "inbox_count",
+    "inbox_snooze",
+    "inbox_unsnooze",
+    "inbox_done",
+    "inbox_undo_done",
     "dismiss_schedule_attention",
     "worktree_diff",
     "discard_worktree",
     "mark_reviewed",
     "open_run_folder",
+    "connector_list",
+    "connector_runtime",
+    "connector_open_page",
+    "connector_connect",
+    "connector_sign_in",
+    "connector_sign_in_cancel",
+    "connector_set_dots",
+    "connector_disconnect",
     "library_list",
     "library_add",
     "library_update",
@@ -697,6 +921,11 @@
     "memory_add",
     "memory_update",
     "memory_delete",
+    "intents_list",
+    "intent_create",
+    "intent_update",
+    "intent_set_done",
+    "intent_delete",
     "apps_list",
     "app_call",
     "app_files",
@@ -760,6 +989,743 @@
     "workflow_retry_step",
     "workflow_stop"
   ],
+  "ConnectorEntry": [
+    {
+      "abilities": [
+        "Read and search your mail (IMAP)",
+        "Send email as you (SMTP)",
+        "Move messages and manage folders and labels"
+      ],
+      "auth": "key",
+      "catalog_status": "accepted",
+      "category": "communication",
+      "description": "Read, search and send email from your Gmail account.",
+      "error": null,
+      "fields": [
+        {
+          "format": {
+            "kind": "email"
+          },
+          "hint": "The Google account you made the app password in.",
+          "key": "address",
+          "label": "Gmail address",
+          "placeholder": "you@gmail.com",
+          "secret": false,
+          "strip_spaces": false,
+          "variable": "CONNECTOR_GMAIL_ADDRESS"
+        },
+        {
+          "format": {
+            "kind": "letters",
+            "length": 16
+          },
+          "hint": "16 letters. Not your Google password.",
+          "key": "app_password",
+          "label": "App password",
+          "placeholder": "abcd efgh ijkl mnop",
+          "secret": true,
+          "strip_spaces": true,
+          "variable": "CONNECTOR_GMAIL_APP_PASSWORD"
+        }
+      ],
+      "icon": "gmail",
+      "id": "gmail",
+      "instructions": {
+        "open_label": "Open Google App passwords",
+        "open_url": "https://myaccount.google.com/apppasswords",
+        "steps": [
+          "App passwords need 2-Step Verification. If it is off, turn it on first at myaccount.google.com/security.",
+          "Click Open Google App passwords below and sign in.",
+          "Type a name such as Dots and click Create.",
+          "Copy the 16-letter password Google shows. It is shown only once.",
+          "Paste it below with your Gmail address. Spaces don't matter.",
+          "To stop, click Disconnect here and delete the app password on the same Google page."
+        ]
+      },
+      "maker": "codefuturist",
+      "name": "Gmail",
+      "note": "Made by codefuturist, not Google. Its program runs on this PC and gets your app password.",
+      "runtime": {
+        "command": "node",
+        "download_url": "https://nodejs.org/en/download",
+        "min_major": 24,
+        "name": "Node.js"
+      },
+      "server": {
+        "args": [
+          "-y",
+          "@codefuturist/email-mcp@0.6.0",
+          "stdio"
+        ],
+        "command": "npx",
+        "env": {
+          "MCP_EMAIL_ADDRESS": "${CONNECTOR_GMAIL_ADDRESS}",
+          "MCP_EMAIL_IMAP_HOST": "imap.gmail.com",
+          "MCP_EMAIL_PASSWORD": "${CONNECTOR_GMAIL_APP_PASSWORD}",
+          "MCP_EMAIL_SMTP_HOST": "smtp.gmail.com"
+        },
+        "transport": "stdio"
+      },
+      "server_id": "01J0C5",
+      "source_url": "https://github.com/codefuturist/email-mcp",
+      "state": "connected",
+      "tools": 12,
+      "trust": "community",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "abilities": [
+        "Read code, issues and pull requests in the repositories you allow",
+        "Open and comment on issues and pull requests",
+        "Search code and repositories"
+      ],
+      "auth": "key",
+      "catalog_status": "unreachable",
+      "category": "developer",
+      "description": "Work with repositories, issues, pull requests and code on GitHub.",
+      "error": "the server answered HTTP 401 Unauthorized",
+      "fields": [
+        {
+          "format": {
+            "kind": "prefix",
+            "prefixes": [
+              "github_pat_",
+              "ghp_"
+            ]
+          },
+          "hint": "Starts with github_pat_ (fine-grained) or ghp_ (classic).",
+          "key": "token",
+          "label": "Personal access token",
+          "placeholder": "github_pat_…",
+          "secret": true,
+          "strip_spaces": false,
+          "variable": "CONNECTOR_GITHUB_TOKEN"
+        }
+      ],
+      "icon": "github",
+      "id": "github",
+      "instructions": {
+        "open_label": "Open GitHub",
+        "open_url": "https://github.com/settings/personal-access-tokens/new",
+        "steps": [
+          "Click Open GitHub below. It opens GitHub's New fine-grained token page; sign in if asked.",
+          "Name the token Dots and pick when it expires.",
+          "Under Repository access, choose the repositories your dots may work on.",
+          "Under Permissions, give what they need, for example Contents, Issues and Pull requests: Read and write.",
+          "Click Generate token and copy it. GitHub shows it only once.",
+          "Paste it below. To stop, click Disconnect here and delete the token on GitHub."
+        ]
+      },
+      "maker": "GitHub",
+      "name": "GitHub",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_GITHUB_TOKEN",
+        "transport": "http",
+        "url": "https://api.githubcopilot.com/mcp/"
+      },
+      "server_id": "01J0C6",
+      "source_url": "https://github.com/github/github-mcp-server",
+      "state": "error",
+      "tools": 12,
+      "trust": "official",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "abilities": [
+        "Read messages in channels and direct messages you can see",
+        "Search messages and look up people",
+        "Posting messages is off in this connector"
+      ],
+      "auth": "key",
+      "catalog_status": null,
+      "category": "communication",
+      "description": "Read channels and direct messages and search your Slack workspace.",
+      "error": "The Library already has an MCP server named slack of your own.",
+      "fields": [
+        {
+          "format": {
+            "kind": "prefix",
+            "prefixes": [
+              "xoxp-"
+            ]
+          },
+          "hint": "Starts with xoxp-.",
+          "key": "token",
+          "label": "User OAuth token",
+          "placeholder": "xoxp-…",
+          "secret": true,
+          "strip_spaces": false,
+          "variable": "CONNECTOR_SLACK_TOKEN"
+        }
+      ],
+      "icon": "slack",
+      "id": "slack",
+      "instructions": {
+        "open_label": "Open Slack apps",
+        "open_url": "https://api.slack.com/apps",
+        "steps": [
+          "Click Open Slack apps below and sign in. Click Create New App, then From scratch, name it Dots and pick your workspace.",
+          "Open OAuth & Permissions. Under User Token Scopes add: channels:history, channels:read, groups:history, groups:read, im:history, im:read, mpim:history, mpim:read, users:read and search:read.",
+          "Scroll up and click Install to Workspace, then Allow. Your workspace admin may need to approve it.",
+          "Copy the User OAuth Token (it starts with xoxp-).",
+          "Paste it below. To stop, click Disconnect here and remove the app in Slack."
+        ]
+      },
+      "maker": "korotovsky",
+      "name": "Slack",
+      "note": "Made by korotovsky, not Slack. Its program runs on this PC and gets your Slack token. Slack's own server needs an app registered by Dots, which is not available yet.",
+      "runtime": {
+        "command": "node",
+        "download_url": "https://nodejs.org/en/download",
+        "min_major": 18,
+        "name": "Node.js"
+      },
+      "server": {
+        "args": [
+          "-y",
+          "slack-mcp-server@1.3.0",
+          "--transport",
+          "stdio"
+        ],
+        "command": "npx",
+        "env": {
+          "SLACK_MCP_XOXP_TOKEN": "${CONNECTOR_SLACK_TOKEN}"
+        },
+        "transport": "stdio"
+      },
+      "server_id": null,
+      "source_url": "https://github.com/korotovsky/slack-mcp-server",
+      "state": "name_taken",
+      "tools": null,
+      "trust": "community",
+      "used_by": []
+    },
+    {
+      "abilities": [
+        "Search the web and news",
+        "Find images, videos and local results"
+      ],
+      "auth": "key",
+      "catalog_status": null,
+      "category": "search",
+      "description": "Search the web, news, images and videos with Brave Search.",
+      "error": null,
+      "fields": [
+        {
+          "format": {
+            "kind": "any"
+          },
+          "hint": "From the API Keys page of the Brave Search API dashboard.",
+          "key": "api_key",
+          "label": "API key",
+          "placeholder": "BSA…",
+          "secret": true,
+          "strip_spaces": false,
+          "variable": "CONNECTOR_BRAVE_SEARCH_API_KEY"
+        }
+      ],
+      "icon": "brave-search",
+      "id": "brave-search",
+      "instructions": {
+        "open_label": "Open Brave Search API",
+        "open_url": "https://api-dashboard.search.brave.com/app/keys",
+        "steps": [
+          "Click Open Brave Search API below and sign up or sign in.",
+          "Choose a plan. The free plan works for light use.",
+          "Open API Keys and click Add API key.",
+          "Copy the key and paste it below."
+        ]
+      },
+      "maker": "Brave",
+      "name": "Brave Search",
+      "note": null,
+      "runtime": {
+        "command": "node",
+        "download_url": "https://nodejs.org/en/download",
+        "min_major": 18,
+        "name": "Node.js"
+      },
+      "server": {
+        "args": [
+          "-y",
+          "@brave/brave-search-mcp-server@2.1.4",
+          "--transport",
+          "stdio"
+        ],
+        "command": "npx",
+        "env": {
+          "BRAVE_API_KEY": "${CONNECTOR_BRAVE_SEARCH_API_KEY}"
+        },
+        "transport": "stdio"
+      },
+      "server_id": null,
+      "source_url": "https://github.com/brave/brave-search-mcp-server",
+      "state": "not_connected",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [
+        "Search models, datasets and Spaces",
+        "Find and read papers and documentation"
+      ],
+      "auth": "key",
+      "catalog_status": null,
+      "category": "developer",
+      "description": "Search models, datasets, Spaces and papers on Hugging Face.",
+      "error": null,
+      "fields": [
+        {
+          "format": {
+            "kind": "prefix",
+            "prefixes": [
+              "hf_"
+            ]
+          },
+          "hint": "Starts with hf_. A Read token is enough.",
+          "key": "token",
+          "label": "Access token",
+          "placeholder": "hf_…",
+          "secret": true,
+          "strip_spaces": false,
+          "variable": "CONNECTOR_HUGGINGFACE_TOKEN"
+        }
+      ],
+      "icon": "huggingface",
+      "id": "huggingface",
+      "instructions": {
+        "open_label": "Open Hugging Face",
+        "open_url": "https://huggingface.co/settings/tokens/new?tokenType=read",
+        "steps": [
+          "Click Open Hugging Face below and sign in.",
+          "Choose the Read token type and name it Dots.",
+          "Click Create token and copy it.",
+          "Paste it below. To stop, click Disconnect here and delete the token on Hugging Face."
+        ]
+      },
+      "maker": "Hugging Face",
+      "name": "Hugging Face",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_HUGGINGFACE_TOKEN",
+        "transport": "http",
+        "url": "https://huggingface.co/mcp"
+      },
+      "server_id": null,
+      "source_url": "https://huggingface.co/docs/hub/en/hf-mcp-server",
+      "state": "not_connected",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [
+        "Search and read your pages and databases",
+        "Create and update pages",
+        "Add comments"
+      ],
+      "auth": "oauth",
+      "catalog_status": "accepted",
+      "category": "work",
+      "description": "Search, read and update pages and databases in Notion.",
+      "error": "Notion needs you to sign in again.",
+      "fields": [],
+      "icon": "notion",
+      "id": "notion",
+      "instructions": {
+        "open_label": "Read Notion's guide",
+        "open_url": "https://developers.notion.com/docs/mcp",
+        "steps": [
+          "Pick the dots that may use Notion below, then click Sign in with Notion.",
+          "Your browser opens Notion. Sign in if it asks you to.",
+          "Pick the workspace Dots may use. Then click Allow (or Approve).",
+          "Come back to Dots: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Dots from Notion's connected apps."
+        ]
+      },
+      "maker": "Notion",
+      "name": "Notion",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_NOTION_ACCESS_TOKEN",
+        "transport": "http",
+        "url": "https://mcp.notion.com/mcp"
+      },
+      "server_id": "01J0C6",
+      "source_url": "https://developers.notion.com/docs/mcp",
+      "state": "needs_sign_in",
+      "tools": 12,
+      "trust": "official",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "abilities": [
+        "Find and read issues and projects",
+        "Create and update issues",
+        "Add comments"
+      ],
+      "auth": "oauth",
+      "catalog_status": "accepted",
+      "category": "work",
+      "description": "Find, create and update issues, projects and comments in Linear.",
+      "error": null,
+      "fields": [],
+      "icon": "linear",
+      "id": "linear",
+      "instructions": {
+        "open_label": "Read Linear's guide",
+        "open_url": "https://linear.app/docs/mcp",
+        "steps": [
+          "Pick the dots that may use Linear below, then click Sign in with Linear.",
+          "Your browser opens Linear. Sign in if it asks you to.",
+          "Pick the workspace Dots may use. Then click Allow (or Approve).",
+          "Come back to Dots: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Dots from Linear's connected apps."
+        ]
+      },
+      "maker": "Linear",
+      "name": "Linear",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_LINEAR_ACCESS_TOKEN",
+        "transport": "http",
+        "url": "https://mcp.linear.app/mcp"
+      },
+      "server_id": "01J0C6",
+      "source_url": "https://linear.app/docs/mcp",
+      "state": "connected",
+      "tools": 12,
+      "trust": "official",
+      "used_by": [
+        {
+          "id": "01J0DOT",
+          "name": "nightly-tests"
+        }
+      ]
+    },
+    {
+      "abilities": [
+        "Search, read, create and update Jira issues",
+        "Search, read and write Confluence pages"
+      ],
+      "auth": "oauth",
+      "catalog_status": null,
+      "category": "work",
+      "description": "Work with Jira issues and Confluence pages in your Atlassian site.",
+      "error": null,
+      "fields": [],
+      "icon": "atlassian",
+      "id": "atlassian",
+      "instructions": {
+        "open_label": "Read Atlassian's guide",
+        "open_url": "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/",
+        "steps": [
+          "Pick the dots that may use Jira and Confluence below, then click Sign in with Jira and Confluence.",
+          "Your browser opens Jira and Confluence. Sign in if it asks you to.",
+          "Pick the Atlassian site Dots may use. Then click Allow (or Approve).",
+          "Come back to Dots: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Dots from Jira and Confluence's connected apps."
+        ]
+      },
+      "maker": "Atlassian",
+      "name": "Jira and Confluence",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_ATLASSIAN_ACCESS_TOKEN",
+        "transport": "http",
+        "url": "https://mcp.atlassian.com/v1/mcp"
+      },
+      "server_id": null,
+      "source_url": "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/",
+      "state": "not_connected",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [
+        "Find and read issues and errors",
+        "Look up projects, releases and events"
+      ],
+      "auth": "oauth",
+      "catalog_status": null,
+      "category": "developer",
+      "description": "Look into errors, issues and releases in Sentry.",
+      "error": null,
+      "fields": [],
+      "icon": "sentry",
+      "id": "sentry",
+      "instructions": {
+        "open_label": "Read Sentry's guide",
+        "open_url": "https://docs.sentry.io/product/sentry-mcp/",
+        "steps": [
+          "Pick the dots that may use Sentry below, then click Sign in with Sentry.",
+          "Your browser opens Sentry. Sign in if it asks you to.",
+          "Pick the organization Dots may use. Then click Allow (or Approve).",
+          "Come back to Dots: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Dots from Sentry's connected apps."
+        ]
+      },
+      "maker": "Sentry",
+      "name": "Sentry",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_SENTRY_ACCESS_TOKEN",
+        "transport": "http",
+        "url": "https://mcp.sentry.dev/mcp"
+      },
+      "server_id": null,
+      "source_url": "https://docs.sentry.io/product/sentry-mcp/",
+      "state": "not_connected",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [
+        "Read your tasks and projects",
+        "Add, change and complete tasks"
+      ],
+      "auth": "oauth",
+      "catalog_status": null,
+      "category": "work",
+      "description": "Read, add and complete tasks and projects in Todoist.",
+      "error": null,
+      "fields": [],
+      "icon": "todoist",
+      "id": "todoist",
+      "instructions": {
+        "open_label": "Read Doist's guide",
+        "open_url": "https://github.com/Doist/todoist-ai",
+        "steps": [
+          "Pick the dots that may use Todoist below, then click Sign in with Todoist.",
+          "Your browser opens Todoist. Sign in if it asks you to.",
+          "Check what Dots may do. Then click Allow (or Approve).",
+          "Come back to Dots: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Dots from Todoist's connected apps."
+        ]
+      },
+      "maker": "Doist",
+      "name": "Todoist",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_TODOIST_ACCESS_TOKEN",
+        "transport": "http",
+        "url": "https://ai.todoist.net/mcp"
+      },
+      "server_id": null,
+      "source_url": "https://github.com/Doist/todoist-ai",
+      "state": "not_connected",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [
+        "Read bases, tables and records",
+        "Create and update records"
+      ],
+      "auth": "oauth",
+      "catalog_status": null,
+      "category": "work",
+      "description": "Read and write records in your Airtable bases.",
+      "error": null,
+      "fields": [],
+      "icon": "airtable",
+      "id": "airtable",
+      "instructions": {
+        "open_label": "Read Airtable's guide",
+        "open_url": "https://support.airtable.com/docs/using-the-airtable-mcp-server",
+        "steps": [
+          "Pick the dots that may use Airtable below, then click Sign in with Airtable.",
+          "Your browser opens Airtable. Sign in if it asks you to.",
+          "Pick the bases Dots may use. Then click Allow (or Approve).",
+          "Come back to Dots: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Dots from Airtable's connected apps."
+        ]
+      },
+      "maker": "Airtable",
+      "name": "Airtable",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_AIRTABLE_ACCESS_TOKEN",
+        "transport": "http",
+        "url": "https://mcp.airtable.com/mcp"
+      },
+      "server_id": null,
+      "source_url": "https://support.airtable.com/docs/using-the-airtable-mcp-server",
+      "state": "not_connected",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [
+        "Look up customers, payments and invoices",
+        "Create customers, products and payment links",
+        "Search Stripe's documentation"
+      ],
+      "auth": "oauth",
+      "catalog_status": null,
+      "category": "business",
+      "description": "Look up customers, payments and invoices in Stripe.",
+      "error": null,
+      "fields": [],
+      "icon": "stripe",
+      "id": "stripe",
+      "instructions": {
+        "open_label": "Read Stripe's guide",
+        "open_url": "https://docs.stripe.com/mcp",
+        "steps": [
+          "Pick the dots that may use Stripe below, then click Sign in with Stripe.",
+          "Your browser opens Stripe. Sign in if it asks you to.",
+          "Pick the Stripe account Dots may use. Then click Allow (or Approve).",
+          "Come back to Dots: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Dots from Stripe's connected apps."
+        ]
+      },
+      "maker": "Stripe",
+      "name": "Stripe",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_STRIPE_ACCESS_TOKEN",
+        "transport": "http",
+        "url": "https://mcp.stripe.com"
+      },
+      "server_id": null,
+      "source_url": "https://docs.stripe.com/mcp",
+      "state": "not_connected",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [
+        "Read your accounts, zones and settings",
+        "Call the Cloudflare API on your behalf"
+      ],
+      "auth": "oauth",
+      "catalog_status": null,
+      "category": "developer",
+      "description": "Look up and manage your Cloudflare account through its API.",
+      "error": null,
+      "fields": [],
+      "icon": "cloudflare",
+      "id": "cloudflare",
+      "instructions": {
+        "open_label": "Read Cloudflare's guide",
+        "open_url": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
+        "steps": [
+          "Pick the dots that may use Cloudflare below, then click Sign in with Cloudflare.",
+          "Your browser opens Cloudflare. Sign in if it asks you to.",
+          "Pick the account Dots may use. Then click Allow (or Approve).",
+          "Come back to Dots: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Dots from Cloudflare's connected apps."
+        ]
+      },
+      "maker": "Cloudflare",
+      "name": "Cloudflare",
+      "note": null,
+      "runtime": null,
+      "server": {
+        "bearer": "CONNECTOR_CLOUDFLARE_ACCESS_TOKEN",
+        "transport": "http",
+        "url": "https://mcp.cloudflare.com/mcp"
+      },
+      "server_id": null,
+      "source_url": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
+      "state": "not_connected",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [],
+      "auth": "coming_soon",
+      "catalog_status": null,
+      "category": "work",
+      "description": "See and add events in your Google Calendar.",
+      "error": null,
+      "fields": [],
+      "icon": "google-calendar",
+      "id": "google-calendar",
+      "instructions": {
+        "open_label": "About Google Workspace APIs",
+        "open_url": "https://developers.google.com/workspace",
+        "steps": [
+          "Not available yet. Google does not let apps register themselves for sign-in the way the other apps here do: Dots needs its own Google sign-in, reviewed by Google, first.",
+          "Until then, Gmail works with an app password (see the Gmail connector)."
+        ]
+      },
+      "maker": "Google",
+      "name": "Google Calendar",
+      "note": "Coming soon: needs Google sign-in for Dots.",
+      "runtime": null,
+      "server": null,
+      "server_id": null,
+      "source_url": "https://developers.google.com/workspace",
+      "state": "coming_soon",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    },
+    {
+      "abilities": [],
+      "auth": "coming_soon",
+      "catalog_status": null,
+      "category": "files",
+      "description": "Find and read files in your Google Drive.",
+      "error": null,
+      "fields": [],
+      "icon": "google-drive",
+      "id": "google-drive",
+      "instructions": {
+        "open_label": "About Google Workspace APIs",
+        "open_url": "https://developers.google.com/workspace",
+        "steps": [
+          "Not available yet. Google does not let apps register themselves for sign-in the way the other apps here do: Dots needs its own Google sign-in, reviewed by Google, first.",
+          "Until then, Gmail works with an app password (see the Gmail connector)."
+        ]
+      },
+      "maker": "Google",
+      "name": "Google Drive",
+      "note": "Coming soon: needs Google sign-in for Dots.",
+      "runtime": null,
+      "server": null,
+      "server_id": null,
+      "source_url": "https://developers.google.com/workspace",
+      "state": "coming_soon",
+      "tools": null,
+      "trust": "official",
+      "used_by": []
+    }
+  ],
   "ContextDocuments": {
     "complete": true,
     "documents": [
@@ -771,6 +1737,24 @@
     ],
     "total": 42,
     "truncated": true
+  },
+  "ConversationFile": {
+    "at": "2026-10-09T12:00:00.000Z",
+    "can_open": true,
+    "exists": true,
+    "name": "report.pdf",
+    "path": "C:\\work\\attachments\\01J0RUN6\\report.pdf",
+    "run_id": "01J0RUN6",
+    "source": "attached"
+  },
+  "ConversationFileGone": {
+    "at": "2026-10-09T12:00:00.000Z",
+    "can_open": true,
+    "exists": false,
+    "name": "summary.md",
+    "path": "C:\\work\\out\\summary.md",
+    "run_id": "01J0RUN6",
+    "source": "written"
   },
   "CreatedApiKey": {
     "key": {
@@ -800,6 +1784,11 @@
   "CurrentScope": {
     "account": "personal",
     "workspace": "default"
+  },
+  "DeliveryCounts": {
+    "delivered": 4,
+    "not_delivered": 1,
+    "sent": 5
   },
   "Dot": {
     "approval_wait_secs": 240,
@@ -1151,6 +2140,9 @@
       "base_commit": "0123abcd",
       "branch": "dots/nightly-tests/01J0RUN",
       "cost_usd": 1.32,
+      "delivered_at": "2026-10-09T12:00:00.000Z",
+      "delivery": "delivered",
+      "dismissed_at": null,
       "dot_id": "01J0DOT",
       "ended_at": "2026-10-09T12:00:00.000Z",
       "error": null,
@@ -1175,6 +2167,9 @@
       "tokens_in": 1200,
       "tokens_out": 340,
       "trigger": "schedule",
+      "undelivered_at": null,
+      "undelivered_reason": null,
+      "wait_reason": null,
       "workflow_step_run_id": null,
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
     },
@@ -1185,9 +2180,11 @@
         "run_id": "01J0RUN0"
       },
       "fired_count": 3,
+      "last_skipped_at": "2026-10-09T11:00:00Z",
       "next_fire": "2026-10-10T02:00:00+01:00",
       "retry_at": "2026-10-09T13:02:00+01:00",
       "retry_attempt": 2,
+      "skipped_since_run": 2,
       "status": "active"
     },
     "unread": 0
@@ -1387,11 +2384,24 @@
       "denied",
       "expired"
     ],
+    "AuthKind": [
+      "key",
+      "oauth",
+      "coming_soon"
+    ],
     "CatalogStatus": [
       "accepted",
       "changed",
       "unreachable",
       "unchecked"
+    ],
+    "Category": [
+      "communication",
+      "work",
+      "developer",
+      "search",
+      "files",
+      "business"
     ],
     "CmdErrorKind": [
       "not_found",
@@ -1401,6 +2411,19 @@
       "internal",
       "cancelled"
     ],
+    "ConnectorState": [
+      "not_connected",
+      "connected",
+      "needs_sign_in",
+      "error",
+      "name_taken",
+      "coming_soon"
+    ],
+    "Delivery": [
+      "delivered",
+      "waiting",
+      "not_delivered"
+    ],
     "EngineKind": [
       "claude",
       "local"
@@ -1408,6 +2431,10 @@
     "EntryKind": [
       "plain",
       "secret"
+    ],
+    "FileSource": [
+      "attached",
+      "written"
     ],
     "FileStatus": [
       "added",
@@ -1445,6 +2472,19 @@
       "policy_invalid",
       "org_removed",
       "not_member"
+    ],
+    "InboxKind": [
+      "message",
+      "approval",
+      "review",
+      "not_delivered",
+      "attention",
+      "watcher",
+      "held",
+      "tools",
+      "instructions",
+      "app_review",
+      "team_scope"
     ],
     "InstructionStatus": [
       "pending",
@@ -1507,6 +2547,18 @@
       "completed",
       "expired"
     ],
+    "ScheduledStatus": [
+      "scheduled",
+      "sending",
+      "sent",
+      "failed",
+      "cancelled"
+    ],
+    "ScheduledWait": [
+      "busy",
+      "approval",
+      "usage_limit"
+    ],
     "StepRunStatus": [
       "running",
       "waiting",
@@ -1527,6 +2579,10 @@
       "watcher",
       "api"
     ],
+    "Trust": [
+      "official",
+      "community"
+    ],
     "UsagePeriod": [
       "five_hours",
       "week",
@@ -1535,6 +2591,13 @@
     "ValueSource": [
       "org",
       "personal"
+    ],
+    "WaitReason": [
+      "busy",
+      "usage_hold",
+      "updating",
+      "dot_busy",
+      "queued"
     ],
     "WaitingOn": [
       "check",
@@ -1781,6 +2844,28 @@
         "run_id": "01J0RUN"
       }
     ],
+    "back": [
+      {
+        "back_at": "2026-10-09T12:00:00.000Z",
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "id": "01J0RUN",
+        "kind": "review",
+        "snoozed_until": null,
+        "title": "nightly-tests: run to review"
+      }
+    ],
+    "done": [
+      {
+        "back_at": null,
+        "done_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": null,
+        "id": "01J0SRV/personal",
+        "kind": "tools",
+        "snoozed_until": null,
+        "title": "github tools changed"
+      }
+    ],
     "held": [
       {
         "dot_id": "01J0DOT",
@@ -1807,6 +2892,9 @@
         "trigger": "watcher"
       }
     ],
+    "hidden_messages": [
+      "01J0MSG1"
+    ],
     "instructions": [
       {
         "dot_name": "shopper",
@@ -1825,11 +2913,52 @@
         }
       }
     ],
+    "not_delivered": [
+      {
+        "base_commit": "0123abcd",
+        "branch": "dots/nightly-tests/01J0RUN",
+        "cost_usd": 1.32,
+        "delivered_at": null,
+        "delivery": "not_delivered",
+        "dismissed_at": null,
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "ended_at": "2026-10-09T12:00:00.000Z",
+        "error": "claude CLI not found",
+        "hold_released": false,
+        "id": "01J0RUN",
+        "parent_run_id": null,
+        "payload": null,
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "quiet_limit_secs": null,
+        "quiet_since": null,
+        "quiet_stopped": false,
+        "retry_of": null,
+        "reviewed_at": null,
+        "root_run_id": "01J0RUN",
+        "session_id": "sess-1",
+        "started_at": "2026-10-09T12:00:00.000Z",
+        "status": "failed",
+        "summary": null,
+        "tokens_cache_read": 0,
+        "tokens_in": 1200,
+        "tokens_out": 340,
+        "trigger": "chat",
+        "undelivered_at": "2026-10-09T12:00:00.000Z",
+        "undelivered_reason": "claude CLI not found",
+        "wait_reason": null,
+        "workflow_step_run_id": null,
+        "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+      }
+    ],
     "review_runs": [
       {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
         "ended_at": "2026-10-09T12:00:00.000Z",
@@ -1855,9 +2984,23 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
         "worktree_exists": true
+      }
+    ],
+    "snoozed": [
+      {
+        "back_at": null,
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "id": "01J0MSG1",
+        "kind": "message",
+        "snoozed_until": "2026-10-21T09:00:00Z",
+        "title": "nightly-tests asks: Ship the release?"
       }
     ],
     "team_scope": [
@@ -1910,6 +3053,99 @@
       }
     ]
   },
+  "InboxKey": [
+    {
+      "id": "01J0RUN",
+      "kind": "review"
+    },
+    {
+      "id": "01J0MSG1",
+      "kind": "message"
+    },
+    {
+      "id": "01J0SRV/personal",
+      "kind": "tools"
+    }
+  ],
+  "InboxKeys": [
+    {
+      "id": "01J0MSG1",
+      "kind": "message"
+    },
+    {
+      "id": "01J0APR",
+      "kind": "approval"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "not_delivered"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "review"
+    },
+    {
+      "id": "01J0RUN",
+      "kind": "attention"
+    },
+    {
+      "id": "01J0SRV/personal",
+      "kind": "tools"
+    },
+    {
+      "id": "01J0WAT2@2026-10-09T12:00:00.000Z",
+      "kind": "watcher"
+    },
+    {
+      "id": "01J0RUN4",
+      "kind": "held"
+    },
+    {
+      "id": "01J0RUN5",
+      "kind": "held"
+    },
+    {
+      "id": "01J0INS",
+      "kind": "instructions"
+    },
+    {
+      "id": "01J0PROP",
+      "kind": "app_review"
+    },
+    {
+      "id": "01J0TEAM/01J0DOT",
+      "kind": "team_scope"
+    }
+  ],
+  "InboxMark": [
+    {
+      "back_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0RUN",
+      "kind": "review",
+      "snoozed_until": null,
+      "title": "nightly-tests: run to review"
+    },
+    {
+      "back_at": null,
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "id": "01J0MSG1",
+      "kind": "message",
+      "snoozed_until": "2026-10-21T09:00:00Z",
+      "title": "nightly-tests asks: Ship the release?"
+    },
+    {
+      "back_at": null,
+      "done_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "id": "01J0SRV/personal",
+      "kind": "tools",
+      "snoozed_until": null,
+      "title": "github tools changed"
+    }
+  ],
   "InstalledPlugin": [
     {
       "exists": true,
@@ -1975,6 +3211,63 @@
       "status": "replaced"
     }
   ],
+  "Intent": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": "01J0DOT",
+      "due_date": null,
+      "id": "01J0GOAL1",
+      "org_id": "acme-eng",
+      "text": "Ship the spring report",
+      "urgent": true,
+      "workspace_id": "platform"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": null,
+      "dot_id": null,
+      "due_date": "2026-10-14",
+      "id": "01J0GOAL2",
+      "org_id": "acme-eng",
+      "text": "Book the venue",
+      "urgent": false,
+      "workspace_id": "platform"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "done_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "due_date": "2026-10-14",
+      "id": "01J0GOAL3",
+      "org_id": "acme-eng",
+      "text": "Renew the passport",
+      "urgent": false,
+      "workspace_id": "platform"
+    }
+  ],
+  "IntentFields": {
+    "dot_id": "01J0DOT",
+    "due_date": "2026-10-14",
+    "text": "Book the venue",
+    "urgent": false
+  },
+  "IntentsView": {
+    "intents": [
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "done_at": null,
+        "dot_id": "01J0DOT",
+        "due_date": null,
+        "id": "01J0GOAL1",
+        "org_id": "acme-eng",
+        "text": "Ship the spring report",
+        "urgent": true,
+        "workspace_id": "platform"
+      }
+    ],
+    "refusal": "Acme Engineering: a Viewer in the Platform workspace can't change goals. Ask an Admin or Owner."
+  },
   "JoinPreview": [
     {
       "address": "https://bao.acme.internal",
@@ -2724,6 +4017,47 @@
       ]
     }
   ],
+  "ManagedCheck": {
+    "conflicts": [
+      {
+        "dot_rule": "everything else",
+        "kind": "deny",
+        "rule": "WebFetch"
+      }
+    ],
+    "managed": {
+      "blocks_skipping_asks": true,
+      "error": null,
+      "forced_ask": [
+        "Bash(git push:*)"
+      ],
+      "forced_deny": [
+        "WebFetch"
+      ],
+      "managed_rules_only": false,
+      "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+    }
+  },
+  "ManagedPolicy": {
+    "blocks_skipping_asks": true,
+    "error": null,
+    "forced_ask": [
+      "Bash(git push:*)"
+    ],
+    "forced_deny": [
+      "WebFetch"
+    ],
+    "managed_rules_only": false,
+    "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+  },
+  "ManagedPolicyUnread": {
+    "blocks_skipping_asks": false,
+    "error": "Couldn't read your company's Claude Code policy at C:/Program Files/ClaudeCode/managed-settings.json: expected value at line 1 column 3",
+    "forced_ask": [],
+    "forced_deny": [],
+    "managed_rules_only": false,
+    "path": "C:/Program Files/ClaudeCode/managed-settings.json"
+  },
   "McpCatalog": {
     "accepted_fingerprint": "fp-accepted",
     "accepted_tools": [
@@ -2971,6 +4305,28 @@
       "read_at": "2026-10-09T12:00:00.000Z",
       "run_id": null,
       "text": "A follow-up was skipped because the dot is off. It was due Tue 21 Oct 09:00: check CI"
+    }
+  ],
+  "ModelOption": [
+    {
+      "hint": "Most capable, for hard work; slower and uses more of your limits.",
+      "id": "opus",
+      "label": "Opus"
+    },
+    {
+      "hint": "Balanced speed and capability; the usual choice.",
+      "id": "sonnet",
+      "label": "Sonnet"
+    },
+    {
+      "hint": "Fastest and lightest on your limits, for simple tasks.",
+      "id": "haiku",
+      "label": "Haiku"
+    },
+    {
+      "hint": "",
+      "id": "qwen2.5-coder-7b",
+      "label": "qwen2.5-coder-7b"
     }
   ],
   "NewDotSpec": {
@@ -3671,6 +5027,9 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
     "dot_id": "01J0DOT",
     "ended_at": "2026-10-09T12:00:00.000Z",
     "error": null,
@@ -3695,6 +5054,9 @@
     "tokens_in": 1200,
     "tokens_out": 340,
     "trigger": "schedule",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
@@ -3784,12 +5146,201 @@
     "dot_id": "01J0DOT",
     "root_run_id": "01J0RUN"
   },
+  "RunNotDelivered": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": null,
+    "delivery": "not_delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": "claude CLI not found",
+    "hold_released": false,
+    "id": "01J0RUN",
+    "parent_run_id": null,
+    "payload": null,
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "failed",
+    "summary": null,
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": "2026-10-09T12:00:00.000Z",
+    "undelivered_reason": "claude CLI not found",
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunSentLate": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN5",
+    "parent_run_id": null,
+    "payload": {
+      "message": "Ship the release notes.",
+      "send_later": {
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "id": "01J0SCHED",
+        "late": true,
+        "new_topic": false
+      },
+      "typed": true
+    },
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "succeeded",
+    "summary": "All tests pass.",
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunWaiting": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": null,
+    "delivery": "waiting",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": null,
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN",
+    "parent_run_id": null,
+    "payload": null,
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": null,
+    "status": "queued",
+    "summary": null,
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": "busy",
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunWithAttachments": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cost_usd": 1.32,
+    "delivered_at": "2026-10-09T12:00:00.000Z",
+    "delivery": "delivered",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": "2026-10-09T12:00:00.000Z",
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN6",
+    "parent_run_id": null,
+    "payload": {
+      "attachments": [
+        {
+          "id": "01J0ATT",
+          "name": "report.pdf",
+          "size": 2458
+        }
+      ],
+      "message": "Shorten the report.",
+      "typed": true
+    },
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": "2026-10-09T12:00:00.000Z",
+    "status": "succeeded",
+    "summary": "All tests pass.",
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_reason": null,
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RuntimeCheck": [
+    {
+      "found": null,
+      "needed": null,
+      "ok": true
+    },
+    {
+      "found": "v24.18.0",
+      "needed": {
+        "command": "node",
+        "download_url": "https://nodejs.org/en/download",
+        "min_major": 24,
+        "name": "Node.js"
+      },
+      "ok": true
+    },
+    {
+      "found": null,
+      "needed": {
+        "command": "node",
+        "download_url": "https://nodejs.org/en/download",
+        "min_major": 24,
+        "name": "Node.js"
+      },
+      "ok": false
+    }
+  ],
   "RuntimeEvent": [
     {
       "run": {
         "base_commit": null,
         "branch": null,
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": null,
         "error": null,
@@ -3815,6 +5366,9 @@
         "tokens_in": 0,
         "tokens_out": 0,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": null
       },
@@ -3960,6 +5514,22 @@
     {
       "dot_id": "01J0DOT",
       "type": "follow_ups_updated"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "skip": {
+        "created_at": "2026-10-09T11:00:01Z",
+        "dot_id": "01J0DOT",
+        "id": "01J0SKIP",
+        "reason": "busy",
+        "run_id": "01J0RUN",
+        "slot_at": "2026-10-09T11:00:00Z"
+      },
+      "type": "schedule_skipped"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "type": "topics_changed"
     },
     {
       "dot_id": "01J0DOT",
@@ -4169,6 +5739,9 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": "2026-10-09T12:00:00.000Z",
         "error": null,
@@ -4199,6 +5772,9 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "watcher",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
       },
@@ -4223,6 +5799,9 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cost_usd": 1.32,
+        "delivered_at": "2026-10-09T12:00:00.000Z",
+        "delivery": "delivered",
+        "dismissed_at": null,
         "dot_id": "01J0DOT",
         "ended_at": "2026-10-09T12:00:00.000Z",
         "error": null,
@@ -4247,6 +5826,9 @@
         "tokens_in": 1200,
         "tokens_out": 340,
         "trigger": "schedule",
+        "undelivered_at": null,
+        "undelivered_reason": null,
+        "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
       },
@@ -4461,6 +6043,124 @@
         "workflow_id": "01J0WFL"
       },
       "type": "workflow_run_updated"
+    },
+    {
+      "type": "inbox_updated"
+    },
+    {
+      "items": [
+        {
+          "back_at": "2026-10-09T12:00:00.000Z",
+          "done_at": null,
+          "dot_id": "01J0DOT",
+          "id": "01J0RUN",
+          "kind": "review",
+          "snoozed_until": null,
+          "title": "nightly-tests: run to review"
+        }
+      ],
+      "type": "snooze_ended"
+    },
+    {
+      "message": {
+        "attachments": [
+          {
+            "id": "01J0ATT2",
+            "name": "notes.pdf",
+            "size": 31457
+          }
+        ],
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "error": null,
+        "id": "01J0SCHED",
+        "root_run_id": "01J0RUN",
+        "run_id": null,
+        "sent_at": null,
+        "status": "scheduled",
+        "text": "Ship the release notes.",
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "waiting": "busy"
+      },
+      "type": "scheduled_message_updated"
+    },
+    {
+      "message": {
+        "attachments": [
+          {
+            "id": "01J0ATT2",
+            "name": "notes.pdf",
+            "size": 31457
+          }
+        ],
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "due_at": "2026-11-05T09:00:00.000Z",
+        "error": "dot 'builder': its org 'acme' was removed",
+        "id": "01J0SCHED2",
+        "root_run_id": null,
+        "run_id": null,
+        "sent_at": null,
+        "status": "failed",
+        "text": "Ship the release notes.",
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "waiting": null
+      },
+      "type": "scheduled_message_updated"
+    },
+    {
+      "org_id": null,
+      "type": "intents_updated",
+      "workspace_id": "default"
+    }
+  ],
+  "ScannedAgent": [
+    {
+      "already_imported": false,
+      "description": "The reviewer agent",
+      "error": null,
+      "model": "sonnet",
+      "name": "reviewer",
+      "path": "C:/Users/u/.claude/agents/reviewer.md",
+      "plugin": null,
+      "project": null,
+      "source": "user",
+      "tools": [
+        "Read",
+        "Bash",
+        "Frob"
+      ],
+      "warnings": [
+        "Bash asks before each use.",
+        "Frob is left out: Dots does not know this tool."
+      ]
+    },
+    {
+      "already_imported": true,
+      "description": "The tester agent",
+      "error": null,
+      "model": "sonnet",
+      "name": "tester",
+      "path": "C:/code/app/.claude/agents/tester.md",
+      "plugin": null,
+      "project": "C:/code/app",
+      "source": "project",
+      "tools": null,
+      "warnings": []
+    },
+    {
+      "already_imported": false,
+      "description": null,
+      "error": "it has no instructions",
+      "model": null,
+      "name": "pdf",
+      "path": "C:/plugins/pdf-tools/agents/pdf.md",
+      "plugin": "pdf-tools",
+      "project": null,
+      "source": "plugin",
+      "tools": null,
+      "warnings": []
     }
   ],
   "ScannedSkill": [
@@ -4537,10 +6237,62 @@
       "until": null
     }
   ],
+  "ScheduleSkip": {
+    "created_at": "2026-10-09T11:00:01Z",
+    "dot_id": "01J0DOT",
+    "id": "01J0SKIP",
+    "reason": "busy",
+    "run_id": "01J0RUN",
+    "slot_at": "2026-10-09T11:00:00Z"
+  },
+  "ScheduledMessage": {
+    "attachments": [
+      {
+        "id": "01J0ATT2",
+        "name": "notes.pdf",
+        "size": 31457
+      }
+    ],
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "dot_id": "01J0DOT",
+    "due_at": "2026-11-05T09:00:00.000Z",
+    "error": null,
+    "id": "01J0SCHED",
+    "root_run_id": "01J0RUN",
+    "run_id": null,
+    "sent_at": null,
+    "status": "scheduled",
+    "text": "Ship the release notes.",
+    "updated_at": "2026-10-09T12:00:00.000Z",
+    "waiting": "busy"
+  },
+  "ScheduledMessageFailed": {
+    "attachments": [
+      {
+        "id": "01J0ATT2",
+        "name": "notes.pdf",
+        "size": 31457
+      }
+    ],
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "dot_id": "01J0DOT",
+    "due_at": "2026-11-05T09:00:00.000Z",
+    "error": "dot 'builder': its org 'acme' was removed",
+    "id": "01J0SCHED2",
+    "root_run_id": null,
+    "run_id": null,
+    "sent_at": null,
+    "status": "failed",
+    "text": "Ship the release notes.",
+    "updated_at": "2026-10-09T12:00:00.000Z",
+    "waiting": null
+  },
   "Settings": {
+    "auto_archive_days": 30,
     "auto_install_updates": false,
     "autostart": true,
     "claude_path": null,
+    "default_model": "sonnet",
     "edge_path": null,
     "global_instructions": "Use British spelling.",
     "hold_enabled": true,
@@ -4560,9 +6312,11 @@
   "SettingsSaved": {
     "restart_required": true,
     "settings": {
+      "auto_archive_days": 30,
       "auto_install_updates": false,
       "autostart": true,
       "claude_path": null,
+      "default_model": "sonnet",
       "edge_path": null,
       "global_instructions": "Use British spelling.",
       "hold_enabled": true,
@@ -4580,6 +6334,443 @@
       "tested_claude_version": "2.1.295"
     }
   },
+  "SetupAnswer": [
+    {
+      "kind": "questions",
+      "questions": [
+        "Which folder?",
+        "How often?"
+      ]
+    },
+    {
+      "kind": "proposal",
+      "new_dot_root": "C:/Users/me/Dots",
+      "proposal": {
+        "extras": [
+          "web",
+          "mcp:github"
+        ],
+        "first_message": "Start with today's new files.",
+        "folder": "C:/Users/me/Dots/downloads-digest",
+        "instructions": "Read the Downloads folder and tell me what is new.",
+        "name": "Downloads digest",
+        "notes": "Runs on weekdays at 9.",
+        "preset": "read-only",
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 9 * * 1-5",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "uses": {
+          "apps": [],
+          "context": [],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [],
+          "skills": []
+        }
+      }
+    }
+  ],
+  "SetupApplied": [
+    {
+      "dot": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "has_webhook_token": true,
+        "id": "01J0DOT",
+        "instructions": "Run the tests and summarize failures.",
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "nightly-tests",
+        "org_id": null,
+        "policy": {
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "seen_at": "2026-10-09T12:00:00.000Z",
+        "timeout_secs": 1800,
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "use_global_instructions": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_id": "default",
+        "workspace_mode": "worktree"
+      },
+      "notes": "",
+      "run_error": null,
+      "run_id": "01J0RUN"
+    },
+    {
+      "dot": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "has_webhook_token": true,
+        "id": "01J0DOT",
+        "instructions": "Run the tests and summarize failures.",
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "nightly-tests",
+        "org_id": null,
+        "policy": {
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "seen_at": "2026-10-09T12:00:00.000Z",
+        "timeout_secs": 1800,
+        "updated_at": "2026-10-09T12:00:00.000Z",
+        "use_global_instructions": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_id": "default",
+        "workspace_mode": "worktree"
+      },
+      "notes": "Left out the extra telepathy: Dots does not know it.",
+      "run_error": "The first run could not start.",
+      "run_id": null
+    }
+  ],
+  "SetupRequest": [
+    {
+      "change": null,
+      "current": null,
+      "description": "Every weekday at 9, read my Downloads folder",
+      "rounds": [
+        {
+          "answers": [
+            "Downloads"
+          ],
+          "questions": [
+            "Which folder?"
+          ]
+        }
+      ],
+      "skip": false
+    },
+    {
+      "change": "Run at 8 instead",
+      "current": {
+        "extras": [
+          "web",
+          "mcp:github"
+        ],
+        "first_message": "Start with today's new files.",
+        "folder": "C:/Users/me/Dots/downloads-digest",
+        "instructions": "Read the Downloads folder and tell me what is new.",
+        "name": "Downloads digest",
+        "notes": "Runs on weekdays at 9.",
+        "preset": "read-only",
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 9 * * 1-5",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "uses": {
+          "apps": [],
+          "context": [],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [],
+          "skills": []
+        }
+      },
+      "description": "Every weekday at 9, read my Downloads folder",
+      "rounds": [],
+      "skip": true
+    }
+  ],
   "SourceCreds": [
     {
       "kind": "token",
@@ -4600,6 +6791,11 @@
       "kind": "age"
     }
   ],
+  "StagedAttachment": {
+    "id": "01J0ATT",
+    "name": "report.pdf",
+    "size": 2458
+  },
   "StartupError": {
     "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",
     "go_back": "0.1.0",
@@ -4748,6 +6944,12 @@
       "server_id": "01J0SRV"
     }
   ],
+  "TopicInfo": {
+    "archived_at": "2026-11-04T09:00:00.000Z",
+    "dot_id": "01J0DOT",
+    "root_run_id": "01J0RUN",
+    "title": "Trip plans"
+  },
   "UpdateNote": [
     {
       "state": "none"
@@ -4830,6 +7032,52 @@
       "version": "0.2.0"
     }
   ],
+  "UsageCountsReport": [
+    {
+      "app_version": "0.3.0",
+      "approvals_asked": 1,
+      "dots": 5,
+      "hour_start": "2026-10-09T11:00:00Z",
+      "install_id": "3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f",
+      "messages_sent": 2,
+      "runs_failed": 1,
+      "runs_started": 4,
+      "runs_succeeded": 3,
+      "schema": 1
+    },
+    {
+      "app_version": "0.3.0",
+      "approvals_asked": 0,
+      "dots": 5,
+      "hour_start": "2026-10-09T13:00:00Z",
+      "install_id": null,
+      "messages_sent": 0,
+      "runs_failed": 0,
+      "runs_started": 0,
+      "runs_succeeded": 0,
+      "schema": 1
+    }
+  ],
+  "UsageCountsState": [
+    {
+      "enabled": true,
+      "first_hour": "2026-10-09T11:00:00Z",
+      "install_id": "3f2b8c1e-5d4a-4b6f-9e7d-0a1b2c3d4e5f",
+      "last_error": "the server answered 503",
+      "last_sent_at": "2026-10-09T12:02:00Z",
+      "last_sent_hour": "2026-10-09T11:00:00Z",
+      "url": "https://counts.example.com/v1/hourly"
+    },
+    {
+      "enabled": false,
+      "first_hour": null,
+      "install_id": null,
+      "last_error": null,
+      "last_sent_at": null,
+      "last_sent_hour": null,
+      "url": null
+    }
+  ],
   "UsageSummary": {
     "period": "week",
     "rows": [
@@ -4878,6 +7126,17 @@
     ],
     "since": "2026-10-09T12:00:00.000Z"
   },
+  "WatchHours": {
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "end": "18:00",
+    "start": "09:00"
+  },
   "Watcher": [
     {
       "config": {
@@ -4894,10 +7153,23 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 4,
+      "hours": {
+        "days": [
+          "mon",
+          "tue",
+          "wed",
+          "thu",
+          "fri"
+        ],
+        "end": "18:00",
+        "start": "09:00"
+      },
       "id": "01J0WAT1",
       "last_error": null,
       "last_event_at": "2026-10-09T12:00:00.000Z",
       "name": "Invoices folder",
+      "next_opening": "2026-10-26T09:00:00+01:00",
       "paused_reason": null,
       "updated_at": "2026-10-09T12:00:00.000Z"
     },
@@ -4914,10 +7186,13 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 0,
+      "hours": null,
       "id": "01J0WAT2",
       "last_error": "Gmail refused the app password for me@gmail.com, or IMAP is off for it.",
       "last_event_at": null,
       "name": "Billing mail",
+      "next_opening": null,
       "paused_reason": "error",
       "updated_at": "2026-10-09T12:00:00.000Z"
     },
@@ -4940,10 +7215,13 @@
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
       "enabled": true,
+      "held_count": 0,
+      "hours": null,
       "id": "01J0WAT3",
       "last_error": null,
       "last_event_at": "2026-10-09T12:00:00.000Z",
       "name": "Repo events",
+      "next_opening": null,
       "paused_reason": "flood",
       "updated_at": "2026-10-09T12:00:00.000Z"
     }

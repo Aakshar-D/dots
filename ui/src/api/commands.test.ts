@@ -43,12 +43,27 @@ describe("commands", () => {
     reply = async () => fixture.RuleCandidate;
     expect(await commands.approvalRuleCandidates("a1")).toEqual(fixture.RuleCandidate);
     reply = async () => [fixture.Approval];
-    expect(await commands.decideRunApprovals("r1", true, null)).toEqual([fixture.Approval]);
+    expect(await commands.decideRunApprovals("r1", ["a1", "a2"], true, null)).toEqual([fixture.Approval]);
     expect(calls).toEqual([
       ["decide_approval", { id: "a1", approved: true, note: null, allowRule: "Bash(git push)" }],
       ["decide_approval", { id: "a1", approved: false, note: "no", allowRule: null }],
       ["approval_rule_candidates", { id: "a1" }],
-      ["decide_run_approvals", { runId: "r1", approved: true, note: null }],
+      ["decide_run_approvals", { runId: "r1", ids: ["a1", "a2"], approved: true, note: null }],
+    ]);
+  });
+
+  it("scans and imports Claude Code agents as the core names them", async () => {
+    reply = async () => fixture.ScannedAgent;
+    expect(await commands.scanClaudeAgents()).toEqual(fixture.ScannedAgent);
+    reply = async () => fixture.AgentImport;
+    expect(await commands.importClaudeAgents(["C:/a.md"], "acme", "platform")).toEqual(
+      fixture.AgentImport,
+    );
+    await commands.importClaudeAgents(["C:/b.md"]);
+    expect(calls).toEqual([
+      ["scan_claude_agents", undefined],
+      ["import_claude_agents", { paths: ["C:/a.md"], orgId: "acme", workspaceId: "platform" }],
+      ["import_claude_agents", { paths: ["C:/b.md"], orgId: null, workspaceId: null }],
     ]);
   });
 
@@ -63,6 +78,17 @@ describe("commands", () => {
     await commands.messageMarkRead("m1");
     reply = async () => fixture.FollowUp;
     expect(await commands.followUpsList(null)).toEqual(fixture.FollowUp);
+    reply = async () => [fixture.ScheduleSkip];
+    expect(await commands.scheduleSkips("d1")).toEqual([fixture.ScheduleSkip]);
+    reply = async () => [fixture.TopicInfo];
+    expect(await commands.listTopics("d1")).toEqual([fixture.TopicInfo]);
+    reply = async () => fixture.TopicInfo;
+    await commands.renameTopic("r1", "Trip");
+    await commands.setTopicArchived("r1", true);
+    reply = async () => "r2";
+    expect(await commands.moveRun("r3", "r2")).toBe("r2");
+    reply = async () => null;
+    await commands.mergeTopics("r1", "r2");
     reply = async () => fixture.FollowUp[0];
     await commands.followUpCancel("f1");
     expect(calls).toEqual([
@@ -72,6 +98,12 @@ describe("commands", () => {
       ["message_dismiss", { id: "m1" }],
       ["message_mark_read", { id: "m1" }],
       ["follow_ups_list", { dotId: null }],
+      ["schedule_skips", { dotId: "d1", limit: undefined }],
+      ["list_topics", { dotId: "d1" }],
+      ["rename_topic", { rootRunId: "r1", title: "Trip" }],
+      ["set_topic_archived", { rootRunId: "r1", archived: true }],
+      ["move_run", { runId: "r3", toRootRunId: "r2" }],
+      ["merge_topics", { fromRootRunId: "r1", intoRootRunId: "r2" }],
       ["follow_up_cancel", { id: "f1" }],
     ]);
   });
@@ -431,6 +463,31 @@ describe("commands", () => {
     const [run] = fixture.WorkflowRun;
     reply = async () => ({ ...run, steps: [{ ...run.steps[0], extra: 1 }] });
     expect((await failure(commands.workflowRunGet("w1"))).kind).toBe("internal");
+  });
+
+  it("sends the connector commands as the core names them", async () => {
+    reply = async () => fixture.ConnectorEntry;
+    expect(await commands.connectorList()).toEqual(fixture.ConnectorEntry);
+    reply = async () => fixture.ConnectorEntry[0];
+    await commands.connectorConnect("github", { token: "ghp_x" }, ["d1"]);
+    await commands.connectorSignIn("notion", ["d1"]);
+    await commands.connectorSetDots("notion", []);
+    await commands.connectorDisconnect("notion");
+    reply = async () => null;
+    await commands.connectorOpenPage("github", "instructions");
+    await commands.connectorSignInCancel("notion");
+    reply = async () => fixture.RuntimeCheck[2];
+    expect((await commands.connectorRuntime("slack")).ok).toBe(false);
+    expect(calls).toEqual([
+      ["connector_list", undefined],
+      ["connector_connect", { id: "github", values: { token: "ghp_x" }, dotIds: ["d1"] }],
+      ["connector_sign_in", { id: "notion", dotIds: ["d1"] }],
+      ["connector_set_dots", { id: "notion", dotIds: [] }],
+      ["connector_disconnect", { id: "notion" }],
+      ["connector_open_page", { id: "github", page: "instructions" }],
+      ["connector_sign_in_cancel", { id: "notion" }],
+      ["connector_runtime", { id: "slack" }],
+    ]);
   });
 
   it("invokes exactly the commands the app registers", async () => {

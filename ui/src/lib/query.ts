@@ -29,8 +29,12 @@ export function createQueryClient(): QueryClient {
 export const keys = {
   startupError: ["startup-error"] as const,
   status: ["status"] as const,
+  managedPolicy: ["managed-policy"] as const,
   update: ["update"] as const,
   settings: ["settings"] as const,
+  /// Settings › Share usage counts, and the next report under it.
+  usageCounts: ["usage-counts"] as const,
+  usageCountsPreview: ["usage-counts", "preview"] as const,
   chatGptAccount: ["chatgpt-account"] as const,
   overview: ["overview"] as const,
   /// The sum of the dots' unread counts (the Home link). Under the overview's key, so that
@@ -38,7 +42,13 @@ export const keys = {
   unreadTotal: ["overview", "unread"] as const,
   inbox: ["inbox"] as const,
   library: ["library"] as const,
+  /// The Connectors screen, under the Library's key: a Library or vault change marks it stale.
+  connectors: ["library", "connectors"] as const,
+  /// Whether this PC has the program a connector needs (Node.js).
+  connectorRuntime: (id: string) => ["connector-runtime", id] as const,
   installedPlugins: ["installed-plugins"] as const,
+  /// The Claude Code agents on this PC, for the import dialog.
+  claudeAgents: ["claude-agents"] as const,
   environmentVariables: (names: string[]) => ["environment-variables", names] as const,
   env: ["env"] as const,
   envImport: ["env-import"] as const,
@@ -70,17 +80,35 @@ export const keys = {
   /// member list) marks it stale.
   dotAccess: (id: string) => ["dot", id, "access"] as const,
   newDotSpec: ["new-dot-spec"] as const,
+  /// The models of an engine, or of a local endpoint (model switcher spec section 2.1).
+  models: (engine: string, endpoint: string | null) => ["models", engine, endpoint] as const,
   schedulePreview: (schedule: Schedule | null) => ["schedule-preview", schedule] as const,
   webhookUrl: (dotId: string) => ["webhook-url", dotId] as const,
   runs: (dotId: string) => ["runs", dotId] as const,
+  /// The Files panel of a conversation (its topics' roots), under the runs' key: a run that
+  /// changes may have attached or written a file.
+  conversationFiles: (dotId: string, roots: string[]) =>
+    ["runs", dotId, "files", ...roots] as const,
+  /// Today's sent, delivered and not delivered counts for a dot, under the runs' key so a
+  /// run_updated refreshes it.
+  deliveryToday: (dotId: string) => ["runs", dotId, "delivery-today"] as const,
   thread: (runId: string) => ["thread", runId] as const,
+  /// A dot's pending scheduled messages (Send later).
+  scheduledMessages: (dotId: string) => ["scheduled-messages", dotId] as const,
   events: (runId: string) => ["events", runId] as const,
   approvals: (runId: string) => ["approvals", runId] as const,
   approvalRules: (approvalId: string) => ["approval-rules", approvalId] as const,
+  approvalPrivate: (approvalId: string) => ["approval-private", approvalId] as const,
   diff: (runId: string) => ["diff", runId] as const,
   messages: (dotId: string | null) => ["messages", dotId] as const,
   followUps: (dotId: string | null) => ["follow-ups", dotId] as const,
+  /// The slots a dot skipped because it was busy.
+  scheduleSkips: (dotId: string) => ["schedule-skips", dotId] as const,
+  /// The rows of a dot's topics: names and archive marks.
+  topics: (dotId: string) => ["topics", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
+  /// The goals of one workspace of an account (Intents).
+  intents: (scope: string, workspace: string) => ["intents", scope, workspace] as const,
   /// The instructions a dot proposed (conversational chat spec section 4).
   instructionProposals: (dotId: string) => ["instruction-proposals", dotId] as const,
   watchers: (dotId: string) => ["watchers", dotId] as const,
