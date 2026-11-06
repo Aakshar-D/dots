@@ -12,6 +12,7 @@ use crate::accounts::edit::RosterEdit;
 use crate::accounts::{Access, Permission, Role};
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::checkins::CheckIns;
+use crate::checkpoint::{ChangesPreview, Checkpoints, RunChanges, UndoOutcome};
 use crate::engine::claude::args::resolve_claude;
 use crate::engine::claude::{cli_version, ClaudeEngine};
 use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
@@ -1357,6 +1358,101 @@ impl Runtime {
             .discard(Path::new(&dot.spec.workdir), &prepared)
             .await?;
         self.mark_reviewed(run_id).await
+    }
+
+    fn checkpoints(&self) -> Checkpoints {
+        Checkpoints::new(self.data_dir.join(crate::checkpoint::DIR))
+    }
+
+    /// What a folder run changed in its folder (undo spec section 3), from its checkpoint.
+    /// `None` for a run with none: a worktree run (its diff is `worktree_diff`), a run from
+    /// before checkpoints, or one that has not started.
+    pub async fn run_changes(&self, run_id: &str) -> Result<Option<RunChanges>> {
+        self.store.get_run(run_id).await?;
+        self.checkpoints().changes(run_id)
+    }
+
+    /// Each file of a folder run's changes with what undo (or redo, once undone) would do to
+    /// it now, the run's diff, and the later runs in the folder that changed the same files.
+    pub async fn run_changes_preview(&self, run_id: &str) -> Result<ChangesPreview> {
+        self.store.get_run(run_id).await?;
+        self.checkpoints().preview(run_id).await
+    }
+
+    /// **Undo these changes** (undo spec section 4): puts the files the run changed back as
+    /// they were before it. A file changed since is skipped unless `overwrite`.
+    pub async fn undo_run(&self, run_id: &str, overwrite: bool) -> Result<UndoOutcome> {
+        self.apply_checkpoint(run_id, false, overwrite).await
+    }
+
+    /// **Redo**: puts an undone run's changes back as the run left them.
+    pub async fn redo_run(&self, run_id: &str, overwrite: bool) -> Result<UndoOutcome> {
+        self.apply_checkpoint(run_id, true, overwrite).await
+    }
+
+    /// Undo or redo, refused while the run, or any run in its folder, is working. Recorded on
+    /// the run as a notice.
+    async fn apply_checkpoint(
+        &self,
+        run_id: &str,
+        redo: bool,
+        overwrite: bool,
+    ) -> Result<UndoOutcome> {
+        self.require_for_run(run_id, Permission::RunDots).await?;
+        let run = self.store.get_run(run_id).await?;
+        if !run.status.is_terminal() {
+            return Err(Error::Conflict(
+                "this run is still working; undo its changes once it ends".into(),
+            ));
+        }
+        if let Some(path) = &run.workspace_path {
+            if !self.store.running_in_folder(path).await?.is_empty() {
+                return Err(Error::Conflict(
+                    "a run is working in this folder now; try again once it ends".into(),
+                ));
+            }
+        }
+        let outcome = self.checkpoints().apply(run_id, redo, overwrite).await?;
+        let verb = if redo { "Redid" } else { "Undid" };
+        let files = |n: usize| {
+            if n == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{n} files")
+            }
+        };
+        let mut text = format!(
+            "{verb} this run's changes: put back {}.",
+            files(outcome.restored.len())
+        );
+        if !outcome.skipped.is_empty() {
+            text.push_str(&format!(
+                " Left {} as {} {}.",
+                files(outcome.skipped.len()),
+                if outcome.skipped.len() == 1 {
+                    "it"
+                } else {
+                    "they"
+                },
+                if outcome.skipped.len() == 1 {
+                    "is"
+                } else {
+                    "are"
+                },
+            ));
+        }
+        let notice = crate::engine::EngineEvent::Notice { text };
+        match self
+            .store
+            .append_event(run_id, notice.kind(), &serde_json::to_value(&notice)?)
+            .await
+        {
+            Ok(event) => {
+                let _ = self.bus.send(RuntimeEvent::RunEvent { event });
+            }
+            Err(e) => tracing::warn!(run = %run_id, "recording the undo failed: {e}"),
+        }
+        Ok(outcome)
     }
 
     /// The folder a run worked in, for "Open folder".

@@ -417,6 +417,17 @@ impl Store {
         rows.iter().map(run_from_row).collect()
     }
 
+    /// The runs working now in the folder `path`: an undo there waits for them (undo spec
+    /// section 4).
+    pub async fn running_in_folder(&self, path: &str) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT id FROM runs WHERE workspace_path = ? AND status = 'running' ORDER BY id",
+        )
+        .bind(path)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Every run of the lineage rooted at `root_run_id`, oldest first.
     pub async fn list_thread(&self, root_run_id: &str) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(

@@ -62,7 +62,7 @@ export function runTrigger(run: Pick<Run, "trigger" | "payload">): string {
 
 /// What the person wrote, for a chat run: an answer to a question as they typed it, not the
 /// words Dots wraps it in for the dot.
-function chatMessage(run: Run): string | null {
+export function chatMessage(run: Run): string | null {
   if (run.trigger !== "chat" || typeof run.payload !== "object" || run.payload === null) {
     return null;
   }

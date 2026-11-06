@@ -388,11 +388,12 @@ describe("the run view", () => {
     expect(backend.callsTo("worktree_diff")).toEqual([{ runId: run.id }]);
   });
 
-  it("has no changes tab, discard or review for a folder run that succeeded", async () => {
+  it("has its own Changes tab, no discard and no review for a folder run that succeeded", async () => {
     thread([folderRun]);
     renderApp(`/runs/${run.id}`);
     await screen.findByRole("heading", { name: `${sample.dot.name} run` });
-    expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
+    // The folder run's changes come from its checkpoint, not a worktree (undo spec section 5).
+    expect(screen.getByRole("tab", { name: "Changes" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
     expect(backend.callsTo("worktree_diff")).toEqual([]);

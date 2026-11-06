@@ -363,6 +363,19 @@ export const commands = {
   worktreeDiff: (runId: string) => call(T.WorktreeDiff, "worktree_diff", { runId }),
   discardWorktree: (runId: string) => call(T.Run, "discard_worktree", { runId }),
   markReviewed: (runId: string) => call(T.Run, "mark_reviewed", { runId }),
+  /// What a folder run changed in its folder; null for a run with no checkpoint (a worktree
+  /// run, or one from before checkpoints).
+  runChanges: (runId: string) => call(T.RunChanges.nullable(), "run_changes", { runId }),
+  /// Each changed file with what undo (or redo) would do to it now, and the run's diff.
+  runChangesPreview: (runId: string) =>
+    call(T.ChangesPreview, "run_changes_preview", { runId }),
+  /// Puts the run's files back as they were before it. Files changed since are skipped unless
+  /// `overwrite`. Rejects with kind `conflict` while the run, or a run in its folder, works.
+  undoRun: (runId: string, overwrite: boolean) =>
+    call(T.UndoOutcome, "undo_run", { runId, overwrite }),
+  /// Puts an undone run's files back as the run left them.
+  redoRun: (runId: string, overwrite: boolean) =>
+    call(T.UndoOutcome, "redo_run", { runId, overwrite }),
   openRunFolder: (runId: string) => call(nothing, "open_run_folder", { runId }),
 
   // Connectors (connectors spec §6).
