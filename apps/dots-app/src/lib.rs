@@ -224,6 +224,7 @@ command_list![
     memory_add,
     memory_update,
     memory_delete,
+    search,
     intents_list,
     intent_create,
     intent_update,

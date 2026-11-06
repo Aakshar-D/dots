@@ -16,8 +16,10 @@ import {
   type RunEventRecord,
 } from "@/api/types";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import { AutoLine } from "@/components/AutoLine";
 import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
+import { RunPlan } from "@/components/RunPlan";
 import { StatusBadge } from "@/components/StatusBadge";
 import { messageAttachments } from "@/lib/attachments";
 import { WorkingLine } from "@/components/WorkingLine";
@@ -31,6 +33,7 @@ import {
   checkInLine,
   callLabel,
   memoryNote,
+  PARKED_PREFIX,
   stepsLine,
   toolPreview,
   transcriptItems,
@@ -131,12 +134,9 @@ function FollowUpLine({ run }: { run: Run }) {
   return <p className="mb-2 text-xs whitespace-pre-wrap text-muted-foreground">{message}</p>;
 }
 
-/// The result Dots gives a call it parked for a person's approval (`approvals::parked_message`).
-const PARKED = "Queued for human approval #";
-
 /// Whether a call's result says it was parked for approval: not a failure.
 function parked(result: { output: string; isError: boolean } | null): boolean {
-  return result !== null && result.output.startsWith(PARKED);
+  return result !== null && result.output.startsWith(PARKED_PREFIX);
 }
 
 /// What became of a call: running, done, sent for approval, failed, or no result in a run that
@@ -517,6 +517,13 @@ export function Transcript(props: {
               )}
               <DeliveryLine run={run} />
               <CapNote run={run} className="self-end" />
+              {/* The run's plan and timeline stand above the dot's reply (run plan spec 2). */}
+              <RunPlan
+                run={run}
+                events={props.events.get(run.id) ?? []}
+                dotName={props.dotName ?? "The dot"}
+                owners={owners}
+              />
               {!conversation && (items.length > 0 || checkIns.length > 0) && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span aria-hidden className="size-1.5 rounded-full bg-primary" />
@@ -546,6 +553,7 @@ export function Transcript(props: {
                   />
                 ),
               )}
+              <AutoLine run={run} />
               {conversation && run.trigger === "chat" && run.status === "cancelled" && !run.undelivered_at && (
                 <p className="text-xs text-muted-foreground">Cancelled</p>
               )}

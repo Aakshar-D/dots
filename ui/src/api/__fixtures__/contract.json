@@ -925,6 +925,7 @@
     "memory_add",
     "memory_update",
     "memory_delete",
+    "search",
     "intents_list",
     "intent_create",
     "intent_update",
@@ -2163,6 +2164,10 @@
       "error": null,
       "hold_released": false,
       "id": "01J0RUN",
+      "model": "sonnet",
+      "model_fallback_from": "opus",
+      "model_reason": "code work: refactor",
+      "model_tier": "standard",
       "parent_run_id": null,
       "payload": {
         "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -2579,6 +2584,15 @@
       "approval",
       "usage_limit"
     ],
+    "SearchKind": [
+      "chat",
+      "reply",
+      "note",
+      "memory",
+      "intent",
+      "topic",
+      "file"
+    ],
     "StepRunStatus": [
       "running",
       "waiting",
@@ -2962,6 +2976,10 @@
         "error": "claude CLI not found",
         "hold_released": false,
         "id": "01J0RUN",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": null,
         "queued_at": "2026-10-09T12:00:00.000Z",
@@ -3002,6 +3020,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -4355,6 +4377,11 @@
   ],
   "ModelOption": [
     {
+      "hint": "Picks Haiku, Sonnet or Opus for each task, to spend less of your limits on easy ones.",
+      "id": "auto",
+      "label": "Auto"
+    },
+    {
       "hint": "Most capable, for hard work; slower and uses more of your limits.",
       "id": "opus",
       "label": "Opus"
@@ -5086,6 +5113,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -5125,6 +5156,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": null,
     "queued_at": "2026-10-09T12:00:00.000Z",
@@ -5164,6 +5199,7 @@
         "command": "cargo test"
       },
       "kind": "tool_call",
+      "parent": "task-1",
       "tool": "Bash"
     },
     {
@@ -5248,6 +5284,10 @@
     "error": "claude CLI not found",
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": null,
     "queued_at": "2026-10-09T12:00:00.000Z",
@@ -5285,6 +5325,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN5",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "message": "Ship the release notes.",
@@ -5331,6 +5375,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": null,
     "queued_at": "2026-10-09T12:00:00.000Z",
@@ -5368,6 +5416,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN6",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "attachments": [
@@ -5444,6 +5496,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN2",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "attempt": 2,
@@ -5847,6 +5903,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN3",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "event": "created",
@@ -5909,6 +5969,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN4",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -6390,9 +6454,83 @@
     "updated_at": "2026-10-09T12:00:00.000Z",
     "waiting": null
   },
+  "SearchHit": [
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "planner",
+      "kind": "chat",
+      "snippet": "Plan the Lisbon trip",
+      "target": {
+        "dot_id": "01J0DOT",
+        "root_run_id": "01J0ROOT",
+        "run_id": "01J0RUN",
+        "type": "topic"
+      }
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "planner",
+      "kind": "reply",
+      "snippet": "…booked a Lisbon hotel by the river",
+      "target": {
+        "run_id": "01J0RUN2",
+        "type": "run"
+      }
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "planner",
+      "kind": "note",
+      "snippet": "Lisbon restarted",
+      "target": {
+        "dot_id": "01J0DOT",
+        "type": "dot"
+      }
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "planner",
+      "kind": "memory",
+      "snippet": "Likes Lisbon in spring",
+      "target": {
+        "dot_id": "01J0DOT",
+        "memory_id": "01J0MEM",
+        "type": "memory"
+      }
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "dot_name": null,
+      "kind": "intent",
+      "snippet": "Book the Lisbon venue",
+      "target": {
+        "intent_id": "01J0GOAL1",
+        "type": "intent"
+      }
+    }
+  ],
+  "SearchQuery": {
+    "dot_id": "01J0DOT",
+    "kinds": [
+      "chat",
+      "reply"
+    ],
+    "limit": 30,
+    "text": "lisbon ho"
+  },
   "Settings": {
     "auto_archive_days": 30,
     "auto_install_updates": false,
+    "auto_models": {
+      "large": "opus",
+      "small": "haiku",
+      "standard": "sonnet"
+    },
     "autostart": true,
     "claude_path": null,
     "default_model": "sonnet",
@@ -6420,6 +6558,11 @@
     "settings": {
       "auto_archive_days": 30,
       "auto_install_updates": false,
+      "auto_models": {
+        "large": "opus",
+        "small": "haiku",
+        "standard": "sonnet"
+      },
       "autostart": true,
       "claude_path": null,
       "default_model": "sonnet",

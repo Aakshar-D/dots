@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::auto_model::AutoModels;
 use crate::model::{check_endpoint_url, MAX_QUIET_LIMIT_SECS, MIN_QUIET_LIMIT_SECS};
 use crate::models::DEFAULT_CLAUDE_MODEL;
 use crate::store::Store;
@@ -65,6 +66,8 @@ pub struct Settings {
     pub spend_daily_tokens: Option<u64>,
     /// The most every dot together may spend in a local calendar month, in estimated API USD.
     pub spend_monthly_usd: Option<f64>,
+    /// The model of each size Auto picks from (auto model spec section 3).
+    pub auto_models: AutoModels,
 }
 
 impl Default for Settings {
@@ -91,6 +94,7 @@ impl Default for Settings {
             spend_daily_usd: None,
             spend_daily_tokens: None,
             spend_monthly_usd: None,
+            auto_models: AutoModels::default(),
         }
     }
 }
@@ -142,6 +146,7 @@ impl Settings {
             return invalid("default_model must not be empty");
         }
         crate::spend::GlobalCaps::from(self).validate()?;
+        self.auto_models.validate()?;
         Ok(())
     }
 

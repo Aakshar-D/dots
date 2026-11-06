@@ -109,7 +109,7 @@ export const sample = {
   stepDotRuns: T.StepDotRun.array().parse(contract.StepDotRun),
   /// The builder's live check: a step's problem, then the workflow name's.
   workflowProblems: T.WorkflowProblem.array().parse(contract.WorkflowProblem),
-  /// The Claude models (Opus, Sonnet, Haiku), then one a local endpoint lists.
+  /// The Claude models (Auto, Opus, Sonnet, Haiku), then one a local endpoint lists.
   models: T.ModelOption.array().parse(contract.ModelOption),
 };
 
@@ -267,6 +267,8 @@ export function installDefaults(): void {
   backend.on("memories_list", () => []);
   // No goals yet, and the person may change them.
   backend.on("intents_list", () => ({ intents: [], refusal: null }));
+  // A search finds nothing.
+  backend.on("search", () => []);
   backend.on("watchers_list", () => []);
   // Nothing is unread; looking at a dot and saying which one is viewed are taken.
   backend.on("unread_total", () => 0);
