@@ -4,6 +4,7 @@
       {
         "approval_wait_secs": 240,
         "browser": false,
+        "check_results": true,
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,
@@ -16,6 +17,7 @@
         "name": "nightly-tests",
         "org_id": null,
         "policy": {
+          "ask_send_delete": true,
           "default": "ask",
           "mcp_default": "ask",
           "preset": "sandboxed",
@@ -140,6 +142,10 @@
           "until": null
         },
         "seen_at": "2026-10-09T12:00:00.000Z",
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
@@ -617,6 +623,7 @@
     "apply_state": null,
     "created_at": "2026-10-09T12:00:00.000Z",
     "decided_at": null,
+    "decided_via": null,
     "id": "01J0APR",
     "input": {
       "command": "git push origin main"
@@ -630,6 +637,31 @@
     "self_apply": false,
     "status": "pending",
     "tool": "Bash"
+  },
+  "ApprovalFromPhone": {
+    "applied_at": null,
+    "apply_state": null,
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "decided_at": "2026-10-09T12:00:00.000Z",
+    "decided_via": "phone: iPhone",
+    "id": "01J0APR",
+    "input": {
+      "command": "git push origin main"
+    },
+    "input_hash": "h1",
+    "mcp_fingerprint": null,
+    "note": null,
+    "parked": false,
+    "resolved": false,
+    "run_id": "01J0RUN",
+    "self_apply": false,
+    "status": "approved",
+    "tool": "Bash"
+  },
+  "ApprovalGuard": {
+    "always_asks": true,
+    "kind": "send",
+    "summary": "push commits with git (git push origin main)"
   },
   "BrowserStatus": {
     "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
@@ -657,6 +689,51 @@
       "title": "Projects"
     }
   ],
+  "ChangesPreview": {
+    "diff": {
+      "exists": true,
+      "files": [
+        {
+          "binary": false,
+          "patch": "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n",
+          "path": "src/lib.rs",
+          "status": "modified"
+        }
+      ],
+      "truncated": false
+    },
+    "files": [
+      {
+        "action": "ready",
+        "path": "src/lib.rs",
+        "reason": null,
+        "status": "modified"
+      },
+      {
+        "action": "conflict",
+        "path": "notes.md",
+        "reason": "The file changed after this run.",
+        "status": "added"
+      },
+      {
+        "action": "done",
+        "path": "old.txt",
+        "reason": null,
+        "status": "deleted"
+      },
+      {
+        "action": "cannot",
+        "path": "data/dump.sql",
+        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "status": "deleted"
+      }
+    ],
+    "later_runs": [
+      "01J0LATER"
+    ],
+    "redo": false,
+    "run_id": "01J0RUN"
+  },
   "ChatGptStatus": [
     {
       "account": null,
@@ -794,6 +871,12 @@
     "api_key_create",
     "api_key_revoke",
     "api_base_url",
+    "phone_status",
+    "phone_pair_start",
+    "phone_pair_cancel",
+    "phone_devices",
+    "phone_device_remove",
+    "phone_actions",
     "update_dot",
     "delete_dot",
     "set_dot_enabled",
@@ -810,6 +893,7 @@
     "run_now",
     "chat",
     "resend_run",
+    "result_check_fix",
     "attachment_add_path",
     "attachment_add_bytes",
     "attachment_remove",
@@ -840,6 +924,7 @@
     "decide_approval",
     "approval_rule_candidates",
     "approval_touches_private",
+    "approval_guard",
     "decide_run_approvals",
     "inbox",
     "inbox_count",
@@ -850,6 +935,10 @@
     "dismiss_schedule_attention",
     "worktree_diff",
     "discard_worktree",
+    "run_changes",
+    "run_changes_preview",
+    "undo_run",
+    "redo_run",
     "mark_reviewed",
     "open_run_folder",
     "connector_list",
@@ -921,6 +1010,7 @@
     "memory_add",
     "memory_update",
     "memory_delete",
+    "search",
     "intents_list",
     "intent_create",
     "intent_update",
@@ -958,6 +1048,8 @@
     "limits_get",
     "usage_summary",
     "run_release_hold",
+    "run_release_cap",
+    "spend_today",
     "teams_list",
     "team_get",
     "team_create",
@@ -1793,6 +1885,7 @@
   "Dot": {
     "approval_wait_secs": 240,
     "browser": false,
+    "check_results": true,
     "created_at": "2026-10-09T12:00:00.000Z",
     "enabled": true,
     "endpoint_url": null,
@@ -1805,6 +1898,7 @@
     "name": "nightly-tests",
     "org_id": null,
     "policy": {
+      "ask_send_delete": true,
       "default": "ask",
       "mcp_default": "ask",
       "preset": "sandboxed",
@@ -1929,6 +2023,10 @@
       "until": null
     },
     "seen_at": "2026-10-09T12:00:00.000Z",
+    "spend_cap": {
+      "daily_tokens": null,
+      "daily_usd": 2.0
+    },
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
     "use_global_instructions": true,
@@ -1974,6 +2072,7 @@
     "dot": {
       "approval_wait_secs": 240,
       "browser": false,
+      "check_results": true,
       "created_at": "2026-10-09T12:00:00.000Z",
       "enabled": true,
       "endpoint_url": null,
@@ -1986,6 +2085,7 @@
       "name": "nightly-tests",
       "org_id": null,
       "policy": {
+        "ask_send_delete": true,
         "default": "ask",
         "mcp_default": "ask",
         "preset": "sandboxed",
@@ -2110,6 +2210,10 @@
         "until": null
       },
       "seen_at": "2026-10-09T12:00:00.000Z",
+      "spend_cap": {
+        "daily_tokens": null,
+        "daily_usd": 2.0
+      },
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
       "use_global_instructions": true,
@@ -2139,6 +2243,7 @@
     "last_run": {
       "base_commit": "0123abcd",
       "branch": "dots/nightly-tests/01J0RUN",
+      "cap_released": false,
       "cost_usd": 1.32,
       "delivered_at": "2026-10-09T12:00:00.000Z",
       "delivery": "delivered",
@@ -2148,6 +2253,10 @@
       "error": null,
       "hold_released": false,
       "id": "01J0RUN",
+      "model": "sonnet",
+      "model_fallback_from": "opus",
+      "model_reason": "code work: refactor",
+      "model_tier": "standard",
       "parent_run_id": null,
       "payload": {
         "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -2156,6 +2265,15 @@
       "quiet_limit_secs": null,
       "quiet_since": null,
       "quiet_stopped": false,
+      "result_check": {
+        "concerns": [
+          "The summary says all tests pass, but two were skipped."
+        ],
+        "confidence": 0.7,
+        "model": "haiku",
+        "state": "done",
+        "verdict": "has_concerns"
+      },
       "retry_of": null,
       "reviewed_at": null,
       "root_run_id": "01J0RUN",
@@ -2169,6 +2287,7 @@
       "trigger": "schedule",
       "undelivered_at": null,
       "undelivered_reason": null,
+      "wait_detail": null,
       "wait_reason": null,
       "workflow_step_run_id": null,
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -2192,6 +2311,7 @@
   "DotSpec": {
     "approval_wait_secs": 240,
     "browser": false,
+    "check_results": true,
     "enabled": true,
     "endpoint_url": "http://127.0.0.1:1234",
     "engine": "local",
@@ -2200,6 +2320,7 @@
     "model": "google/gemma-4-12b-qat",
     "name": "notes",
     "policy": {
+      "ask_send_delete": true,
       "default": "deny",
       "mcp_default": "deny",
       "preset": "read-only",
@@ -2284,6 +2405,10 @@
     },
     "quiet_limit_secs": null,
     "schedule": null,
+    "spend_cap": {
+      "daily_tokens": null,
+      "daily_usd": null
+    },
     "timeout_secs": 1800,
     "use_global_instructions": true,
     "use_user_settings": false,
@@ -2559,6 +2684,15 @@
       "approval",
       "usage_limit"
     ],
+    "SearchKind": [
+      "chat",
+      "reply",
+      "note",
+      "memory",
+      "intent",
+      "topic",
+      "file"
+    ],
     "StepRunStatus": [
       "running",
       "waiting",
@@ -2597,7 +2731,8 @@
       "usage_hold",
       "updating",
       "dot_busy",
-      "queued"
+      "queued",
+      "spend_cap"
     ],
     "WaitingOn": [
       "check",
@@ -2818,6 +2953,7 @@
         "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": null,
+        "decided_via": null,
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
         "id": "01J0APR",
@@ -2890,6 +3026,19 @@
         "run_id": "01J0RUN5",
         "starts_after": null,
         "trigger": "watcher"
+      },
+      {
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "queued_at": "2026-10-09T12:00:00.000Z",
+        "reason": {
+          "kind": "spend_cap",
+          "scope": "dot",
+          "text": "nightly-tests reached its $2.00 daily cap"
+        },
+        "run_id": "01J0RUN6",
+        "starts_after": null,
+        "trigger": "chat"
       }
     ],
     "hidden_messages": [
@@ -2917,6 +3066,7 @@
       {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": null,
         "delivery": "not_delivered",
@@ -2927,12 +3077,25 @@
         "error": "claude CLI not found",
         "hold_released": false,
         "id": "01J0RUN",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": null,
         "queued_at": "2026-10-09T12:00:00.000Z",
         "quiet_limit_secs": null,
         "quiet_since": null,
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": null,
         "reviewed_at": null,
         "root_run_id": "01J0RUN",
@@ -2946,6 +3109,7 @@
         "trigger": "chat",
         "undelivered_at": "2026-10-09T12:00:00.000Z",
         "undelivered_reason": "claude CLI not found",
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -2955,6 +3119,7 @@
       {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -2965,6 +3130,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -2973,6 +3142,15 @@
         "quiet_limit_secs": null,
         "quiet_since": null,
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": null,
         "reviewed_at": null,
         "root_run_id": "01J0RUN",
@@ -2986,6 +3164,7 @@
         "trigger": "schedule",
         "undelivered_at": null,
         "undelivered_reason": null,
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN",
@@ -3102,6 +3281,10 @@
     },
     {
       "id": "01J0RUN5",
+      "kind": "held"
+    },
+    {
+      "id": "01J0RUN6",
       "kind": "held"
     },
     {
@@ -3904,6 +4087,8 @@
   ],
   "Limits": {
     "max_approval_wait_secs": 280,
+    "max_cap_tokens": 10000000000,
+    "max_cap_usd": 100000.0,
     "max_concurrent_runs": 16,
     "max_global_instructions": 32768,
     "max_memories": 200,
@@ -3912,7 +4097,9 @@
     "max_schedule_attempts": 6,
     "max_timeout_secs": 604800,
     "max_watcher_name": 80,
-    "min_quiet_limit_secs": 60
+    "min_cap_usd": 0.01,
+    "min_quiet_limit_secs": 60,
+    "spend_warn_at": 0.8
   },
   "LimitsState": [
     {
@@ -4309,6 +4496,11 @@
   ],
   "ModelOption": [
     {
+      "hint": "Picks Haiku, Sonnet or Opus for each task, to spend less of your limits on easy ones.",
+      "id": "auto",
+      "label": "Auto"
+    },
+    {
       "hint": "Most capable, for hard work; slower and uses more of your limits.",
       "id": "opus",
       "label": "Opus"
@@ -4332,6 +4524,7 @@
   "NewDotSpec": {
     "approval_wait_secs": 240,
     "browser": false,
+    "check_results": true,
     "enabled": true,
     "endpoint_url": null,
     "engine": "claude",
@@ -4340,6 +4533,7 @@
     "model": "sonnet",
     "name": "",
     "policy": {
+      "ask_send_delete": true,
       "default": "ask",
       "mcp_default": "ask",
       "preset": "sandboxed",
@@ -4456,6 +4650,10 @@
     },
     "quiet_limit_secs": null,
     "schedule": null,
+    "spend_cap": {
+      "daily_tokens": null,
+      "daily_usd": null
+    },
     "timeout_secs": 1800,
     "use_global_instructions": true,
     "use_user_settings": false,
@@ -4868,6 +5066,61 @@
       }
     }
   ],
+  "PairingView": {
+    "address": "https://192.168.1.20:47323",
+    "code": "ABCD-EFGH",
+    "expires_at": "2026-10-09T12:00:00.000Z",
+    "fingerprint": "AB:CD:EF:01",
+    "qr_path": "M4 4h1v1h-1z",
+    "qr_size": 37,
+    "url": "https://192.168.1.20:47323/#t=abc&fp=ABCDEF01"
+  },
+  "PhoneAction": [
+    {
+      "action": "approve",
+      "at": "2026-10-09T12:00:00.000Z",
+      "device_id": "01J0PHN",
+      "device_name": "iPhone",
+      "summary": "Approved Bash",
+      "target": "01J0APR"
+    }
+  ],
+  "PhoneDevice": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0PHN",
+      "last_ip": "192.168.1.31",
+      "last_seen_at": "2026-10-09T12:00:00.000Z",
+      "name": "iPhone"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0PHN2",
+      "last_ip": null,
+      "last_seen_at": null,
+      "name": "Pixel"
+    }
+  ],
+  "PhoneStatus": [
+    {
+      "addresses": [
+        "https://192.168.1.20:47323"
+      ],
+      "error": null,
+      "fingerprint": "AB:CD:EF:01",
+      "pairing": true,
+      "port": 47323,
+      "running": true
+    },
+    {
+      "addresses": [],
+      "error": "This PC has no private network address.",
+      "fingerprint": null,
+      "pairing": false,
+      "port": 47323,
+      "running": false
+    }
+  ],
   "Project": {
     "created_at": "2026-10-09T12:00:00.000Z",
     "default_branch": "main",
@@ -4967,6 +5220,32 @@
       "role": "admin"
     }
   ],
+  "ResultCheck": [
+    {
+      "model": "haiku",
+      "state": "checking"
+    },
+    {
+      "concerns": [],
+      "confidence": null,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "looks_good"
+    },
+    {
+      "concerns": [
+        "No tests were run."
+      ],
+      "confidence": 0.9,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "failed_task"
+    },
+    {
+      "reason": "The check took too long.",
+      "state": "skipped"
+    }
+  ],
   "RosterEdit": [
     {
       "confirm_no_invite": false,
@@ -5026,6 +5305,7 @@
   "Run": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -5035,6 +5315,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -5043,6 +5327,15 @@
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5056,9 +5349,96 @@
     "trigger": "schedule",
     "undelivered_at": null,
     "undelivered_reason": null,
+    "wait_detail": null,
     "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunCapped": {
+    "base_commit": "0123abcd",
+    "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
+    "cost_usd": 1.32,
+    "delivered_at": null,
+    "delivery": "waiting",
+    "dismissed_at": null,
+    "dot_id": "01J0DOT",
+    "ended_at": null,
+    "error": null,
+    "hold_released": false,
+    "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
+    "parent_run_id": null,
+    "payload": null,
+    "queued_at": "2026-10-09T12:00:00.000Z",
+    "quiet_limit_secs": null,
+    "quiet_since": null,
+    "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
+    "retry_of": null,
+    "reviewed_at": null,
+    "root_run_id": "01J0RUN",
+    "session_id": "sess-1",
+    "started_at": null,
+    "status": "queued",
+    "summary": null,
+    "tokens_cache_read": 0,
+    "tokens_in": 1200,
+    "tokens_out": 340,
+    "trigger": "chat",
+    "undelivered_at": null,
+    "undelivered_reason": null,
+    "wait_detail": "nightly-tests reached its $2.00 daily cap",
+    "wait_reason": "spend_cap",
+    "workflow_step_run_id": null,
+    "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
+  },
+  "RunChanges": {
+    "files": [
+      {
+        "path": "src/lib.rs",
+        "reason": null,
+        "status": "modified",
+        "undoable": true
+      },
+      {
+        "path": "notes.md",
+        "reason": null,
+        "status": "added",
+        "undoable": true
+      },
+      {
+        "path": "data/dump.sql",
+        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "status": "deleted",
+        "undoable": false
+      }
+    ],
+    "git": true,
+    "note": null,
+    "run_id": "01J0RUN",
+    "state": "recorded",
+    "undone_at": null
+  },
+  "RunChangesNone": null,
+  "RunChangesUnavailable": {
+    "files": [],
+    "git": false,
+    "note": "This folder has more than 20000 files to back up, so Dots did not back it up and this run can't be undone.",
+    "run_id": "01J0RUN",
+    "state": "unavailable",
+    "undone_at": null
   },
   "RunEventData": [
     {
@@ -5075,6 +5455,7 @@
         "command": "cargo test"
       },
       "kind": "tool_call",
+      "parent": "task-1",
       "tool": "Bash"
     },
     {
@@ -5126,6 +5507,16 @@
     {
       "kind": "notice",
       "text": "skill pdf: folder not found"
+    },
+    {
+      "cache_read": 0,
+      "cost_usd": 0.002,
+      "kind": "result_check",
+      "model": "haiku",
+      "skipped": null,
+      "tokens_in": 900,
+      "tokens_out": 40,
+      "verdict": "looks_good"
     }
   ],
   "RunEventRecord": {
@@ -5149,6 +5540,7 @@
   "RunNotDelivered": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": null,
     "delivery": "not_delivered",
@@ -5158,12 +5550,25 @@
     "error": "claude CLI not found",
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": null,
     "queued_at": "2026-10-09T12:00:00.000Z",
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5177,6 +5582,7 @@
     "trigger": "chat",
     "undelivered_at": "2026-10-09T12:00:00.000Z",
     "undelivered_reason": "claude CLI not found",
+    "wait_detail": null,
     "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5184,6 +5590,7 @@
   "RunSentLate": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -5193,6 +5600,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN5",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "message": "Ship the release notes.",
@@ -5208,6 +5619,15 @@
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5221,6 +5641,7 @@
     "trigger": "chat",
     "undelivered_at": null,
     "undelivered_reason": null,
+    "wait_detail": null,
     "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5228,6 +5649,7 @@
   "RunWaiting": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": null,
     "delivery": "waiting",
@@ -5237,12 +5659,25 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": null,
     "queued_at": "2026-10-09T12:00:00.000Z",
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5256,6 +5691,7 @@
     "trigger": "chat",
     "undelivered_at": null,
     "undelivered_reason": null,
+    "wait_detail": null,
     "wait_reason": "busy",
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5263,6 +5699,7 @@
   "RunWithAttachments": {
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
+    "cap_released": false,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -5272,6 +5709,10 @@
     "error": null,
     "hold_released": false,
     "id": "01J0RUN6",
+    "model": "sonnet",
+    "model_fallback_from": "opus",
+    "model_reason": "code work: refactor",
+    "model_tier": "standard",
     "parent_run_id": null,
     "payload": {
       "attachments": [
@@ -5288,6 +5729,15 @@
     "quiet_limit_secs": null,
     "quiet_since": null,
     "quiet_stopped": false,
+    "result_check": {
+      "concerns": [
+        "The summary says all tests pass, but two were skipped."
+      ],
+      "confidence": 0.7,
+      "model": "haiku",
+      "state": "done",
+      "verdict": "has_concerns"
+    },
     "retry_of": null,
     "reviewed_at": null,
     "root_run_id": "01J0RUN",
@@ -5301,6 +5751,7 @@
     "trigger": "chat",
     "undelivered_at": null,
     "undelivered_reason": null,
+    "wait_detail": null,
     "wait_reason": null,
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5337,6 +5788,7 @@
       "run": {
         "base_commit": null,
         "branch": null,
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -5346,6 +5798,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN2",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "attempt": 2,
@@ -5355,6 +5811,15 @@
         "quiet_limit_secs": null,
         "quiet_since": null,
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": "01J0RUN",
         "reviewed_at": null,
         "root_run_id": "01J0RUN2",
@@ -5368,6 +5833,7 @@
         "trigger": "schedule",
         "undelivered_at": null,
         "undelivered_reason": null,
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": null
@@ -5397,6 +5863,7 @@
         "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": null,
+        "decided_via": null,
         "id": "01J0APR",
         "input": {
           "command": "git push origin main"
@@ -5419,6 +5886,7 @@
         "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": "2026-10-09T12:00:00.000Z",
+        "decided_via": null,
         "id": "01J0APR",
         "input": {
           "command": "git push origin main"
@@ -5441,6 +5909,7 @@
         "apply_state": "applied",
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": "2026-10-09T12:00:00.000Z",
+        "decided_via": null,
         "id": "01J0APR",
         "input": {
           "command": "git push origin main"
@@ -5738,6 +6207,7 @@
       "run": {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -5747,6 +6217,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN3",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "event": "created",
@@ -5761,6 +6235,15 @@
         "quiet_limit_secs": null,
         "quiet_since": null,
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": null,
         "reviewed_at": null,
         "root_run_id": "01J0RUN3",
@@ -5774,6 +6257,7 @@
         "trigger": "watcher",
         "undelivered_at": null,
         "undelivered_reason": null,
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -5798,6 +6282,7 @@
       "run": {
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
+        "cap_released": false,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -5807,6 +6292,10 @@
         "error": null,
         "hold_released": false,
         "id": "01J0RUN4",
+        "model": "sonnet",
+        "model_fallback_from": "opus",
+        "model_reason": "code work: refactor",
+        "model_tier": "standard",
         "parent_run_id": null,
         "payload": {
           "scheduled_for": "2026-10-09T02:00:00+01:00"
@@ -5815,6 +6304,15 @@
         "quiet_limit_secs": 600,
         "quiet_since": "2026-10-20T09:10:00Z",
         "quiet_stopped": false,
+        "result_check": {
+          "concerns": [
+            "The summary says all tests pass, but two were skipped."
+          ],
+          "confidence": 0.7,
+          "model": "haiku",
+          "state": "done",
+          "verdict": "has_concerns"
+        },
         "retry_of": null,
         "reviewed_at": null,
         "root_run_id": "01J0RUN4",
@@ -5828,6 +6326,7 @@
         "trigger": "schedule",
         "undelivered_at": null,
         "undelivered_reason": null,
+        "wait_detail": null,
         "wait_reason": null,
         "workflow_step_run_id": null,
         "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
@@ -6287,10 +6786,86 @@
     "updated_at": "2026-10-09T12:00:00.000Z",
     "waiting": null
   },
+  "SearchHit": [
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "planner",
+      "kind": "chat",
+      "snippet": "Plan the Lisbon trip",
+      "target": {
+        "dot_id": "01J0DOT",
+        "root_run_id": "01J0ROOT",
+        "run_id": "01J0RUN",
+        "type": "topic"
+      }
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "planner",
+      "kind": "reply",
+      "snippet": "…booked a Lisbon hotel by the river",
+      "target": {
+        "run_id": "01J0RUN2",
+        "type": "run"
+      }
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "planner",
+      "kind": "note",
+      "snippet": "Lisbon restarted",
+      "target": {
+        "dot_id": "01J0DOT",
+        "type": "dot"
+      }
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0DOT",
+      "dot_name": "planner",
+      "kind": "memory",
+      "snippet": "Likes Lisbon in spring",
+      "target": {
+        "dot_id": "01J0DOT",
+        "memory_id": "01J0MEM",
+        "type": "memory"
+      }
+    },
+    {
+      "at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "dot_name": null,
+      "kind": "intent",
+      "snippet": "Book the Lisbon venue",
+      "target": {
+        "intent_id": "01J0GOAL1",
+        "type": "intent"
+      }
+    }
+  ],
+  "SearchQuery": {
+    "dot_id": "01J0DOT",
+    "kinds": [
+      "chat",
+      "reply"
+    ],
+    "limit": 30,
+    "text": "lisbon ho"
+  },
   "Settings": {
     "auto_archive_days": 30,
     "auto_install_updates": false,
+    "auto_models": {
+      "large": "opus",
+      "small": "haiku",
+      "standard": "sonnet"
+    },
     "autostart": true,
+    "check_results": true,
+    "checker_model": "haiku",
     "claude_path": null,
     "default_model": "sonnet",
     "edge_path": null,
@@ -6303,10 +6878,15 @@
     ],
     "max_concurrent_runs": 2,
     "notify_on_notes": true,
+    "phone_enabled": false,
+    "phone_port": 47323,
     "port": 47321,
     "publish_token": null,
     "quiet_limit_secs": 600,
     "schedules_paused": false,
+    "spend_daily_tokens": null,
+    "spend_daily_usd": 10.0,
+    "spend_monthly_usd": 200.0,
     "tested_claude_version": "2.1.295"
   },
   "SettingsSaved": {
@@ -6314,7 +6894,14 @@
     "settings": {
       "auto_archive_days": 30,
       "auto_install_updates": false,
+      "auto_models": {
+        "large": "opus",
+        "small": "haiku",
+        "standard": "sonnet"
+      },
       "autostart": true,
+      "check_results": true,
+      "checker_model": "haiku",
       "claude_path": null,
       "default_model": "sonnet",
       "edge_path": null,
@@ -6327,10 +6914,15 @@
       ],
       "max_concurrent_runs": 2,
       "notify_on_notes": true,
+      "phone_enabled": false,
+      "phone_port": 47323,
       "port": 47321,
       "publish_token": null,
       "quiet_limit_secs": 600,
       "schedules_paused": false,
+      "spend_daily_tokens": null,
+      "spend_daily_usd": 10.0,
+      "spend_monthly_usd": 200.0,
       "tested_claude_version": "2.1.295"
     }
   },
@@ -6381,6 +6973,7 @@
       "dot": {
         "approval_wait_secs": 240,
         "browser": false,
+        "check_results": true,
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,
@@ -6393,6 +6986,7 @@
         "name": "nightly-tests",
         "org_id": null,
         "policy": {
+          "ask_send_delete": true,
           "default": "ask",
           "mcp_default": "ask",
           "preset": "sandboxed",
@@ -6517,6 +7111,10 @@
           "until": null
         },
         "seen_at": "2026-10-09T12:00:00.000Z",
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
@@ -6551,6 +7149,7 @@
       "dot": {
         "approval_wait_secs": 240,
         "browser": false,
+        "check_results": true,
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,
@@ -6563,6 +7162,7 @@
         "name": "nightly-tests",
         "org_id": null,
         "policy": {
+          "ask_send_delete": true,
           "default": "ask",
           "mcp_default": "ask",
           "preset": "sandboxed",
@@ -6687,6 +7287,10 @@
           "until": null
         },
         "seen_at": "2026-10-09T12:00:00.000Z",
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
@@ -6791,6 +7395,50 @@
       "kind": "age"
     }
   ],
+  "SpendToday": {
+    "caps": {
+      "daily_tokens": null,
+      "daily_usd": 10.0,
+      "monthly_usd": 200.0
+    },
+    "day_end": "2026-10-09T23:00:00.000Z",
+    "day_start": "2026-10-08T23:00:00.000Z",
+    "dots": [
+      {
+        "caps": {
+          "daily_tokens": 1000000,
+          "daily_usd": 2.0
+        },
+        "dot_id": "01J0DOT",
+        "dot_name": "nightly-tests",
+        "today": {
+          "cost_usd": 2.0,
+          "tokens": 400000
+        }
+      },
+      {
+        "caps": {
+          "daily_tokens": null,
+          "daily_usd": null
+        },
+        "dot_id": "01J0DOT2",
+        "dot_name": "local-summarizer",
+        "today": {
+          "cost_usd": 0.0,
+          "tokens": 850000
+        }
+      }
+    ],
+    "month": {
+      "cost_usd": 61.25,
+      "tokens": 9400000
+    },
+    "month_start": "2026-09-30T23:00:00.000Z",
+    "today": {
+      "cost_usd": 8.5,
+      "tokens": 1250000
+    }
+  },
   "StagedAttachment": {
     "id": "01J0ATT",
     "name": "report.pdf",
@@ -6949,6 +7597,59 @@
     "dot_id": "01J0DOT",
     "root_run_id": "01J0RUN",
     "title": "Trip plans"
+  },
+  "UndoOutcome": {
+    "changes": {
+      "files": [
+        {
+          "path": "src/lib.rs",
+          "reason": null,
+          "status": "modified",
+          "undoable": true
+        },
+        {
+          "path": "notes.md",
+          "reason": null,
+          "status": "added",
+          "undoable": true
+        },
+        {
+          "path": "data/dump.sql",
+          "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+          "status": "deleted",
+          "undoable": false
+        }
+      ],
+      "git": true,
+      "note": null,
+      "run_id": "01J0RUN",
+      "state": "recorded",
+      "undone_at": "2026-10-09T12:00:00.000Z"
+    },
+    "redo": false,
+    "restored": [
+      "src/lib.rs"
+    ],
+    "skipped": [
+      {
+        "action": "conflict",
+        "path": "notes.md",
+        "reason": "The file changed after this run.",
+        "status": "added"
+      },
+      {
+        "action": "done",
+        "path": "old.txt",
+        "reason": null,
+        "status": "deleted"
+      },
+      {
+        "action": "cannot",
+        "path": "data/dump.sql",
+        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "status": "deleted"
+      }
+    ]
   },
   "UpdateNote": [
     {

@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+use crate::auto_model::AutoModels;
 use crate::model::{check_endpoint_url, MAX_QUIET_LIMIT_SECS, MIN_QUIET_LIMIT_SECS};
 use crate::models::DEFAULT_CLAUDE_MODEL;
 use crate::store::Store;
@@ -58,6 +59,25 @@ pub struct Settings {
     /// The model a new Claude dot starts with (model switcher spec section 2.2). Existing dots
     /// keep their own.
     pub default_model: String,
+    /// "Answer from my phone" (phone view spec section 2): a listener on this PC's private
+    /// network addresses serves the Inbox to paired phones. Off by default; applies at once.
+    pub phone_enabled: bool,
+    /// The phone view's port, not the local server's.
+    pub phone_port: u16,
+    /// Every Claude run's final answer gets a quick automatic check before it reaches the
+    /// person (result check spec section 5); a dot can turn it off for itself.
+    pub check_results: bool,
+    /// The Claude model the result check uses: the cheapest by default.
+    pub checker_model: String,
+    /// The most every dot together may spend in a local day, in estimated API USD (spend caps
+    /// design); `None` is no cap.
+    pub spend_daily_usd: Option<f64>,
+    /// The most tokens (in + out) every dot together may use in a local day; `None` is no cap.
+    pub spend_daily_tokens: Option<u64>,
+    /// The most every dot together may spend in a local calendar month, in estimated API USD.
+    pub spend_monthly_usd: Option<f64>,
+    /// The model of each size Auto picks from (auto model spec section 3).
+    pub auto_models: AutoModels,
 }
 
 impl Default for Settings {
@@ -81,6 +101,14 @@ impl Default for Settings {
             quiet_limit_secs: 600,
             auto_archive_days: 30,
             default_model: DEFAULT_CLAUDE_MODEL.to_string(),
+            phone_enabled: false,
+            phone_port: crate::phone::DEFAULT_PORT,
+            check_results: true,
+            checker_model: crate::result_check::DEFAULT_CHECKER_MODEL.to_string(),
+            spend_daily_usd: None,
+            spend_daily_tokens: None,
+            spend_monthly_usd: None,
+            auto_models: AutoModels::default(),
         }
     }
 }
@@ -131,6 +159,17 @@ impl Settings {
         if self.default_model.trim().is_empty() {
             return invalid("default_model must not be empty");
         }
+        if self.phone_port == 0 {
+            return invalid("phone_port must be between 1 and 65535");
+        }
+        if self.phone_port == self.port {
+            return invalid("phone_port must differ from the local server's port");
+        }
+        if self.checker_model.trim().is_empty() {
+            return invalid("checker_model must not be empty");
+        }
+        crate::spend::GlobalCaps::from(self).validate()?;
+        self.auto_models.validate()?;
         Ok(())
     }
 
@@ -157,7 +196,7 @@ impl Settings {
 ///
 /// Letters of any script, spaces and the look-alikes of a space pass: a name that reads like
 /// another one is not hidden, and no list of characters can rule that out.
-fn check_plain_text(field: &str, value: &str) -> Result<()> {
+pub(crate) fn check_plain_text(field: &str, value: &str) -> Result<()> {
     for (i, c) in value.chars().enumerate() {
         let rule = if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') {
             "control characters such as a tab or a line break"

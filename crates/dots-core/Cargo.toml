@@ -52,9 +52,13 @@ tokio-util = "0.7"
 tracing = "0.1"
 ulid = "1"
 zeroize = { version = "1", features = ["serde"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
+rcgen = { version = "0.13", default-features = false, features = ["ring"] }
+qrcode = { version = "0.14.1", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_NetworkManagement_IpHelper", "Win32_NetworkManagement_Ndis", "Win32_Networking_WinSock", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Credentials", "Win32_Security_Cryptography", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 # The login keychain holds the vault's secrets on macOS, as Credential Manager does on Windows.
 [target.'cfg(target_os = "macos")'.dependencies]

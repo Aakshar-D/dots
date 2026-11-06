@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="robots" content="noindex" />
+    <title>Dots</title>
+    <link rel="stylesheet" href="/app.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="bar">
+      <h1>Dots</h1>
+      <span id="who" class="who"></span>
+    </header>
+    <main id="main" tabindex="-1">
+      <p id="loading" class="muted">Loading…</p>
+
+      <section id="pair" aria-labelledby="pair-title" hidden>
+        <h2 id="pair-title">Pair this phone</h2>
+        <p id="pair-lost" class="note" hidden>This phone is not paired, or was removed on the PC.</p>
+        <div id="pair-fp" class="note" hidden>
+          <p>
+            Your browser warned about this page's certificate because Dots made it itself. Check
+            that the certificate's SHA-256 fingerprint is the same as on the PC, in Settings &gt;
+            Phone:
+          </p>
+          <p><code id="pair-fp-text" class="fp"></code></p>
+        </div>
+        <form id="pair-form" novalidate>
+          <div id="pair-code-row" class="field">
+            <label for="pair-code">Code shown on the PC</label>
+            <input
+              id="pair-code"
+              name="code"
+              autocomplete="one-time-code"
+              autocapitalize="characters"
+              spellcheck="false"
+              maxlength="12"
+              placeholder="ABCD-EFGH"
+            />
+          </div>
+          <div class="field">
+            <label for="pair-name">Name for this phone</label>
+            <input id="pair-name" name="name" maxlength="40" autocomplete="off" />
+          </div>
+          <button id="pair-go" type="submit" class="primary">Pair</button>
+        </form>
+        <div id="pair-wait" hidden>
+          <p class="big">Check your PC</p>
+          <p>A dialog asks whether this phone may pair. Allow it only if it shows this number:</p>
+          <p id="pair-match" class="match"></p>
+        </div>
+        <p class="muted small">Use this only on a network you trust, such as your home Wi-Fi.</p>
+      </section>
+
+      <section id="inbox" aria-labelledby="inbox-title" hidden>
+        <h2 id="inbox-title" class="sr-only">Inbox</h2>
+        <p id="empty" class="empty" hidden>Nothing needs you right now.</p>
+        <section id="approvals-box" aria-labelledby="approvals-title" hidden>
+          <h3 id="approvals-title">Approvals</h3>
+          <ul id="approvals" class="cards"></ul>
+        </section>
+        <section id="questions-box" aria-labelledby="questions-title" hidden>
+          <h3 id="questions-title">Questions</h3>
+          <ul id="questions" class="cards"></ul>
+        </section>
+        <section id="held-box" aria-labelledby="held-title" hidden>
+          <h3 id="held-title">Waiting runs</h3>
+          <ul id="held" class="cards"></ul>
+        </section>
+        <p class="muted small">Updates every few seconds. Everything else is on your PC.</p>
+        <button id="forget" type="button" class="link">Unpair this phone</button>
+      </section>
+    </main>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+  </body>
+</html>

@@ -11,6 +11,7 @@ use dots_core::model::{
     Message, MessageKind, PausedReason, Run, RunStatus, ScheduledMessage, ScheduledStatus,
     TriggerKind, WaitingOn, WorkflowRun, WorkflowRunStatus,
 };
+use dots_core::result_check::{concerns_label, Verdict};
 use dots_core::Runtime;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
@@ -141,6 +142,11 @@ impl WorkflowNotice {
 /// included) never notify that they finished or failed: the workflow run tells what matters
 /// (teams spec section 10.5); their questions, approvals and parks notify as any run's.
 ///
+/// A run that succeeds while its result check runs (result check spec section 4) is told once
+/// the check has a verdict or was skipped, so the notification says what the check found. The
+/// core ends every check within its time limit (`result_check::CHECK_LIMIT`), so the notice
+/// waits at most that long.
+///
 /// A workflow run notifies when it moves into a wait on the person, finishes or fails, once
 /// per move: an update that repeats its status, its wait and its current step run is quiet.
 /// A wait on a new step run is a new move (a second check right after an approval, a retried
@@ -167,6 +173,9 @@ pub struct Notifier {
     workflows: HashMap<String, Moved>,
     /// The ids of the ended runs in `workflows`, the one seen ended first at the front.
     ended: VecDeque<String>,
+    /// Runs whose end notice waits for their result check. Kept through a lag, so a check that
+    /// ends after it is still told.
+    checking: HashSet<String>,
 }
 
 /// How many ended workflow runs the notifier remembers.
@@ -222,6 +231,13 @@ impl Notifier {
                 })
             }
             RuntimeEvent::RunUpdated { run } => {
+                let check_running = run.result_check.as_ref().is_some_and(|c| c.is_checking());
+                // The check of a run whose end notice waits for it has ended: told now.
+                if run.status.is_terminal() && !check_running && self.checking.remove(&run.id) {
+                    return Some(Notice::RunEnded {
+                        run: Box::new(run.clone()),
+                    });
+                }
                 let prev = if run.status.is_terminal() {
                     self.active.remove(&run.id)
                 } else {
@@ -255,10 +271,15 @@ impl Notifier {
                     _ => false,
                 };
                 // A chat run is watched, unless the watchdog stopped it while nobody was looking.
-                (was_working && ended && (run.trigger != TriggerKind::Chat || run.quiet_stopped))
-                    .then(|| Notice::RunEnded {
-                        run: Box::new(run.clone()),
-                    })
+                let tell =
+                    was_working && ended && (run.trigger != TriggerKind::Chat || run.quiet_stopped);
+                if tell && run.status == RunStatus::Succeeded && check_running {
+                    self.checking.insert(run.id.clone());
+                    return None;
+                }
+                tell.then(|| Notice::RunEnded {
+                    run: Box::new(run.clone()),
+                })
             }
             RuntimeEvent::RunQuiet {
                 run_id,
@@ -407,7 +428,7 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
         ),
         Notice::RunEnded { run } => match run.status {
             RunStatus::Succeeded => (
-                format!("{dot_name} finished"),
+                finished_title(run, dot_name),
                 first_line(run.summary.as_deref(), "The run succeeded."),
             ),
             RunStatus::Failed => (
@@ -493,6 +514,20 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
 
 /// (title, body) of a workflow run's notice, in the needs-you wording (teams spec section
 /// 10.5); `team` is the name of the run's team. A test run's title says so.
+/// The title of a succeeded run's notice: what its result check flagged, if anything.
+fn finished_title(run: &Run, dot_name: &str) -> String {
+    match run.result_check.as_ref().and_then(|c| c.flagged()) {
+        Some((Verdict::FailedTask, _)) => {
+            format!("{dot_name} finished, but may have missed the task")
+        }
+        Some((_, concerns)) => format!(
+            "{dot_name} finished ({} from the check)",
+            concerns_label(concerns.len())
+        ),
+        None => format!("{dot_name} finished"),
+    }
+}
+
 fn workflow_text(run: &WorkflowRun, about: WorkflowNotice, team: &str) -> (String, String) {
     let task = first_line(Some(run.task.as_str()), "A task.");
     let step = run
@@ -692,6 +727,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
 mod tests {
     use super::*;
     use dots_core::model::{Approval, ApprovalStatus, RunEventRecord};
+    use dots_core::result_check::ResultCheck;
     use serde_json::json;
     use RunStatus::*;
 
@@ -730,6 +766,13 @@ mod tests {
             dismissed_at: None,
             delivery: None,
             wait_reason: None,
+            result_check: None,
+            wait_detail: None,
+            cap_released: false,
+            model: None,
+            model_tier: None,
+            model_reason: None,
+            model_fallback_from: None,
         }
     }
 
@@ -792,6 +835,7 @@ mod tests {
                 apply_state: None,
                 applied_at: None,
                 mcp_fingerprint: None,
+                decided_via: None,
             },
         }
     }
@@ -2122,5 +2166,105 @@ mod tests {
         // The run that never ended is still remembered: the same update is quiet.
         assert_eq!(workflow_told(&mut n, "live", &[(WRunning, None)]), [None]);
         assert!(n.workflows.contains_key("live"));
+    }
+
+    fn checked(id: &str, status: RunStatus, check: Option<ResultCheck>) -> RuntimeEvent {
+        RuntimeEvent::RunUpdated {
+            run: Run {
+                summary: Some("All green.".into()),
+                result_check: check,
+                ..run(id, status, TriggerKind::Schedule)
+            },
+        }
+    }
+
+    fn checking() -> Option<ResultCheck> {
+        Some(ResultCheck::Checking {
+            model: "haiku".into(),
+        })
+    }
+
+    fn done(verdict: Verdict, concerns: &[&str]) -> Option<ResultCheck> {
+        Some(ResultCheck::Done {
+            model: "haiku".into(),
+            verdict,
+            concerns: concerns.iter().map(|c| c.to_string()).collect(),
+            confidence: Some(0.8),
+        })
+    }
+
+    /// Result check spec section 4: a run's end notice waits for its check and says what it
+    /// found; a check that is skipped still lets the notice go, once.
+    #[test]
+    fn a_checked_run_is_told_after_its_check_once() {
+        let mut n = Notifier::default();
+        assert!(n.decide(&checked("a", Running, None)).is_none());
+        // Ended while its check runs: nothing yet.
+        assert!(n.decide(&checked("a", Succeeded, checking())).is_none());
+        // The verdict arrives: the notice goes now, with it.
+        let notice = n
+            .decide(&checked(
+                "a",
+                Succeeded,
+                done(Verdict::HasConcerns, &["x", "y"]),
+            ))
+            .expect("told once the check ended");
+        let (title, body) = notice_text(&notice, "nightly");
+        assert_eq!(title, "nightly finished (2 concerns from the check)");
+        assert_eq!(body, "All green.");
+        // Told once.
+        assert!(n
+            .decide(&checked(
+                "a",
+                Succeeded,
+                done(Verdict::HasConcerns, &["x", "y"])
+            ))
+            .is_none());
+
+        // A skipped check lets the notice go as a plain one.
+        assert!(n.decide(&checked("b", Running, None)).is_none());
+        assert!(n.decide(&checked("b", Succeeded, checking())).is_none());
+        let skipped = Some(ResultCheck::Skipped {
+            reason: "The check took too long.".into(),
+        });
+        let notice = n.decide(&checked("b", Succeeded, skipped)).unwrap();
+        assert_eq!(notice_text(&notice, "nightly").0, "nightly finished");
+
+        // A run with no check is told at once, as before.
+        assert!(n.decide(&checked("c", Running, None)).is_none());
+        assert!(n.decide(&checked("c", Succeeded, None)).is_some());
+    }
+
+    #[test]
+    fn a_check_that_ends_after_a_lag_is_still_told() {
+        let mut n = Notifier::default();
+        n.decide(&checked("a", Running, None));
+        assert!(n.decide(&checked("a", Succeeded, checking())).is_none());
+        n.forget();
+        let notice = n.decide(&checked(
+            "a",
+            Succeeded,
+            done(Verdict::FailedTask, &["Nothing ran."]),
+        ));
+        assert_eq!(
+            notice_text(&notice.unwrap(), "nightly").0,
+            "nightly finished, but may have missed the task"
+        );
+    }
+
+    #[test]
+    fn a_chat_run_s_check_tells_nothing_by_itself() {
+        let mut n = Notifier::default();
+        let chat = |status, check| RuntimeEvent::RunUpdated {
+            run: Run {
+                result_check: check,
+                ..run("c", status, TriggerKind::Chat)
+            },
+        };
+        assert!(n.decide(&chat(Running, None)).is_none());
+        assert!(n.decide(&chat(Succeeded, checking())).is_none());
+        assert!(n
+            .decide(&chat(Succeeded, done(Verdict::LooksGood, &[])))
+            .is_none());
     }
 }

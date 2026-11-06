@@ -25,10 +25,12 @@ mod limits;
 mod memories;
 mod messages;
 mod orgs;
+mod phone;
 mod report;
 mod runs;
 mod scheduled_messages;
 mod schedules;
+mod search;
 mod settings;
 mod skips;
 mod step_members;
@@ -59,6 +61,7 @@ pub use held::HeldEvent;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;
 pub use memories::Added;
+pub use phone::{PhoneAction, PhoneDevice, PhoneTls};
 pub use report::ReportCounts;
 pub use usage_counts::HourCounts;
 pub use workspaces::WorkspaceRow;
@@ -90,6 +93,7 @@ impl Store {
         upgrade::finish_0015(&store.pool).await?;
         upgrade::finish_0016(&store.pool).await?;
         upgrade::finish_0018(&store.pool).await?;
+        store.sync_search_index().await?;
         Ok(store)
     }
 

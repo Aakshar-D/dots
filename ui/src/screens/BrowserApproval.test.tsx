@@ -63,6 +63,33 @@ describe("a browser approval", () => {
     );
   });
 
+  it("says a send or delete always asks while the dot's switch is on", async () => {
+    const remove: PendingApproval = {
+      ...pay,
+      id: "01J0APR3",
+      input: {
+        target: "e18",
+        dots_browser: { ...card, labels: ["Delete account"], guarded: true },
+      },
+    };
+    inbox([remove]);
+    backend.on("approval_rule_candidates", () => [
+      { pattern: "Browser(shop.com)", label: "always allow on shop.com" },
+    ]);
+    renderApp("/inbox");
+    const article = await screen.findByRole("article", {
+      name: `Browser approval for ${pay.dot_name}`,
+    });
+    expect(article).toHaveTextContent(`${pay.dot_name} wants to click "Delete account"`);
+    expect(
+      within(article).getByText(/This may send or delete, so it always asks while/),
+    ).toHaveTextContent(`"Always ask before sending or deleting" is on for ${pay.dot_name}`);
+    await within(article).findByRole("button", { name: "Always allow on shop.com" });
+    expect(
+      within(article).queryByRole("button", { name: /Always allow risky actions/ }),
+    ).toBeNull();
+  });
+
   it("asks to open a site, says a parked approval is not performed, and denies", async () => {
     const open: PendingApproval = {
       ...pay,

@@ -27,8 +27,11 @@ fn refs() -> RefMap {
     read_snapshot(&on(SNAPSHOT, CART)).unwrap()
 }
 
+/// The rules `list` with "Always ask before sending or deleting" off: the gate as it was before
+/// the switch. `guarded_rules` turns it on.
 fn rules(list: &[(&str, Action)]) -> SiteRules {
     let mut p = Policy::preset(Preset::Sandboxed);
+    p.ask_send_delete = false;
     p.rules
         .extend(list.iter().map(|(tool, action)| Rule::new(tool, *action)));
     SiteRules::of(&p)
@@ -247,6 +250,7 @@ fn opening_a_page_asks_unless_its_site_is_approved() {
             labels: vec![],
             risky: false,
             dangerous: false,
+            guarded: false,
         }
     );
     assert_eq!(
@@ -319,6 +323,7 @@ fn acting_needs_an_approved_site_and_a_risky_act_asks_there() {
             labels: vec![Some(s("Home"))],
             risky: false,
             dangerous: false,
+            guarded: false,
         }
     );
     assert_eq!(
@@ -334,6 +339,7 @@ fn acting_needs_an_approved_site_and_a_risky_act_asks_there() {
             labels: vec![Some(s("Pay now"))],
             risky: true,
             dangerous: false,
+            guarded: false,
         }
     );
     assert_eq!(
@@ -800,4 +806,85 @@ fn keys_that_type_into_a_password_field_are_refused() {
     let search = Element::new("textbox", "Search");
     assert!(!press_refused("h", Some(&search)));
     assert!(!press_refused("h", None));
+}
+
+fn guarded_rules(list: &[(&str, Action)]) -> SiteRules {
+    let mut p = Policy::preset(Preset::Sandboxed);
+    p.rules
+        .extend(list.iter().map(|(tool, action)| Rule::new(tool, *action)));
+    SiteRules::of(&p)
+}
+
+fn guarded_verdict(tool: &str, input: Value, list: &[(&str, Action)]) -> Verdict {
+    judge(
+        tool,
+        &classify(tool, &input),
+        Some(CART),
+        Some(&refs()),
+        &guarded_rules(list),
+        "shopper",
+    )
+}
+
+#[test]
+fn with_the_guard_on_a_delete_or_a_dialog_asks_even_where_risky_acts_are_allowed() {
+    // "Delete account" asks under every allow rule, and its card says why.
+    let delete = guarded_verdict("browser_click", json!({"target": "e18"}), &EVERYTHING);
+    assert!(asks(&delete).guarded);
+    assert!(asks(&delete).risky);
+    // Accepting a dialog may confirm a delete.
+    let dialog = guarded_verdict(
+        "browser_handle_dialog",
+        json!({"accept": true}),
+        &EVERYTHING,
+    );
+    assert!(asks(&dialog).guarded);
+    // "Pay now" is risky but neither sends nor deletes: `BrowserRisky` still allows it.
+    assert_eq!(
+        guarded_verdict("browser_click", json!({"target": "e16"}), &[SHOP, RISKY]),
+        Verdict::Allow
+    );
+    // A plain act is untouched.
+    assert_eq!(
+        guarded_verdict("browser_click", json!({"target": "e6"}), &[SHOP]),
+        Verdict::Allow
+    );
+    // A deny still refuses.
+    assert_eq!(
+        guarded_verdict(
+            "browser_click",
+            json!({"target": "e18"}),
+            &[("Browser(shop.com)", Action::Deny)]
+        ),
+        denied("shop.com")
+    );
+    // A guarded act that would ask anyway says why too.
+    assert!(
+        asks(&guarded_verdict(
+            "browser_click",
+            json!({"target": "e18"}),
+            &[SHOP]
+        ))
+        .guarded
+    );
+}
+
+#[test]
+fn a_guarded_card_offers_no_rule_for_risky_acts() {
+    let card = Ask {
+        action: s("click"),
+        site: Some(s("shop.com")),
+        page: Some(s("shop.com/cart")),
+        labels: vec![Some(s("Delete account"))],
+        risky: true,
+        dangerous: false,
+        guarded: true,
+    };
+    let input = json!({ "target": "e18", ASK_KEY: card });
+    let offered: Vec<String> = rule_candidates("mcp__browser__browser_click", &input)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.pattern)
+        .collect();
+    assert_eq!(offered, ["Browser(shop.com)"]);
 }

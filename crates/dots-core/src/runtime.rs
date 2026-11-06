@@ -12,6 +12,7 @@ use crate::accounts::edit::RosterEdit;
 use crate::accounts::{Access, Permission, Role};
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::checkins::CheckIns;
+use crate::checkpoint::{ChangesPreview, Checkpoints, RunChanges, UndoOutcome};
 use crate::engine::claude::args::resolve_claude;
 use crate::engine::claude::{cli_version, ClaudeEngine};
 use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
@@ -30,8 +31,8 @@ use crate::model::{
     TriggerKind, UndeliveredMessage, WorkspaceMode, WorktreeDiff,
 };
 use crate::policy::{
-    allow_candidates, pattern_touches_private, touches_private, Action, Rule, RuleCandidate,
-    PRIVATE_REFUSAL,
+    allow_candidates, pattern_touches_private, touches_private, Action, ApprovalGuard, Rule,
+    RuleCandidate, PRIVATE_REFUSAL,
 };
 use crate::runner::{Runner, RunnerConfig};
 use crate::schedule::{upcoming, Schedule};
@@ -61,6 +62,8 @@ pub const SKILLS_DIR: &str = "skills";
 pub const DRAFTS_DIR: &str = "drafts";
 
 /// Retry's and Discard's refusal for a message the dispatcher has just claimed.
+/// Why a result check Dots stopped in the middle of has no verdict.
+const CHECK_INTERRUPTED: &str = "Dots stopped before the check ended.";
 const JUST_REACHED: &str = "this message has just reached the dot";
 
 #[derive(Debug, Clone)]
@@ -369,6 +372,14 @@ impl Runtime {
         if !recovered.is_empty() {
             tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
         }
+        // A result check Dots stopped in the middle of gets no verdict (result check spec
+        // section 3); its leftover folders go.
+        match store.skip_unfinished_checks(CHECK_INTERRUPTED).await {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!("marked {n} unfinished result check(s) as skipped"),
+            Err(e) => tracing::warn!("marking unfinished result checks failed: {e}"),
+        }
+        let _ = std::fs::remove_dir_all(cfg.data_dir.join(crate::result_check::CHECKS_DIR));
         // A scheduled message a crash left being sent: sent if its run was stored, else
         // scheduled again (send later spec section 4.5). Never sent twice, never lost.
         let recovered = store.recover_sending_messages(cfg.clock.now()).await?;
@@ -509,6 +520,16 @@ impl Runtime {
         .await?;
         runner.set_limits(limits.clone());
         runner.set_apps(apps.clone());
+        let shutdown = CancellationToken::new();
+        // The result check asks the CLI with no tools; it needs no local server.
+        if let Some(program) = &claude_program {
+            runner.set_checker(Arc::new(crate::result_check::CliChecker::new(
+                program.clone(),
+                cfg.claude_env.clone(),
+                cfg.data_dir.join(crate::result_check::CHECKS_DIR),
+                shutdown.clone(),
+            )));
+        }
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {
@@ -521,7 +542,6 @@ impl Runtime {
             }
             Err(e) => tracing::error!("listing awaiting runs failed: {e}"),
         }
-        let shutdown = CancellationToken::new();
         // Every org is fetched once now, without holding the start up, and then every
         // `refresh_minutes` of its policy (env vault spec §6.4).
         let org_timers = OrgTimers::new(
@@ -752,6 +772,7 @@ impl Runtime {
         change(&mut next);
         // As the store keeps it, so the live copy reads the same as the stored one.
         next.default_model = next.default_model.trim().to_string();
+        next.checker_model = next.checker_model.trim().to_string();
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
         self.watchers.set_paused(next.schedules_paused);
@@ -1337,6 +1358,101 @@ impl Runtime {
             .discard(Path::new(&dot.spec.workdir), &prepared)
             .await?;
         self.mark_reviewed(run_id).await
+    }
+
+    fn checkpoints(&self) -> Checkpoints {
+        Checkpoints::new(self.data_dir.join(crate::checkpoint::DIR))
+    }
+
+    /// What a folder run changed in its folder (undo spec section 3), from its checkpoint.
+    /// `None` for a run with none: a worktree run (its diff is `worktree_diff`), a run from
+    /// before checkpoints, or one that has not started.
+    pub async fn run_changes(&self, run_id: &str) -> Result<Option<RunChanges>> {
+        self.store.get_run(run_id).await?;
+        self.checkpoints().changes(run_id)
+    }
+
+    /// Each file of a folder run's changes with what undo (or redo, once undone) would do to
+    /// it now, the run's diff, and the later runs in the folder that changed the same files.
+    pub async fn run_changes_preview(&self, run_id: &str) -> Result<ChangesPreview> {
+        self.store.get_run(run_id).await?;
+        self.checkpoints().preview(run_id).await
+    }
+
+    /// **Undo these changes** (undo spec section 4): puts the files the run changed back as
+    /// they were before it. A file changed since is skipped unless `overwrite`.
+    pub async fn undo_run(&self, run_id: &str, overwrite: bool) -> Result<UndoOutcome> {
+        self.apply_checkpoint(run_id, false, overwrite).await
+    }
+
+    /// **Redo**: puts an undone run's changes back as the run left them.
+    pub async fn redo_run(&self, run_id: &str, overwrite: bool) -> Result<UndoOutcome> {
+        self.apply_checkpoint(run_id, true, overwrite).await
+    }
+
+    /// Undo or redo, refused while the run, or any run in its folder, is working. Recorded on
+    /// the run as a notice.
+    async fn apply_checkpoint(
+        &self,
+        run_id: &str,
+        redo: bool,
+        overwrite: bool,
+    ) -> Result<UndoOutcome> {
+        self.require_for_run(run_id, Permission::RunDots).await?;
+        let run = self.store.get_run(run_id).await?;
+        if !run.status.is_terminal() {
+            return Err(Error::Conflict(
+                "this run is still working; undo its changes once it ends".into(),
+            ));
+        }
+        if let Some(path) = &run.workspace_path {
+            if !self.store.running_in_folder(path).await?.is_empty() {
+                return Err(Error::Conflict(
+                    "a run is working in this folder now; try again once it ends".into(),
+                ));
+            }
+        }
+        let outcome = self.checkpoints().apply(run_id, redo, overwrite).await?;
+        let verb = if redo { "Redid" } else { "Undid" };
+        let files = |n: usize| {
+            if n == 1 {
+                "1 file".to_string()
+            } else {
+                format!("{n} files")
+            }
+        };
+        let mut text = format!(
+            "{verb} this run's changes: put back {}.",
+            files(outcome.restored.len())
+        );
+        if !outcome.skipped.is_empty() {
+            text.push_str(&format!(
+                " Left {} as {} {}.",
+                files(outcome.skipped.len()),
+                if outcome.skipped.len() == 1 {
+                    "it"
+                } else {
+                    "they"
+                },
+                if outcome.skipped.len() == 1 {
+                    "is"
+                } else {
+                    "are"
+                },
+            ));
+        }
+        let notice = crate::engine::EngineEvent::Notice { text };
+        match self
+            .store
+            .append_event(run_id, notice.kind(), &serde_json::to_value(&notice)?)
+            .await
+        {
+            Ok(event) => {
+                let _ = self.bus.send(RuntimeEvent::RunEvent { event });
+            }
+            Err(e) => tracing::warn!(run = %run_id, "recording the undo failed: {e}"),
+        }
+        Ok(outcome)
     }
 
     /// The folder a run worked in, for "Open folder".
@@ -2245,6 +2361,8 @@ impl Runtime {
         self.scheduler.reload();
         self.watchers.reload();
         self.follow_ups.wake();
+        // A cap raised or cleared lets its waiting runs start now.
+        self.runner.nudge();
         Ok(dot)
     }
 
@@ -2416,6 +2534,24 @@ impl Runtime {
     ) -> Result<Run> {
         self.chat_with(dot_id, message, parent_run_id, ChatExtra::default())
             .await
+    }
+
+    /// "Ask the dot to fix this" (result check spec section 4): the concerns the run's result
+    /// check raised go to the dot as the person's next message in the run's conversation, after
+    /// its last message, as `chat` sends it (and refuses it). `Invalid` when the check flagged
+    /// nothing. Never sent by itself: only the person asks.
+    pub async fn ask_to_fix(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        let text = run
+            .result_check
+            .as_ref()
+            .and_then(crate::result_check::fix_request)
+            .ok_or_else(|| Error::Invalid("This answer's check found nothing to fix.".into()))?;
+        let thread = self.store.list_thread(&run.root_run_id).await?;
+        let end = crate::send_later::thread_end(&thread)
+            .map(|r| r.id.clone())
+            .unwrap_or(run.id.clone());
+        self.chat(&run.dot_id, &text, Some(&end)).await
     }
 
     /// The chat path with files (attachments spec section 4.3): `attachment_ids` are staged
@@ -2908,7 +3044,34 @@ impl Runtime {
         let approval = self.store.get_approval(approval_id).await?;
         let run = self.store.get_run(&approval.run_id).await?;
         let workspace = run.workspace_path.as_deref().map(Path::new);
+        // A call the send-and-delete guard asks about asks while the switch is on, whatever
+        // rule is saved: offering one would promise what it cannot do.
+        if self
+            .approval_guard(approval_id)
+            .await?
+            .is_some_and(|g| g.always_asks)
+        {
+            return Ok(Vec::new());
+        }
         Ok(allow_candidates(&approval.tool, &approval.input, workspace))
+    }
+
+    /// What the send-and-delete guard finds in the call of this approval (it sends or deletes,
+    /// and how, for the card), and whether the dot's "Always ask before sending or deleting"
+    /// is on, so that it always asks. `None` when the call neither sends nor deletes as far as
+    /// Dots can tell.
+    pub async fn approval_guard(&self, approval_id: &str) -> Result<Option<ApprovalGuard>> {
+        let approval = self.store.get_approval(approval_id).await?;
+        let Some(found) = crate::policy::guard::classify(&approval.tool, &approval.input) else {
+            return Ok(None);
+        };
+        let run = self.store.get_run(&approval.run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        Ok(Some(ApprovalGuard {
+            kind: found.kind,
+            summary: found.summary,
+            always_asks: dot.spec.policy.ask_send_delete,
+        }))
     }
 
     /// True when the call of this approval touches a private folder (approval guards spec
@@ -3111,6 +3274,13 @@ impl Runtime {
                 if self.approval_touches_private(id).await? || pattern_touches_private(&pattern) {
                     return Err(Error::Invalid(PRIVATE_REFUSAL.into()));
                 }
+                if self
+                    .approval_guard(id)
+                    .await?
+                    .is_some_and(|g| g.always_asks)
+                {
+                    return Err(Error::Invalid(crate::policy::GUARD_REFUSAL.into()));
+                }
                 let offered = self.approval_rule_candidates(id).await?;
                 if !offered.iter().any(|c| c.pattern == pattern) {
                     return Err(Error::Invalid(format!(
@@ -3129,6 +3299,17 @@ impl Runtime {
                 Ok(a)
             }
         }
+    }
+
+    /// Records where the decided approval `id` was decided ("phone: <name>", phone view spec
+    /// section 7) and announces it. An approval still pending, or one recorded already, is
+    /// left as it is.
+    pub async fn note_decided_via(&self, id: &str, via: &str) -> Result<()> {
+        if self.store.set_decided_via(id, via).await? {
+            let approval = self.store.get_approval(id).await?;
+            let _ = self.bus.send(RuntimeEvent::ApprovalUpdated { approval });
+        }
+        Ok(())
     }
 
     /// Gives pending approvals of one run the same answer, in the order they were asked, and
@@ -3541,6 +3722,24 @@ fn watch_viewing(store: Store, bus: Bus, viewing: Viewing, shutdown: Cancellatio
     });
 }
 
+/// Search (search spec 2026-11-06-search-design.md).
+impl Runtime {
+    /// The hits of `query` among the dots and goals of the workspace `workspace_id` of `scope`
+    /// (`personal` or an org id), best first; refused for a role that may not view it.
+    pub async fn search(
+        &self,
+        scope: &str,
+        workspace_id: &str,
+        query: &crate::search::SearchQuery,
+    ) -> Result<Vec<crate::search::SearchHit>> {
+        let org_id = org_of_scope(scope);
+        self.check_workspace(org_id, workspace_id).await?;
+        self.require_in(org_id, workspace_id, Permission::View)
+            .await?;
+        self.store.search(org_id, workspace_id, query).await
+    }
+}
+
 /// The person's goals (Intents). A goal lives in the account and workspace it was added in;
 /// changing one needs a role that may change goals there (`Permission::EditGoals`).
 impl Runtime {
@@ -3816,6 +4015,37 @@ impl Runtime {
         Ok(run)
     }
 
+    /// **Run once anyway** (spend caps design): lets one of the person's own runs (a chat, a
+    /// manual run, a resume) start past the spending cap that holds it. The run is marked, so no
+    /// cap stops it either, and the release is noted on it. Background runs wait for the cap.
+    pub async fn run_release_cap(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        self.require_dot(&dot, Permission::RunDots).await?;
+        if crate::limits::is_background(run.trigger) {
+            return Err(Error::Invalid(crate::spend::BACKGROUND_WAITS.into()));
+        }
+        let Some(hit) = self.runner.cap_hold(&run).await? else {
+            return Err(Error::Invalid(crate::spend::NOT_CAPPED.into()));
+        };
+        let run = self.store.set_cap_released(run_id).await?;
+        let text = format!("Run once past the cap: {}", hit.text);
+        let ev = crate::engine::EngineEvent::Notice { text };
+        let rec = self
+            .store
+            .append_event(run_id, ev.kind(), &serde_json::to_value(&ev)?)
+            .await?;
+        let _ = self.bus.send(RuntimeEvent::RunEvent { event: rec });
+        let _ = self.bus.send(RuntimeEvent::RunUpdated { run: run.clone() });
+        self.runner.nudge();
+        Ok(run)
+    }
+
+    /// Today's spend against the spending caps (spend caps design).
+    pub async fn spend_today(&self) -> Result<crate::spend::SpendToday> {
+        crate::spend::today(&self.store, chrono::Utc::now()).await
+    }
+
     /// Refuses the person's own Claude run while Claude's limit is reached: the CLI would
     /// refuse it anyway (usage and limits spec section 4).
     fn refuse_at_the_limit(&self, dot: &crate::model::Dot) -> Result<()> {
@@ -3865,8 +4095,28 @@ impl Runtime {
                 reason: crate::model::HoldReason::Usage,
             });
         }
-        // Runs waiting for a role, which the limits do not hold.
+        // Runs waiting for a role, which the limits do not hold, and runs waiting for a
+        // spending cap, read once for them all (spend caps design).
+        let usage_held: HashSet<String> = held.iter().map(|h| h.run_id.clone()).collect();
+        let mut ledger = crate::spend::Ledger::load(&self.store).await?;
         for (run, _) in self.store.queued_with_engine(false).await? {
+            if !run.cap_released && !usage_held.contains(&run.id) {
+                if let Some(hit) = ledger.hit_for(&self.store, &run.dot_id).await? {
+                    held.push(crate::model::HeldRun {
+                        dot_name: names.get(&run.dot_id).cloned().unwrap_or_default(),
+                        dot_id: run.dot_id,
+                        run_id: run.id,
+                        trigger: run.trigger,
+                        queued_at: run.queued_at,
+                        starts_after: None,
+                        reason: crate::model::HoldReason::SpendCap {
+                            text: hit.text,
+                            scope: hit.scope,
+                        },
+                    });
+                    continue;
+                }
+            }
             if let Some((account, text)) = self.runner.role_hold(&run).await? {
                 held.push(crate::model::HeldRun {
                     dot_name: names.get(&run.dot_id).cloned().unwrap_or_default(),

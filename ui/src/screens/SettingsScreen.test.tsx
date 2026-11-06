@@ -117,6 +117,63 @@ describe("the Settings screen", () => {
     );
   });
 
+  it("checks every result with Haiku by default, and saves a change to either", async () => {
+    saving();
+    const { user } = renderApp("/settings/claude");
+    const box = await screen.findByLabelText("Check every result");
+    expect(box).toBeChecked();
+    const model = screen.getByLabelText("Checker model");
+    await within(model).findByRole("option", { name: "Sonnet" });
+    expect(model).toHaveValue("haiku");
+    await user.click(box);
+    await user.selectOptions(model, "Sonnet");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, check_results: false, checker_model: "sonnet" } },
+    ]);
+    expect(settingsErrors({ port: 1, max_concurrent_runs: 1, checker_model: " " })).toEqual({
+      checker: "Name the model that checks results.",
+    });
+  });
+
+  it("maps Auto's sizes to models and allows Auto as the default", async () => {
+    saving();
+    const { user } = renderApp("/settings/claude");
+    const model = await screen.findByLabelText("Default model");
+    await within(model).findByRole("option", { name: "Auto" });
+    const large = screen.getByLabelText("Large");
+    expect(large).toHaveValue("opus");
+    expect(screen.getByLabelText("Small")).toHaveValue("haiku");
+    expect(screen.getByLabelText("Standard")).toHaveValue("sonnet");
+    // A size names one model: Auto is not among them.
+    expect(within(large).queryByRole("option", { name: "Auto" })).toBeNull();
+    await user.selectOptions(large, "Sonnet");
+    await user.selectOptions(model, "Auto");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      {
+        settings: {
+          ...stored,
+          default_model: "auto",
+          auto_models: { small: "haiku", standard: "sonnet", large: "sonnet" },
+        },
+      },
+    ]);
+  });
+
+  it("checks each of Auto's sizes names a model", () => {
+    const base = { port: 47321, max_concurrent_runs: 2 };
+    const auto_models = { small: "haiku", standard: "sonnet", large: "opus" };
+    expect(settingsErrors({ ...base, auto_models })).toEqual({});
+    for (const bad of ["", "auto", "two words"]) {
+      expect(settingsErrors({ ...base, auto_models: { ...auto_models, small: bad } })).toEqual({
+        auto: "Each size needs a model ID such as haiku, sonnet or opus.",
+      });
+    }
+  });
+
   it("keeps numbers inside the core's bounds", async () => {
     expect(settingsErrors({ port: 47321, max_concurrent_runs: 16 })).toEqual({});
     expect(Object.keys(settingsErrors({ port: 0, max_concurrent_runs: 17 }))).toEqual([
@@ -420,6 +477,7 @@ describe("the Settings tabs", () => {
       "Instructions",
       "Claude",
       "Runs & server",
+      "Phone",
       "Local models",
       "Browser",
       "Updates",

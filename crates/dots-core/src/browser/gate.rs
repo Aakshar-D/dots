@@ -39,6 +39,35 @@ pub const RISKY_WORDS: [&str; 23] = [
     "place",
 ];
 
+/// With the dot's "Always ask before sending or deleting" on, an act whose target's name or
+/// role holds one of these as a whole word asks even where `BrowserRisky(<site>)` allows risky
+/// acts (send-and-delete guard design note). So does accepting a dialog, which may confirm a
+/// delete.
+pub const GUARD_WORDS: [&str; 22] = [
+    "send",
+    "delete",
+    "remove",
+    "post",
+    "publish",
+    "submit",
+    "reply",
+    "share",
+    "comment",
+    "forward",
+    "invite",
+    "tweet",
+    "trash",
+    "archive",
+    "discard",
+    "erase",
+    "destroy",
+    "empty",
+    "unsubscribe",
+    "transfer",
+    "merge",
+    "push",
+];
+
 /// Typing into an element whose name holds one of these as a whole word is refused (section
 /// 3.5).
 pub const SECRET_WORDS: [&str; 7] = [
@@ -264,11 +293,16 @@ pub struct SiteRules {
     denied: Vec<String>,
     risky_allowed: Vec<String>,
     risky_denied: Vec<String>,
+    /// The dot's "Always ask before sending or deleting" (`Policy::ask_send_delete`).
+    guard: bool,
 }
 
 impl SiteRules {
     pub fn of(policy: &Policy) -> SiteRules {
-        let mut rules = SiteRules::default();
+        let mut rules = SiteRules {
+            guard: policy.ask_send_delete,
+            ..SiteRules::default()
+        };
         for rule in &policy.rules {
             let Some((risky, site)) = browser_rule(&rule.tool) else {
                 continue;
@@ -342,6 +376,11 @@ pub struct Ask {
     pub risky: bool,
     /// No rule can allow it.
     pub dangerous: bool,
+    /// It asks because it may send or delete and the dot's "Always ask before sending or
+    /// deleting" is on (`GUARD_WORDS`): no rule can allow it while the switch is on. Absent in
+    /// a card stored before the switch existed.
+    #[serde(default)]
+    pub guarded: bool,
 }
 
 /// The gate's answer.
@@ -389,7 +428,25 @@ pub fn judge(
             labels,
             risky,
             dangerous,
+            guarded: false,
         })
+    };
+    // A guarded act or dialog asks where the rules would allow it.
+    let guarded_ask = |verdict: Verdict, action: &str, labels: Vec<Option<String>>| match verdict {
+        Verdict::Allow => Verdict::Ask(Ask {
+            action: action.to_string(),
+            site: current.clone(),
+            page: page.map(place),
+            labels,
+            risky: true,
+            dangerous: false,
+            guarded: true,
+        }),
+        Verdict::Ask(mut card) => {
+            card.guarded = true;
+            Verdict::Ask(card)
+        }
+        refused => refused,
     };
     let on_page = |action: &str, labels: Vec<Option<String>>, risky: bool| match current.as_deref()
     {
@@ -417,6 +474,7 @@ pub fn judge(
                     labels: Vec::new(),
                     risky: false,
                     dangerous: false,
+                    guarded: false,
                 }),
             }
         }
@@ -430,7 +488,14 @@ pub fn judge(
                 ask(danger.as_str(), current.clone(), labels, true, true)
             }
         },
-        Kind::AcceptDialog => on_page("dialog", Vec::new(), true),
+        Kind::AcceptDialog => {
+            let verdict = on_page("dialog", Vec::new(), true);
+            if rules.guard {
+                guarded_ask(verdict, "dialog", Vec::new())
+            } else {
+                verdict
+            }
+        }
         Kind::Act {
             act,
             targets,
@@ -449,7 +514,13 @@ pub fn judge(
                     .collect(),
             };
             let risky = targets.iter().any(|t| element(t).is_none_or(is_risky));
-            on_page(act.as_str(), labels, risky)
+            let guarded = rules.guard && targets.iter().any(|t| element(t).is_none_or(is_guarded));
+            let verdict = on_page(act.as_str(), labels.clone(), risky);
+            if guarded {
+                guarded_ask(verdict, act.as_str(), labels)
+            } else {
+                verdict
+            }
         }
     }
 }
@@ -499,6 +570,11 @@ pub fn is_risky(element: &Element) -> bool {
     has_word(&element.name, &RISKY_WORDS) || has_word(&element.role, &RISKY_WORDS)
 }
 
+/// An act on `element` may send or delete (`GUARD_WORDS`).
+pub fn is_guarded(element: &Element) -> bool {
+    has_word(&element.name, &GUARD_WORDS) || has_word(&element.role, &GUARD_WORDS)
+}
+
 /// `element` takes a password or a code (section 3.5).
 pub fn is_secret(element: &Element) -> bool {
     has_word(&element.name, &SECRET_WORDS) || element.role.eq_ignore_ascii_case("password")
@@ -520,6 +596,7 @@ pub fn rule_candidates(tool: &str, input: &Value) -> Option<Vec<RuleCandidate>> 
         site: Some(site),
         risky,
         dangerous: false,
+        guarded,
         ..
     }) = card
     else {
@@ -532,7 +609,8 @@ pub fn rule_candidates(tool: &str, input: &Value) -> Option<Vec<RuleCandidate>> 
         pattern: format!("Browser({site})"),
         label: format!("always allow on {site}"),
     }];
-    if risky {
+    // While the guard asks, a rule for risky acts would not stop this one from asking.
+    if risky && !guarded {
         out.push(RuleCandidate {
             pattern: format!("BrowserRisky({site})"),
             label: format!("always allow risky actions on {site}"),

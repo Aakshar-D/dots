@@ -63,7 +63,17 @@ export const CatalogStatus = z.enum(["accepted", "changed", "unreachable", "unch
 // Whether a chat message reached its dot (delivery tracking spec section 3).
 export const Delivery = z.enum(["delivered", "waiting", "not_delivered"]);
 // Why a message is still waiting.
-export const WaitReason = z.enum(["busy", "usage_hold", "updating", "dot_busy", "queued"]);
+export const WaitReason = z.enum([
+  "busy",
+  "usage_hold",
+  "updating",
+  "dot_busy",
+  "queued",
+  "spend_cap",
+]);
+// The size of model Auto picks for a run (auto model spec section 2).
+export const ModelTier = z.enum(["small", "standard", "large"]);
+export type ModelTier = z.infer<typeof ModelTier>;
 
 export const Rule = z.strictObject({ tool: z.string(), action: Action });
 export const Policy = z.strictObject({
@@ -71,6 +81,9 @@ export const Policy = z.strictObject({
   rules: z.array(Rule),
   default: Action,
   mcp_default: Action,
+  // "Always ask before sending or deleting": a call that sends or deletes asks even where a
+  // rule, the preset or the default allows it. A deny still refuses it.
+  ask_send_delete: z.boolean(),
 });
 
 // A dot's schedule (Scheduler v2 spec §2). Times are "HH:MM" and date-times
@@ -107,6 +120,14 @@ export const Uses = z.strictObject({
   apps: z.array(z.string()),
 });
 
+/// A dot's daily spending caps (spend caps design): estimated API USD and tokens (in + out)
+/// since local midnight; null is no cap.
+export const DotCaps = z.strictObject({
+  daily_usd: nullable(z.number()),
+  daily_tokens: nullable(z.number().int()),
+});
+export type DotCaps = z.infer<typeof DotCaps>;
+
 const dotSpecShape = {
   name: z.string(),
   instructions: z.string(),
@@ -123,12 +144,15 @@ const dotSpecShape = {
   // A visible Microsoft Edge with the dot's own profile (browser spec section 2.4).
   browser: z.boolean(),
   use_global_instructions: z.boolean(),
+  // Each final answer gets a result check while Settings › Check every result is on.
+  check_results: z.boolean(),
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),
   timeout_secs: z.number().int(),
   approval_wait_secs: z.number().int(),
   // Quiet limit in seconds: null follows the app default, 0 is off, else 60 to 86400.
   quiet_limit_secs: nullable(z.number().int()),
+  spend_cap: DotCaps,
   enabled: z.boolean(),
 };
 export const DotSpec = z.strictObject(dotSpecShape);
@@ -147,6 +171,24 @@ export const Dot = z.strictObject({
   workspace_id: z.string(),
   ...dotSpecShape,
 });
+
+// A run's result check (result check spec): a quick second look at its final answer.
+export const Verdict = z.enum(["looks_good", "has_concerns", "failed_task"]);
+export const ResultCheck = z.discriminatedUnion("state", [
+  // Running now; the run's notification waits for it.
+  z.strictObject({ state: z.literal("checking"), model: z.string() }),
+  z.strictObject({
+    state: z.literal("done"),
+    model: z.string(),
+    verdict: Verdict,
+    // Short sentences; empty for looks_good.
+    concerns: z.array(z.string()),
+    // 0 to 1, when the checker gave one.
+    confidence: nullable(z.number()),
+  }),
+  // No verdict: why, in words for the person.
+  z.strictObject({ state: z.literal("skipped"), reason: z.string() }),
+]);
 
 const runShape = {
   id: z.string(),
@@ -193,6 +235,19 @@ const runShape = {
   dismissed_at: nullable(z.string()),
   delivery: nullable(Delivery),
   wait_reason: nullable(WaitReason),
+  // The words for a spend_cap wait ("Scout reached its $2.00 daily cap"); null otherwise.
+  wait_detail: nullable(z.string()),
+  // The person let it start once past a reached spending cap (Run once anyway).
+  cap_released: z.boolean(),
+  // The model the run's engine was started with; null before it starts.
+  model: nullable(z.string()),
+  // Auto's pick: the size and why ("code work: refactor"); null for a dot with its own model.
+  model_tier: nullable(ModelTier),
+  model_reason: nullable(z.string()),
+  // The model Auto tried first, when the CLI could not use it.
+  model_fallback_from: nullable(z.string()),
+  // The result check of its final answer; null when none applies.
+  result_check: nullable(ResultCheck),
 };
 export const Run = z.strictObject(runShape);
 
@@ -301,7 +356,45 @@ export const UsageSummary = z.strictObject({
 export const HoldReason = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("usage") }),
   z.strictObject({ kind: z.literal("role"), account: z.string(), text: z.string() }),
+  // A spending cap is reached: the dot's own, or the one for all dots.
+  z.strictObject({
+    kind: z.literal("spend_cap"),
+    text: z.string(),
+    scope: z.enum(["dot", "all"]),
+  }),
 ]);
+
+// Spending caps (spend caps design). Cost is the estimated API cost the engine reported;
+// tokens are in + out.
+export const Spend = z.strictObject({
+  cost_usd: z.number(),
+  tokens: z.number().int(),
+});
+export const GlobalCaps = z.strictObject({
+  daily_usd: nullable(z.number()),
+  daily_tokens: nullable(z.number().int()),
+  monthly_usd: nullable(z.number()),
+});
+export const DotSpend = z.strictObject({
+  dot_id: z.string(),
+  dot_name: z.string(),
+  today: Spend,
+  caps: DotCaps,
+});
+// Today's spend (local midnight to local midnight) and this month's, against the caps.
+export const SpendToday = z.strictObject({
+  day_start: z.string(),
+  day_end: z.string(),
+  month_start: z.string(),
+  today: Spend,
+  month: Spend,
+  caps: GlobalCaps,
+  dots: z.array(DotSpend),
+});
+export type Spend = z.infer<typeof Spend>;
+export type GlobalCaps = z.infer<typeof GlobalCaps>;
+export type DotSpend = z.infer<typeof DotSpend>;
+export type SpendToday = z.infer<typeof SpendToday>;
 // A run held for Claude usage or a role; starts_after is null while held runs start one at a
 // time, and for a role hold.
 export const HeldRun = z.strictObject({
@@ -325,6 +418,9 @@ export const RunEventData = z.discriminatedUnion("kind", [
     id: z.string(),
     tool: z.string(),
     input: z.unknown(),
+    // The helper's call (the claude CLI's Task or Agent tool) that made this call; absent for
+    // the dot's own calls and from events stored before it existed.
+    parent: z.string().optional(),
   }),
   z.strictObject({
     kind: z.literal("tool_result"),
@@ -354,6 +450,17 @@ export const RunEventData = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("failed"), error: z.string() }),
   // Something about the run that is not the model's doing: an item left out, a server problem.
   z.strictObject({ kind: z.literal("notice"), text: z.string() }),
+  // The result check's record, with what the checker used; not shown in the transcript.
+  z.strictObject({
+    kind: z.literal("result_check"),
+    model: z.string(),
+    verdict: nullable(Verdict),
+    skipped: nullable(z.string()),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    cache_read: z.number().int(),
+    cost_usd: nullable(z.number()),
+  }),
 ]);
 
 const approvalShape = {
@@ -373,8 +480,20 @@ const approvalShape = {
   applied_at: nullable(z.string()),
   // For an MCP call: the server's accepted fingerprint when it asked.
   mcp_fingerprint: nullable(z.string()),
+  // Where it was decided when not in the app: "phone: <name>".
+  decided_via: nullable(z.string()),
 };
 export const Approval = z.strictObject(approvalShape);
+
+// What the send-and-delete guard finds in an approval's call: whether it sends, deletes, or
+// runs something Dots cannot read; what it does, to follow "<dot> wants to"; and whether the
+// dot's "Always ask before sending or deleting" is on, so that it always asks.
+export const GuardKind = z.enum(["send", "delete", "unclear"]);
+export const ApprovalGuard = z.strictObject({
+  kind: GuardKind,
+  summary: z.string(),
+  always_asks: z.boolean(),
+});
 
 // An allow rule the core offers to save with an approval: the rule's pattern, and what it
 // covers in words.
@@ -440,6 +559,40 @@ export const IntentFields = z.strictObject({
   due_date: nullable(z.string()),
   urgent: z.boolean(),
   dot_id: nullable(z.string()),
+});
+
+// Search (search spec section 3): what a hit is, which says where it opens.
+export const SearchKind = z.enum(["chat", "reply", "note", "memory", "intent", "topic", "file"]);
+// What the search box asks: the text as typed, only hits of `kinds` (empty is every kind), of
+// one dot, and at most `limit`.
+export const SearchQuery = z.strictObject({
+  text: z.string(),
+  kinds: z.array(SearchKind),
+  dot_id: nullable(z.string()),
+  limit: nullable(z.number()),
+});
+// Where a hit opens: a chat topic on the home, a run's own page, a dot's conversation (a note of
+// Dots' own), a memory in its dot's Memory tab, or a goal on the Intents screen.
+export const SearchTarget = z.discriminatedUnion("type", [
+  z.strictObject({
+    type: z.literal("topic"),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+    run_id: nullable(z.string()),
+  }),
+  z.strictObject({ type: z.literal("run"), run_id: z.string() }),
+  z.strictObject({ type: z.literal("dot"), dot_id: z.string() }),
+  z.strictObject({ type: z.literal("memory"), dot_id: z.string(), memory_id: z.string() }),
+  z.strictObject({ type: z.literal("intent"), intent_id: z.string() }),
+]);
+// One hit. `snippet` is plain text with each matched word between U+E000 and U+E001.
+export const SearchHit = z.strictObject({
+  kind: SearchKind,
+  dot_id: nullable(z.string()),
+  dot_name: nullable(z.string()),
+  target: SearchTarget,
+  at: z.string(),
+  snippet: z.string(),
 });
 
 export const MemorySource = z.enum(["dot", "person"]);
@@ -781,6 +934,24 @@ export const Settings = z.strictObject({
   auto_archive_days: z.number().int(),
   // The model a new Claude dot starts with (model switcher spec section 2.2).
   default_model: z.string(),
+  // "Answer from my phone": a listener on the PC's private network addresses serves the Inbox
+  // to paired phones. Off by default; applies at once.
+  phone_enabled: z.boolean(),
+  phone_port: z.number().int(),
+  // Caps for all dots together (spend caps design); null is no cap.
+  spend_daily_usd: nullable(z.number()),
+  spend_daily_tokens: nullable(z.number().int()),
+  spend_monthly_usd: nullable(z.number()),
+  // The model of each size Auto picks from (auto model spec section 3).
+  auto_models: z.strictObject({
+    small: z.string(),
+    standard: z.string(),
+    large: z.string(),
+  }),
+  // Every Claude run's final answer gets a quick automatic check (result check spec).
+  check_results: z.boolean(),
+  // The Claude model the result check uses.
+  checker_model: z.string(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -1944,6 +2115,45 @@ export const ApiKeyView = z.strictObject({
   last_used_at: nullable(z.string()),
   revoked_at: nullable(z.string()),
 });
+// Where the phone view stands (phone view spec section 10): listening or not, its https
+// addresses (the QR code's first), its certificate's SHA-256 fingerprint, and why it is not
+// listening although it is on.
+export const PhoneStatus = z.strictObject({
+  running: z.boolean(),
+  port: z.number().int(),
+  addresses: z.array(z.string()),
+  fingerprint: nullable(z.string()),
+  error: nullable(z.string()),
+  pairing: z.boolean(),
+});
+// A pairing in progress: the QR code's link with its one-time token, the code to type, and the
+// QR code as one SVG path of `qr_size` modules square.
+export const PairingView = z.strictObject({
+  url: z.string(),
+  code: z.string(),
+  address: z.string(),
+  fingerprint: z.string(),
+  expires_at: z.string(),
+  qr_size: z.number().int(),
+  qr_path: z.string(),
+});
+// A paired phone; its credential never leaves the core.
+export const PhoneDevice = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  created_at: z.string(),
+  last_seen_at: nullable(z.string()),
+  last_ip: nullable(z.string()),
+});
+// One thing a phone did (the audit trail).
+export const PhoneAction = z.strictObject({
+  device_id: z.string(),
+  device_name: z.string(),
+  action: z.string(),
+  target: z.string(),
+  summary: z.string(),
+  at: z.string(),
+});
 // What making a key answers: the key and its text, which exists only in this answer.
 export const CreatedApiKey = z.strictObject({
   key: ApiKeyView,
@@ -2021,6 +2231,48 @@ export const WorktreeDiff = z.strictObject({
   files: z.array(FileDiff),
   truncated: z.boolean(),
   exists: z.boolean(),
+});
+
+// What a folder run changed in its folder, from its checkpoint (undo spec section 3).
+export const ChangesState = z.enum(["recording", "recorded", "unavailable"]);
+export const ChangedFile = z.strictObject({
+  path: z.string(),
+  status: FileStatus,
+  // Dots kept what it needs to put the file back.
+  undoable: z.boolean(),
+  reason: nullable(z.string()),
+});
+export const RunChanges = z.strictObject({
+  run_id: z.string(),
+  state: ChangesState,
+  // The folder is in a git repository: files it ignores are not tracked.
+  git: z.boolean(),
+  files: z.array(ChangedFile),
+  note: nullable(z.string()),
+  undone_at: nullable(z.string()),
+});
+// What undo (or redo) would do to one file now.
+export const FileAction = z.enum(["ready", "conflict", "done", "cannot"]);
+export const PlannedFile = z.strictObject({
+  path: z.string(),
+  status: FileStatus,
+  action: FileAction,
+  reason: nullable(z.string()),
+});
+export const ChangesPreview = z.strictObject({
+  run_id: z.string(),
+  // The run's changes were undone: the action is redo.
+  redo: z.boolean(),
+  files: z.array(PlannedFile),
+  diff: WorktreeDiff,
+  // Later runs in the same folder that changed some of the same files.
+  later_runs: z.array(z.string()),
+});
+export const UndoOutcome = z.strictObject({
+  redo: z.boolean(),
+  restored: z.array(z.string()),
+  skipped: z.array(PlannedFile),
+  changes: RunChanges,
 });
 
 // `cancelled`: the user declined a native confirmation; nothing was changed.
@@ -2195,6 +2447,10 @@ export const LIMITS = {
   max_memories: 200,
   max_memory_text: 500,
   max_watcher_name: 80,
+  min_cap_usd: 0.01,
+  max_cap_usd: 100000,
+  max_cap_tokens: 10000000000,
+  spend_warn_at: 0.8,
 } as const;
 
 export type EngineKind = z.infer<typeof EngineKind>;
@@ -2228,10 +2484,12 @@ export type Uses = z.infer<typeof Uses>;
 export type DotSpec = z.infer<typeof DotSpec>;
 export type Dot = z.infer<typeof Dot>;
 export type Run = z.infer<typeof Run>;
+export type ResultCheck = z.infer<typeof ResultCheck>;
 export type RunEventRecord = z.infer<typeof RunEventRecord>;
 export type RunEventData = z.infer<typeof RunEventData>;
 export type Approval = z.infer<typeof Approval>;
 export type RuleCandidate = z.infer<typeof RuleCandidate>;
+export type ApprovalGuard = z.infer<typeof ApprovalGuard>;
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
 export type ClaudeStatus = z.infer<typeof ClaudeStatus>;
 export type Status = z.infer<typeof Status>;
@@ -2349,6 +2607,10 @@ export type RosterEdit = z.infer<typeof RosterEdit>;
 export type WorkspaceView = z.infer<typeof WorkspaceView>;
 export type Refusals = z.infer<typeof Refusals>;
 export type ApiKeyView = z.infer<typeof ApiKeyView>;
+export type PhoneStatus = z.infer<typeof PhoneStatus>;
+export type PairingView = z.infer<typeof PairingView>;
+export type PhoneDevice = z.infer<typeof PhoneDevice>;
+export type PhoneAction = z.infer<typeof PhoneAction>;
 export type DotAccess = z.infer<typeof DotAccess>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;
@@ -2360,6 +2622,12 @@ export type ValueSource = z.infer<typeof ValueSource>;
 export type GrantStatus = z.infer<typeof GrantStatus>;
 export type FileDiff = z.infer<typeof FileDiff>;
 export type WorktreeDiff = z.infer<typeof WorktreeDiff>;
+export type ChangedFile = z.infer<typeof ChangedFile>;
+export type RunChanges = z.infer<typeof RunChanges>;
+export type FileAction = z.infer<typeof FileAction>;
+export type PlannedFile = z.infer<typeof PlannedFile>;
+export type ChangesPreview = z.infer<typeof ChangesPreview>;
+export type UndoOutcome = z.infer<typeof UndoOutcome>;
 export type CmdErrorKind = z.infer<typeof CmdErrorKind>;
 export type CmdError = z.infer<typeof CmdError>;
 export type StartupError = z.infer<typeof StartupError>;
@@ -2372,6 +2640,10 @@ export type Memory = z.infer<typeof Memory>;
 export type Intent = z.infer<typeof Intent>;
 export type IntentsView = z.infer<typeof IntentsView>;
 export type IntentFields = z.infer<typeof IntentFields>;
+export type SearchKind = z.infer<typeof SearchKind>;
+export type SearchQuery = z.infer<typeof SearchQuery>;
+export type SearchTarget = z.infer<typeof SearchTarget>;
+export type SearchHit = z.infer<typeof SearchHit>;
 export type WatcherKind = z.infer<typeof WatcherKind>;
 export type PausedReason = z.infer<typeof PausedReason>;
 export type FolderEvent = z.infer<typeof FolderEvent>;

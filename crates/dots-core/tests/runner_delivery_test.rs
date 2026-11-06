@@ -150,6 +150,7 @@ impl Env {
 fn wait_reason_follows_its_precedence() {
     let base = WaitFacts {
         usage_held: false,
+        spend_capped: false,
         runner_held: false,
         dot_has_active_run: false,
         running: 0,
@@ -186,6 +187,17 @@ fn wait_reason_follows_its_precedence() {
                 running: 2,
                 dot_has_active_run: true,
                 runner_held: true,
+                spend_capped: true,
+                ..base.clone()
+            },
+            WaitReason::SpendCap,
+        ),
+        (
+            WaitFacts {
+                running: 2,
+                dot_has_active_run: true,
+                runner_held: true,
+                spend_capped: true,
                 usage_held: true,
                 ..base.clone()
             },
