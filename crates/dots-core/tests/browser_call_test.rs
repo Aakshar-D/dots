@@ -320,6 +320,7 @@ async fn an_approved_site_passes_and_a_new_site_asks() {
             labels: vec![],
             risky: false,
             dangerous: false,
+            guarded: false,
         }
     );
     assert_eq!(
@@ -354,6 +355,7 @@ async fn a_risky_act_asks_on_an_approved_site_and_passes_with_risky_actions_allo
             labels: vec![Some(s("Pay now"))],
             risky: true,
             dangerous: false,
+            guarded: false,
         }
     );
     assert_eq!(
@@ -389,6 +391,19 @@ async fn a_risky_act_asks_on_an_approved_site_and_passes_with_risky_actions_allo
         text(&again).starts_with("Dots: Clicked \"Pay now\"\n"),
         "{again}"
     );
+    // A selector could name a Send or Delete button: with "Always ask before sending or
+    // deleting" on, it still asks, and says why.
+    call(
+        &e,
+        &browser,
+        "browser_click",
+        json!({"target": "text=Pay now"}),
+    )
+    .await;
+    assert!(card(&newest(&e, &run).await).guarded);
+    // With the switch off, risky actions allowed on the site let it pass.
+    risky.policy.ask_send_delete = false;
+    e.store.update_dot(&dot.id, &risky).await.unwrap();
     let named = call(
         &e,
         &browser,

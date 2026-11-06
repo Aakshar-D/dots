@@ -100,6 +100,7 @@ impl Engine for ScriptedEngine {
                             id: id.clone(),
                             tool: tool.clone(),
                             input: input.clone(),
+                            parent: None,
                         };
                         let _ = tx.send(call).await;
                         let outcome = match &gate {
@@ -148,6 +149,7 @@ impl Engine for ScriptedEngine {
                                 id: id.clone(),
                                 tool: approval.tool.clone(),
                                 input: approval.input.clone(),
+                                parent: None,
                             };
                             let _ = tx.send(call).await;
                             let _ = gate.settle_apply(&approval.id, ApplyState::Applied).await;

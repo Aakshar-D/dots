@@ -5,9 +5,11 @@ import { Link } from "react-router";
 import { commands } from "@/api/commands";
 import type { Message } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
+import { AutoLine } from "@/components/AutoLine";
 import { ErrorNote } from "@/components/ErrorNote";
 import { ResultCheckBadge } from "@/components/ResultCheckBadge";
 import { HeldNote, RunNumbers } from "@/components/RunNumbers";
+import { CapNote } from "@/components/SpendCaps";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
 import { isActive, oneLine, topicTitle, type Topic } from "@/lib/home-topics";
@@ -59,7 +61,9 @@ export function RunCard(props: {
       {summary && <p className="text-muted-foreground">{summary}</p>}
       <ResultCheckBadge run={run} canFix={!topic.runs.some(isActive)} />
       <RunNumbers run={run} />
+      <AutoLine run={run} />
       <HeldNote run={run} />
+      <CapNote run={run} />
       <DeliveryLine run={run} />
       {error && <p className="text-destructive">{error}</p>}
       {waiting && approvals.isError && <ErrorNote error={approvals.error} />}

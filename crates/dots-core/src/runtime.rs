@@ -30,8 +30,8 @@ use crate::model::{
     TriggerKind, UndeliveredMessage, WorkspaceMode, WorktreeDiff,
 };
 use crate::policy::{
-    allow_candidates, pattern_touches_private, touches_private, Action, Rule, RuleCandidate,
-    PRIVATE_REFUSAL,
+    allow_candidates, pattern_touches_private, touches_private, Action, ApprovalGuard, Rule,
+    RuleCandidate, PRIVATE_REFUSAL,
 };
 use crate::runner::{Runner, RunnerConfig};
 use crate::schedule::{upcoming, Schedule};
@@ -2265,6 +2265,8 @@ impl Runtime {
         self.scheduler.reload();
         self.watchers.reload();
         self.follow_ups.wake();
+        // A cap raised or cleared lets its waiting runs start now.
+        self.runner.nudge();
         Ok(dot)
     }
 
@@ -2946,7 +2948,34 @@ impl Runtime {
         let approval = self.store.get_approval(approval_id).await?;
         let run = self.store.get_run(&approval.run_id).await?;
         let workspace = run.workspace_path.as_deref().map(Path::new);
+        // A call the send-and-delete guard asks about asks while the switch is on, whatever
+        // rule is saved: offering one would promise what it cannot do.
+        if self
+            .approval_guard(approval_id)
+            .await?
+            .is_some_and(|g| g.always_asks)
+        {
+            return Ok(Vec::new());
+        }
         Ok(allow_candidates(&approval.tool, &approval.input, workspace))
+    }
+
+    /// What the send-and-delete guard finds in the call of this approval (it sends or deletes,
+    /// and how, for the card), and whether the dot's "Always ask before sending or deleting"
+    /// is on, so that it always asks. `None` when the call neither sends nor deletes as far as
+    /// Dots can tell.
+    pub async fn approval_guard(&self, approval_id: &str) -> Result<Option<ApprovalGuard>> {
+        let approval = self.store.get_approval(approval_id).await?;
+        let Some(found) = crate::policy::guard::classify(&approval.tool, &approval.input) else {
+            return Ok(None);
+        };
+        let run = self.store.get_run(&approval.run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        Ok(Some(ApprovalGuard {
+            kind: found.kind,
+            summary: found.summary,
+            always_asks: dot.spec.policy.ask_send_delete,
+        }))
     }
 
     /// True when the call of this approval touches a private folder (approval guards spec
@@ -3148,6 +3177,13 @@ impl Runtime {
                 // Said first, so the refusal names the reason rather than "not offered".
                 if self.approval_touches_private(id).await? || pattern_touches_private(&pattern) {
                     return Err(Error::Invalid(PRIVATE_REFUSAL.into()));
+                }
+                if self
+                    .approval_guard(id)
+                    .await?
+                    .is_some_and(|g| g.always_asks)
+                {
+                    return Err(Error::Invalid(crate::policy::GUARD_REFUSAL.into()));
                 }
                 let offered = self.approval_rule_candidates(id).await?;
                 if !offered.iter().any(|c| c.pattern == pattern) {
@@ -3579,6 +3615,24 @@ fn watch_viewing(store: Store, bus: Bus, viewing: Viewing, shutdown: Cancellatio
     });
 }
 
+/// Search (search spec 2026-11-06-search-design.md).
+impl Runtime {
+    /// The hits of `query` among the dots and goals of the workspace `workspace_id` of `scope`
+    /// (`personal` or an org id), best first; refused for a role that may not view it.
+    pub async fn search(
+        &self,
+        scope: &str,
+        workspace_id: &str,
+        query: &crate::search::SearchQuery,
+    ) -> Result<Vec<crate::search::SearchHit>> {
+        let org_id = org_of_scope(scope);
+        self.check_workspace(org_id, workspace_id).await?;
+        self.require_in(org_id, workspace_id, Permission::View)
+            .await?;
+        self.store.search(org_id, workspace_id, query).await
+    }
+}
+
 /// The person's goals (Intents). A goal lives in the account and workspace it was added in;
 /// changing one needs a role that may change goals there (`Permission::EditGoals`).
 impl Runtime {
@@ -3854,6 +3908,37 @@ impl Runtime {
         Ok(run)
     }
 
+    /// **Run once anyway** (spend caps design): lets one of the person's own runs (a chat, a
+    /// manual run, a resume) start past the spending cap that holds it. The run is marked, so no
+    /// cap stops it either, and the release is noted on it. Background runs wait for the cap.
+    pub async fn run_release_cap(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        self.require_dot(&dot, Permission::RunDots).await?;
+        if crate::limits::is_background(run.trigger) {
+            return Err(Error::Invalid(crate::spend::BACKGROUND_WAITS.into()));
+        }
+        let Some(hit) = self.runner.cap_hold(&run).await? else {
+            return Err(Error::Invalid(crate::spend::NOT_CAPPED.into()));
+        };
+        let run = self.store.set_cap_released(run_id).await?;
+        let text = format!("Run once past the cap: {}", hit.text);
+        let ev = crate::engine::EngineEvent::Notice { text };
+        let rec = self
+            .store
+            .append_event(run_id, ev.kind(), &serde_json::to_value(&ev)?)
+            .await?;
+        let _ = self.bus.send(RuntimeEvent::RunEvent { event: rec });
+        let _ = self.bus.send(RuntimeEvent::RunUpdated { run: run.clone() });
+        self.runner.nudge();
+        Ok(run)
+    }
+
+    /// Today's spend against the spending caps (spend caps design).
+    pub async fn spend_today(&self) -> Result<crate::spend::SpendToday> {
+        crate::spend::today(&self.store, chrono::Utc::now()).await
+    }
+
     /// Refuses the person's own Claude run while Claude's limit is reached: the CLI would
     /// refuse it anyway (usage and limits spec section 4).
     fn refuse_at_the_limit(&self, dot: &crate::model::Dot) -> Result<()> {
@@ -3903,8 +3988,28 @@ impl Runtime {
                 reason: crate::model::HoldReason::Usage,
             });
         }
-        // Runs waiting for a role, which the limits do not hold.
+        // Runs waiting for a role, which the limits do not hold, and runs waiting for a
+        // spending cap, read once for them all (spend caps design).
+        let usage_held: HashSet<String> = held.iter().map(|h| h.run_id.clone()).collect();
+        let mut ledger = crate::spend::Ledger::load(&self.store).await?;
         for (run, _) in self.store.queued_with_engine(false).await? {
+            if !run.cap_released && !usage_held.contains(&run.id) {
+                if let Some(hit) = ledger.hit_for(&self.store, &run.dot_id).await? {
+                    held.push(crate::model::HeldRun {
+                        dot_name: names.get(&run.dot_id).cloned().unwrap_or_default(),
+                        dot_id: run.dot_id,
+                        run_id: run.id,
+                        trigger: run.trigger,
+                        queued_at: run.queued_at,
+                        starts_after: None,
+                        reason: crate::model::HoldReason::SpendCap {
+                            text: hit.text,
+                            scope: hit.scope,
+                        },
+                    });
+                    continue;
+                }
+            }
             if let Some((account, text)) = self.runner.role_hold(&run).await? {
                 held.push(crate::model::HeldRun {
                     dot_name: names.get(&run.dot_id).cloned().unwrap_or_default(),

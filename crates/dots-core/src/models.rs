@@ -40,6 +40,16 @@ pub const CLAUDE_MODELS: &[(&str, &str, &str)] = &[
 /// The model a new Claude dot starts with when Settings name none.
 pub const DEFAULT_CLAUDE_MODEL: &str = "sonnet";
 
+/// Auto, offered first for a Claude dot (auto model spec section 1): a model picked per run.
+pub fn auto_option() -> ModelOption {
+    ModelOption {
+        id: crate::auto_model::AUTO_MODEL.to_string(),
+        label: crate::auto_model::AUTO_LABEL.to_string(),
+        hint: crate::auto_model::AUTO_HINT.to_string(),
+    }
+}
+
+/// The curated Claude models, without Auto.
 pub fn claude_models() -> Vec<ModelOption> {
     CLAUDE_MODELS
         .iter()
@@ -59,12 +69,16 @@ pub fn new_dot_spec(settings: &Settings, name: &str, instructions: &str, workdir
     spec
 }
 
-/// The models `engine` offers: the Claude list, or the ids the local `endpoint` lists. A local
+/// The models `engine` offers: Auto and the Claude list, or the ids the local `endpoint` lists. A local
 /// endpoint is checked as the "Test endpoint" probe checks it; every failure is an error that
 /// says what happened.
 pub async fn list_models(engine: EngineKind, endpoint: Option<&str>) -> Result<Vec<ModelOption>> {
     match engine {
-        EngineKind::Claude => Ok(claude_models()),
+        EngineKind::Claude => {
+            let mut models = vec![auto_option()];
+            models.extend(claude_models());
+            Ok(models)
+        }
         EngineKind::Local => {
             let endpoint = endpoint
                 .map(str::trim)

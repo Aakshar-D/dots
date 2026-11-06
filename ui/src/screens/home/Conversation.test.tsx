@@ -536,6 +536,50 @@ describe("a dot's conversation", () => {
   });
 });
 
+describe("the run's plan in the conversation", () => {
+  const event = (seq: number, data: Record<string, unknown>): RunEventRecord => ({
+    run_id: "a",
+    seq,
+    ts: sample.run.queued_at,
+    kind: String(data.kind),
+    data,
+  });
+  const todos = (...steps: [string, string][]) =>
+    steps.map(([content, status]) => ({ content, status, activeForm: `Doing ${content}` }));
+
+  it("shows the dot's plan above its reply and follows it live", async () => {
+    const events = [
+      event(1, {
+        kind: "tool_call",
+        id: "p1",
+        tool: "TodoWrite",
+        input: { todos: todos(["Read", "in_progress"], ["Fix", "pending"]) },
+      }),
+      event(2, { kind: "assistant_text", text: "On it." }),
+    ];
+    home([chat("a", "10:00", { status: "running", ended_at: null })], events);
+    renderApp(`/home/${dot.id}`);
+    const view = within(await screen.findByRole("region", { name: "Conversation" }));
+    const card = await view.findByRole("region", { name: `Plan of ${dot.name}` });
+    expect(within(card).getByText("Doing Read…")).toBeVisible();
+    // The card stands above the dot's words.
+    expect(
+      card.compareDocumentPosition(view.getByText("On it.")) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // A plan update the core sends live moves the card on.
+    const next = event(3, {
+      kind: "tool_call",
+      id: "p2",
+      tool: "TodoWrite",
+      input: { todos: todos(["Read", "completed"], ["Fix", "in_progress"]) },
+    });
+    events.push(next);
+    act(() => backend.emit("runtime", { type: "run_event", event: next }));
+    expect(await within(card).findByText("Doing Fix…")).toBeVisible();
+    expect(within(card).getByText("1 of 2 steps done")).toBeInTheDocument();
+  });
+});
+
 describe("what the self-QA found", () => {
   const event = (runId: string, seq: number, data: Record<string, unknown>): RunEventRecord => ({
     run_id: runId,

@@ -104,7 +104,7 @@ it is short, one turn, and on the cheapest model.
 
 ## 6. Data
 
-- Migration `0041_result_check.sql` (number may move at merge): `runs.result_check TEXT`
+- Migration `0040_result_check.sql`: `runs.result_check TEXT`
   (JSON of `ResultCheck`, tagged by `state`: `checking` / `done` / `skipped`), and
   `dots.check_results INTEGER NOT NULL DEFAULT 1`.
 - Settings: `check_results` (bool, default true), `checker_model` (string, default `haiku`, not

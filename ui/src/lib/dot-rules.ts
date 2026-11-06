@@ -3,6 +3,7 @@
 import { z } from "zod";
 
 import { LIMITS, type DotSpec, type Schedule, type ScheduleRule } from "@/api/types";
+import { tokenCapError, usdCapError } from "@/lib/spend";
 
 export type SpecErrors = Partial<Record<keyof DotSpec, string>>;
 
@@ -88,6 +89,8 @@ export function specErrors(spec: DotSpec, isNew = false): SpecErrors {
   }
   const schedule = scheduleError(spec.schedule);
   if (schedule) errors.schedule = schedule;
+  const cap = usdCapError(spec.spend_cap.daily_usd) ?? tokenCapError(spec.spend_cap.daily_tokens);
+  if (cap) errors.spend_cap = cap;
   return errors;
 }
 
@@ -226,6 +229,7 @@ export function specOf(dot: DotSpec): DotSpec {
     timeout_secs: dot.timeout_secs,
     approval_wait_secs: dot.approval_wait_secs,
     quiet_limit_secs: dot.quiet_limit_secs,
+    spend_cap: dot.spend_cap,
     enabled: dot.enabled,
   };
 }

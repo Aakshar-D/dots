@@ -49,6 +49,14 @@ async fn settings_round_trip() {
         default_model: "opus".into(),
         check_results: false,
         checker_model: "sonnet".into(),
+        spend_daily_usd: Some(12.5),
+        spend_daily_tokens: Some(500_000),
+        spend_monthly_usd: Some(100.0),
+        auto_models: dots_core::auto_model::AutoModels {
+            small: "claude-haiku-4-5".into(),
+            standard: "sonnet".into(),
+            large: "opus".into(),
+        },
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);

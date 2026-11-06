@@ -4,7 +4,8 @@ import { useState } from "react";
 import { describe, expect, it } from "vitest";
 
 import type { ModelOption } from "@/api/types";
-import { CUSTOM, ModelPicker } from "@/components/ModelPicker";
+import { CUSTOM, ModelPicker, withoutAuto } from "@/components/ModelPicker";
+import { claudeModels } from "@/test/fixtures";
 
 const option = (id: string): ModelOption => ({ id, label: id.toUpperCase(), hint: "" });
 
@@ -40,5 +41,20 @@ describe("the model picker", () => {
     await user.clear(box);
     await user.type(box, "  x-1 ");
     expect(screen.getByLabelText("Saved")).toHaveTextContent(/^x-1$/);
+  });
+
+  it("offers Auto first for a Claude dot, with what it does", async () => {
+    const user = userEvent.setup();
+    render(<Held options={claudeModels} start="sonnet" />);
+    const select = screen.getByLabelText("Model");
+    const names = [...select.querySelectorAll("option")].map((o) => o.textContent);
+    expect(names).toEqual(["Auto", "Opus", "Sonnet", "Haiku", "Custom…"]);
+    await user.selectOptions(select, "Auto");
+    expect(screen.getByLabelText("Saved")).toHaveTextContent(/^auto$/);
+    expect(screen.getByText(/Picks Haiku, Sonnet or Opus for each task/)).toBeVisible();
+  });
+
+  it("leaves Auto out of a list of fixed models", () => {
+    expect(withoutAuto(claudeModels).map((m) => m.id)).toEqual(["opus", "sonnet", "haiku"]);
   });
 });
