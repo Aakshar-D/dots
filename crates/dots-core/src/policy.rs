@@ -14,7 +14,10 @@ use serde_json::Value;
 use crate::library::{check_name, LibraryKind};
 use crate::{Error, Result};
 
+pub mod guard;
 mod private;
+
+pub use guard::{ApprovalGuard, GuardKind, Guarded};
 
 pub use private::{
     cli_private_ask_rules, pattern_touches_private, register_vault, touches_private,
@@ -53,11 +56,24 @@ pub struct Policy {
     /// A policy stored before it existed reads as `ask`.
     #[serde(default = "default_mcp_action")]
     pub mcp_default: Action,
+    /// "Always ask before sending or deleting" (send-and-delete guard design note): a call
+    /// that `guard::classify` finds sending or deleting asks even where a rule, the preset or
+    /// the default allows it. A deny still refuses it. On for every preset; a policy stored
+    /// before it existed reads as on.
+    #[serde(default = "default_ask_send_delete")]
+    pub ask_send_delete: bool,
 }
 
 fn default_mcp_action() -> Action {
     Action::Ask
 }
+
+fn default_ask_send_delete() -> bool {
+    true
+}
+
+/// Why no rule can be saved with the approval of a call the send-and-delete guard asks about.
+pub const GUARD_REFUSAL: &str = "this sends or deletes, so it always asks while \"Always ask before sending or deleting\" is on: no rule can allow it";
 
 /// What the Library knows about the server and the tool of an MCP call, for `resolve_mcp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -260,7 +276,17 @@ impl Policy {
             rules,
             default,
             mcp_default,
+            ask_send_delete: true,
         }
+    }
+
+    /// What the send-and-delete guard finds in this call, while the policy's
+    /// `ask_send_delete` is on; `None` when it is off or the call neither sends nor deletes.
+    pub fn guarded(&self, tool: &str, input: &Value) -> Option<Guarded> {
+        if !self.ask_send_delete {
+            return None;
+        }
+        guard::classify(tool, input)
     }
 
     /// Deny rules win over allow rules, which win over ask rules; otherwise `default`.
@@ -273,7 +299,8 @@ impl Policy {
     /// Two guards come on top (approval guards spec sections 3 and 5): a plumbing tool
     /// (`PLUMBING_TOOLS`) is allowed unless a deny rule matches it, and a call that touches a
     /// private place (`touches_private`) is never allowed without asking, whatever rule,
-    /// preset or default would allow it.
+    /// preset or default would allow it. A third: while `ask_send_delete` is on, a call that
+    /// sends or deletes (`guard::classify`) asks where it would be allowed.
     pub fn resolve_in(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Action {
         let ws = workspace_key(workspace);
         if PLUMBING_TOOLS.contains(&tool.trim()) {
@@ -284,6 +311,7 @@ impl Policy {
         }
         match self.resolve_rules(tool, input, ws.as_deref()) {
             Action::Allow if touches_private(tool, input, workspace) => Action::Ask,
+            Action::Allow if self.guarded(tool, input).is_some() => Action::Ask,
             action => action,
         }
     }
@@ -312,7 +340,16 @@ impl Policy {
     /// The check of an MCP tool call (`tool` is `mcp__<server>__<tool>`). The first match wins:
     /// a deny rule; a held server or an unlisted tool (ask); an allow rule; an ask rule; the
     /// accepted `readOnlyHint` (allow); `mcp_default`. MCP tools never fall to `default`.
+    /// While `ask_send_delete` is on, a tool whose name sends or deletes asks where it would be
+    /// allowed (a read-only hint does not exempt it: the name wins).
     pub fn resolve_mcp(&self, tool: &str, input: &Value, trust: McpTrust) -> Action {
+        match self.resolve_mcp_rules(tool, input, trust) {
+            Action::Allow if self.guarded(tool, input).is_some() => Action::Ask,
+            action => action,
+        }
+    }
+
+    fn resolve_mcp_rules(&self, tool: &str, input: &Value, trust: McpTrust) -> Action {
         if self.rule_matches(Action::Deny, tool, input, None) {
             return Action::Deny;
         }
@@ -984,6 +1021,7 @@ pub fn allow_candidates(tool: &str, input: &Value, workspace: Option<&Path>) -> 
             rules: vec![Rule::new(&pattern, Action::Allow)],
             default: Action::Ask,
             mcp_default: Action::Ask,
+            ask_send_delete: false,
         };
         if rule.validate().is_ok()
             && !pattern_touches_private(&pattern)

@@ -732,7 +732,7 @@ async fn chat_follow_up_restores_a_removed_worktree_at_the_same_path() {
 async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
     let script = json!([
         {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
-        {"approve": {"tool_name": "Bash", "input": {"command": "git push"}}},
+        {"approve": {"tool_name": "Bash", "input": {"command": "npm test"}}},
         {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "ok",
                   "usage": {"input_tokens": 1, "output_tokens": 1}}}
     ]);
@@ -755,16 +755,16 @@ async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
             .into_iter()
             .map(|c| c.pattern)
             .collect();
-    assert_eq!(offered, vec!["Bash(git push)"]);
+    assert_eq!(offered, vec!["Bash(npm test)"]);
     assert!(!t.rt.approval_touches_private(&approval.id).await.unwrap());
-    t.rt.decide_approval(&approval.id, true, None, Some("Bash(git push)".into()))
+    t.rt.decide_approval(&approval.id, true, None, Some("Bash(npm test)".into()))
         .await
         .unwrap();
 
     let policy = t.rt.get_dot(&dot.id).await.unwrap().spec.policy;
     assert_eq!(policy.rules.len(), dot.spec.policy.rules.len() + 1);
     // From the next run the CLI gets the rule in its own allow list.
-    assert!(policy.cli_lists().0.contains(&"Bash(git push)".to_string()));
+    assert!(policy.cli_lists().0.contains(&"Bash(npm test)".to_string()));
     // The engine is unchanged: a grant, and a resume that asks the model to repeat the call.
     let decided = t.rt.store().get_approval(&approval.id).await.unwrap();
     assert!(!decided.self_apply);
@@ -779,6 +779,82 @@ async fn a_rule_can_be_saved_with_the_approval_of_a_claude_dot() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     panic!("no resume run");
+}
+
+#[tokio::test]
+async fn a_send_or_delete_gets_no_rule_while_the_guard_is_on_and_says_why() {
+    let script = json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+        {"approve": {"tool_name": "Bash", "input": {"command": "rm a.txt b.txt"}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "ok",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]);
+    let t = start(Some(script), None).await;
+    let mut s = folder_spec(&t.dir, "guarded");
+    s.approval_wait_secs = 0;
+    // An allow rule for the command: the guard asks anyway.
+    s.policy.rules.push(dots_core::policy::Rule::new(
+        "Bash(rm:*)",
+        dots_core::policy::Action::Allow,
+    ));
+    let dot = t.rt.create_dot(s, None, None).await.unwrap();
+    let parent = t.rt.run_now(&dot.id).await.unwrap();
+    wait_status(t.rt.store(), &parent.id, RunStatus::AwaitingApproval, 15).await;
+    let approval =
+        t.rt.store()
+            .list_pending_approvals()
+            .await
+            .unwrap()
+            .remove(0);
+    let guard = t.rt.approval_guard(&approval.id).await.unwrap().unwrap();
+    assert_eq!(guard.kind, dots_core::policy::GuardKind::Delete);
+    assert_eq!(guard.summary, "delete 2 files: a.txt, b.txt");
+    assert!(guard.always_asks);
+    assert!(t
+        .rt
+        .approval_rule_candidates(&approval.id)
+        .await
+        .unwrap()
+        .is_empty());
+    let err =
+        t.rt.decide_approval(
+            &approval.id,
+            true,
+            None,
+            Some("Bash(rm a.txt b.txt)".into()),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Invalid(m) if m.contains("Always ask before sending or deleting")),
+        "{err:?}"
+    );
+    // The switch off: the same call would offer its rules again, and the card says it no
+    // longer always asks.
+    let mut off = t.rt.get_dot(&dot.id).await.unwrap().spec;
+    off.policy.ask_send_delete = false;
+    t.rt.store().update_dot(&dot.id, &off).await.unwrap();
+    assert!(
+        !t.rt
+            .approval_guard(&approval.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .always_asks
+    );
+    assert!(!t
+        .rt
+        .approval_rule_candidates(&approval.id)
+        .await
+        .unwrap()
+        .is_empty());
+    // Approving the one call works.
+    let once =
+        t.rt.decide_approval(&approval.id, true, None, None)
+            .await
+            .unwrap();
+    assert_eq!(once.status, ApprovalStatus::Approved);
+    t.rt.shutdown();
 }
 
 #[tokio::test]

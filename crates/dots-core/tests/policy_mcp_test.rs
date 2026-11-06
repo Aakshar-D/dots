@@ -27,6 +27,7 @@ fn policy(rules: Vec<Rule>, mcp_default: Action) -> Policy {
         rules,
         default: Action::Allow,
         mcp_default,
+        ask_send_delete: false,
     }
 }
 

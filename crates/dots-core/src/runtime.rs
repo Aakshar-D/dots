@@ -30,8 +30,8 @@ use crate::model::{
     TriggerKind, UndeliveredMessage, WorkspaceMode, WorktreeDiff,
 };
 use crate::policy::{
-    allow_candidates, pattern_touches_private, touches_private, Action, Rule, RuleCandidate,
-    PRIVATE_REFUSAL,
+    allow_candidates, pattern_touches_private, touches_private, Action, ApprovalGuard, Rule,
+    RuleCandidate, PRIVATE_REFUSAL,
 };
 use crate::runner::{Runner, RunnerConfig};
 use crate::schedule::{upcoming, Schedule};
@@ -2908,7 +2908,34 @@ impl Runtime {
         let approval = self.store.get_approval(approval_id).await?;
         let run = self.store.get_run(&approval.run_id).await?;
         let workspace = run.workspace_path.as_deref().map(Path::new);
+        // A call the send-and-delete guard asks about asks while the switch is on, whatever
+        // rule is saved: offering one would promise what it cannot do.
+        if self
+            .approval_guard(approval_id)
+            .await?
+            .is_some_and(|g| g.always_asks)
+        {
+            return Ok(Vec::new());
+        }
         Ok(allow_candidates(&approval.tool, &approval.input, workspace))
+    }
+
+    /// What the send-and-delete guard finds in the call of this approval (it sends or deletes,
+    /// and how, for the card), and whether the dot's "Always ask before sending or deleting"
+    /// is on, so that it always asks. `None` when the call neither sends nor deletes as far as
+    /// Dots can tell.
+    pub async fn approval_guard(&self, approval_id: &str) -> Result<Option<ApprovalGuard>> {
+        let approval = self.store.get_approval(approval_id).await?;
+        let Some(found) = crate::policy::guard::classify(&approval.tool, &approval.input) else {
+            return Ok(None);
+        };
+        let run = self.store.get_run(&approval.run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        Ok(Some(ApprovalGuard {
+            kind: found.kind,
+            summary: found.summary,
+            always_asks: dot.spec.policy.ask_send_delete,
+        }))
     }
 
     /// True when the call of this approval touches a private folder (approval guards spec
@@ -3110,6 +3137,13 @@ impl Runtime {
                 // Said first, so the refusal names the reason rather than "not offered".
                 if self.approval_touches_private(id).await? || pattern_touches_private(&pattern) {
                     return Err(Error::Invalid(PRIVATE_REFUSAL.into()));
+                }
+                if self
+                    .approval_guard(id)
+                    .await?
+                    .is_some_and(|g| g.always_asks)
+                {
+                    return Err(Error::Invalid(crate::policy::GUARD_REFUSAL.into()));
                 }
                 let offered = self.approval_rule_candidates(id).await?;
                 if !offered.iter().any(|c| c.pattern == pattern) {

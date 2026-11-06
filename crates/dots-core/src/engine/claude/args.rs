@@ -10,6 +10,9 @@ use crate::policy::{cli_private_ask_rules, PLUMBING_TOOLS};
 /// The CLI's search and listing tools, never in its allow list.
 const SEARCH_TOOLS: &[&str] = &["Grep", "Glob", "LS"];
 
+/// The CLI's shell tools.
+const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
+
 pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     let spec = &ctx.dot.spec;
     let mut a: Vec<String> = vec![
@@ -45,6 +48,16 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         let name = rule.split('(').next().unwrap_or(rule).trim();
         !SEARCH_TOOLS.contains(&name)
     });
+    // While "Always ask before sending or deleting" is on, every shell command reaches
+    // `approve`: the CLI would run one its allow list matches (`Bash(git:*)` covers
+    // `git push --force`) without asking, and only `Policy::resolve_in` reads a command for
+    // sends and deletes. Dots answers the rest with an allow at once.
+    if spec.policy.ask_send_delete {
+        allow.retain(|rule| {
+            let name = rule.split('(').next().unwrap_or(rule).trim();
+            !COMMAND_TOOLS.contains(&name)
+        });
+    }
     // The gateway checks every call of a run's MCP server (spec section 4), so the CLI does not
     // ask the `approve` tool for them first.
     allow.extend(

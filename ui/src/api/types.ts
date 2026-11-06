@@ -71,6 +71,9 @@ export const Policy = z.strictObject({
   rules: z.array(Rule),
   default: Action,
   mcp_default: Action,
+  // "Always ask before sending or deleting": a call that sends or deletes asks even where a
+  // rule, the preset or the default allows it. A deny still refuses it.
+  ask_send_delete: z.boolean(),
 });
 
 // A dot's schedule (Scheduler v2 spec §2). Times are "HH:MM" and date-times
@@ -375,6 +378,16 @@ const approvalShape = {
   mcp_fingerprint: nullable(z.string()),
 };
 export const Approval = z.strictObject(approvalShape);
+
+// What the send-and-delete guard finds in an approval's call: whether it sends, deletes, or
+// runs something Dots cannot read; what it does, to follow "<dot> wants to"; and whether the
+// dot's "Always ask before sending or deleting" is on, so that it always asks.
+export const GuardKind = z.enum(["send", "delete", "unclear"]);
+export const ApprovalGuard = z.strictObject({
+  kind: GuardKind,
+  summary: z.string(),
+  always_asks: z.boolean(),
+});
 
 // An allow rule the core offers to save with an approval: the rule's pattern, and what it
 // covers in words.
@@ -2232,6 +2245,7 @@ export type RunEventRecord = z.infer<typeof RunEventRecord>;
 export type RunEventData = z.infer<typeof RunEventData>;
 export type Approval = z.infer<typeof Approval>;
 export type RuleCandidate = z.infer<typeof RuleCandidate>;
+export type ApprovalGuard = z.infer<typeof ApprovalGuard>;
 export type RuntimeEvent = z.infer<typeof RuntimeEvent>;
 export type ClaudeStatus = z.infer<typeof ClaudeStatus>;
 export type Status = z.infer<typeof Status>;

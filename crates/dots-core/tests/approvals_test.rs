@@ -377,13 +377,13 @@ async fn a_rule_is_saved_with_an_approval_and_refused_with_a_denial() {
     let h = hub.clone();
     let rid = run.id.clone();
     let check =
-        tokio::spawn(async move { h.check(&rid, "Bash", json!({"command": "git push"})).await });
+        tokio::spawn(async move { h.check(&rid, "Bash", json!({"command": "npm test"})).await });
     let approval = loop {
         if let RuntimeEvent::ApprovalRequested { approval } = events.recv().await.unwrap() {
             break approval;
         }
     };
-    let rule = Rule::new("Bash(git push)", Action::Allow);
+    let rule = Rule::new("Bash(npm test)", Action::Allow);
     // Refused before anything is touched: the engine still waits and can still be answered.
     let err = hub
         .decide_with_rule(&approval.id, false, None, Some(rule.clone()))
@@ -410,7 +410,7 @@ async fn a_rule_is_saved_with_an_approval_and_refused_with_a_denial() {
     assert_eq!(policy.preset, Preset::Custom);
     // The rule holds for the next call at once: no question, no approval row.
     let again = hub
-        .check(&run.id, "Bash", json!({"command": "git push"}))
+        .check(&run.id, "Bash", json!({"command": "npm test"}))
         .await
         .unwrap();
     assert!(matches!(again, PermissionOutcome::Allow { .. }));

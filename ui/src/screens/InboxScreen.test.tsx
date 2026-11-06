@@ -541,6 +541,64 @@ describe("saving a rule with an approval", () => {
     );
   });
 
+  it("says plainly what a guarded call does, shows the command, and offers no rule", async () => {
+    waiting([]);
+    backend.on("approval_guard", () => ({
+      kind: "send",
+      summary: "push commits with git (git push origin main)",
+      always_asks: true,
+    }));
+    const { user } = renderApp("/inbox");
+    const shown = await card();
+    const sentence = await within(shown).findByLabelText("What this does");
+    expect(sentence).toHaveTextContent(
+      `${approval.dot_name} wants to push commits with git (git push origin main)`,
+    );
+    expect(backend.callsTo("approval_guard")[0]).toEqual({ id: approval.id });
+    // The exact command is on the card.
+    expect(within(shown).getAllByText(/git push origin main/).length).toBeGreaterThan(1);
+    expect(
+      within(shown).getByText(/This sends or deletes, so it always asks while/),
+    ).toHaveTextContent(`"Always ask before sending or deleting" is on for ${approval.dot_name}`);
+    expect(within(shown).queryByRole("button", opener)).toBeNull();
+    await user.click(within(shown).getByRole("button", { name: "Deny" }));
+    await waitFor(() =>
+      expect(backend.callsTo("decide_approval")).toEqual([
+        { id: approval.id, approved: false, note: null, allowRule: null },
+      ]),
+    );
+  });
+
+  it("says what a guarded call does without the always-asks line when the switch is off", async () => {
+    waiting();
+    backend.on("approval_guard", () => ({
+      kind: "delete",
+      summary: "delete 3 files: a.txt, b.txt, c.txt",
+      always_asks: false,
+    }));
+    renderApp("/inbox");
+    const shown = await card();
+    expect(await within(shown).findByLabelText("What this does")).toHaveTextContent(
+      "wants to delete 3 files: a.txt, b.txt, c.txt",
+    );
+    expect(within(shown).queryByText(/so it always asks while/)).toBeNull();
+    await within(shown).findByRole("button", opener);
+  });
+
+  it("says when Dots cannot read a command", async () => {
+    waiting([]);
+    backend.on("approval_guard", () => ({
+      kind: "unclear",
+      summary: "run an encoded PowerShell command that Dots cannot read",
+      always_asks: true,
+    }));
+    renderApp("/inbox");
+    const shown = await card();
+    expect(
+      await within(shown).findByText(/Dots can't tell whether this sends or deletes/),
+    ).toBeVisible();
+  });
+
   it("keeps the card whole when the private-folder check fails", async () => {
     waiting();
     backend.on("approval_touches_private", () => {

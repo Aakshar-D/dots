@@ -27,7 +27,8 @@ use dots_core::library_service::{
 use dots_core::managed_policy::ManagedPolicy;
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
-use dots_core::policy::{allow_candidates, Action, Policy, Preset};
+use dots_core::policy::guard::classify;
+use dots_core::policy::{allow_candidates, Action, ApprovalGuard, Policy, Preset};
 use dots_core::schedule::Schedule;
 use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
@@ -1730,6 +1731,13 @@ pub fn samples() -> Value {
     connector_samples(&mut samples);
     apps_samples(&mut samples);
     teams::teams_samples(&mut samples);
+    // What `approval_guard` answers for the `Approval` sample (`git push origin main`).
+    let guarded = classify(&approval().tool, &approval().input).expect("git push is guarded");
+    samples["ApprovalGuard"] = to(ApprovalGuard {
+        kind: guarded.kind,
+        summary: guarded.summary,
+        always_asks: true,
+    });
     samples["InstructionProposal"] = to(dots_core::instructions::InstructionStatus::ALL
         .iter()
         .enumerate()

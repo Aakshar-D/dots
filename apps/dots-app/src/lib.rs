@@ -143,6 +143,7 @@ command_list![
     decide_approval,
     approval_rule_candidates,
     approval_touches_private,
+    approval_guard,
     decide_run_approvals,
     inbox,
     inbox_count,

@@ -1150,6 +1150,17 @@ pub async fn approval_touches_private(state: State<'_, AppState>, id: String) ->
     Ok(state.rt()?.approval_touches_private(&id).await?)
 }
 
+/// What the send-and-delete guard finds in the call (it sends or deletes, and how), and
+/// whether the dot's "Always ask before sending or deleting" is on; null when the call
+/// neither sends nor deletes as far as Dots can tell.
+#[tauri::command]
+pub async fn approval_guard(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<Option<dots_core::policy::ApprovalGuard>> {
+    Ok(state.rt()?.approval_guard(&id).await?)
+}
+
 #[tauri::command]
 pub async fn decide_run_approvals(
     state: State<'_, AppState>,

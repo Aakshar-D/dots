@@ -181,6 +181,8 @@ export function installDefaults(): void {
   backend.on("approval_rule_candidates", () => []);
   // And whether the call touches a private folder; by default it does not.
   backend.on("approval_touches_private", () => false);
+  // And what the send-and-delete guard finds in the call; by default nothing.
+  backend.on("approval_guard", () => null);
   // The policy editor asks which always-allowed rules cover a private folder; by default none.
   backend.on("rules_touch_private", ({ patterns }) => (patterns as string[]).map(() => false));
   // No company Claude Code policy is installed on this PC.
