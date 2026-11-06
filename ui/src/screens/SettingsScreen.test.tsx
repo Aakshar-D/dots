@@ -420,6 +420,7 @@ describe("the Settings tabs", () => {
       "Instructions",
       "Claude",
       "Runs & server",
+      "Phone",
       "Local models",
       "Browser",
       "Updates",
