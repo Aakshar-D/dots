@@ -13,6 +13,7 @@ import { Page } from "@/components/Page";
 import { ReviewActions } from "@/components/ReviewActions";
 import { isFolderRun, RunChangesPanel } from "@/components/RunChanges";
 import { HeldNote } from "@/components/RunNumbers";
+import { modelLine } from "@/lib/auto-model";
 import { StatusBadge } from "@/components/StatusBadge";
 import { chatMessage, Transcript } from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
@@ -202,6 +203,12 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
               </abbr>
             </dt>
             <dd className="text-foreground">{formatCost(costUsd)}</dd>
+          </div>
+        )}
+        {modelLine(latest) !== null && (
+          <div className="flex gap-1">
+            <dt>Model</dt>
+            <dd className="text-foreground">{modelLine(latest)}</dd>
           </div>
         )}
         {latest.branch && (

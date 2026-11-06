@@ -6,6 +6,7 @@ import { AppliedCalls } from "@/components/AppliedCalls";
 import { AppReviews } from "@/components/AppReviewCard";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { LoadErrors } from "@/components/ErrorNote";
+import { ResultCheckBadge } from "@/components/ResultCheckBadge";
 import { InstructionsCard } from "@/components/InstructionsCard";
 import { ChangesLine, isFolderRun } from "@/components/RunChanges";
 import { Failure, Transcript } from "@/components/Transcript";
@@ -68,6 +69,8 @@ export function TopicRuns(props: {
         variant="conversation"
         after={(run) => (
           <>
+            {/* The answer's result check: Checking…, its verdict, and the fix it offers. */}
+            <ResultCheckBadge run={run} canFix={!busy} />
             {props.workflows
               ?.get(run.id)
               ?.map((workflowRun) => <WorkflowCard key={workflowRun.id} run={workflowRun} />)}

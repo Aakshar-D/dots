@@ -18,6 +18,7 @@ import type {
   Policy,
   Preset,
   Schedule,
+  SearchQuery,
   Settings,
   SetupProposal,
   SetupRequest,
@@ -278,6 +279,9 @@ export const commands = {
     call(nothing, "conversation_file_reveal", { dotId, rootRunIds, path }),
   /// Send again: a failed chat message, queued once more in its topic.
   resendRun: (runId: string) => call(T.Run, "resend_run", { runId }),
+  /// "Ask the dot to fix this": the run's result check concerns, sent as the next message of its
+  /// conversation (result check spec section 4).
+  resultCheckFix: (runId: string) => call(T.Run, "result_check_fix", { runId }),
   cancelRun: (runId: string) => call(T.Run, "cancel_run", { runId }),
   keepWaiting: (runId: string) => call(nothing, "keep_waiting", { runId }),
   /// Send a chat message that did not get there again; rejects with `conflict` when it just did.
@@ -330,6 +334,9 @@ export const commands = {
   /// True when the call touches a private folder (keys, tokens, `.env` files): it always asks,
   /// and no rule can be saved with its approval.
   approvalTouchesPrivate: (id: string) => call(z.boolean(), "approval_touches_private", { id }),
+  /// What the send-and-delete guard finds in the call (null when it neither sends nor
+  /// deletes), and whether the dot's switch makes it always ask.
+  approvalGuard: (id: string) => call(T.ApprovalGuard.nullable(), "approval_guard", { id }),
   /// Gives every pending approval of one run the same answer, in the order they were asked.
   /// Answers the approvals it decided.
   /// Decides only `ids`, the calls of the run the person was shown: a snoozed call of the same
@@ -550,6 +557,10 @@ export const commands = {
   memoryUpdate: (id: string, text: string | null, pinned: boolean | null) =>
     call(T.Memory, "memory_update", { id, text, pinned }),
   memoryDelete: (id: string) => call(nothing, "memory_delete", { id }),
+  /// The hits of `query` in the workspace `workspace` of `scope` ("personal" or an org id),
+  /// best first (search spec section 3).
+  search: (scope: string, workspace: string, query: SearchQuery) =>
+    call(T.SearchHit.array(), "search", { scope, workspace, query }),
   /// The goals of the workspace `workspace` of `scope` ("personal" or an org id), and why
   /// this PC may not change them (Intents).
   intentsList: (scope: string, workspace: string) =>
@@ -637,6 +648,10 @@ export const commands = {
   limitsGet: () => call(T.LimitsState, "limits_get"),
   usageSummary: (period: T.UsagePeriod) => call(T.UsageSummary, "usage_summary", { period }),
   runReleaseHold: (runId: string) => call(T.Run, "run_release_hold", { runId }),
+  /// Run once anyway: one of the person's own runs starts past the spending cap holding it.
+  runReleaseCap: (runId: string) => call(T.Run, "run_release_cap", { runId }),
+  /// Today's spend against the spending caps.
+  spendToday: () => call(T.SpendToday, "spend_today"),
 
   // Teams, their projects and workflows (teams spec section 10). A refusal carries the core's
   // sentence: kind `invalid` for a rule broken, `conflict` for a taken name or a state that

@@ -99,6 +99,7 @@ export const keys = {
   approvals: (runId: string) => ["approvals", runId] as const,
   approvalRules: (approvalId: string) => ["approval-rules", approvalId] as const,
   approvalPrivate: (approvalId: string) => ["approval-private", approvalId] as const,
+  approvalGuard: (approvalId: string) => ["approval-guard", approvalId] as const,
   diff: (runId: string) => ["diff", runId] as const,
   /// A folder run's changes, and what undo would do to them now (undo spec section 3).
   changes: (runId: string) => ["changes", runId] as const,
@@ -110,6 +111,9 @@ export const keys = {
   /// The rows of a dot's topics: names and archive marks.
   topics: (dotId: string) => ["topics", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
+  /// The hits of one search in one workspace of an account (search spec section 3).
+  search: (scope: string, workspace: string, text: string) =>
+    ["search", scope, workspace, text] as const,
   /// The goals of one workspace of an account (Intents).
   intents: (scope: string, workspace: string) => ["intents", scope, workspace] as const,
   /// The instructions a dot proposed (conversational chat spec section 4).
@@ -123,6 +127,8 @@ export const keys = {
   /// The apps that come with Dots and are not installed ("Install Projects").
   appsBundled: ["apps", "bundled"] as const,
   limits: ["limits"] as const,
+  /// Today's spend against the spending caps: what any run reports changes it.
+  spend: ["spend"] as const,
   updateStatus: ["update-status"] as const,
   publisher: ["publisher"] as const,
   releasesPage: ["releases-page"] as const,
@@ -225,6 +231,8 @@ export function invalidateDots(qc: QueryClient): void {
     ["runs"],
     keys.env,
     keys.library,
+    // A dot's caps are shown with today's spend.
+    keys.spend,
     ...orgEntries,
   ];
   for (const queryKey of stale) invalidate(qc, queryKey);

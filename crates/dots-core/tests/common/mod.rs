@@ -116,6 +116,13 @@ pub fn fake_run(trigger: TriggerKind, payload: Option<Value>, session_id: Option
         dismissed_at: None,
         delivery: None,
         wait_reason: None,
+        result_check: None,
+        wait_detail: None,
+        cap_released: false,
+        model: None,
+        model_tier: None,
+        model_reason: None,
+        model_fallback_from: None,
     }
 }
 

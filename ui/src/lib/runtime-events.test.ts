@@ -71,6 +71,8 @@ describe("runtime events and the query cache", () => {
       keys.inbox,
       // A run that ends takes its pending approvals with it, and no approval event says so.
       keys.approvals(run.id),
+      // What it spent counts against the caps.
+      keys.spend,
     ];
     const untouched = [keys.settings, keys.approvals("another-run")];
     for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);

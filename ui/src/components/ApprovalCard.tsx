@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CircleHelp, Send, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { commands } from "@/api/commands";
-import type { Approval } from "@/api/types";
+import type { Approval, ApprovalGuard } from "@/api/types";
 import { BrowserApprovalCard } from "@/components/BrowserApprovalCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,14 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
     // A failed check only leaves the line out: the core still refuses a rule for such a call.
     retry: false,
   });
+  // A call that sends or deletes says so plainly, and while the dot's "Always ask before
+  // sending or deleting" is on it always asks: the core offers no rule for it then.
+  const guard = useQuery({
+    queryKey: keys.approvalGuard(approval.id),
+    queryFn: () => commands.approvalGuard(approval.id),
+    // A failed check only leaves the sentence out: the core still decides what asks.
+    retry: false,
+  });
   // The narrowest rule comes first and is the one chosen until the user picks another.
   const chosen = picked ?? offered[0]?.pattern ?? null;
   const decide = useMutation({
@@ -81,6 +90,7 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
           {toolPreview(approval.input)}
         </span>
       </header>
+      {guard.data && <GuardSentence guard={guard.data} dotName={dotName} />}
       <pre className="max-h-60 overflow-auto rounded-md bg-background/60 p-2 text-xs whitespace-pre-wrap">
         {JSON.stringify(approval.input, null, 2)}
       </pre>
@@ -132,6 +142,15 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
           This touches a private folder, so it always asks.
         </p>
       )}
+      {guard.data?.always_asks && (
+        <p className="text-xs text-muted-foreground">
+          {guard.data.kind === "unclear"
+            ? "Dots can't tell whether this sends or deletes, so it always asks"
+            : "This sends or deletes, so it always asks"}{" "}
+          while "Always ask before sending or deleting" is on for {dotName ?? "this dot"}. You can
+          switch that off in the dot's permissions.
+        </p>
+      )}
       {rules.isError && (
         <p className="text-xs text-muted-foreground">
           The rules that could be saved with this approval could not be loaded. You can still
@@ -173,5 +192,19 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
         </fieldset>
       )}
     </article>
+  );
+}
+
+/// "Scout wants to send an email with Gmail (send_email)": what a guarded call does, in words.
+/// The exact command or arguments are in the card below it.
+function GuardSentence({ guard, dotName }: { guard: ApprovalGuard; dotName?: string }) {
+  const Icon = guard.kind === "send" ? Send : guard.kind === "delete" ? Trash2 : CircleHelp;
+  return (
+    <p className="flex items-start gap-1.5" aria-label="What this does">
+      <Icon aria-hidden className="mt-1 size-3.5 shrink-0 text-needs" />
+      <span>
+        <span className="font-semibold">{dotName ?? "The dot"}</span> wants to {guard.summary}
+      </span>
+    </p>
   );
 }

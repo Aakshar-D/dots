@@ -394,7 +394,9 @@ fn policy_extras() {
     );
     let mcp = setup_policy(Preset::ReadOnly, &["mcp:gmail".to_string()]);
     assert_eq!(mcp.preset, Preset::Custom);
-    assert_eq!(mcp.resolve("mcp__gmail__send", &json!({})), Action::Allow);
+    assert_eq!(mcp.resolve("mcp__gmail__search", &json!({})), Action::Allow);
+    // A send still asks: "Always ask before sending or deleting" is on.
+    assert_eq!(mcp.resolve("mcp__gmail__send", &json!({})), Action::Ask);
     assert_ne!(mcp.resolve("mcp__slack__send", &json!({})), Action::Allow);
 }
 

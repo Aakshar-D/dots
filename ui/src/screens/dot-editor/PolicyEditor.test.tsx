@@ -15,12 +15,14 @@ const sandboxed: Policy = {
   ],
   default: "ask",
   mcp_default: "ask",
+  ask_send_delete: true,
 };
 const readOnly: Policy = {
   preset: "read-only",
   rules: [{ tool: "Read", action: "allow" }],
   default: "deny",
   mcp_default: "deny",
+  ask_send_delete: true,
 };
 
 function setup(initial: Policy = sandboxed) {
@@ -139,6 +141,7 @@ describe("the always-allowed list", () => {
     ],
     default: "ask",
     mcp_default: "ask",
+    ask_send_delete: true,
   };
   const list = () => screen.getByRole("list", { name: "Always allowed" });
 
@@ -189,6 +192,7 @@ describe("an always-allowed rule that covers a private folder", () => {
       ],
       default: "ask",
       mcp_default: "ask",
+      ask_send_delete: true,
     });
     const items = within(screen.getByRole("list", { name: "Always allowed" })).getAllByRole(
       "listitem",
@@ -209,6 +213,7 @@ describe("an always-allowed rule that covers a private folder", () => {
       rules: [{ tool: "Read(src/**)", action: "allow" }],
       default: "ask",
       mcp_default: "ask",
+      ask_send_delete: true,
     });
     await waitFor(() => expect(backend.callsTo("rules_touch_private").length).toBe(1));
     expect(screen.getByText("Read: everything under src/")).toBeVisible();
@@ -261,5 +266,33 @@ describe("the company's Claude Code policy", () => {
     }
     render(<Host />);
     expect(backend.callsTo("managed_policy_check")).toEqual([]);
+  });
+});
+
+describe("always ask before sending or deleting", () => {
+  const name = "Always ask before sending or deleting";
+
+  it("is on for a preset and says what it does", () => {
+    setup();
+    const toggle = screen.getByRole("switch", { name });
+    expect(toggle).toBeChecked();
+    expect(screen.getByText(/always waits for your approval, even where a rule allows it/)).toBeVisible();
+  });
+
+  it("turns off and on without making the policy custom", async () => {
+    const { user, policy } = setup();
+    await user.click(screen.getByRole("switch", { name }));
+    expect(policy()).toEqual({ ...sandboxed, ask_send_delete: false });
+    expect(screen.getByRole("switch", { name })).not.toBeChecked();
+    expect(screen.getByText(/follow the rules above like any other call/)).toBeVisible();
+    await user.click(screen.getByRole("switch", { name }));
+    expect(policy()).toEqual(sandboxed);
+  });
+
+  it("stays as the person set it when they choose another preset", async () => {
+    backend.on("policy_preset", () => readOnly);
+    const { user, policy } = setup({ ...sandboxed, ask_send_delete: false });
+    await user.selectOptions(screen.getByLabelText("Preset"), "read-only");
+    await waitFor(() => expect(policy()).toEqual({ ...readOnly, ask_send_delete: false }));
   });
 });

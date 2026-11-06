@@ -12,15 +12,18 @@ import { BrowserSettings } from "@/components/BrowserSettings";
 import { ErrorNote } from "@/components/ErrorNote";
 import { ReportProblemDialog } from "@/components/ReportProblemDialog";
 import { Field } from "@/components/Field";
-import { ModelPicker, useModels } from "@/components/ModelPicker";
+import { ModelPicker, useModels, withoutAuto } from "@/components/ModelPicker";
+import { isAuto } from "@/lib/auto-model";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { CapInput, SpendLine, useSpendToday } from "@/components/SpendCaps";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys, takeStatus } from "@/lib/query";
+import { tokenCapError, usdCapError } from "@/lib/spend";
 
 import { ChatGptAccount } from "./ChatGptAccount";
 import { Accounts } from "./Accounts";
@@ -36,6 +39,11 @@ type Errors = {
   quiet?: string;
   archive?: string;
   model?: string;
+  checker?: string;
+  spendDailyUsd?: string;
+  spendDailyTokens?: string;
+  spendMonthlyUsd?: string;
+  auto?: string;
 };
 
 /// The Settings tabs, in the order they are listed; each id is its URL, `/settings/<id>`.
@@ -64,7 +72,19 @@ const ERROR_TAB: Record<keyof Errors, TabId> = {
   global: "instructions",
   share: "claude",
   model: "claude",
+  checker: "claude",
+  spendDailyUsd: "runs",
+  spendDailyTokens: "runs",
+  spendMonthlyUsd: "runs",
+  auto: "claude",
 };
+
+/// The sizes Auto picks from, as Settings name them (auto model spec section 3).
+const TIERS = [
+  { id: "small", label: "Small" },
+  { id: "standard", label: "Standard" },
+  { id: "large", label: "Large" },
+] as const;
 
 /// The most days the idle-topic setting takes (`settings::MAX_AUTO_ARCHIVE_DAYS`).
 const MAX_AUTO_ARCHIVE_DAYS = 3650;
@@ -88,6 +108,11 @@ export function settingsErrors(
         | "quiet_limit_secs"
         | "auto_archive_days"
         | "default_model"
+        | "checker_model"
+        | "spend_daily_usd"
+        | "spend_daily_tokens"
+        | "spend_monthly_usd"
+        | "auto_models"
       >
     >,
 ): Errors {
@@ -117,6 +142,20 @@ export function settingsErrors(
   }
   if (draft.default_model !== undefined && draft.default_model.trim() === "") {
     errors.model = "Name the model new dots start with.";
+  }
+  if (draft.checker_model !== undefined && draft.checker_model.trim() === "") {
+    errors.checker = "Name the model that checks results.";
+  }
+  const dailyUsd = usdCapError(draft.spend_daily_usd ?? null);
+  if (dailyUsd) errors.spendDailyUsd = dailyUsd;
+  const dailyTokens = tokenCapError(draft.spend_daily_tokens ?? null);
+  if (dailyTokens) errors.spendDailyTokens = dailyTokens;
+  const monthlyUsd = usdCapError(draft.spend_monthly_usd ?? null);
+  if (monthlyUsd) errors.spendMonthlyUsd = monthlyUsd;
+  // Mirrors `AutoModels::validate`: each size names a model, and not Auto.
+  const tiers = draft.auto_models ? Object.values(draft.auto_models) : [];
+  if (tiers.some((m) => m.trim() === "" || isAuto(m) || /\s/.test(m.trim()))) {
+    errors.auto = "Each size needs a model ID such as haiku, sonnet or opus.";
   }
   return errors;
 }
@@ -225,6 +264,8 @@ function Form({
     mutationFn: commands.updateSettings,
     onSuccess: (saved) => {
       qc.setQueryData(keys.settings, saved.settings);
+      // Today's spend is shown against the caps.
+      invalidate(qc, keys.spend);
       // A new dot starts with the default model.
       invalidate(qc, keys.newDotSpec);
       // A token chosen for publishing is checked at once (updates UI spec section 5.1).
@@ -260,9 +301,12 @@ function Form({
 
   const errors = settingsErrors(draft);
   const shareBad = tried && errors.share !== undefined;
-  // The quiet limit and the idle days show their errors at once; the rest after a Save.
+  // The quiet limit, the idle days and the caps show their errors at once; the rest after a
+  // Save.
+  const atOnce = (key: keyof Errors) =>
+    key === "quiet" || key === "archive" || key.startsWith("spend");
   const shownErrors = (Object.keys(errors) as (keyof Errors)[]).filter(
-    (key) => tried || key === "quiet" || key === "archive",
+    (key) => tried || atOnce(key),
   );
   const tabsWithErrors = new Set(shownErrors.map((key) => ERROR_TAB[key]));
   // What Save would send, against what is stored: edits on other tabs are easy to forget.
@@ -466,6 +510,60 @@ function Form({
           </Field>
         </Section>
 
+        <Section title="Result check">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="settings-check-results"
+              checked={draft.check_results}
+              onCheckedChange={(check_results) => set({ check_results })}
+            />
+            <Label htmlFor="settings-check-results">Check every result</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Before a Claude dot's answer reaches you, a quick second look checks it did what was
+            asked and flags concerns. It has no tools, takes a few seconds, and its usage counts
+            toward the run. Short replies, local-model dots and team workflow steps are not
+            checked. A dot can turn it off in its editor.
+          </p>
+          <Field
+            label="Checker model"
+            htmlFor="settings-checker-model"
+            error={tried ? errors.checker : undefined}
+          >
+            <ModelPicker
+              id="settings-checker-model"
+              value={draft.checker_model}
+              onChange={(checker_model) => set({ checker_model })}
+              options={claudeModels.options}
+            />
+            <p className="text-xs text-muted-foreground">
+              Haiku is the cheapest and fast enough for a second look.
+            </p>
+          </Field>
+        </Section>
+        <Section title="Auto model">
+          <p className="text-xs text-muted-foreground">
+            A dot set to Auto picks a size of model for each task: small for quick checks and
+            light requests, large for hard work such as building, refactoring or debugging code,
+            standard for the rest. Choose the model of each size.
+          </p>
+          {TIERS.map((tier) => (
+            <Field
+              key={tier.id}
+              label={tier.label}
+              htmlFor={`settings-auto-${tier.id}`}
+              error={tried ? errors.auto : undefined}
+            >
+              <ModelPicker
+                id={`settings-auto-${tier.id}`}
+                value={draft.auto_models[tier.id]}
+                onChange={(model) => set({ auto_models: { ...draft.auto_models, [tier.id]: model } })}
+                options={withoutAuto(claudeModels.options)}
+              />
+            </Field>
+          ))}
+        </Section>
+
         <Section title="Claude usage">
           <div className="flex items-center gap-2">
             <Switch
@@ -577,6 +675,8 @@ function Form({
             />
           </Field>
         </Section>
+
+        <SpendingSection draft={draft} set={set} errors={errors} />
       </>
     ),
     models: (
@@ -665,7 +765,9 @@ function Form({
           )}
           <Button
             size="sm"
-            disabled={save.isPending || errors.quiet !== undefined || errors.archive !== undefined}
+            disabled={
+              save.isPending || (Object.keys(errors) as (keyof Errors)[]).some(atOnce)
+            }
             onClick={submit}
           >
             Save
@@ -706,6 +808,62 @@ function Form({
         <div className="flex min-w-0 flex-1 flex-col gap-4">{content[tab]}</div>
       </div>
     </Page>
+  );
+}
+
+/// Caps for every dot together (spend caps design), and what today and this month spent.
+function SpendingSection(props: {
+  draft: Settings;
+  set: (change: Partial<Settings>) => void;
+  errors: Errors;
+}) {
+  const { draft, set, errors } = props;
+  const spend = useSpendToday().data;
+  return (
+    <Section title="Spending caps">
+      <p className="text-xs text-muted-foreground">
+        When every dot together reaches a cap, new runs wait until the day (or month) ends or you
+        raise the cap; a run that goes over is stopped. Your own chats can run once anyway. Days
+        start at local midnight. Costs are estimates: a Claude subscription does not bill per run,
+        so this is what the runs would cost on the API. Leave a field empty for no cap. A dot can
+        have its own daily caps.
+      </p>
+      {spend && (
+        <div className="flex flex-col gap-1">
+          <SpendLine
+            label="Today"
+            spend={spend.today}
+            usdCap={spend.caps.daily_usd}
+            tokenCap={spend.caps.daily_tokens}
+            showTokens
+          />
+          <SpendLine label="This month" spend={spend.month} usdCap={spend.caps.monthly_usd} />
+        </div>
+      )}
+      <div className="flex flex-wrap gap-4">
+        <CapInput
+          id="settings-spend-daily-usd"
+          label="Daily cost cap (USD)"
+          value={draft.spend_daily_usd}
+          onChange={(spend_daily_usd) => set({ spend_daily_usd })}
+          error={errors.spendDailyUsd}
+        />
+        <CapInput
+          id="settings-spend-daily-tokens"
+          label="Daily token cap"
+          value={draft.spend_daily_tokens}
+          onChange={(spend_daily_tokens) => set({ spend_daily_tokens })}
+          error={errors.spendDailyTokens}
+        />
+        <CapInput
+          id="settings-spend-monthly-usd"
+          label="Monthly cost cap (USD)"
+          value={draft.spend_monthly_usd}
+          onChange={(spend_monthly_usd) => set({ spend_monthly_usd })}
+          error={errors.spendMonthlyUsd}
+        />
+      </div>
+    </Section>
   );
 }
 
