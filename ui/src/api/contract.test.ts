@@ -75,6 +75,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   Intent: T.Intent.array(),
   IntentsView: T.IntentsView,
   IntentFields: T.IntentFields,
+  SearchQuery: T.SearchQuery,
+  SearchHit: T.SearchHit.array(),
   Watcher: T.Watcher.array(),
   WatchHours: T.WatchHours,
   BrowserStatus: T.BrowserStatus,
@@ -169,6 +171,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   AuthKind: T.AuthKind,
   Trust: T.Trust,
   Category: T.Category,
+  SearchKind: T.SearchKind,
 };
 
 describe("Rust/TypeScript contract", () => {

@@ -7,16 +7,18 @@ import {
   Library as LibraryIcon,
   Plug,
   Rocket,
+  Search,
   Settings as SettingsIcon,
   Target,
   UsersRound,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { NavLink, Outlet } from "react-router";
 
 import { commands } from "@/api/commands";
 import { AccountSwitcher } from "@/app/AccountSwitcher";
 import { Banners } from "@/app/Banners";
+import { isSearchShortcut, SearchDialog } from "@/app/SearchDialog";
 import { LimitsMeter } from "@/components/LimitsMeter";
 import { Badge } from "@/components/ui/badge";
 import { Toaster } from "@/components/ui/sonner";
@@ -49,6 +51,17 @@ export function Layout() {
   useEffect(() => {
     commands.appRendered().catch(() => {});
   }, []);
+  // Ctrl+K (Cmd+K on a Mac) opens the search box from anywhere, and closes it again.
+  const [searching, setSearching] = useState(false);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!isSearchShortcut(e)) return;
+      e.preventDefault();
+      setSearching((open) => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const inbox = useQuery({ queryKey: keys.inbox, queryFn: commands.inbox }).data;
   const messages = useQuery({
     queryKey: keys.messages(null),
@@ -72,6 +85,16 @@ export function Layout() {
         className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
       >
         <AccountSwitcher />
+        <button
+          type="button"
+          aria-label="Search (Ctrl+K)"
+          title="Search (Ctrl+K)"
+          aria-haspopup="dialog"
+          onClick={() => setSearching(true)}
+          className="flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+        >
+          <Search className="size-5" aria-hidden />
+        </button>
         {(isPublisher ? [...LINKS.slice(0, -1), RELEASES, LINKS.at(-1)!] : LINKS).map(({ to, label, icon: Icon }) => {
           const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
           // The name says the count too, and the tooltip shows it.
@@ -112,6 +135,7 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
+      <SearchDialog open={searching} onOpenChange={setSearching} />
       <Toaster />
     </div>
   );

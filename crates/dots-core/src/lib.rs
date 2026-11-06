@@ -40,6 +40,7 @@ pub mod runner;
 pub mod runtime;
 pub mod schedule;
 pub mod scheduler;
+pub mod search;
 pub mod send_later;
 pub mod server;
 pub mod settings;

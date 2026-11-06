@@ -42,6 +42,7 @@ use dots_core::model::{
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
+use dots_core::search::{SearchHit, SearchQuery};
 use dots_core::settings::Settings;
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest};
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
@@ -1871,6 +1872,19 @@ pub async fn memory_update(
 #[tauri::command]
 pub async fn memory_delete(state: State<'_, AppState>, id: String) -> Res<()> {
     Ok(state.rt()?.memory_delete(&id).await?)
+}
+
+/// The hits of `query` in the workspace `workspace` of `scope` (`personal` or an org id): what
+/// the person and the dots said, memory, goals, topic titles and chat file names, best first
+/// (search spec section 3).
+#[tauri::command]
+pub async fn search(
+    state: State<'_, AppState>,
+    scope: String,
+    workspace: String,
+    query: SearchQuery,
+) -> Res<Vec<SearchHit>> {
+    Ok(state.rt()?.search(&scope, &workspace, &query).await?)
 }
 
 /// The goals of the workspace `workspace` of `scope` (`personal` or an org id), and why this
