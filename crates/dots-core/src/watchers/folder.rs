@@ -68,6 +68,9 @@ enum Seen {
     Created,
     Changed,
     Removed,
+    /// One side of a rename the OS did not pair up (macOS): a creation when the path is there
+    /// afterwards, a deletion when it is not.
+    Renamed,
 }
 
 /// The kinds a notify event stands for, per path.
@@ -89,6 +92,7 @@ fn seen(kind: &EventKind, paths: &[PathBuf]) -> Vec<(Seen, PathBuf)> {
             }
             out
         }
+        EventKind::Modify(ModifyKind::Name(_)) => all(Seen::Renamed),
         _ => all(Seen::Changed),
     }
 }
@@ -242,10 +246,12 @@ fn settle(
         }
         Ok(meta) => {
             let now = (meta.len(), modified(&meta));
-            let event = if first == Seen::Created {
-                FolderEvent::Created
-            } else {
-                FolderEvent::Changed
+            // macOS keeps a file's "created" flag on its later events: a file already reported
+            // and not deleted since is changed, not created again.
+            let created_again = cfg!(target_os = "macos") && reported.contains_key(path);
+            let event = match first {
+                Seen::Created | Seen::Renamed if !created_again => FolderEvent::Created,
+                _ => FolderEvent::Changed,
             };
             // Unchanged since it was last reported, whatever the OS called the event: a sync
             // engine's touch or replace (Review Focus 1).
