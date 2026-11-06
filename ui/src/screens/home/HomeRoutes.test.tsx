@@ -58,9 +58,9 @@ describe("the home's routes", () => {
     backend.on("inbox", () => sample.inbox);
     const { user, router } = renderApp("/settings");
     const rail = await screen.findByRole("navigation", { name: "Main" });
-    const inbox = await within(rail).findByRole("link", { name: "Inbox, 10 waiting" });
-    expect(inbox).toHaveAttribute("title", "Inbox, 10 waiting");
-    expect(within(inbox).getByText("10")).toBeVisible();
+    const inbox = await within(rail).findByRole("link", { name: "Inbox, 11 waiting" });
+    expect(inbox).toHaveAttribute("title", "Inbox, 11 waiting");
+    expect(within(inbox).getByText("11")).toBeVisible();
     await user.click(within(rail).getByRole("link", { name: "Home" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
     expect(

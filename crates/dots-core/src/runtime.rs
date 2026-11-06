@@ -924,7 +924,8 @@ impl Runtime {
     /// The whole Inbox, hidden items included, and the messages that wait: pending approvals,
     /// the finished, unreviewed thread ends that failed or kept a worktree with changes, the
     /// chat messages not delivered (not listed as runs to review too), the schedules that need
-    /// attention, the MCP servers whose tool list waits for review, and the rest.
+    /// attention, the MCP servers whose tool list waits for review, the workflow runs that wait
+    /// for the person, and the rest.
     async fn full_inbox(&self) -> Result<(Inbox, Vec<crate::model::Message>)> {
         let mut names = std::collections::HashMap::new();
         for dot in self.store.list_dots().await? {
@@ -1007,6 +1008,7 @@ impl Runtime {
             app_reviews,
             team_scope: self.store.team_scope_issues().await?,
             not_delivered,
+            workflows: self.store.waiting_workflow_runs().await?,
             back: Vec::new(),
             snoozed: Vec::new(),
             done: Vec::new(),
@@ -1105,6 +1107,8 @@ impl Runtime {
             + inbox.app_reviews.len()
             // A team with a member outside its account or workspace (accounts design §6.3).
             + inbox.team_scope.len()
+            // A workflow run waiting on the person (teams spec section 10).
+            + inbox.workflows.len()
             // A chat message that did not reach its dot (snooze and done spec section 3.9.7).
             + inbox.not_delivered.len()
             + self.store.count_waiting_messages().await?)
@@ -1750,15 +1754,32 @@ impl Runtime {
     /// The dot's trigger URL. `Conflict` while the local server is not running: the port then
     /// belongs to another program, and a webhook sent there would hand it the dot's token.
     pub fn webhook_url(&self, dot: &Dot) -> Result<String> {
-        if let Some(reason) = &self.server_error {
-            return Err(Error::Conflict(format!(
-                "webhooks are off because the local server is not running: {reason}"
-            )));
-        }
+        self.webhooks_on()?;
         Ok(format!(
             "http://127.0.0.1:{}/dots/{}/trigger",
             self.port, dot.id
         ))
+    }
+
+    /// The workflow's trigger URL (teams spec section 5.1), refused as `webhook_url` is while
+    /// the local server is not running. `NotFound` for an unknown workflow.
+    pub async fn workflow_webhook_url(&self, id: &str) -> Result<String> {
+        self.webhooks_on()?;
+        let workflow = self.store.get_workflow(id).await?;
+        Ok(format!(
+            "http://127.0.0.1:{}/workflows/{}/trigger",
+            self.port, workflow.id
+        ))
+    }
+
+    /// `Conflict` while the local server is not running, for the webhook URLs.
+    fn webhooks_on(&self) -> Result<()> {
+        match &self.server_error {
+            Some(reason) => Err(Error::Conflict(format!(
+                "webhooks are off because the local server is not running: {reason}"
+            ))),
+            None => Ok(()),
+        }
     }
 
     /// The address `/v1` answers on, for the API keys tab to show: this PC's own port. A
@@ -2216,6 +2237,9 @@ impl Runtime {
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
+        if dot.spec.name != old.spec.name {
+            self.teams.dot_renamed(id).await;
+        }
         self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
             .await?;
         self.scheduler.reload();
@@ -2239,9 +2263,12 @@ impl Runtime {
             .into_iter()
             .map(|w| w.id)
             .collect();
+        let teams = self.store.teams_of_dot(id).await?;
         let attachments = self.store.attachment_ids_of_dot(id).await?;
         let had_goals = self.store.count_intents_of_dot(id).await? > 0;
         self.store.delete_dot_if_idle(id).await?;
+        // It left its teams (`ON DELETE CASCADE`), and their workflows may now have a problem.
+        self.teams.dot_deleted(&teams).await;
         // Its goals stay, unlinked (`ON DELETE SET NULL`).
         if had_goals {
             let _ = self.bus.send(RuntimeEvent::IntentsUpdated {

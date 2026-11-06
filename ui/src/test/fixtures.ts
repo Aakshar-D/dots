@@ -85,6 +85,26 @@ export const sample = {
   /// Ben's request answering his invite; then one with no invite whose email is Asha's, with a
   /// problem.
   requestPreviews: T.RequestPreview.array().parse(contract.RequestPreview),
+  /// crew (nightly-tests, the dev agent, and reviewer; projects Dots and Site), then an org's
+  /// team with no member or project.
+  teams: T.Team.array().parse(contract.Team),
+  /// crew's workflows, one per trigger: Fix and ship (chat: a delegate lead, then a branch on
+  /// its outcome to a check and a pull request that merges itself, else a designer; a run in
+  /// flight), Push it (manual, turned off, with a problem), Nightly (schedule: a branch on the
+  /// project) and On issue (webhook: a member deploys).
+  workflows: T.Workflow.array().parse(contract.Workflow),
+  /// Runs of Fix and ship: waiting on its check (started from a chat); sent back once, then
+  /// approved and shipped; holding a send-back at the cap; a test run whose deploy failed part
+  /// way. Then a run of Nightly on Site held by the budget, whose workflow and project were
+  /// deleted since.
+  workflowRuns: T.WorkflowRun.array().parse(contract.WorkflowRun),
+  /// What the first run's check shows: the lead's branch at its tip, and a member's that is gone.
+  check: T.CheckView.parse(contract.CheckView),
+  /// The first run's dot runs, oldest first: the lead's, its two members' (one handed back a
+  /// branch, one failed without), and the run that continued the lead, in the lead's thread.
+  stepDotRuns: T.StepDotRun.array().parse(contract.StepDotRun),
+  /// The builder's live check: a step's problem, then the workflow name's.
+  workflowProblems: T.WorkflowProblem.array().parse(contract.WorkflowProblem),
   /// The Claude models (Opus, Sonnet, Haiku), then one a local endpoint lists.
   models: T.ModelOption.array().parse(contract.ModelOption),
 };
@@ -150,7 +170,7 @@ export function installDefaults(): void {
     review_runs: [],
     attention: [],
     tools_changed: [],
-    watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [],
+    watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [],
     not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   }));
   // No dot proposed instructions.
@@ -246,6 +266,15 @@ export function installDefaults(): void {
     read_at: sample.run.queued_at,
   }));
   backend.on("webhook_url", (args) => `http://127.0.0.1:47321/dots/${String(args.id)}/trigger`);
+  // No team is made, no workflow has run and no chat started one.
+  backend.on("teams_list", () => []);
+  backend.on("workflow_runs_list", () => []);
+  backend.on("workflow_runs_for_origins", () => []);
+  backend.on("workflow_run_dot_runs", () => []);
+  backend.on(
+    "workflow_webhook_url",
+    (args) => `http://127.0.0.1:47321/workflows/${String(args.id)}/trigger`,
+  );
   backend.on("preview_schedule", () => [
     "2026-10-13T02:00:00+01:00",
     "2026-10-14T02:00:00+01:00",

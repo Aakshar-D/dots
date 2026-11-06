@@ -9,14 +9,18 @@
 //! loop's lock (`jobs`). A delegate step's run may start other members, whose results continue
 //! it (`delegate`). A check or an agent step may send the work back to an earlier agent step,
 //! which goes on where it left off (`send_back`). A deploy step ships the branches its check
-//! approved (`deploy_step`).
+//! approved (`deploy_step`), at the tips the person was shown (`check`). "Open folder" finds a
+//! project's folder and a ready branch's worktree by id (`folder`).
 
+mod check;
 mod delegate;
 mod deploy_step;
+mod folder;
 mod jobs;
 mod send_back;
 mod tools;
 
+pub use check::{branches_changed, CheckTip, CheckView, ShownBranch, CHECK_CHANGED};
 pub use deploy_step::{INTERRUPTED, NO_APPROVAL, NO_DEFAULT_BRANCH};
 pub use tools::STEP_CLOSED;
 
@@ -36,9 +40,9 @@ use crate::accounts::Permission;
 use crate::deploy::Deployer;
 use crate::events::{Bus, RuntimeEvent};
 use crate::model::{
-    BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepMember,
-    StepRun, StepRunChange, StepRunStatus, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
-    WorkflowRunStatus, WorkflowTrigger,
+    BranchRef, Handoff, NewRun, NewWorkflowRun, Run, RunStatus, StartableWorkflow, StepDotRun,
+    StepMember, StepRun, StepRunChange, StepRunStatus, TriggerKind, WaitingOn, WorkflowRun,
+    WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::runner::Runner;
 use crate::scheduler::Clock;
@@ -360,6 +364,22 @@ async fn has_commits(repo: &Path, branch: &str, base: Option<&str>) -> bool {
         .is_ok_and(|n| n.trim().parse::<u64>().is_ok_and(|n| n > 0))
 }
 
+/// Whether the tip of the branch `branch` is an ancestor of the tip of the branch `of`, or the
+/// same commit: all the work of `branch` is in `of`. `false` when git cannot tell (a branch
+/// gone), so the branch is shown rather than hidden.
+async fn merged_into(repo: &Path, branch: &str, of: &str) -> bool {
+    let branch = format!("refs/heads/{branch}");
+    let of = format!("refs/heads/{of}");
+    let args = [
+        "merge-base",
+        "--is-ancestor",
+        "--end-of-options",
+        &branch,
+        &of,
+    ];
+    git(repo, &args).await.is_ok()
+}
+
 /// The hand-off's reference to `branch`, the branch of `run`.
 fn branch_ref(run: &Run, branch: String) -> BranchRef {
     BranchRef {
@@ -429,14 +449,26 @@ impl Workflows {
         self.store.get_workflow_run(id).await
     }
 
-    /// The newest workflow runs, of one team or of all.
-    pub async fn list(&self, team_id: Option<&str>, limit: i64) -> Result<Vec<WorkflowRun>> {
-        self.store.list_workflow_runs(team_id, limit).await
+    /// The workflow runs `filter` picks (by team, workflow and status), newest first.
+    pub async fn list(&self, filter: &WorkflowRunFilter) -> Result<Vec<WorkflowRun>> {
+        self.store.find_workflow_runs(filter).await
+    }
+
+    /// The workflow runs the chat runs `run_ids` started (`origin_run_id`), oldest first: a
+    /// chat shows each one's card after the turn that started it (section 10.4).
+    pub async fn for_origins(&self, run_ids: &[String]) -> Result<Vec<WorkflowRun>> {
+        self.store.workflow_runs_from(run_ids).await
+    }
+
+    /// The dot runs of the workflow run `id`'s step runs, oldest first: the run page links each
+    /// step to its own (section 10.3). `NotFound` for an unknown workflow run.
+    pub async fn dot_runs(&self, id: &str) -> Result<Vec<StepDotRun>> {
+        self.store.workflow_run_dot_runs(id).await
     }
 
     /// Starts a run of a workflow on one of its team's projects. Refused for a workflow that is
-    /// turned off or has a `problem`, a project of another team or whose folder is no longer a
-    /// git repo, and a task that is blank or longer than `MAX_TASK`.
+    /// turned off (except a Test run) or has a `problem`, a project of another team or whose
+    /// folder is no longer a git repo, and a task that is blank or longer than `MAX_TASK`.
     pub async fn start(&self, req: StartRequest) -> Result<WorkflowRun> {
         let task = req.task.trim();
         if task.is_empty() || task.chars().count() > MAX_TASK {
@@ -447,7 +479,11 @@ impl Workflows {
         let workflow = self.store.get_workflow(&req.workflow_id).await?;
         self.require(&workflow.team_id, Permission::RunDots).await?;
         let name = &workflow.spec.name;
-        if !workflow.spec.enabled {
+        // `enabled` arms the chat, schedule and webhook triggers and Run now. A Test run (the
+        // person's manual start with `test`) starts while the workflow is off, so a new
+        // workflow can be tried before it is armed.
+        let test_run = req.test && matches!(req.trigger, WorkflowTrigger::Manual);
+        if !workflow.spec.enabled && !test_run {
             return Err(Error::Conflict(format!("workflow {name} is turned off")));
         }
         if let Some(problem) = &workflow.problem {
@@ -683,28 +719,43 @@ impl Workflows {
 
     /// Approves the check the workflow run waits on (section 5.4): the check passes the hand-off
     /// it was shown on, with the tip of each of its branches (section 6.2), and the workflow
-    /// goes on.
-    pub async fn approve_check(&self, id: &str, note: Option<&str>) -> Result<WorkflowRun> {
+    /// goes on. `step_run_id` is the step run the check page showed (`check`): when the run
+    /// waits on another one now, the approval is refused (`Conflict`, `CHECK_CHANGED`) and
+    /// nothing is recorded. `tips` are the branches and commits the check page showed: when they
+    /// are not exactly the shown branches at their tips now, the approval is refused
+    /// (`Conflict`, `branches_changed`) and nothing is recorded.
+    pub async fn approve_check(
+        &self,
+        id: &str,
+        note: Option<&str>,
+        step_run_id: &str,
+        tips: &[CheckTip],
+    ) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
         let wr = self.store.get_workflow_run(id).await?;
         self.require(&wr.team_id, Permission::AnswerApprovals)
             .await?;
         let wr = self.tick(&wr).await?;
-        let step_run = match (&wr.status, &wr.waiting_on, &wr.current_step) {
-            (WorkflowRunStatus::Waiting, Some(WaitingOn::Check), Some(current)) => {
-                latest(&wr, current).cloned()
-            }
-            _ => None,
-        };
-        let Some(step_run) = step_run else {
+        let Some(step_run) = check::waiting_check(&wr).cloned() else {
             return Err(Error::Conflict(format!(
                 "workflow run {id} is not waiting for a check"
             )));
         };
+        // The check the person saw, read again under the lock: two checks in a row can show the
+        // same tips, so only the step run tells the next check from the one approved.
+        if step_run.id != step_run_id {
+            return Err(Error::Conflict(CHECK_CHANGED.into()));
+        }
         let shown = shown_at(&wr, &step_run.step_id);
-        let note = note.map(str::trim).filter(|n| !n.is_empty());
-        // The tips the person approved: a deploy after the check pushes exactly these.
+        // The tips the person approved, read again under the lock: a deploy after the check
+        // pushes exactly these, so they must be what the page showed. Equal to the page's tips,
+        // and kept in the order the check shows them.
         let branches = deploy_step::tips(Path::new(&wr.project.repo_path), &shown).await;
+        let differ = check::changed(&branches, tips);
+        if !differ.is_empty() {
+            return Err(Error::Conflict(branches_changed(&differ)));
+        }
+        let note = note.map(str::trim).filter(|n| !n.is_empty());
         let decision = json!({"decision": "approved", "note": note, "branches": branches});
         self.store
             .set_step_run(
@@ -774,9 +825,12 @@ impl Workflows {
 
     /// Stops the workflow run (section 8): its queued and running dot runs are cancelled, the
     /// questions they left open are dismissed, its open steps and a waiting check are closed as
-    /// cancelled, and with them the follow-ups their runs scheduled.
+    /// cancelled, and with them the follow-ups their runs scheduled. Refused without the
+    /// permission to run dots in the team's account.
     pub async fn stop(&self, id: &str) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
+        let wr = self.store.get_workflow_run(id).await?;
+        self.require(&wr.team_id, Permission::RunDots).await?;
         self.stop_locked(id).await
     }
 
@@ -828,20 +882,27 @@ impl Workflows {
         Ok(wr)
     }
 
-    /// Stops the team's workflow runs in flight, then deletes the team (section 4).
+    /// Stops the team's workflow runs in flight, then deletes the team (section 4), and
+    /// announces each workflow it removed and the team.
     pub async fn delete_team(&self, team_id: &str) -> Result<()> {
         self.require(team_id, Permission::EditDots).await?;
         let _one = self.lock.lock().await;
-        for wr in self
-            .store
-            .list_workflow_runs(Some(team_id), i64::MAX)
-            .await?
-        {
-            if !wr.status.is_terminal() {
-                self.stop_locked(&wr.id).await?;
-            }
+        let in_flight = WorkflowRunFilter {
+            team_id: Some(team_id.to_string()),
+            statuses: vec![WorkflowRunStatus::Running, WorkflowRunStatus::Waiting],
+            ..Default::default()
+        };
+        for wr in self.store.find_workflow_runs(&in_flight).await? {
+            self.stop_locked(&wr.id).await?;
         }
+        let workflows = self.store.list_workflows(team_id).await?;
         self.store.delete_team(team_id).await?;
+        for workflow in &workflows {
+            let _ = self.bus.send(RuntimeEvent::WorkflowUpdated {
+                team_id: team_id.to_string(),
+                workflow_id: workflow.id.clone(),
+            });
+        }
         let _ = self.bus.send(RuntimeEvent::TeamUpdated {
             team_id: team_id.to_string(),
         });
@@ -1431,9 +1492,11 @@ impl Workflows {
     /// the branch of that thread when the branch still exists (a worktree with no change was
     /// removed with its branch). What the thread left uncommitted is committed first. A
     /// delegate step also hands on what each member it started handed back, and its branches
-    /// are those of section 6.2: its own branch when it has commits (the delegating run merged
-    /// the members' work), else each member's branch that exists. The outcome is the caller's:
-    /// the step run's. Slow, and run by a job without the lock.
+    /// are those of section 6.2 (`delegate::handed_branches`): its own branch when it has
+    /// commits, with each member's branch that exists and that it did not merge; else each
+    /// member's branch that exists. A check after the step shows these, and a deploy after it
+    /// ships them. The outcome is the caller's: the step run's. Slow, and run by a job without
+    /// the lock.
     async fn handoff_of(&self, wr: &WorkflowRun, members: &[StepMember], runs: &[Run]) -> Handoff {
         let own = delegate::own_runs(runs, members);
         let summary = own
@@ -1441,7 +1504,7 @@ impl Workflows {
             .and_then(|r| r.summary.clone())
             .unwrap_or_default();
         let repo = Path::new(&wr.project.repo_path);
-        let mut branches = Vec::new();
+        let mut lead = None;
         if let Some(run) = own.iter().rev().find(|r| r.branch.is_some()) {
             // Dots' commit, should the run's end not have made it (section 6.1): the next step
             // starts from this branch's tip.
@@ -1451,7 +1514,7 @@ impl Workflows {
                 && (members.is_empty()
                     || has_commits(repo, &branch, run.base_commit.as_deref()).await)
             {
-                branches.push(branch_ref(run, branch));
+                lead = Some(branch_ref(run, branch));
             }
         }
         let mut handed = Vec::new();
@@ -1461,9 +1524,7 @@ impl Workflows {
             handed.push(end);
             member_branches.extend(branch);
         }
-        if branches.is_empty() {
-            branches = member_branches;
-        }
+        let branches = delegate::handed_branches(repo, lead, member_branches).await;
         Handoff {
             summary: cut(&summary, MAX_HANDOFF_SUMMARY),
             branches,

@@ -21,13 +21,22 @@ async function openPanel(name: string, action: RegExp) {
 }
 
 describe("the Connectors screen", () => {
-  it("has a place in the rail between Library and Settings", async () => {
+  it("has a place in the rail between Teams and Settings", async () => {
     renderApp("/connectors");
     const nav = await screen.findByRole("navigation", { name: "Main" });
     const labels = within(nav)
       .getAllByRole("link")
       .map((l) => l.getAttribute("aria-label"));
-    expect(labels).toEqual(["Home", "Inbox", "Intents", "Apps", "Library", "Connectors", "Settings"]);
+    expect(labels).toEqual([
+      "Home",
+      "Inbox",
+      "Intents",
+      "Apps",
+      "Library",
+      "Teams",
+      "Connectors",
+      "Settings",
+    ]);
     expect(await screen.findByRole("heading", { name: "Connectors" })).toBeVisible();
   });
 

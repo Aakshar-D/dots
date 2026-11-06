@@ -434,6 +434,8 @@ export function Transcript(props: {
   /// (its bubble says it, whoever wrote the message), a cancelled one marked "Cancelled", and
   /// each group of tool steps as one line that opens to its chips.
   variant?: "run" | "conversation";
+  /// What shows after a run's check-ins: the cards of the workflows the run started.
+  after?: (run: Run) => ReactNode;
   /// Shown under the person's message of a run, such as "Move to topic…".
   messageAction?: (run: Run) => ReactNode;
 }) {
@@ -554,6 +556,7 @@ export function Transcript(props: {
               {checkIns.map((checkIn) => (
                 <CheckIn key={checkIn.id} message={checkIn} />
               ))}
+              {props.after?.(run)}
             </div>
           </section>
         );

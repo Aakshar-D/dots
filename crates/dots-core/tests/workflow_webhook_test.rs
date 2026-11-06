@@ -152,6 +152,14 @@ impl Rt {
         self.rt.store().get_workflow_run(id).await.unwrap()
     }
 
+    /// `started`, then the run is stopped, so it is not counted in flight
+    /// (`MAX_WEBHOOK_IN_FLIGHT`).
+    async fn started_and_stopped(&self, answer: (u16, Value)) -> WorkflowRun {
+        let wr = self.started(answer).await;
+        self.rt.workflows().stop(&wr.id).await.unwrap();
+        wr
+    }
+
     async fn runs(&self) -> usize {
         self.rt
             .store()
@@ -225,7 +233,7 @@ async fn the_body_falls_back_to_the_trigger_s_task_and_project() {
     let dots = t.project("Dots").await;
     // No body.
     let wr = t
-        .started(t.post(&workflow.id, Some(&token), None).await)
+        .started_and_stopped(t.post(&workflow.id, Some(&token), None).await)
         .await;
     assert_eq!(
         (wr.task.as_str(), wr.project_id.clone()),
@@ -239,7 +247,7 @@ async fn the_body_falls_back_to_the_trigger_s_task_and_project() {
         r#"{"task": null, "project": null}"#,
     ] {
         let wr = t
-            .started(t.post(&workflow.id, Some(&token), Some(body)).await)
+            .started_and_stopped(t.post(&workflow.id, Some(&token), Some(body)).await)
             .await;
         assert_eq!(
             (wr.task.as_str(), wr.project_id.clone()),
@@ -250,7 +258,7 @@ async fn the_body_falls_back_to_the_trigger_s_task_and_project() {
     // Only the task, with another sender's own keys, which are ignored.
     let body = json!({"task": "Fix the build.", "action": "opened", "number": 7}).to_string();
     let wr = t
-        .started(t.post(&workflow.id, Some(&token), Some(&body)).await)
+        .started_and_stopped(t.post(&workflow.id, Some(&token), Some(&body)).await)
         .await;
     assert_eq!(
         (wr.task.as_str(), wr.project_id),
@@ -259,7 +267,7 @@ async fn the_body_falls_back_to_the_trigger_s_task_and_project() {
     // Only the project.
     let body = json!({"project": "SITE"}).to_string();
     let wr = t
-        .started(t.post(&workflow.id, Some(&token), Some(&body)).await)
+        .started_and_stopped(t.post(&workflow.id, Some(&token), Some(&body)).await)
         .await;
     assert_eq!(
         (wr.task.as_str(), wr.project_id),
@@ -531,6 +539,131 @@ async fn a_new_token_replaces_the_old_one_and_shows_on_the_workflow() {
             .regenerate_workflow_token("no-such-workflow")
             .await,
         Err(dots_core::Error::NotFound(_))
+    ));
+    t.rt.shutdown();
+}
+
+/// The workflow's runs that have not ended, by the store.
+async fn in_flight(t: &Rt, workflow_id: &str) -> u32 {
+    t.rt.store()
+        .count_workflow_runs_in_flight(workflow_id)
+        .await
+        .unwrap()
+}
+
+/// Past `MAX_WEBHOOK_IN_FLIGHT` (3) runs in flight, waiting on the person's check included, the
+/// webhook answers 429 and starts nothing, whatever the body; the token and the 409s are
+/// answered first. Another workflow of the team is not held back, and a run that ends makes
+/// room again.
+#[tokio::test]
+async fn a_workflow_with_three_runs_in_flight_is_429_and_starts_nothing() {
+    use dots_core::model::WorkflowRunStatus;
+    use dots_core::server::workflow_webhook::{MAX_WEBHOOK_IN_FLIGHT, TOO_MANY_IN_FLIGHT};
+    assert_eq!(MAX_WEBHOOK_IN_FLIGHT, 3);
+    assert_eq!(TOO_MANY_IN_FLIGHT, "too many runs in flight");
+    let t = Rt::start().await;
+    let (workflow, token) = t.hooked(Some(TRIGGER_TASK), Some("Dots")).await;
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        ids.push(
+            t.started(t.post(&workflow.id, Some(&token), None).await)
+                .await
+                .id,
+        );
+    }
+    // Each waits on the check: a waiting run is in flight.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    for id in &ids {
+        while t.rt.workflows().get(id).await.unwrap().status != WorkflowRunStatus::Waiting {
+            assert!(std::time::Instant::now() < deadline, "{id} never waited");
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+    }
+    let too_many = (429, json!({"error": "too many runs in flight"}));
+    assert_eq!(t.post(&workflow.id, Some(&token), None).await, too_many);
+    // Before the body is read.
+    assert_eq!(
+        t.post(&workflow.id, Some(&token), Some("not json")).await,
+        too_many
+    );
+    // The token first, then the 409s.
+    assert_eq!(t.post(&workflow.id, Some("wrong"), None).await.0, 401);
+    let mut off = flow(webhook(Some(TRIGGER_TASK), Some("Dots")), check());
+    off.enabled = false;
+    t.rt.teams()
+        .update_workflow(&workflow.id, &off)
+        .await
+        .unwrap();
+    assert_eq!(
+        t.post(&workflow.id, Some(&token), None).await,
+        (409, json!({"error": "workflow Fix is turned off"}))
+    );
+    t.rt.teams()
+        .update_workflow(
+            &workflow.id,
+            &flow(webhook(Some(TRIGGER_TASK), Some("Dots")), check()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(t.post(&workflow.id, Some(&token), None).await, too_many);
+    assert_eq!(t.runs().await, 3);
+    assert_eq!(in_flight(&t, &workflow.id).await, 3);
+    // Another workflow of the team starts.
+    let mut ship = flow(webhook(Some(TRIGGER_TASK), Some("Dots")), check());
+    ship.name = "Ship".into();
+    let other = t.rt.teams().create_workflow(&t.team, &ship).await.unwrap();
+    let other_token =
+        t.rt.teams()
+            .regenerate_workflow_token(&other.id)
+            .await
+            .unwrap();
+    t.started(t.post(&other.id, Some(&other_token), None).await)
+        .await;
+    // A stopped run makes room for one more.
+    t.rt.workflows().stop(&ids[0]).await.unwrap();
+    t.started(t.post(&workflow.id, Some(&token), None).await)
+        .await;
+    assert_eq!(t.post(&workflow.id, Some(&token), None).await, too_many);
+    assert_eq!(in_flight(&t, &workflow.id).await, 3);
+    t.rt.shutdown();
+}
+
+/// Calls at once cannot pass the cap together: of five, three start and two are 429.
+#[tokio::test]
+async fn calls_at_once_start_no_more_than_the_cap() {
+    let t = Rt::start().await;
+    let (workflow, token) = t.hooked(Some(TRIGGER_TASK), Some("Dots")).await;
+    let calls = (0..5).map(|_| t.post(&workflow.id, Some(&token), None));
+    let mut codes: Vec<u16> = futures_util::future::join_all(calls)
+        .await
+        .into_iter()
+        .map(|(status, _)| status)
+        .collect();
+    codes.sort_unstable();
+    assert_eq!(codes, [202, 202, 202, 429, 429]);
+    assert_eq!(t.runs().await, 3);
+    assert_eq!(in_flight(&t, &workflow.id).await, 3);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn the_workflow_s_url_is_the_one_its_webhook_answers_on() {
+    let t = Rt::start().await;
+    let (workflow, token) = t.hooked(Some(TRIGGER_TASK), Some("Dots")).await;
+    let url = t.rt.workflow_webhook_url(&workflow.id).await.unwrap();
+    assert_eq!(
+        url,
+        format!(
+            "http://127.0.0.1:{}/workflows/{}/trigger",
+            t.rt.port(),
+            workflow.id
+        )
+    );
+    let resp = t.http.post(&url).bearer_auth(&token).send().await.unwrap();
+    assert_eq!(resp.status().as_u16(), 202);
+    assert!(matches!(
+        t.rt.workflow_webhook_url("nope").await,
+        Err(dots_core::Error::NotFound(m)) if m == "workflow nope"
     ));
     t.rt.shutdown();
 }

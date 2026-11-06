@@ -13,6 +13,10 @@ import { LibraryScreen } from "@/screens/library/LibraryScreen";
 import { RunScreen } from "@/screens/RunScreen";
 import { SettingsScreen } from "@/screens/SettingsScreen";
 import { ReleasesScreen } from "@/screens/ReleasesScreen";
+import { TeamScreen } from "@/screens/teams/TeamScreen";
+import { TeamsScreen } from "@/screens/teams/TeamsScreen";
+import { WorkflowBuilderScreen } from "@/screens/teams/builder/WorkflowBuilderScreen";
+import { WorkflowRunScreen } from "@/screens/teams/run/WorkflowRunScreen";
 import { UsageScreen } from "@/screens/UsageScreen";
 
 export const routes: RouteObject[] = [
@@ -38,6 +42,10 @@ export const routes: RouteObject[] = [
       { path: "chat", element: <Navigate to="/home" replace /> },
       { path: "chat/:dotId", element: <ChatRedirect /> },
       { path: "chat/:dotId/:runId", element: <ChatRedirect /> },
+      { path: "teams", element: <TeamsScreen /> },
+      { path: "teams/:teamId", element: <TeamScreen /> },
+      { path: "teams/:teamId/workflows/:workflowId", element: <WorkflowBuilderScreen /> },
+      { path: "workflow-runs/:runId", element: <WorkflowRunScreen /> },
       // Settings is one page per tab; the bare path opens the first tab.
       { path: "settings", element: <Navigate to="/settings/general" replace /> },
       { path: "settings/:tab", element: <SettingsScreen /> },

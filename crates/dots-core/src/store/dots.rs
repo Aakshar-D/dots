@@ -362,9 +362,10 @@ impl Store {
     }
 
     /// What the dot has for the person (needs-you spec section 2), as `(needs_you, unread)`:
-    /// its open questions, pending approvals, paused watchers and app proposals waiting for
-    /// review; and those plus its runs that ended and its notes posted after its `seen_at`
-    /// (none without one). Items the person snoozed or marked done are left out.
+    /// its open questions, pending approvals, paused watchers, app proposals waiting for review
+    /// and the workflow runs its chats started that wait for the person (teams spec section
+    /// 10); and those plus its runs that ended and its notes posted after its `seen_at` (none
+    /// without one). Items the person snoozed or marked done are left out.
     /// `NotFound` for an unknown dot.
     pub async fn dot_counts(&self, id: &str) -> Result<(u32, u32)> {
         // An item the person snoozed or marked done is left out of every term that is an
@@ -383,7 +384,11 @@ impl Store {
               AND q.quiet_since IS NOT NULL) \
              + (SELECT COUNT(*) FROM runs u WHERE u.dot_id = d.id AND u.trigger_kind = 'chat' \
               AND u.undelivered_at IS NOT NULL AND u.dismissed_at IS NULL \
-              AND u.delivered_at IS NULL AND {not_delivered}) AS needs_you, \
+              AND u.delivered_at IS NULL AND u.workflow_step_run_id IS NULL \
+              AND {not_delivered}) \
+             + (SELECT COUNT(*) FROM workflow_runs w JOIN runs o ON o.id = w.origin_run_id \
+              WHERE o.dot_id = d.id AND w.status = 'waiting' AND w.waiting_on IS NOT NULL) \
+             AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
               AND r.status IN ('succeeded', 'failed', 'cancelled') AND r.ended_at > d.seen_at \

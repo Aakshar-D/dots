@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use common::{git_out, init_repo};
 use dots_core::deploy::{
     ApprovedBranch, DeployFailure, DeployedBranch, Deployer, BRANCH_CHANGED, GH_MISSING,
+    NOTHING_TO_SHIP,
 };
 use dots_core::workflow::{DeployMode, MergeMethod};
 use tempfile::TempDir;
@@ -189,6 +190,30 @@ async fn branch_mode_pushes_nothing_and_lists_the_branches_as_ready() {
     assert_eq!(result.branches[0].commit, tip);
     assert_eq!(s.remote_tip("dots/fix"), None);
     assert!(s.gh_calls().is_empty());
+}
+
+#[tokio::test]
+async fn push_pr_and_pr_merge_with_no_branch_fail_and_branch_mode_succeeds() {
+    let s = scratch();
+    let modes = [
+        DeployMode::Push,
+        DeployMode::Pr,
+        DeployMode::PrMerge {
+            merge_method: MergeMethod::Squash,
+        },
+    ];
+    for mode in modes {
+        let (err, done) = s.deploy_keeping("ok", &mode, &[]).await.unwrap_err();
+        assert_eq!(err, NOTHING_TO_SHIP);
+        assert_eq!(err, "Nothing to ship: the check approved no branch.");
+        assert!(done.branches.is_empty());
+        assert!(!done.ready);
+        assert_eq!(done.error, None);
+    }
+    assert!(s.gh_calls().is_empty(), "gh is not even asked its version");
+    let result = s.deploy("ok", &DeployMode::Branch, &[]).await.unwrap();
+    assert!(result.ready);
+    assert!(result.branches.is_empty());
 }
 
 #[tokio::test]

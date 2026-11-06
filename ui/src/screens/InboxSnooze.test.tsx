@@ -33,6 +33,7 @@ const empty: Inbox = {
   instructions: [],
   app_reviews: [],
   team_scope: [],
+  workflows: [],
   not_delivered: [],
   back: [],
   snoozed: [],

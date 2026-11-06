@@ -7,10 +7,12 @@ use sqlx::Row;
 
 use super::{opt_json, Store};
 use crate::model::{
-    Message, NewWorkflowRun, Run, StepRun, StepRunChange, StepRunStatus, WaitingOn, WorkflowRun,
-    WorkflowRunChange, WorkflowRunStatus, WorkflowTrigger,
+    LastRun, Message, NewWorkflowRun, Run, RunStatus, StepDotRun, StepRun, StepRunChange,
+    StepRunStatus, WaitingOn, WaitingWorkflowRun, WorkflowRun, WorkflowRunChange,
+    WorkflowRunFilter, WorkflowRunStatus, WorkflowTrigger,
 };
 use crate::util::{new_id, now};
+use crate::workflow::Definition;
 use crate::{Error, Result};
 
 const WR_COLUMNS: &str = "id, workflow_id, team_id, definition, project_id, project, task, \
@@ -128,18 +130,34 @@ impl Store {
         })
     }
 
-    /// The newest workflow runs, of one team or of all.
+    /// The newest workflow runs, of one team or of all: `find_workflow_runs` with those two.
     pub async fn list_workflow_runs(
         &self,
         team_id: Option<&str>,
         limit: i64,
     ) -> Result<Vec<WorkflowRun>> {
+        self.find_workflow_runs(&WorkflowRunFilter {
+            team_id: team_id.map(str::to_string),
+            limit: u32::try_from(limit).ok(),
+            ..Default::default()
+        })
+        .await
+    }
+
+    /// The workflow runs `filter` picks, newest first.
+    pub async fn find_workflow_runs(&self, filter: &WorkflowRunFilter) -> Result<Vec<WorkflowRun>> {
+        let statuses: Vec<&str> = filter.statuses.iter().map(|s| s.as_str()).collect();
         let ids: Vec<String> = sqlx::query_scalar(
             "SELECT id FROM workflow_runs WHERE (?1 IS NULL OR team_id = ?1) \
-             ORDER BY started_at DESC, id DESC LIMIT ?2",
+             AND (?2 IS NULL OR workflow_id = ?2) \
+             AND (?3 = '[]' OR status IN (SELECT value FROM json_each(?3))) \
+             ORDER BY started_at DESC, id DESC LIMIT ?4",
         )
-        .bind(team_id)
-        .bind(limit)
+        .bind(&filter.team_id)
+        .bind(&filter.workflow_id)
+        .bind(serde_json::to_string(&statuses)?)
+        // A negative limit is none in SQLite.
+        .bind(filter.limit.map_or(-1, i64::from))
         .fetch_all(&self.pool)
         .await?;
         let mut out = Vec::new();
@@ -147,6 +165,84 @@ impl Store {
             out.push(self.get_workflow_run(&id).await?);
         }
         Ok(out)
+    }
+
+    /// The workflow runs that the dot runs `run_ids` started (`origin_run_id`), oldest first.
+    pub async fn workflow_runs_from(&self, run_ids: &[String]) -> Result<Vec<WorkflowRun>> {
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT id FROM workflow_runs \
+             WHERE origin_run_id IN (SELECT value FROM json_each(?)) ORDER BY started_at, id",
+        )
+        .bind(serde_json::to_string(run_ids)?)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out = Vec::new();
+        for id in ids {
+            out.push(self.get_workflow_run(&id).await?);
+        }
+        Ok(out)
+    }
+
+    /// The workflow's newest run, as the team page shows it.
+    pub async fn last_workflow_run(&self, workflow_id: &str) -> Result<Option<LastRun>> {
+        let row = sqlx::query(
+            "SELECT id, status, started_at, test FROM workflow_runs WHERE workflow_id = ? \
+             ORDER BY started_at DESC, id DESC LIMIT 1",
+        )
+        .bind(workflow_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(|row| {
+            Ok(LastRun {
+                id: row.try_get("id")?,
+                status: WorkflowRunStatus::parse(&row.try_get::<String, _>("status")?)?,
+                started_at: row.try_get("started_at")?,
+                test: row.try_get::<i64, _>("test")? != 0,
+            })
+        })
+        .transpose()
+    }
+
+    /// The workflow runs that wait for the person, as the Inbox lists them, newest first.
+    pub async fn waiting_workflow_runs(&self) -> Result<Vec<WaitingWorkflowRun>> {
+        let rows = sqlx::query(
+            "SELECT w.id, w.team_id, t.name AS team_name, w.workflow_id, f.name AS workflow_name, \
+             w.definition, w.task, w.waiting_on, w.current_step, o.dot_id AS origin_dot_id, \
+             w.test, w.started_at FROM workflow_runs w JOIN teams t ON t.id = w.team_id \
+             LEFT JOIN workflows f ON f.id = w.workflow_id \
+             LEFT JOIN runs o ON o.id = w.origin_run_id \
+             WHERE w.status = 'waiting' AND w.waiting_on IS NOT NULL \
+             ORDER BY w.started_at DESC, w.id DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let definition: Definition =
+                    serde_json::from_str(&row.try_get::<String, _>("definition")?)?;
+                let current: Option<String> = row.try_get("current_step")?;
+                let task: String = row.try_get("task")?;
+                Ok(WaitingWorkflowRun {
+                    id: row.try_get("id")?,
+                    team_id: row.try_get("team_id")?,
+                    team_name: row.try_get("team_name")?,
+                    workflow_id: row.try_get("workflow_id")?,
+                    workflow_name: row.try_get("workflow_name")?,
+                    task: task
+                        .trim()
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                    waiting_on: WaitingOn::parse(&row.try_get::<String, _>("waiting_on")?)?,
+                    step_name: current.and_then(|id| definition.step(&id).map(|s| s.name.clone())),
+                    origin_dot_id: row.try_get("origin_dot_id")?,
+                    test: row.try_get::<i64, _>("test")? != 0,
+                    started_at: row.try_get("started_at")?,
+                })
+            })
+            .collect()
     }
 
     /// The ids of the workflow runs that have not ended (running or waiting), oldest first.
@@ -157,6 +253,18 @@ impl Store {
         )
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    /// How many runs of the workflow have not ended (running or waiting).
+    pub async fn count_workflow_runs_in_flight(&self, workflow_id: &str) -> Result<u32> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM workflow_runs WHERE workflow_id = ? \
+             AND status IN ('running', 'waiting')",
+        )
+        .bind(workflow_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(u32::try_from(n).unwrap_or(u32::MAX))
     }
 
     /// Whether a workflow run of `workflow_id` on `project_id` that a run of the thread
@@ -490,6 +598,44 @@ impl Store {
         let mut out = Vec::new();
         for id in ids {
             out.push(self.get_run(&id).await?);
+        }
+        Ok(out)
+    }
+
+    /// The dot runs of every step run of the workflow run `id`, resume children and delegate
+    /// members' runs included, oldest first (by queue time, then id). `NotFound` for an unknown
+    /// workflow run; a run with no dot run yet gives none.
+    pub async fn workflow_run_dot_runs(&self, id: &str) -> Result<Vec<StepDotRun>> {
+        // One query: the workflow run's row always comes back, with no run when it has none,
+        // so an empty answer means the workflow run does not exist.
+        let rows = sqlx::query(
+            "SELECT r.id, r.root_run_id, r.workflow_step_run_id, r.dot_id, d.name AS dot_name, \
+             r.status, r.started_at FROM workflow_runs w \
+             LEFT JOIN workflow_step_runs s ON s.workflow_run_id = w.id \
+             LEFT JOIN runs r ON r.workflow_step_run_id = s.id \
+             LEFT JOIN dots d ON d.id = r.dot_id \
+             WHERE w.id = ? ORDER BY r.queued_at, r.id",
+        )
+        .bind(id)
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.is_empty() {
+            return Err(Error::NotFound(format!("workflow run {id}")));
+        }
+        let mut out = Vec::new();
+        for row in &rows {
+            let Some(run_id) = row.try_get::<Option<String>, _>("id")? else {
+                continue;
+            };
+            out.push(StepDotRun {
+                step_run_id: row.try_get("workflow_step_run_id")?,
+                run_id,
+                root_run_id: row.try_get("root_run_id")?,
+                dot_id: row.try_get("dot_id")?,
+                dot_name: row.try_get("dot_name")?,
+                status: RunStatus::parse(&row.try_get::<String, _>("status")?)?,
+                started_at: row.try_get("started_at")?,
+            });
         }
         Ok(out)
     }

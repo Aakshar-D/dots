@@ -20,7 +20,7 @@ use serde_json::json;
 use super::delegate::own_runs;
 use super::{
     branch_exists, handoffs_before, latest, next_attempt, next_of, ran_before, shown_at,
-    start_branch, Workflows, MAX_TASK,
+    start_branch, Workflows, CHECK_CHANGED, MAX_TASK,
 };
 use crate::accounts::Permission;
 use crate::model::{
@@ -142,8 +142,14 @@ impl Workflows {
     /// the person's note of 1 to 8,000 characters: the check's step run succeeds with the
     /// decision, and the work goes to the check's `send_back_to`, else to the nearest agent
     /// step before it, within the cap of send-backs (section 9). Refused for a run not waiting
-    /// on a check, and for a check with no agent step before it.
-    pub async fn send_back_check(&self, id: &str, note: &str) -> Result<WorkflowRun> {
+    /// on a check, for a check whose step run is not `step_run_id` (the one the page showed:
+    /// `CHECK_CHANGED`), and for a check with no agent step before it.
+    pub async fn send_back_check(
+        &self,
+        id: &str,
+        note: &str,
+        step_run_id: &str,
+    ) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
         let wr = self.store.get_workflow_run(id).await?;
         self.require(&wr.team_id, Permission::AnswerApprovals)
@@ -163,6 +169,9 @@ impl Workflows {
                 "workflow run {id} is not waiting for a check"
             )));
         };
+        if step_run.id != step_run_id {
+            return Err(Error::Conflict(CHECK_CHANGED.into()));
+        }
         let note = note.trim();
         if note.is_empty() || note.chars().count() > MAX_TASK {
             return Err(Error::Invalid(

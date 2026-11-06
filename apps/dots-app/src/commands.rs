@@ -5,7 +5,9 @@
 //! setting (`Settings::validate`; the runtime runs that program as the Claude CLI from the
 //! next start). A folder watcher's `path` is checked in the core (`watchers::check_config`:
 //! absolute, an existing folder) and only watched; its files are opened by the dot's run under
-//! the dot's policy. The Library commands take more: a skill or plugin folder, a folder to scan for
+//! the dot's policy. A team project's `repo_path` is checked in the core (`teams::check_repo`:
+//! a git repo) and opened by "Open folder" only from the stored project, by id. The Library
+//! commands take more: a skill or plugin folder, a folder to scan for
 //! skills, and the command of an MCP server, which `library_probe` starts and a dot's runs
 //! start. Like `claude_path`, a new command line or env (and a plugin's servers and hooks) is confirmed in
 //! a native dialog from Rust before it is run or stored (`confirm.rs`). The UI is first-party
@@ -33,9 +35,10 @@ use dots_core::library_service::{
 };
 use dots_core::model::{
     Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind, FollowUp,
-    Inbox, Intent, Memory, Message, Run, RunEventRecord, ScheduleSkip, ScheduledMessage,
-    SettingsSaved, StagedAttachment, Status, TopicInfo, WatchHours, Watcher, WatcherConfig,
-    WorktreeDiff,
+    Inbox, Intent, Memory, Message, Project, ProjectSpec, Run, RunEventRecord, ScheduleSkip,
+    ScheduledMessage, SettingsSaved, StagedAttachment, Status, StepDotRun, Team, TeamSpec,
+    TopicInfo, WatchHours, Watcher, WatcherConfig, Workflow, WorkflowRun, WorkflowRunFilter,
+    WorkflowSpec, WorkflowTrigger, WorktreeDiff,
 };
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
@@ -48,6 +51,8 @@ use dots_core::vault::org::{
     SourceCreds,
 };
 use dots_core::vault::{EntryKind, EnvEntry, GrantStatus};
+use dots_core::workflow::WorkflowProblem;
+use dots_core::workflows::{CheckTip, CheckView, StartRequest};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -2209,6 +2214,273 @@ pub async fn run_release_hold(state: State<'_, AppState>, run_id: String) -> Res
 #[tauri::command]
 pub async fn watcher_resume(state: State<'_, AppState>, id: String) -> Res<Watcher> {
     Ok(state.rt()?.watcher_resume(&id).await?)
+}
+
+/// Every team with its members and projects (teams spec section 10.1).
+#[tauri::command]
+pub async fn teams_list(state: State<'_, AppState>) -> Res<Vec<Team>> {
+    Ok(state.rt()?.teams().list().await?)
+}
+
+#[tauri::command]
+pub async fn team_get(state: State<'_, AppState>, id: String) -> Res<Team> {
+    Ok(state.rt()?.teams().get(&id).await?)
+}
+
+#[tauri::command]
+pub async fn team_create(state: State<'_, AppState>, spec: TeamSpec) -> Res<Team> {
+    Ok(state.rt()?.teams().create(&spec).await?)
+}
+
+/// Its name, description and members; its account and workspace stay as they are.
+#[tauri::command]
+pub async fn team_update(state: State<'_, AppState>, id: String, spec: TeamSpec) -> Res<Team> {
+    Ok(state.rt()?.teams().update(&id, &spec).await?)
+}
+
+/// Stops the team's runs in flight, then deletes it with its projects and workflows.
+#[tauri::command]
+pub async fn team_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.workflows().delete_team(&id).await?)
+}
+
+/// Adds a project to the team; the core checks that its folder is a git repo.
+#[tauri::command]
+pub async fn project_add(
+    state: State<'_, AppState>,
+    team_id: String,
+    spec: ProjectSpec,
+) -> Res<Project> {
+    Ok(state.rt()?.teams().add_project(&team_id, &spec).await?)
+}
+
+#[tauri::command]
+pub async fn project_update(
+    state: State<'_, AppState>,
+    id: String,
+    spec: ProjectSpec,
+) -> Res<Project> {
+    Ok(state.rt()?.teams().update_project(&id, &spec).await?)
+}
+
+#[tauri::command]
+pub async fn project_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.teams().delete_project(&id).await?)
+}
+
+/// Opens a folder in Explorer: the project `project_id`'s repo, or, with `workflow_run_id` and
+/// `branch`, the worktree of a branch that run's deploy listed as ready. The path comes from
+/// the core's records, never the UI.
+#[tauri::command]
+pub async fn open_project_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    project_id: Option<String>,
+    workflow_run_id: Option<String>,
+    branch: Option<String>,
+) -> Res<()> {
+    let rt = state.rt()?;
+    let path = match (project_id, workflow_run_id, branch) {
+        (Some(project), None, None) => rt.workflows().project_folder(&project).await?,
+        (None, Some(run), Some(branch)) => rt.workflows().branch_folder(&run, &branch).await?,
+        _ => {
+            return Err(CmdError::from(dots_core::Error::Invalid(
+                "name a project, or a workflow run and its branch".into(),
+            )))
+        }
+    };
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| CmdError::internal(format!("could not open {}: {e}", path.display())))
+}
+
+/// The team's workflows, by name.
+#[tauri::command]
+pub async fn workflows_list(state: State<'_, AppState>, team_id: String) -> Res<Vec<Workflow>> {
+    Ok(state.rt()?.teams().list_workflows(&team_id).await?)
+}
+
+#[tauri::command]
+pub async fn workflow_get(state: State<'_, AppState>, id: String) -> Res<Workflow> {
+    Ok(state.rt()?.teams().get_workflow(&id).await?)
+}
+
+#[tauri::command]
+pub async fn workflow_create(
+    state: State<'_, AppState>,
+    team_id: String,
+    spec: WorkflowSpec,
+) -> Res<Workflow> {
+    Ok(state.rt()?.teams().create_workflow(&team_id, &spec).await?)
+}
+
+/// Saves the builder's draft; runs in flight keep the definition they started with.
+#[tauri::command]
+pub async fn workflow_update(
+    state: State<'_, AppState>,
+    id: String,
+    spec: WorkflowSpec,
+) -> Res<Workflow> {
+    Ok(state.rt()?.teams().update_workflow(&id, &spec).await?)
+}
+
+#[tauri::command]
+pub async fn workflow_delete(state: State<'_, AppState>, id: String) -> Res<()> {
+    Ok(state.rt()?.teams().delete_workflow(&id).await?)
+}
+
+/// The builder's live check of its draft: the first refusal a save would give and the step it
+/// names, or none (teams spec section 5.8).
+#[tauri::command]
+pub async fn workflow_check_spec(
+    state: State<'_, AppState>,
+    team_id: String,
+    spec: WorkflowSpec,
+) -> Res<Option<WorkflowProblem>> {
+    Ok(state.rt()?.teams().check_workflow(&team_id, &spec).await?)
+}
+
+/// The workflow's trigger URL; an error while the local server is not running.
+#[tauri::command]
+pub async fn workflow_webhook_url(state: State<'_, AppState>, id: String) -> Res<String> {
+    Ok(state.rt()?.workflow_webhook_url(&id).await?)
+}
+
+/// A new webhook token for the workflow, shown this once; the old one stops working.
+#[tauri::command]
+pub async fn regenerate_workflow_token(state: State<'_, AppState>, id: String) -> Res<String> {
+    Ok(state.rt()?.teams().regenerate_workflow_token(&id).await?)
+}
+
+/// The workflow runs `filter` picks (team, workflow, statuses, limit), newest first.
+#[tauri::command]
+pub async fn workflow_runs_list(
+    state: State<'_, AppState>,
+    filter: WorkflowRunFilter,
+) -> Res<Vec<WorkflowRun>> {
+    Ok(state.rt()?.workflows().list(&filter).await?)
+}
+
+/// The workflow runs the chat runs `run_ids` started, oldest first: a chat's cards.
+#[tauri::command]
+pub async fn workflow_runs_for_origins(
+    state: State<'_, AppState>,
+    run_ids: Vec<String>,
+) -> Res<Vec<WorkflowRun>> {
+    Ok(state.rt()?.workflows().for_origins(&run_ids).await?)
+}
+
+#[tauri::command]
+pub async fn workflow_run_get(state: State<'_, AppState>, id: String) -> Res<WorkflowRun> {
+    Ok(state.rt()?.workflows().get(&id).await?)
+}
+
+/// The dot runs of the workflow run's step runs, oldest first: the run page's links to them.
+#[tauri::command]
+pub async fn workflow_run_dot_runs(state: State<'_, AppState>, id: String) -> Res<Vec<StepDotRun>> {
+    Ok(state.rt()?.workflows().dot_runs(&id).await?)
+}
+
+/// "Run now" (or "Test run" with `test`: its deploys push nothing): the person's task on one
+/// of the team's projects.
+#[tauri::command]
+pub async fn workflow_run_start(
+    state: State<'_, AppState>,
+    workflow_id: String,
+    project_id: String,
+    task: String,
+    test: bool,
+) -> Res<WorkflowRun> {
+    Ok(state
+        .rt()?
+        .workflows()
+        .start(StartRequest {
+            workflow_id,
+            project_id,
+            task,
+            trigger: WorkflowTrigger::Manual,
+            origin_run_id: None,
+            test,
+        })
+        .await?)
+}
+
+/// What the check the workflow run waits on shows: its summary and each branch at its tip.
+#[tauri::command]
+pub async fn workflow_check(state: State<'_, AppState>, id: String) -> Res<CheckView> {
+    Ok(state.rt()?.workflows().check(&id).await?)
+}
+
+/// A branch's committed work from the project's default branch, for a branch the run shows.
+#[tauri::command]
+pub async fn workflow_branch_diff(
+    state: State<'_, AppState>,
+    id: String,
+    branch: String,
+    commit: String,
+) -> Res<WorktreeDiff> {
+    Ok(state
+        .rt()?
+        .workflows()
+        .branch_diff(&id, &branch, &commit)
+        .await?)
+}
+
+/// Approves the check's step run `step_run_id` with the tips the page showed; refused when the
+/// run waits on another check or the tips changed since.
+#[tauri::command]
+pub async fn workflow_approve(
+    state: State<'_, AppState>,
+    id: String,
+    note: Option<String>,
+    step_run_id: String,
+    tips: Vec<CheckTip>,
+) -> Res<WorkflowRun> {
+    Ok(state
+        .rt()?
+        .workflows()
+        .approve_check(&id, note.as_deref(), &step_run_id, &tips)
+        .await?)
+}
+
+/// Sends the work of the check's step run `step_run_id` back, with the person's note; refused
+/// when the run waits on another check.
+#[tauri::command]
+pub async fn workflow_send_back(
+    state: State<'_, AppState>,
+    id: String,
+    note: String,
+    step_run_id: String,
+) -> Res<WorkflowRun> {
+    Ok(state
+        .rt()?
+        .workflows()
+        .send_back_check(&id, &note, &step_run_id)
+        .await?)
+}
+
+/// Raises each limit the waiting run reached by its default amount, once.
+#[tauri::command]
+pub async fn workflow_add_budget(state: State<'_, AppState>, id: String) -> Res<WorkflowRun> {
+    Ok(state.rt()?.workflows().add_budget(&id).await?)
+}
+
+/// Lets the send-back held at the cap go on: one more.
+#[tauri::command]
+pub async fn workflow_allow_send_back(state: State<'_, AppState>, id: String) -> Res<WorkflowRun> {
+    Ok(state.rt()?.workflows().allow_send_back(&id).await?)
+}
+
+/// Runs the failed step the workflow run waits on again.
+#[tauri::command]
+pub async fn workflow_retry_step(state: State<'_, AppState>, id: String) -> Res<WorkflowRun> {
+    Ok(state.rt()?.workflows().retry_step(&id).await?)
+}
+
+/// Stops the workflow run and its dot runs.
+#[tauri::command]
+pub async fn workflow_stop(state: State<'_, AppState>, id: String) -> Res<WorkflowRun> {
+    Ok(state.rt()?.workflows().stop(&id).await?)
 }
 
 /// The sign-in details a command was given, read as `SourceCreds`. The words of a failure name

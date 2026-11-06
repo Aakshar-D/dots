@@ -308,3 +308,126 @@ async fn a_pending_approval_is_listed_with_its_dot() {
     wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 15).await;
     t.rt.shutdown();
 }
+
+/// Deleting a team keeps its workflow steps' runs out of "Runs to review": they are marked
+/// reviewed before the cascade clears their step (teams spec section 10).
+#[tokio::test]
+async fn a_deleted_team_s_step_runs_stay_out_of_runs_to_review() {
+    use dots_core::model::{
+        MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, StepRunStatus, TeamSpec, TriggerKind,
+        WorkflowRunChange, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger,
+    };
+    use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
+
+    let t = start().await;
+    let store = t.rt.store();
+    let dot = store
+        .create_dot(&spec("dev"), None, "default")
+        .await
+        .unwrap()
+        .id;
+    let team = store
+        .create_team(&TeamSpec {
+            org_id: None,
+            workspace_id: "default".into(),
+            name: "T".into(),
+            description: String::new(),
+            members: vec![MemberSpec {
+                dot_id: dot.clone(),
+                role: "dev".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    let project = ProjectSpec {
+        name: "Dots".into(),
+        repo_path: t.repo.to_string_lossy().to_string(),
+        default_branch: None,
+        remote: "origin".into(),
+    };
+    let project_id = store.add_project(&team.id, &project).await.unwrap().id;
+    // A check only: a pass of the loop meanwhile starts no dot run.
+    let definition = Definition {
+        trigger: Trigger::Manual,
+        steps: vec![Step {
+            id: "check".into(),
+            name: "Your check".into(),
+            kind: StepKind::Check { send_back_to: None },
+        }],
+        budget: Budget::default(),
+    };
+    let workflow = store
+        .create_workflow(
+            &team.id,
+            &WorkflowSpec {
+                name: "Fix".into(),
+                definition: definition.clone(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+    let wr = store
+        .create_workflow_run(&NewWorkflowRun {
+            workflow_id: workflow.id,
+            team_id: team.id.clone(),
+            definition,
+            project_id,
+            project,
+            task: "The tray icon is invisible.".into(),
+            trigger: WorkflowTrigger::Manual,
+            origin_run_id: None,
+            test: false,
+        })
+        .await
+        .unwrap();
+    store
+        .set_workflow_run(
+            &wr.id,
+            &WorkflowRunChange {
+                status: Some(WorkflowRunStatus::Failed),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let step = store
+        .create_step_run(&wr.id, "check", 1, StepRunStatus::Failed)
+        .await
+        .unwrap();
+    let mut new = NewRun::new(&dot, TriggerKind::Workflow);
+    new.workflow_step_run_id = Some(step.id.clone());
+    let failed = store.create_run(&new).await.unwrap();
+    store
+        .finish_run(&failed.id, RunStatus::Failed, None, Some("down"))
+        .await
+        .unwrap();
+    let mut new = NewRun::new(&dot, TriggerKind::Workflow);
+    new.workflow_step_run_id = Some(step.id.clone());
+    new.branch = Some("dots/work-1".into());
+    let branched = store.create_run(&new).await.unwrap();
+    store
+        .finish_run(&branched.id, RunStatus::Succeeded, None, None)
+        .await
+        .unwrap();
+    // A step's runs are quiet while the team lives.
+    assert!(t.rt.inbox().await.unwrap().review_runs.is_empty());
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
+
+    t.rt.workflows().delete_team(&team.id).await.unwrap();
+    // The cascade cleared their step; they were marked reviewed first.
+    for id in [&failed.id, &branched.id] {
+        let run = store.get_run(id).await.unwrap();
+        assert_eq!(run.workflow_step_run_id, None);
+        assert!(run.reviewed_at.is_some(), "{id} is not reviewed");
+    }
+    assert!(store.unreviewed_thread_ends().await.unwrap().is_empty());
+    assert!(t.rt.inbox().await.unwrap().review_runs.is_empty());
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
+    // A team that is gone is still not found.
+    assert!(matches!(
+        store.delete_team(&team.id).await,
+        Err(Error::NotFound(_))
+    ));
+    t.rt.shutdown();
+}

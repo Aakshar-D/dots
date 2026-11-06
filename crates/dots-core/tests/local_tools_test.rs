@@ -343,6 +343,55 @@ fn padded_paths_are_canonical_before_the_gate() {
     assert_eq!(input["path"], json!("."));
 }
 
+/// Under Sandboxed a step's `report_outcome` and `send_back` pass the gate without asking, and
+/// `start_workflow` and `start_member` still ask, even with a decoy `outcome` or `to_step`
+/// (dropped before the gate, so a call cannot pass for one of the two). A `Workflow: deny`
+/// refuses all four.
+#[test]
+fn the_gate_asks_for_start_workflow_and_start_member_only() {
+    let ws = workspace();
+    let p = ws.path();
+    let sandboxed = Policy::preset(Preset::Sandboxed);
+    let mut denies = sandboxed.clone();
+    denies.rules.push(Rule::new("Workflow", Action::Deny));
+    let decoys = json!({"outcome": "fixed", "to_step": "Build", "note": "x"});
+    let calls = [
+        (
+            "start_workflow",
+            json!({"workflow": "Fix", "project": "Dots", "task": "Fix it."}),
+            Action::Ask,
+        ),
+        (
+            "start_member",
+            json!({"member": "dev", "task": "Fix it."}),
+            Action::Ask,
+        ),
+        ("report_outcome", json!({"outcome": "fixed"}), Action::Allow),
+        (
+            "send_back",
+            json!({"to_step": "Build", "note": "Use the light icon."}),
+            Action::Allow,
+        ),
+    ];
+    for (name, args, want) in calls {
+        let (input, action) = gate(p, &sandboxed, name, args.clone());
+        assert_eq!(input, args, "{name}");
+        assert_eq!(action, want, "{name}");
+        let mut decoyed = args.clone();
+        for (key, value) in decoys.as_object().unwrap() {
+            decoyed
+                .as_object_mut()
+                .unwrap()
+                .entry(key.clone())
+                .or_insert(value.clone());
+        }
+        let (input, action) = gate(p, &sandboxed, name, decoyed);
+        assert_eq!(input, args, "{name} with decoys");
+        assert_eq!(action, want, "{name} with decoys");
+        assert_eq!(gate(p, &denies, name, args).1, Action::Deny, "{name}");
+    }
+}
+
 #[test]
 fn links_are_resolved_before_the_gate() {
     let ws = workspace();

@@ -12,7 +12,8 @@ import { Input } from "@/components/ui/input";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidateDots, keys } from "@/lib/query";
 
-function CopyButton({ what, text }: { what: string; text: string }) {
+/// Copies `text` and says so; named "Copy the <what>". The workflow builder's webhook uses it too.
+export function CopyButton({ what, text }: { what: string; text: string }) {
   return (
     <Button
       type="button"

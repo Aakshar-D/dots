@@ -462,12 +462,14 @@ impl Store {
     /// Inbox can ever show (failed, or with a branch) are returned; `Runtime::inbox` filters further.
     /// A failed scheduled run that made no tool call and that the scheduler judged into a retry
     /// or into "Needs attention" is marked reviewed when it is judged (Scheduler v2), so it is
-    /// not listed.
+    /// not listed. Nor is a run of a workflow step: its workflow run's page shows it (teams spec
+    /// section 10).
     pub async fn unreviewed_thread_ends(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
             "SELECT {RUN_COLUMNS} FROM runs r \
              WHERE r.reviewed_at IS NULL AND r.status IN ('succeeded', 'failed', 'cancelled') \
              AND (r.status = 'failed' OR r.branch IS NOT NULL) \
+             AND r.workflow_step_run_id IS NULL \
              ORDER BY r.ended_at DESC, r.id DESC"
         ))
         .fetch_all(&self.pool)
@@ -495,10 +497,13 @@ impl Store {
 
     /// Chat runs marked not delivered that the person has not retried or discarded and that
     /// were not delivered after all: the Inbox's "Not delivered" section, newest mark first.
+    /// A run of a workflow step is not listed: its workflow run waits on the failed step, and
+    /// the run page shows it (teams spec section 10).
     pub async fn undelivered_chat_runs(&self) -> Result<Vec<Run>> {
         let rows = sqlx::query(&format!(
             "SELECT {RUN_COLUMNS} FROM runs WHERE trigger_kind = 'chat' \
              AND undelivered_at IS NOT NULL AND dismissed_at IS NULL AND delivered_at IS NULL \
+             AND workflow_step_run_id IS NULL \
              ORDER BY undelivered_at DESC, id DESC"
         ))
         .fetch_all(&self.pool)

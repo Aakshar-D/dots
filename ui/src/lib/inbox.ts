@@ -108,7 +108,9 @@ export function inboxWaiting(inbox: Inbox | undefined, messages: Message[] | und
       Math.min(inbox.held.length, 1) +
       inbox.instructions.length +
       inbox.app_reviews.length +
-      inbox.team_scope.length
+      inbox.team_scope.length +
+      // A workflow run waiting on the person: a check, a limit or a failed step.
+      inbox.workflows.length
     : 0;
   return sections + shownMessages(inbox, messages ?? []).length;
 }

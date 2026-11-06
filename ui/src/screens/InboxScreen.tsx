@@ -57,6 +57,7 @@ import { releasable } from "@/components/RunNumbers";
 import { resetTime } from "@/lib/usage-format";
 import { MarkedList } from "@/screens/inbox/MarkedList";
 import { NotDeliveredRow } from "@/screens/inbox/NotDeliveredRow";
+import { WaitingRunRow } from "@/screens/teams/WaitingRuns";
 
 /// A finished run that waits for the user: it failed, or it left a worktree to look at.
 function ReviewRow({ run, actions }: { run: ReviewRun; actions?: ReactNode }) {
@@ -504,6 +505,9 @@ export function InboxScreen() {
   const [held, backHeld] = split(data.held, heldKey, back);
   const [tools, backTools] = split(data.tools_changed, toolsKey, back);
   const [runs, backRuns] = split(data.review_runs, reviewKey, back);
+  // A waiting workflow run has no Snooze or Done: the core gives it no Inbox key, and it
+  // leaves the Inbox once the person acts on it.
+  const workflows = data.workflows;
 
   const act = (key: InboxKey, what: string) => <InboxActions items={[key]} done what={what} />;
   const row = {
@@ -614,7 +618,8 @@ export function InboxScreen() {
     watchers.length === 0 &&
     held.length === 0 &&
     instructions.length === 0 &&
-    reviews.length === 0;
+    reviews.length === 0 &&
+    workflows.length === 0;
   return (
     <InboxActed.Provider value={acted}>
       <Page title="Inbox">
@@ -622,8 +627,9 @@ export function InboxScreen() {
         {nothing && (
           <EmptyState icon={InboxIcon}>
             Nothing waits for you. Questions and notes from dots, approvals a dot asks for,
-            messages that did not reach a dot, apps sent for review, schedules that need
-            attention, paused watchers and finished runs to review show up here.
+            messages that did not reach a dot, apps sent for review, workflow runs that wait for
+            you, schedules that need attention, paused watchers and finished runs to review show
+            up here.
           </EmptyState>
         )}
         <Section id="inbox-back" title="Back from snooze" count={backList.length}>
@@ -640,6 +646,13 @@ export function InboxScreen() {
         </Section>
         <Section id="inbox-app-reviews" title="Apps to review" count={reviews.length}>
           <ul className="flex flex-col gap-2">{reviews.map(row.review)}</ul>
+        </Section>
+        <Section id="inbox-workflows" title="Workflows" count={workflows.length}>
+          <ul className="flex flex-col gap-2">
+            {workflows.map((item) => (
+              <WaitingRunRow key={item.id} item={item} />
+            ))}
+          </ul>
         </Section>
         <Section id="inbox-instructions" title="New instructions" count={instructions.length}>
           <ul className="flex flex-col gap-2">{instructions.map(row.instructions)}</ul>

@@ -39,10 +39,12 @@ describe("inboxWaiting", () => {
       1 +
       shown.instructions.length +
       shown.app_reviews.length +
-      shown.team_scope.length;
+      shown.team_scope.length +
+      shown.workflows.length;
     expect(shown.held.length).toBeGreaterThan(1);
     expect(shown.not_delivered.length).toBe(1);
     expect(shown.team_scope.length).toBe(1);
+    expect(shown.workflows.length).toBe(1);
     expect(inboxWaiting(shown, messages)).toBe(sections + 1);
     expect(inboxWaiting(undefined, messages)).toBe(1);
     expect(inboxWaiting(undefined, undefined)).toBe(0);

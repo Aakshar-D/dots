@@ -717,6 +717,17 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     limits: LimitsState,
     change: nullable(HoldChange),
   }),
+  // A team, its members or its projects were made, changed or deleted.
+  z.strictObject({ type: z.literal("team_updated"), team_id: z.string() }),
+  // A workflow of the team was made, changed or deleted, or its team's members changed.
+  z.strictObject({
+    type: z.literal("workflow_updated"),
+    team_id: z.string(),
+    workflow_id: z.string(),
+  }),
+  // A workflow run started, moved to another step, waited or ended. Lazy: the run's schema is
+  // declared with the teams, below.
+  z.strictObject({ type: z.literal("workflow_run_updated"), run: z.lazy(() => WorkflowRun) }),
 ]);
 
 export const ClaudeStatus = z.strictObject({
@@ -914,6 +925,9 @@ export const Inbox = z.strictObject({
   // The waiting messages that are hidden (snoozed, or done however long ago): the questions
   // and notes come with the messages, so the Inbox leaves these out.
   hidden_messages: z.array(z.string()).default([]),
+  // Workflow runs that wait for the person (a check, the budget, the send-back cap or a failed
+  // step), newest first.
+  workflows: z.array(z.lazy(() => WaitingWorkflowRun)),
 });
 // A member dot that is not in its team's account or workspace, as the Inbox lists it.
 export const TeamScopeIssue = z.strictObject({
@@ -924,6 +938,386 @@ export const TeamScopeIssue = z.strictObject({
   reason: z.string(),
 });
 export type TeamScopeIssue = z.infer<typeof TeamScopeIssue>;
+// What a waiting workflow run waits for: the person's check, more budget, a send-back past the
+// cap, or a decision about a failed step (retry or stop).
+export const WaitingOn = z.enum(["check", "budget", "send_backs", "step_failed"]);
+export type WaitingOn = z.infer<typeof WaitingOn>;
+// A workflow run that waits for the person, as the Inbox lists it. The workflow is null once it
+// is deleted; the step is null before the first one; the origin dot is the one whose chat
+// started the run.
+export const WaitingWorkflowRun = z.strictObject({
+  id: z.string(),
+  team_id: z.string(),
+  team_name: z.string(),
+  workflow_id: nullable(z.string()),
+  workflow_name: nullable(z.string()),
+  task: z.string(),
+  waiting_on: WaitingOn,
+  step_name: nullable(z.string()),
+  origin_dot_id: nullable(z.string()),
+  test: z.boolean(),
+  started_at: z.string(),
+});
+export type WaitingWorkflowRun = z.infer<typeof WaitingWorkflowRun>;
+
+// Teams and workflows (teams spec sections 3 to 11). Members and steps name dots by id.
+export const MemberSpec = z.strictObject({ dot_id: z.string(), role: z.string() });
+export type MemberSpec = z.infer<typeof MemberSpec>;
+// A team as it is saved. Its account and workspace are fixed once it is made.
+export const TeamSpec = z.strictObject({
+  name: z.string(),
+  description: z.string(),
+  members: z.array(MemberSpec),
+  org_id: nullable(z.string()),
+  workspace_id: z.string(),
+});
+export type TeamSpec = z.infer<typeof TeamSpec>;
+export const TeamMember = z.strictObject({
+  dot_id: z.string(),
+  dot_name: z.string(),
+  role: z.string(),
+});
+export type TeamMember = z.infer<typeof TeamMember>;
+// A team's local git repo. `default_branch` null: found as worktrees find it.
+export const ProjectSpec = z.strictObject({
+  name: z.string(),
+  repo_path: z.string(),
+  default_branch: nullable(z.string()),
+  remote: z.string(),
+});
+export type ProjectSpec = z.infer<typeof ProjectSpec>;
+export const Project = z.strictObject({
+  id: z.string(),
+  team_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  ...ProjectSpec.shape,
+});
+export type Project = z.infer<typeof Project>;
+export const Team = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  members: z.array(TeamMember),
+  projects: z.array(Project),
+  org_id: nullable(z.string()),
+  workspace_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+});
+export type Team = z.infer<typeof Team>;
+
+export const WorkflowTrigger = z.enum(["chat", "manual", "schedule", "webhook"]);
+export type WorkflowTrigger = z.infer<typeof WorkflowTrigger>;
+export const WorkflowRunStatus = z.enum(["running", "waiting", "succeeded", "failed", "cancelled"]);
+export type WorkflowRunStatus = z.infer<typeof WorkflowRunStatus>;
+export const StepRunStatus = z.enum([
+  "running",
+  "waiting",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "skipped",
+]);
+export type StepRunStatus = z.infer<typeof StepRunStatus>;
+// How `gh pr merge` merges; squash when the JSON leaves it out.
+export const MergeMethod = z.enum(["merge", "squash", "rebase"]);
+export type MergeMethod = z.infer<typeof MergeMethod>;
+// What a branch step compares its labels with: the outcome reported before it, or the project.
+export const BranchOn = z.enum(["outcome", "project"]);
+export type BranchOn = z.infer<typeof BranchOn>;
+
+// What starts a workflow run (section 5.1). A webhook's task and project are the fallbacks for
+// a body without them; a schedule's project is named.
+export const Trigger = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("manual") }),
+  z.strictObject({ kind: z.literal("chat"), starters: z.array(z.string()) }),
+  z.strictObject({
+    kind: z.literal("schedule"),
+    schedule: Schedule,
+    task: z.string(),
+    project: z.string(),
+  }),
+  z.strictObject({
+    kind: z.literal("webhook"),
+    task: nullable(z.string()),
+    project: nullable(z.string()),
+  }),
+]);
+export type Trigger = z.infer<typeof Trigger>;
+// What a delegate step's member may start (section 5.3).
+export const Delegate = z.strictObject({
+  may_start: z.array(z.string()),
+  at_once: z.number().int(),
+  total: z.number().int(),
+});
+export type Delegate = z.infer<typeof Delegate>;
+
+// A step (sections 5.2 to 5.6): its id is made by the builder, unique across the whole tree.
+// The kind's fields sit beside `id` and `name`, and a deploy's mode's beside those.
+const stepShape = { id: z.string(), name: z.string() };
+export const AgentStep = z.strictObject({
+  ...stepShape,
+  kind: z.literal("agent"),
+  member: z.string(),
+  job: z.string(),
+  // Earlier agent steps it may send work back to, by id.
+  can_send_back_to: z.array(z.string()),
+  // The labels it may report, for a branch on outcome after it.
+  outcomes: z.array(z.string()),
+  delegate: nullable(Delegate),
+});
+export type AgentStep = z.infer<typeof AgentStep>;
+// `send_back_to` null: the nearest agent step before it on its path.
+export const CheckStep = z.strictObject({
+  ...stepShape,
+  kind: z.literal("check"),
+  send_back_to: nullable(z.string()),
+});
+export type CheckStep = z.infer<typeof CheckStep>;
+const deployShape = { ...stepShape, kind: z.literal("deploy") };
+export const DeployStep = z.discriminatedUnion("mode", [
+  z.strictObject({ ...deployShape, mode: z.literal("branch") }),
+  z.strictObject({ ...deployShape, mode: z.literal("push") }),
+  z.strictObject({ ...deployShape, mode: z.literal("pr") }),
+  z.strictObject({ ...deployShape, mode: z.literal("pr_merge"), merge_method: MergeMethod }),
+  z.strictObject({
+    ...deployShape,
+    mode: z.literal("member"),
+    member: z.string(),
+    job: z.string(),
+  }),
+]);
+export type DeployStep = z.infer<typeof DeployStep>;
+export type DeployMode = DeployStep["mode"];
+// A branch holds steps of its own, so its schemas are typed by hand and read `Step` lazily.
+export type BranchPath = { label: string; steps: Step[] };
+export type BranchStep = {
+  id: string;
+  name: string;
+  kind: "branch";
+  on: BranchOn;
+  paths: BranchPath[];
+  otherwise: Step[];
+};
+export type Step = AgentStep | CheckStep | DeployStep | BranchStep;
+export const BranchPath: z.ZodType<BranchPath> = z.strictObject({
+  label: z.string(),
+  steps: z.array(z.lazy(() => Step)),
+});
+export const BranchStep: z.ZodType<BranchStep> = z.strictObject({
+  ...stepShape,
+  kind: z.literal("branch"),
+  on: BranchOn,
+  paths: z.array(BranchPath),
+  otherwise: z.array(z.lazy(() => Step)),
+});
+export const Step: z.ZodType<Step> = z.union([AgentStep, CheckStep, DeployStep, BranchStep]);
+// The limits of one workflow run (section 5.7).
+export const Budget = z.strictObject({
+  max_runs: z.number().int(),
+  max_tokens: z.number().int(),
+  max_minutes: z.number().int(),
+  max_send_backs: z.number().int(),
+});
+export type Budget = z.infer<typeof Budget>;
+export const Definition = z.strictObject({
+  trigger: Trigger,
+  steps: z.array(Step),
+  budget: Budget,
+});
+export type Definition = z.infer<typeof Definition>;
+// A workflow as the builder saves it.
+export const WorkflowSpec = z.strictObject({
+  name: z.string(),
+  definition: Definition,
+  enabled: z.boolean(),
+});
+export type WorkflowSpec = z.infer<typeof WorkflowSpec>;
+// A workflow's newest run, for the team page.
+export const LastRun = z.strictObject({
+  id: z.string(),
+  status: WorkflowRunStatus,
+  started_at: z.string(),
+  test: z.boolean(),
+});
+export type LastRun = z.infer<typeof LastRun>;
+// `problem`: why it cannot start now (the team changed under it). Runs in flight keep the
+// definition they started with. The webhook token itself is shown once, when it is made.
+export const Workflow = z.strictObject({
+  id: z.string(),
+  team_id: z.string(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  problem: nullable(z.string()),
+  has_webhook_token: z.boolean(),
+  runs_in_flight: z.number().int(),
+  last_run: nullable(LastRun),
+  ...WorkflowSpec.shape,
+});
+export type Workflow = z.infer<typeof Workflow>;
+// The first refusal a save of the builder's draft would give, and the step it names (null:
+// the name, the trigger, the budget or the list of steps).
+export const WorkflowProblem = z.strictObject({
+  step_id: nullable(z.string()),
+  message: z.string(),
+});
+export type WorkflowProblem = z.infer<typeof WorkflowProblem>;
+// Which workflow runs to list, newest first; a field left out does not narrow them, no
+// statuses is any status, no limit is all.
+export const WorkflowRunFilter = z.strictObject({
+  team_id: nullable(z.string()),
+  workflow_id: nullable(z.string()),
+  statuses: z.array(WorkflowRunStatus),
+  limit: nullable(z.number().int()),
+});
+export type WorkflowRunFilter = z.infer<typeof WorkflowRunFilter>;
+
+// A branch a step produced, and the dot run whose branch it is (section 6).
+export const BranchRef = z.strictObject({
+  run_id: z.string(),
+  branch: z.string(),
+  worktree_path: z.string(),
+  base_commit: nullable(z.string()),
+});
+export type BranchRef = z.infer<typeof BranchRef>;
+// What a member a delegate step started handed back; its branch is null once it is gone.
+export const MemberHandoff = z.strictObject({
+  dot_id: z.string(),
+  task: z.string(),
+  status: RunStatus,
+  summary: z.string(),
+  branch: nullable(z.string()),
+});
+export type MemberHandoff = z.infer<typeof MemberHandoff>;
+// What a finished step passes to the next ones (section 6).
+export const Handoff = z.strictObject({
+  summary: z.string(),
+  branches: z.array(BranchRef),
+  outcome: nullable(z.string()),
+  members: z.array(MemberHandoff),
+});
+export type Handoff = z.infer<typeof Handoff>;
+// A branch and the commit the check page showed (null: the branch is gone), sent with Approve.
+export const CheckTip = z.strictObject({ branch: z.string(), commit: nullable(z.string()) });
+export type CheckTip = z.infer<typeof CheckTip>;
+// A check's decision, or the path a branch step took. An approval recorded before the
+// approved tips were kept has no `branches`.
+export const StepDecision = z.union([
+  z.strictObject({
+    decision: z.literal("approved"),
+    note: nullable(z.string()),
+    branches: z.array(CheckTip).optional(),
+  }),
+  z.strictObject({ decision: z.literal("sent_back"), note: z.string() }),
+  z.strictObject({ path: nullable(z.string()) }),
+]);
+export type StepDecision = z.infer<typeof StepDecision>;
+// What a deploy did to one branch.
+export const DeployedBranch = z.strictObject({
+  branch: z.string(),
+  commit: z.string(),
+  pushed: z.boolean(),
+  pr_url: nullable(z.string()),
+  auto_merge: z.boolean(),
+});
+export type DeployedBranch = z.infer<typeof DeployedBranch>;
+// `ready`: the branches were kept and listed as ready, not pushed. `error` is left out of a
+// deploy that succeeded.
+export const DeployResult = z.strictObject({
+  branches: z.array(DeployedBranch),
+  ready: z.boolean(),
+  error: z.string().optional(),
+});
+export type DeployResult = z.infer<typeof DeployResult>;
+// One step's execution. `send_back`: what an agent step asked to send back, performed when it
+// succeeds; `notice`: what the run page says about the attempt beyond its status.
+export const StepRun = z.strictObject({
+  id: z.string(),
+  workflow_run_id: z.string(),
+  step_id: z.string(),
+  attempt: z.number().int(),
+  status: StepRunStatus,
+  handoff: nullable(Handoff),
+  decision: nullable(StepDecision),
+  error: nullable(z.string()),
+  outcome: nullable(z.string()),
+  notice: nullable(z.string()),
+  send_back: nullable(z.strictObject({ to: z.string(), note: z.string() })),
+  deploy_result: nullable(DeployResult),
+  started_at: z.string(),
+  ended_at: nullable(z.string()),
+});
+export type StepRun = z.infer<typeof StepRun>;
+export const SentBy = z.enum(["person", "agent"]);
+export type SentBy = z.infer<typeof SentBy>;
+// The last send-back: performed, or `held` at the cap until the person allows one more.
+export const SendBack = z.strictObject({
+  from: z.string(),
+  to: z.string(),
+  note: z.string(),
+  by: SentBy,
+  held: z.boolean(),
+});
+export type SendBack = z.infer<typeof SendBack>;
+// One execution of a workflow with its copy of the definition and its step runs, oldest first.
+// The workflow and the project are null once they are deleted. `spent_tokens` counts new input
+// and output; cache reads are shown beside it, not counted.
+export const WorkflowRun = z.strictObject({
+  id: z.string(),
+  workflow_id: nullable(z.string()),
+  team_id: z.string(),
+  definition: Definition,
+  project_id: nullable(z.string()),
+  project: ProjectSpec,
+  task: z.string(),
+  trigger: WorkflowTrigger,
+  origin_run_id: nullable(z.string()),
+  test: z.boolean(),
+  status: WorkflowRunStatus,
+  waiting_on: nullable(WaitingOn),
+  current_step: nullable(z.string()),
+  budget: Budget,
+  send_backs: z.number().int(),
+  send_back: nullable(SendBack),
+  spent_runs: z.number().int(),
+  spent_tokens: z.number().int(),
+  spent_cache_read: z.number().int(),
+  active_ms: z.number().int(),
+  error: nullable(z.string()),
+  started_at: z.string(),
+  ended_at: nullable(z.string()),
+  steps: z.array(StepRun),
+});
+export type WorkflowRun = z.infer<typeof WorkflowRun>;
+// A branch the waiting check shows, with the commit at its tip now (null: the branch is gone).
+export const ShownBranch = z.strictObject({
+  branch: z.string(),
+  run_id: z.string(),
+  commit: nullable(z.string()),
+});
+export type ShownBranch = z.infer<typeof ShownBranch>;
+// What the check a workflow run waits on shows; Approve sends its branches back as `CheckTip`s,
+// and Approve and Send back name its step run (`step_run_id`, the one the check waits on).
+export const CheckView = z.strictObject({
+  step_id: z.string(),
+  step_run_id: z.string(),
+  summary: z.string(),
+  branches: z.array(ShownBranch),
+});
+export type CheckView = z.infer<typeof CheckView>;
+// A dot run that works for one of a workflow run's step runs, as the run page links it. A resume
+// or a reply continues a thread under the same `root_run_id`.
+export const StepDotRun = z.strictObject({
+  step_run_id: z.string(),
+  run_id: z.string(),
+  root_run_id: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  status: RunStatus,
+  started_at: nullable(z.string()),
+});
+export type StepDotRun = z.infer<typeof StepDotRun>;
 
 // The Library (MCP/skills spec section 2 and 9). `${VAR}` in a server's config stays a
 // reference: the core reads the environment when the server starts.

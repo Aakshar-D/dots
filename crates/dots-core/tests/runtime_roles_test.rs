@@ -25,7 +25,8 @@ use dots_core::apps::source::read_folder;
 use dots_core::library::AppOrigin;
 use dots_core::model::{
     DotSpec, FolderConfig, HoldReason, MemberSpec, NewRun, NewWorkflowRun, ProjectSpec, RunStatus,
-    TeamSpec, TriggerKind, WatcherConfig, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
+    TeamSpec, TriggerKind, WatcherConfig, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger,
+    WorkspaceMode,
 };
 use dots_core::scheduler::Clock;
 use dots_core::util::timestamp;
@@ -610,6 +611,8 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
         .unwrap();
     t.become_(2, Some("viewer")).await;
     let team = t.rt.teams().get(&team.id).await.unwrap();
+    // As it is now: it counts the run above in flight.
+    let workflow = t.rt.teams().get_workflow(&workflow.id).await.unwrap();
     let edit = viewer_cant("create or change dots");
     let answer = viewer_cant("answer approvals");
     let run_text = viewer_cant("run dots");
@@ -711,7 +714,13 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
     assert_eq!(refused(workflows.start(start).await), run_text);
     assert_eq!(refused(workflows.retry_step(&wr.id).await), run_text);
     assert_eq!(refused(workflows.add_budget(&wr.id).await), run_text);
-    assert_eq!(refused(workflows.approve_check(&wr.id, None).await), answer);
+    assert_eq!(
+        refused(workflows.approve_check(&wr.id, None, "", &[]).await),
+        answer
+    );
+    assert_eq!(refused(workflows.stop(&wr.id).await), run_text);
+    let still = store.get_workflow_run(&wr.id).await.unwrap();
+    assert_ne!(still.status, WorkflowRunStatus::Cancelled);
     assert_eq!(
         store
             .list_workflow_runs(Some(&team.id), 100)

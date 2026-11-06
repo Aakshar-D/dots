@@ -1,7 +1,7 @@
 import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
 
 import { commands } from "@/api/commands";
-import type { InstructionProposal, Message, Run, RunEventRecord } from "@/api/types";
+import type { InstructionProposal, Message, Run, RunEventRecord, WorkflowRun } from "@/api/types";
 import { AppliedCalls } from "@/components/AppliedCalls";
 import { AppReviews } from "@/components/AppReviewCard";
 import { ApprovalCard } from "@/components/ApprovalCard";
@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { isActive, type Topic } from "@/lib/home-topics";
 import { errorMessage } from "@/lib/notify";
 import { eventsQuery, invalidate, keys } from "@/lib/query";
+import { WorkflowCard } from "@/screens/teams/run/WorkflowCard";
 
 import { QuietCard } from "./QuietCard";
 import { MoveToTopic } from "./TopicTools";
@@ -19,13 +20,16 @@ import { MoveToTopic } from "./TopicTools";
 /// Runs of one topic as the chat shows a thread: each run's message, the dot's text, its tool
 /// steps, check-ins and browser calls (`Transcript`), the calls Dots performed, a card per
 /// approval it waits for and per app it sent for review, the instructions the dot proposed that
-/// wait for the person, and why the last run failed.
+/// wait for the person, and why the last run failed. A workflow a run started shows as a card
+/// after that run's turn (teams spec section 10.4).
 export function TopicRuns(props: {
   runs: Run[];
   checkIns: Message[];
   dotName: string;
   /// The dot's waiting proposals; the topic shows those its runs made.
   proposals?: InstructionProposal[];
+  /// The workflow runs started by runs of the conversation, by the run that started each.
+  workflows?: ReadonlyMap<string, WorkflowRun[]>;
   /// The dot's topics a message the person sent may be moved to; none offers no move.
   moveTargets?: Topic[];
 }) {
@@ -61,6 +65,11 @@ export function TopicRuns(props: {
         messages={checkIns}
         dotName={dotName}
         variant="conversation"
+        after={(run) =>
+          props.workflows
+            ?.get(run.id)
+            ?.map((workflowRun) => <WorkflowCard key={workflowRun.id} run={workflowRun} />)
+        }
         messageAction={
           props.moveTargets &&
           ((run) =>

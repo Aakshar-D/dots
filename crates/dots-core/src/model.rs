@@ -893,6 +893,10 @@ pub struct Inbox {
     /// out once a done one is no longer in `done`.
     #[serde(default)]
     pub hidden_messages: Vec<String>,
+    /// Workflow runs that wait for the person (on a check, the budget, the send-back cap or a
+    /// failed step), newest first (teams spec section 10).
+    #[serde(default)]
+    pub workflows: Vec<WaitingWorkflowRun>,
 }
 
 /// A chat run that did not reach its dot, as the Inbox lists it.
@@ -901,6 +905,29 @@ pub struct UndeliveredMessage {
     #[serde(flatten)]
     pub run: Run,
     pub dot_name: String,
+}
+
+/// A workflow run that waits for the person, as the Inbox lists it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WaitingWorkflowRun {
+    /// The workflow run's id.
+    pub id: String,
+    pub team_id: String,
+    pub team_name: String,
+    /// `None` once the workflow is deleted: the run goes on with its copy of the definition.
+    pub workflow_id: Option<String>,
+    pub workflow_name: Option<String>,
+    /// The first line of the run's task.
+    pub task: String,
+    pub waiting_on: WaitingOn,
+    /// The step it waits at (the check, the failed step, the step the budget or the send-back
+    /// cap holds), by name; `None` before its first step.
+    pub step_name: Option<String>,
+    /// The dot whose chat started the run; `None` for any other start, or once that chat's run
+    /// is deleted.
+    pub origin_dot_id: Option<String>,
+    pub test: bool,
+    pub started_at: String,
 }
 
 /// A member dot that is not in its team's account or workspace, as the Inbox lists it.
@@ -1315,10 +1342,22 @@ pub struct WorkflowSpec {
 }
 
 impl WorkflowSpec {
-    /// Its name and its definition against the team's `members` (dot ids).
+    /// Its name and its definition against the team's `members` (dot ids). Refuses with
+    /// `problem`'s message.
     pub fn validate(&self, members: &[String]) -> Result<()> {
-        check_name("workflow", &self.name)?;
-        self.definition.validate(members)
+        match self.problem(members) {
+            Some(p) => Err(Error::Invalid(p.message)),
+            None => Ok(()),
+        }
+    }
+
+    /// The first refusal `validate` gives, with the step it names: its name's, then its
+    /// definition's (`Definition::problem`). `None` when it gives none.
+    pub fn problem(&self, members: &[String]) -> Option<crate::workflow::WorkflowProblem> {
+        if let Err(e) = check_name("workflow", &self.name) {
+            return Some(crate::workflow::WorkflowProblem::new(None, e));
+        }
+        self.definition.problem(members)
     }
 }
 
@@ -1334,8 +1373,23 @@ pub struct Workflow {
     /// Whether the workflow has a webhook token. The token is shown once, when it is made;
     /// Dots keeps only its hash, as a dot's (section 5.1).
     pub has_webhook_token: bool,
+    /// How many of its runs have not ended (running or waiting). They keep the definition they
+    /// started with: the builder says "N runs in flight use the previous version".
+    pub runs_in_flight: u32,
+    /// Its newest run, for the team page's "last run".
+    pub last_run: Option<LastRun>,
     #[serde(flatten)]
     pub spec: WorkflowSpec,
+}
+
+/// A workflow's newest run, as the team page shows it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastRun {
+    pub id: String,
+    pub status: WorkflowRunStatus,
+    pub started_at: String,
+    /// A test run (section 5.1).
+    pub test: bool,
 }
 
 str_enum!(WorkflowTrigger {
@@ -1454,6 +1508,21 @@ pub struct StepRun {
     pub ended_at: Option<String>,
 }
 
+/// A dot run that works for one of a workflow run's step runs, as the run page links it (teams
+/// spec section 10.3): its step run, its thread, its dot by name and its state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepDotRun {
+    pub step_run_id: String,
+    pub run_id: String,
+    /// The thread the run is in: a resume or a reply continues a step's run under the same
+    /// root, and the page links each thread once, to its root.
+    pub root_run_id: String,
+    pub dot_id: String,
+    pub dot_name: String,
+    pub status: RunStatus,
+    pub started_at: Option<String>,
+}
+
 /// One execution of a workflow (teams spec section 4), with its step runs, oldest first, and
 /// what it has spent (section 9). Times are RFC 3339 UTC.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1525,6 +1594,19 @@ pub struct NewWorkflowRun {
     pub trigger: WorkflowTrigger,
     pub origin_run_id: Option<String>,
     pub test: bool,
+}
+
+/// Which workflow runs `Workflows::list` gives, newest first. Each field that is set narrows
+/// them; the default is every run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct WorkflowRunFilter {
+    pub team_id: Option<String>,
+    pub workflow_id: Option<String>,
+    /// The runs in one of these statuses; empty for any status.
+    pub statuses: Vec<WorkflowRunStatus>,
+    /// The most runs given; `None` for all.
+    pub limit: Option<u32>,
 }
 
 /// The fields `Store::set_workflow_run` writes: `None` leaves one as it is, `Some(None)` clears

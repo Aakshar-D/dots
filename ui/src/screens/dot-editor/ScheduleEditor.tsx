@@ -279,15 +279,20 @@ function StopFields(props: {
 
 /// The Schedule section's controls. `stored` is the dot's saved schedule (null for a new dot):
 /// picking its kind or stop again gives its values back, and an every rule keeps its anchor
-/// while its minutes are the stored ones. `error` is what blocks a save.
+/// while its minutes are the stored ones. `error` is what blocks a save. A workflow's trigger
+/// passes `required` (it always has a schedule, so None is not offered) and `catchUp={false}`
+/// (its schedules never catch up, teams spec section 5.1).
 export function ScheduleEditor(props: {
   schedule: Schedule | null;
   stored: Schedule | null;
   onChange: (schedule: Schedule | null) => void;
   error?: string;
   preview: SchedulePreview;
+  required?: boolean;
+  catchUp?: boolean;
 }) {
   const { schedule, stored, onChange, preview } = props;
+  const kinds = props.required ? KINDS.filter(([kind]) => kind !== "none") : KINDS;
   return (
     <div className="flex flex-col gap-3">
       <Field label="Kind" htmlFor="dot-schedule-kind">
@@ -296,7 +301,7 @@ export function ScheduleEditor(props: {
           value={kindOf(schedule)}
           onChange={(e) => onChange(withKind(schedule, ScheduleKind.parse(e.target.value), stored))}
         >
-          {KINDS.map(([kind, label]) => (
+          {kinds.map(([kind, label]) => (
             <option key={kind} value={kind}>
               {label}
             </option>
@@ -312,20 +317,22 @@ export function ScheduleEditor(props: {
       )}
       {schedule && schedule.rule.kind !== "once" && (
         <>
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <Switch
-                id="dot-schedule-catch-up"
-                checked={schedule.catch_up}
-                onCheckedChange={(catch_up) => onChange({ ...schedule, catch_up })}
-              />
-              <Label htmlFor="dot-schedule-catch-up">Catch up a missed run</Label>
+          {props.catchUp !== false && (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="dot-schedule-catch-up"
+                  checked={schedule.catch_up}
+                  onCheckedChange={(catch_up) => onChange({ ...schedule, catch_up })}
+                />
+                <Label htmlFor="dot-schedule-catch-up">Catch up a missed run</Label>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                When the PC was off or Dots was closed at a run's time, the dot runs once when Dots
+                is back, if that is within 24 hours.
+              </p>
             </div>
-            <p className="text-xs text-muted-foreground">
-              When the PC was off or Dots was closed at a run's time, the dot runs once when Dots
-              is back, if that is within 24 hours.
-            </p>
-          </div>
+          )}
           <StopFields
             until={schedule.until}
             stored={stored}

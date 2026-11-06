@@ -20,13 +20,14 @@ const failedRun = {
 };
 
 /// An Inbox as a test writes it: without paused watchers, held runs, proposed instructions,
-/// apps to review or team scope problems unless it says so.
+/// apps to review, team scope problems or waiting workflow runs unless it says so.
 type Optional =
   | "watchers"
   | "held"
   | "instructions"
   | "app_reviews"
   | "team_scope"
+  | "workflows"
   | "not_delivered"
   | "back"
   | "snoozed"
@@ -39,6 +40,7 @@ const none = {
   instructions: [],
   app_reviews: [],
   team_scope: [],
+  workflows: [],
   not_delivered: [],
   back: [],
   snoozed: [],
@@ -162,6 +164,7 @@ describe("the Inbox", () => {
         held: [], instructions: [],
         app_reviews: [],
         team_scope: [],
+        workflows: [],
       };
     });
 
@@ -601,6 +604,7 @@ describe("the approvals of one run", () => {
     held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
+    workflows: [],
     not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
@@ -778,6 +782,7 @@ describe("a schedule that needs attention", () => {
     held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
+    workflows: [],
     not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });

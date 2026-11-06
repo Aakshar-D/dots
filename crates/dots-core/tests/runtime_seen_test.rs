@@ -11,8 +11,13 @@ use std::time::{Duration, Instant};
 use common::spec;
 use dots_core::checkins::Tool;
 use dots_core::events::RuntimeEvent;
-use dots_core::model::{Dot, MessageKind, NewRun, Run, RunStatus, TriggerKind};
+use dots_core::model::{
+    Dot, MemberSpec, MessageKind, NewRun, NewWorkflowRun, ProjectSpec, Run, RunStatus,
+    StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WorkflowRunChange, WorkflowRunStatus,
+    WorkflowSpec, WorkflowTrigger,
+};
 use dots_core::store::Store;
+use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::{Config, Error, Runtime};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -254,4 +259,159 @@ async fn a_deleted_dot_is_no_longer_viewed_or_counted() {
     assert_eq!(t.rt.viewing(), None);
     assert!(t.rt.dot_overview().await.unwrap().is_empty());
     assert_eq!(t.rt.unread_total().await.unwrap(), 0);
+}
+
+/// A workflow run that waits for the person is in the Inbox and its count, and one a chat
+/// started also needs the chat's dot. Once that dot is deleted (and the chat's run with it),
+/// the run is in the Inbox only. A failed run of a workflow step is not a run to review.
+#[tokio::test]
+async fn a_waiting_workflow_run_is_in_the_inbox_and_needs_the_dot_whose_chat_started_it() {
+    let t = start().await;
+    let member = t.dot("member").await;
+    let chatter = t.dot("chatter").await;
+    let team =
+        t.rt.teams()
+            .create(&TeamSpec {
+                org_id: None,
+                workspace_id: "default".into(),
+                name: "crew".into(),
+                description: String::new(),
+                members: vec![MemberSpec {
+                    dot_id: member.id.clone(),
+                    role: "dev".into(),
+                }],
+            })
+            .await
+            .unwrap();
+    let project = ProjectSpec {
+        name: "Dots".into(),
+        repo_path: t._dir.path().to_string_lossy().to_string(),
+        default_branch: None,
+        remote: "origin".into(),
+    };
+    let project_id = t.store().add_project(&team.id, &project).await.unwrap().id;
+    let definition = Definition {
+        trigger: Trigger::Manual,
+        steps: vec![Step {
+            id: "a".into(),
+            name: "Work".into(),
+            kind: StepKind::Agent {
+                member: member.id.clone(),
+                job: "Fix it.".into(),
+                can_send_back_to: vec![],
+                outcomes: vec![],
+                delegate: None,
+            },
+        }],
+        budget: Budget::default(),
+    };
+    let workflow = t
+        .store()
+        .create_workflow(
+            &team.id,
+            &WorkflowSpec {
+                name: "Fix".into(),
+                definition: definition.clone(),
+                enabled: true,
+            },
+        )
+        .await
+        .unwrap();
+    let chat = t
+        .ended(&chatter, TriggerKind::Chat, RunStatus::Succeeded)
+        .await;
+    let wr = t
+        .store()
+        .create_workflow_run(&NewWorkflowRun {
+            workflow_id: workflow.id.clone(),
+            team_id: team.id.clone(),
+            definition,
+            project_id,
+            project,
+            task: "Fix the tray icon.".into(),
+            trigger: WorkflowTrigger::Chat,
+            origin_run_id: Some(chat.id.clone()),
+            test: false,
+        })
+        .await
+        .unwrap();
+    let set = |status: WorkflowRunStatus| WorkflowRunChange {
+        status: Some(status),
+        waiting_on: Some(Some(WaitingOn::StepFailed)),
+        current_step: Some(Some("a".into())),
+        ..Default::default()
+    };
+    // A failed run of the step: the workflow run's page shows it, not "Runs to review".
+    let step = t
+        .store()
+        .create_step_run(&wr.id, "a", 1, StepRunStatus::Failed)
+        .await
+        .unwrap();
+    let mut failed = NewRun::new(&member.id, TriggerKind::Manual);
+    failed.workflow_step_run_id = Some(step.id);
+    let failed = t.store().create_run(&failed).await.unwrap();
+    t.store()
+        .finish_run(&failed.id, RunStatus::Failed, None, Some("down"))
+        .await
+        .unwrap();
+    assert!(t.rt.inbox().await.unwrap().workflows.is_empty());
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
+
+    t.store()
+        .set_workflow_run(&wr.id, &set(WorkflowRunStatus::Waiting))
+        .await
+        .unwrap();
+    let inbox = t.rt.inbox().await.unwrap();
+    assert!(inbox.review_runs.is_empty());
+    let shown = |inbox: &dots_core::model::Inbox| {
+        inbox
+            .workflows
+            .iter()
+            .map(|w| {
+                (
+                    w.id.clone(),
+                    w.team_name.clone(),
+                    w.task.clone(),
+                    w.waiting_on,
+                    w.step_name.clone(),
+                    w.origin_dot_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let item = |origin: Option<&str>| {
+        vec![(
+            wr.id.clone(),
+            "crew".to_string(),
+            "Fix the tray icon.".to_string(),
+            WaitingOn::StepFailed,
+            Some("Work".to_string()),
+            origin.map(str::to_string),
+        )]
+    };
+    assert_eq!(shown(&inbox), item(Some(&chatter.id)));
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
+    assert_eq!(t.counts(&chatter).await, (1, 1));
+    assert_eq!(t.counts(&member).await, (0, 0));
+
+    t.rt.delete_dot(&chatter.id).await.unwrap();
+    assert_eq!(
+        t.store()
+            .get_workflow_run(&wr.id)
+            .await
+            .unwrap()
+            .origin_run_id,
+        None
+    );
+    assert_eq!(shown(&t.rt.inbox().await.unwrap()), item(None));
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
+    assert_eq!(t.counts(&member).await, (0, 0));
+
+    // Stopped, it no longer waits.
+    t.store()
+        .set_workflow_run(&wr.id, &set(WorkflowRunStatus::Cancelled))
+        .await
+        .unwrap();
+    assert!(t.rt.inbox().await.unwrap().workflows.is_empty());
+    assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
 }

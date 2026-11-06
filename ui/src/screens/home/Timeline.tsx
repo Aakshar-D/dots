@@ -13,6 +13,7 @@ import { RunCard } from "@/screens/home/RunCard";
 import { ScheduledCards } from "@/screens/home/ScheduledCard";
 import { SkipLine } from "@/screens/home/SkipLine";
 import { TopicRuns } from "@/screens/home/TopicRuns";
+import { useStartedWorkflows } from "@/screens/teams/run/WorkflowCard";
 
 type Entry = { topic: Topic } | { skip: ScheduleSkip };
 
@@ -67,6 +68,8 @@ export function Timeline(props: {
     queryFn: () => commands.appProposalsList(dotId),
     enabled: dotId !== null,
   });
+  // The cards of the workflows the shown runs started, from one query for all of them.
+  const workflows = useStartedWorkflows(topics.flatMap((topic) => topic.runs.map((r) => r.id)));
   // The slots skipped because the dot was busy: a query of their own, never messages, so they
   // cannot change what is unread. They stand among the topics by time.
   const skipsOf = props.skipsDotId ?? null;
@@ -90,6 +93,7 @@ export function Timeline(props: {
         <div className="mx-auto flex w-full max-w-[720px] flex-col gap-6 px-4 py-4">
           {props.children}
           {proposals.isError && <ErrorNote error={proposals.error} />}
+          {workflows.error && <ErrorNote error={workflows.error} />}
           {skipsQuery.isError && <ErrorNote error={skipsQuery.error} />}
           {entries.map((entry) => {
             if ("skip" in entry) return <SkipLine key={entry.skip.id} skip={entry.skip} />;
@@ -102,6 +106,7 @@ export function Timeline(props: {
                 dotName={dotName}
                 proposals={props.proposals}
                 moveTargets={props.moveTargets}
+                workflows={workflows.byRun}
               />
             ) : (
               <div key={topic.rootId} className="flex flex-col gap-4">
@@ -119,6 +124,7 @@ export function Timeline(props: {
                     checkIns={checkIns}
                     dotName={dotName}
                     moveTargets={props.moveTargets}
+                    workflows={workflows.byRun}
                   />
                 )}
               </div>

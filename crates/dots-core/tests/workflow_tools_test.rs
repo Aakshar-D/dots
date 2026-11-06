@@ -63,6 +63,72 @@ fn workflow_follows_memory_asked_by_sandboxed_and_custom_and_the_cli_never_sees_
     assert!(e.contains(WORKFLOW_RULE), "{e}");
 }
 
+/// The `Workflow` input of each workflow tool, as `team_tools::Tool::for_input` reads it.
+fn workflow_calls() -> [(&'static str, Value); 4] {
+    [
+        (
+            "start_workflow",
+            json!({"workflow": "Fix", "project": "Dots", "task": "Fix it."}),
+        ),
+        ("start_member", json!({"member": "dev", "task": "Fix it."})),
+        ("report_outcome", json!({"outcome": "fixed"})),
+        (
+            "send_back",
+            json!({"to_step": "Build", "note": "Use the light icon."}),
+        ),
+    ]
+}
+
+/// `report_outcome` and `send_back` never ask (the person's decision, 2026-11-04): under
+/// Sandboxed and Custom, under the person's own `Workflow: ask` and under a default of ask,
+/// they are allowed, while `start_workflow` and `start_member` still ask. A `Workflow: deny` or
+/// a default of deny refuses all four.
+#[test]
+fn report_outcome_and_send_back_never_ask_and_a_deny_refuses_every_workflow_tool() {
+    let asking = |name: &str| matches!(name, "start_workflow" | "start_member");
+    for preset in [Preset::Sandboxed, Preset::Custom] {
+        let p = Policy::preset(preset);
+        for (name, input) in workflow_calls() {
+            let want = if asking(name) {
+                Action::Ask
+            } else {
+                Action::Allow
+            };
+            assert_eq!(p.resolve(WORKFLOW_TOOL, &input), want, "{preset:?} {name}");
+        }
+    }
+    let mut own = Policy::preset(Preset::Trusted);
+    own.rules.push(Rule::new("Workflow", Action::Ask));
+    let mut no_rule = Policy::preset(Preset::Custom);
+    no_rule.rules.retain(|r| r.tool != "Workflow");
+    assert_eq!(no_rule.default, Action::Ask);
+    for p in [&own, &no_rule] {
+        for (name, input) in workflow_calls() {
+            let want = if asking(name) {
+                Action::Ask
+            } else {
+                Action::Allow
+            };
+            assert_eq!(p.resolve(WORKFLOW_TOOL, &input), want, "{name}");
+        }
+    }
+    let mut denies = Policy::preset(Preset::Sandboxed);
+    denies.rules.push(Rule::new("Workflow", Action::Deny));
+    let mut by_default = no_rule.clone();
+    by_default.default = Action::Deny;
+    for p in [&denies, &by_default] {
+        for (name, input) in workflow_calls() {
+            assert_eq!(p.resolve(WORKFLOW_TOOL, &input), Action::Deny, "{name}");
+        }
+    }
+    // Only `Workflow`: another tool's input with an outcome still asks as before.
+    let sandboxed = Policy::preset(Preset::Sandboxed);
+    assert_eq!(
+        sandboxed.resolve("WebFetch", &json!({"outcome": "fixed"})),
+        Action::Ask
+    );
+}
+
 /// Migration 0015 on a database Dots left at 0014: every stored policy whose preset is not
 /// Custom gets the `Workflow` rule its preset has (Sandboxed asks, the others allow) unless a
 /// rule names it, after `Memory`; 0016 then adds `App` and `ProposeApp` (app library spec
@@ -327,7 +393,7 @@ async fn a_local_helper_starts_the_teams_workflow_from_a_chat() {
             "Workflow \"Fix\" started on \"Dots\".",
         ]
     );
-    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1);
     let wr = &runs[0];
     assert_eq!(wr.trigger, WorkflowTrigger::Chat);
@@ -383,7 +449,7 @@ async fn a_claude_helper_starts_it_through_dots_own_server() {
         args.contains(&"mcp__dots__start_workflow".to_string()),
         "{args:?}"
     );
-    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1, "{runs:#?}");
     assert_eq!(runs[0].origin_run_id.as_deref(), Some(chat.id.as_str()));
     assert_eq!(runs[0].task, "Fix the icon.");
@@ -527,7 +593,13 @@ async fn a_call_held_for_approval_is_refused_once_the_member_stops_being_a_start
         tool_result(&llm.requests()[1], "c1"),
         "There is no workflow named \"Fix\" that you may start."
     );
-    assert!(t.rt.workflows().list(None, 10).await.unwrap().is_empty());
+    assert!(t
+        .rt
+        .workflows()
+        .list(&Default::default())
+        .await
+        .unwrap()
+        .is_empty());
     t.rt.shutdown();
 }
 
@@ -574,7 +646,7 @@ async fn an_approval_that_outlives_the_wait_still_starts_the_workflow_on_the_res
         tokio::time::sleep(Duration::from_millis(50)).await;
     };
     wait_status(t.rt.store(), &child.id, RunStatus::Succeeded, 30).await;
-    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1, "{runs:#?}");
     assert_eq!(runs[0].task, "Fix the icon.");
     t.rt.shutdown();
@@ -683,7 +755,7 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
         tool_result(&reqs[2], "c2"),
         "Not started: \"Fix\" is already running on \"Dots\" from this chat."
     );
-    let runs = t.rt.workflows().list(None, 10).await.unwrap();
+    let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1, "{runs:#?}");
     // Once that run has ended, the same chat starts it again.
     t.rt.workflows().stop(&runs[0].id).await.unwrap();
@@ -697,7 +769,14 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
         tool_result(reqs.last().unwrap(), "c3"),
         "Workflow \"Fix\" started on \"Dots\"."
     );
-    assert_eq!(t.rt.workflows().list(None, 10).await.unwrap().len(), 2);
+    assert_eq!(
+        t.rt.workflows()
+            .list(&Default::default())
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
     t.rt.shutdown();
 }
 
@@ -749,12 +828,25 @@ async fn a_sandboxed_dot_is_offered_start_workflow_and_asks_before_it_starts_one
     };
     assert_eq!(approval.tool, "Workflow");
     assert!(tool_names(&llm.requests()[0]).contains(&"start_workflow".to_string()));
-    assert!(t.rt.workflows().list(None, 10).await.unwrap().is_empty());
+    assert!(t
+        .rt
+        .workflows()
+        .list(&Default::default())
+        .await
+        .unwrap()
+        .is_empty());
     t.rt.decide_approval(&approval.id, true, None, None)
         .await
         .unwrap();
     wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
-    assert_eq!(t.rt.workflows().list(None, 10).await.unwrap().len(), 1);
+    assert_eq!(
+        t.rt.workflows()
+            .list(&Default::default())
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
     t.rt.shutdown();
 }
 
@@ -1342,14 +1434,23 @@ async fn a_claude_step_not_offered_report_outcome_or_send_back_is_refused_both()
     t.rt.shutdown();
 }
 
-/// The plain Sandboxed preset asks before a step's run reports its outcome (policy
-/// `Workflow`); nothing is recorded until the person allows it.
+/// The plain Sandboxed preset does not ask before a step's run reports its outcome or sends
+/// the work back (the person's decision, 2026-11-04): both are recorded at once, and no
+/// approval is asked for.
 #[tokio::test]
-async fn a_sandboxed_step_asks_before_it_reports_an_outcome() {
+async fn a_sandboxed_step_reports_its_outcome_and_sends_back_without_asking() {
     let t = start(json!([])).await;
     let llm = Llm::start(vec![
+        text("Built."),
         call("c1", "report_outcome", json!({"outcome": "done"})),
-        text("Reported."),
+        call(
+            "c2",
+            "send_back",
+            json!({"to_step": "Build it", "note": "Use the light icon."}),
+        ),
+        text("Sent back."),
+        text("Built again."),
+        text("Fine now."),
     ])
     .await;
     let mut s = local_spec(&t, &llm.endpoint(), "helper");
@@ -1360,9 +1461,68 @@ async fn a_sandboxed_step_asks_before_it_reports_an_outcome() {
     let wr = run_steps(
         &t,
         &[&helper],
-        vec![agent_step("review", "Review it", &helper, &["done"], &[])],
+        vec![
+            agent_step("build", "Build it", &helper, &[], &[]),
+            agent_step("review", "Review it", &helper, &["done"], &["build"]),
+        ],
     )
     .await;
+    let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
+    let reqs = llm.requests();
+    assert_eq!(tool_result(&reqs[2], "c1"), "Outcome recorded.");
+    assert_eq!(
+        tool_result(&reqs[3], "c2"),
+        "Sent back to \"Build it\". End your turn now: the work goes back when you finish."
+    );
+    let review = wr
+        .steps
+        .iter()
+        .find(|s| s.step_id == "review" && s.attempt == 1)
+        .unwrap();
+    assert_eq!(review.outcome.as_deref(), Some("done"));
+    assert_eq!(
+        review.send_back,
+        Some(json!({"to": "build", "note": "Use the light icon."}))
+    );
+    assert_eq!(wr.send_backs, 1);
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(
+                event,
+                dots_core::events::RuntimeEvent::ApprovalRequested { .. }
+            ),
+            "{event:?}"
+        );
+    }
+    t.rt.shutdown();
+}
+
+/// The plain Sandboxed preset still asks before a delegate step's run starts a member: the
+/// member starts once the person allows it.
+#[tokio::test]
+async fn a_sandboxed_lead_asks_before_it_starts_a_member() {
+    let t = start(json!([])).await;
+    let lead_llm = Llm::start(vec![
+        call(
+            "c1",
+            "start_member",
+            json!({"member": "dev", "task": "Make the icon light."}),
+        ),
+        text("Started."),
+        text("All in."),
+    ])
+    .await;
+    let dev_llm = Llm::start(vec![text("Made it light.")]).await;
+    let mut s = local_spec(&t, &lead_llm.endpoint(), "lead");
+    s.policy = Policy::preset(Preset::Sandboxed);
+    s.approval_wait_secs = 30;
+    let lead = t.rt.create_dot(s, None, None).await.unwrap();
+    let dev =
+        t.rt.create_dot(local_spec(&t, &dev_llm.endpoint(), "dev"), None, None)
+            .await
+            .unwrap();
+    let mut events = t.rt.subscribe();
+    let wr = run_steps(&t, &[&lead, &dev], vec![delegate_step(&lead, &dev)]).await;
     let approval = loop {
         if let dots_core::events::RuntimeEvent::ApprovalRequested { approval } =
             events.recv().await.unwrap()
@@ -1371,15 +1531,20 @@ async fn a_sandboxed_step_asks_before_it_reports_an_outcome() {
         }
     };
     assert_eq!(approval.tool, "Workflow");
-    assert_eq!(approval.input, json!({"outcome": "done"}));
-    let held = t.rt.workflows().get(&wr.id).await.unwrap();
-    assert_eq!(held.steps[0].outcome, None);
+    assert_eq!(
+        approval.input,
+        json!({"member": "dev", "task": "Make the icon light."})
+    );
+    assert!(dev_llm.requests().is_empty());
     t.rt.decide_approval(&approval.id, true, None, None)
         .await
         .unwrap();
     let wr = until(&t, &wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded).await;
-    assert_eq!(wr.steps[0].outcome.as_deref(), Some("done"));
-    assert_eq!(tool_result(&llm.requests()[1], "c1"), "Outcome recorded.");
+    assert_eq!(
+        tool_result(&lead_llm.requests()[1], "c1"),
+        "Started \"dev\"."
+    );
+    assert_eq!(wr.steps[0].handoff.as_ref().unwrap().members.len(), 1);
     t.rt.shutdown();
 }
 

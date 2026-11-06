@@ -4,10 +4,13 @@ use std::path::PathBuf;
 
 use common::{init_repo, spec, wait_status};
 use dots_core::checkins::Tool;
+use dots_core::events::RuntimeEvent;
 use dots_core::model::{
-    ApprovalStatus, DotSpec, MessageKind, NewRun, RunStatus, TriggerKind, WorkspaceMode,
+    ApprovalStatus, Dot, DotSpec, MemberSpec, MessageKind, NewRun, RunStatus, TeamSpec,
+    TriggerKind, WorkflowSpec, WorkspaceMode,
 };
 use dots_core::store::Store;
+use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::{Config, Error, Runtime};
 use serde_json::{json, Value};
 use tempfile::TempDir;
@@ -873,4 +876,120 @@ async fn close_ends_the_runtime_and_leaves_a_database_to_back_up() {
     dots_core::store::backup_database(&db, &dest).await.unwrap();
     let copy = Store::open(&dest).await.unwrap();
     assert_eq!(copy.list_dots().await.unwrap()[0].id, dot.id);
+}
+
+/// The team and workflow events `events` has had since it was last read, as `team <name>` and
+/// `workflow <name>` by the names in `names` (id, name).
+fn team_events(
+    events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>,
+    names: &[(&str, &str)],
+) -> Vec<String> {
+    let name = |id: &str| names.iter().find(|(i, _)| *i == id).map_or("?", |(_, n)| n);
+    let mut seen = Vec::new();
+    while let Ok(e) = events.try_recv() {
+        match e {
+            RuntimeEvent::TeamUpdated { team_id } => seen.push(format!("team {}", name(&team_id))),
+            RuntimeEvent::WorkflowUpdated { workflow_id, .. } => {
+                seen.push(format!("workflow {}", name(&workflow_id)))
+            }
+            _ => {}
+        }
+    }
+    seen
+}
+
+#[tokio::test]
+async fn renaming_or_deleting_a_member_dot_announces_its_teams() {
+    let t = start(None, None).await;
+    let dev =
+        t.rt.create_dot(folder_spec(&t.dir, "dev"), None, None)
+            .await
+            .unwrap();
+    let helper =
+        t.rt.create_dot(folder_spec(&t.dir, "helper"), None, None)
+            .await
+            .unwrap();
+    let alone =
+        t.rt.create_dot(folder_spec(&t.dir, "alone"), None, None)
+            .await
+            .unwrap();
+    let member = |dot: &Dot| MemberSpec {
+        dot_id: dot.id.clone(),
+        role: "dev agent".into(),
+    };
+    let team = |name: &str, members: Vec<MemberSpec>| TeamSpec {
+        org_id: None,
+        workspace_id: "default".into(),
+        name: name.into(),
+        description: String::new(),
+        members,
+    };
+    let crew =
+        t.rt.teams()
+            .create(&team("Crew", vec![member(&dev), member(&helper)]))
+            .await
+            .unwrap();
+    // Teams are announced in the order of their ids, which sort by the millisecond made.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    let pair =
+        t.rt.teams()
+            .create(&team("Pair", vec![member(&dev)]))
+            .await
+            .unwrap();
+    let fix = WorkflowSpec {
+        name: "Fix".into(),
+        definition: Definition {
+            trigger: Trigger::Manual,
+            steps: vec![Step {
+                id: "a".into(),
+                name: "Work".into(),
+                kind: StepKind::Agent {
+                    member: dev.id.clone(),
+                    job: "Fix it.".into(),
+                    can_send_back_to: vec![],
+                    outcomes: vec![],
+                    delegate: None,
+                },
+            }],
+            budget: Budget::default(),
+        },
+        enabled: true,
+    };
+    let fix = t.rt.teams().create_workflow(&crew.id, &fix).await.unwrap();
+    let names = [
+        (crew.id.as_str(), "Crew"),
+        (pair.id.as_str(), "Pair"),
+        (fix.id.as_str(), "Fix"),
+    ];
+    let mut events = t.rt.subscribe();
+
+    // A change that keeps the name announces no team.
+    let mut changed = dev.spec.clone();
+    changed.instructions = "Fix what you are given.".into();
+    t.rt.update_dot(&dev.id, changed.clone()).await.unwrap();
+    assert!(team_events(&mut events, &names).is_empty());
+    // A new name does: a team shows its members by name.
+    changed.name = "developer".into();
+    t.rt.update_dot(&dev.id, changed).await.unwrap();
+    assert_eq!(team_events(&mut events, &names), ["team Crew", "team Pair"]);
+    let shown = t.rt.teams().get(&crew.id).await.unwrap();
+    assert_eq!(shown.members[0].dot_name, "developer");
+    // A dot in no team announces none.
+    t.rt.delete_dot(&alone.id).await.unwrap();
+    assert!(team_events(&mut events, &names).is_empty());
+    // A deleted member leaves its teams, and their workflows may now have a problem.
+    t.rt.delete_dot(&dev.id).await.unwrap();
+    assert_eq!(
+        team_events(&mut events, &names),
+        ["team Crew", "workflow Fix", "team Pair"]
+    );
+    let fix = t.rt.teams().get_workflow(&fix.id).await.unwrap();
+    assert_eq!(
+        fix.problem,
+        Some(format!(
+            "step \"Work\": {} is not a member of the team",
+            dev.id
+        ))
+    );
+    t.rt.shutdown();
 }

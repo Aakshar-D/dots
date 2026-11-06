@@ -9,6 +9,7 @@ import {
   Rocket,
   Settings as SettingsIcon,
   Target,
+  UsersRound,
 } from "lucide-react";
 import { useEffect } from "react";
 import { NavLink, Outlet } from "react-router";
@@ -31,6 +32,7 @@ const LINKS = [
   { to: "/intents", label: "Intents", icon: Target },
   { to: "/apps", label: "Apps", icon: LayoutGrid },
   { to: "/library", label: "Library", icon: LibraryIcon },
+  { to: "/teams", label: "Teams", icon: UsersRound },
   { to: "/connectors", label: "Connectors", icon: Plug },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];

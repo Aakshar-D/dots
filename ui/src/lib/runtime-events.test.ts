@@ -345,6 +345,118 @@ describe("runtime events and the query cache", () => {
       false,
     ]);
   });
+
+  it("marks the teams, the team's drafts' checks and the inbox stale on a team update", () => {
+    const qc = createQueryClient();
+    const [team] = sample.teams;
+    const [{ name, definition, enabled }] = sample.workflows;
+    const draft = { name, definition, enabled };
+    // A change of members can change a draft's problem; the Inbox lists members outside the
+    // team's account or workspace.
+    const lists = [
+      keys.teams,
+      keys.team(team.id),
+      keys.workflowProblem(team.id, draft),
+      keys.inbox,
+    ];
+    const untouched = [
+      keys.workflowProblem("another-team", draft),
+      keys.workflows(team.id),
+      keys.workflow(sample.workflows[0].id),
+      keys.overview,
+    ];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "team_updated", team_id: team.id });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("marks the team's workflows and the workflow stale on a workflow update", () => {
+    const qc = createQueryClient();
+    const [workflow] = sample.workflows;
+    const lists = [keys.workflows(workflow.team_id), keys.workflow(workflow.id)];
+    const untouched = [
+      keys.workflows("another-team"),
+      keys.workflow("another-workflow"),
+      keys.teams,
+      keys.workflowRuns({ team_id: workflow.team_id }),
+    ];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, {
+      type: "workflow_updated",
+      team_id: workflow.team_id,
+      workflow_id: workflow.id,
+    });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("marks the run, every run list, its workflow and what needs you stale on a run update", () => {
+    const qc = createQueryClient();
+    const [run] = sample.workflowRuns;
+    const [tip] = sample.check.branches;
+    const lists = [
+      keys.workflowRun(run.id),
+      keys.workflowCheck(run.id),
+      keys.workflowBranchDiff(run.id, tip.branch, tip.commit ?? ""),
+      keys.workflowDotRuns(run.id),
+      keys.workflowRuns({ team_id: run.team_id }),
+      keys.workflowRuns({ workflow_id: "another-workflow" }),
+      keys.workflowRunsForOrigins([run.origin_run_id ?? ""]),
+      // Its runs in flight and last run: no workflow event says they changed.
+      keys.workflows(run.team_id),
+      keys.workflow(run.workflow_id ?? ""),
+      // A waiting run is in the Inbox and needs the dot whose chat started it.
+      keys.inbox,
+      keys.overview,
+      keys.unreadTotal,
+    ];
+    const untouched = [
+      keys.workflowRun("another-run"),
+      keys.workflowDotRuns("another-run"),
+      keys.workflows("another-team"),
+      keys.workflow("another-workflow"),
+      keys.teams,
+      keys.runs(sample.dot.id),
+    ];
+    for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+
+    applyRuntimeEvent(qc, { type: "workflow_run_updated", run });
+    for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
+    for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("marks the run pages' dot runs stale when a step's run changes, not for another run", () => {
+    const qc = createQueryClient();
+    const pages = [keys.workflowDotRuns("01J0WFR"), keys.workflowDotRuns("01J0WFR2")];
+    for (const key of pages) qc.setQueryData(key, []);
+    expect(sample.run.workflow_step_run_id).toBeNull();
+    applyRuntimeEvent(qc, { type: "run_updated", run: sample.run });
+    expect(pages.map((key) => stale(qc, key))).toEqual([false, false]);
+
+    // The run names its step run, not the workflow run: every page's links are asked again.
+    const step = { ...sample.run, status: "succeeded" as const, workflow_step_run_id: "01J0STP1" };
+    applyRuntimeEvent(qc, { type: "run_updated", run: step });
+    expect(pages.map((key) => stale(qc, key))).toEqual([true, true]);
+  });
+
+  it("refreshes a run whose workflow was deleted without touching any workflow", () => {
+    const qc = createQueryClient();
+    const run = sample.workflowRuns.find((r) => r.workflow_id === null)!;
+    const workflow = keys.workflow(sample.workflows[0].id);
+    for (const key of [keys.workflowRun(run.id), keys.workflows(run.team_id), workflow]) {
+      qc.setQueryData(key, []);
+    }
+
+    applyRuntimeEvent(qc, { type: "workflow_run_updated", run });
+    expect([
+      stale(qc, keys.workflowRun(run.id)),
+      stale(qc, keys.workflows(run.team_id)),
+      stale(qc, workflow),
+    ]).toEqual([true, true, false]);
+  });
 });
 
 describe("a run's events while their list loads or refetches", () => {
@@ -477,7 +589,7 @@ describe("a run's events while their list loads or refetches", () => {
 });
 
 describe("a change announced while a fetch is in flight", () => {
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [] };
   /// Shows the Inbox as the app's frame does.
   const watchInbox = (qc: Client) =>
     new QueryObserver(qc, { queryKey: keys.inbox, queryFn: commands.inbox }).subscribe(() => {});
