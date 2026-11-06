@@ -7,6 +7,7 @@ import { AppReviews } from "@/components/AppReviewCard";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { LoadErrors } from "@/components/ErrorNote";
 import { InstructionsCard } from "@/components/InstructionsCard";
+import { ChangesLine, isFolderRun } from "@/components/RunChanges";
 import { Failure, Transcript } from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { isActive, type Topic } from "@/lib/home-topics";
@@ -65,11 +66,15 @@ export function TopicRuns(props: {
         messages={checkIns}
         dotName={dotName}
         variant="conversation"
-        after={(run) =>
-          props.workflows
-            ?.get(run.id)
-            ?.map((workflowRun) => <WorkflowCard key={workflowRun.id} run={workflowRun} />)
-        }
+        after={(run) => (
+          <>
+            {props.workflows
+              ?.get(run.id)
+              ?.map((workflowRun) => <WorkflowCard key={workflowRun.id} run={workflowRun} />)}
+            {/* The files a folder run changed, with Undo (undo spec section 5). */}
+            {isFolderRun(run) && <ChangesLine run={run} />}
+          </>
+        )}
         messageAction={
           props.moveTargets &&
           ((run) =>
