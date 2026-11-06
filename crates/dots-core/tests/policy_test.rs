@@ -68,6 +68,7 @@ fn deny_beats_allow_beats_ask() {
         ],
         default: Action::Allow,
         mcp_default: Action::Ask,
+        ask_send_delete: false,
     };
     assert_eq!(p.resolve("Bash", &bash("rm -i x")), Action::Deny);
     assert_eq!(p.resolve("Bash", &bash("echo hi")), Action::Ask);
@@ -95,6 +96,7 @@ fn deny_matches_any_segment() {
         rules: vec![Rule::new("Bash(rm:*)", Action::Deny)],
         default: Action::Allow,
         mcp_default: Action::Ask,
+        ask_send_delete: false,
     };
     assert_eq!(p.resolve("Bash", &bash("ls; rm -rf x")), Action::Deny);
     assert_eq!(p.resolve("Bash", &bash("ls && echo ok")), Action::Allow);
@@ -110,6 +112,7 @@ fn wildcards() {
         ],
         default: Action::Allow,
         mcp_default: Action::Ask,
+        ask_send_delete: false,
     };
     assert_eq!(p.resolve("mcp__sf__query", &json!({})), Action::Deny);
     assert_eq!(p.resolve("Read", &json!({})), Action::Ask);
@@ -123,6 +126,7 @@ fn validate_rejects_bad_patterns() {
             rules: vec![Rule::new(bad, Action::Allow)],
             default: Action::Ask,
             mcp_default: Action::Ask,
+            ask_send_delete: false,
         };
         assert!(p.validate().is_err(), "{bad:?} should be invalid");
     }
@@ -152,6 +156,7 @@ fn custom(rules: Vec<Rule>, default: Action) -> Policy {
         rules,
         default,
         mcp_default: Action::Ask,
+        ask_send_delete: false,
     }
 }
 

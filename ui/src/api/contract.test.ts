@@ -35,6 +35,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   RunEventData: T.RunEventData.array(),
   Approval: T.Approval,
   RuleCandidate: T.RuleCandidate.array(),
+  ApprovalGuard: T.ApprovalGuard,
   RuntimeEvent: T.RuntimeEvent.array(),
   Status: T.Status,
   Settings: T.Settings,

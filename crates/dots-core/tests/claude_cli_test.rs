@@ -388,3 +388,37 @@ fn resolve_finds_plain_binary_on_path() {
         Some(tmp.path().join("claude"))
     );
 }
+
+fn allowed_tools(args: &[String]) -> Vec<String> {
+    args.iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn with_the_guard_on_every_shell_command_reaches_approve() {
+    let mut c = ctx(None);
+    c.dot.spec.policy = Policy::preset(Preset::Sandboxed);
+    // Sandboxed allows `git status`, `git diff` and `git add`; a wide rule covers `git push`.
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("PowerShell(git:*)", Action::Allow));
+    let on = allowed_tools(&build_args(&c, Path::new("m.json")));
+    assert!(
+        !on.iter()
+            .any(|a| a.starts_with("Bash(") || a.starts_with("PowerShell(")),
+        "{on:?}"
+    );
+    // The other allow rules stay with the CLI.
+    assert!(on.iter().any(|a| a == "Write(./**)"), "{on:?}");
+    // Switched off, the CLI gets the shell rules as before.
+    c.dot.spec.policy.ask_send_delete = false;
+    let off = allowed_tools(&build_args(&c, Path::new("m.json")));
+    assert!(off.iter().any(|a| a == "Bash(git status:*)"), "{off:?}");
+    assert!(off.iter().any(|a| a == "PowerShell(git:*)"), "{off:?}");
+}

@@ -16,6 +16,7 @@
         "name": "nightly-tests",
         "org_id": null,
         "policy": {
+          "ask_send_delete": true,
           "default": "ask",
           "mcp_default": "ask",
           "preset": "sandboxed",
@@ -635,6 +636,11 @@
     "status": "pending",
     "tool": "Bash"
   },
+  "ApprovalGuard": {
+    "always_asks": true,
+    "kind": "send",
+    "summary": "push commits with git (git push origin main)"
+  },
   "BrowserStatus": {
     "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
     "npx": "C:/Program Files/nodejs/npx.cmd"
@@ -844,6 +850,7 @@
     "decide_approval",
     "approval_rule_candidates",
     "approval_touches_private",
+    "approval_guard",
     "decide_run_approvals",
     "inbox",
     "inbox_count",
@@ -1812,6 +1819,7 @@
     "name": "nightly-tests",
     "org_id": null,
     "policy": {
+      "ask_send_delete": true,
       "default": "ask",
       "mcp_default": "ask",
       "preset": "sandboxed",
@@ -1997,6 +2005,7 @@
       "name": "nightly-tests",
       "org_id": null,
       "policy": {
+        "ask_send_delete": true,
         "default": "ask",
         "mcp_default": "ask",
         "preset": "sandboxed",
@@ -2221,6 +2230,7 @@
     "model": "google/gemma-4-12b-qat",
     "name": "notes",
     "policy": {
+      "ask_send_delete": true,
       "default": "deny",
       "mcp_default": "deny",
       "preset": "read-only",
@@ -4413,6 +4423,7 @@
     "model": "sonnet",
     "name": "",
     "policy": {
+      "ask_send_delete": true,
       "default": "ask",
       "mcp_default": "ask",
       "preset": "sandboxed",
@@ -6645,6 +6656,7 @@
         "name": "nightly-tests",
         "org_id": null,
         "policy": {
+          "ask_send_delete": true,
           "default": "ask",
           "mcp_default": "ask",
           "preset": "sandboxed",
@@ -6819,6 +6831,7 @@
         "name": "nightly-tests",
         "org_id": null,
         "policy": {
+          "ask_send_delete": true,
           "default": "ask",
           "mcp_default": "ask",
           "preset": "sandboxed",
