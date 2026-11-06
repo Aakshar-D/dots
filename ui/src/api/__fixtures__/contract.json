@@ -657,6 +657,51 @@
       "title": "Projects"
     }
   ],
+  "ChangesPreview": {
+    "diff": {
+      "exists": true,
+      "files": [
+        {
+          "binary": false,
+          "patch": "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@\n-a\n+b\n",
+          "path": "src/lib.rs",
+          "status": "modified"
+        }
+      ],
+      "truncated": false
+    },
+    "files": [
+      {
+        "action": "ready",
+        "path": "src/lib.rs",
+        "reason": null,
+        "status": "modified"
+      },
+      {
+        "action": "conflict",
+        "path": "notes.md",
+        "reason": "The file changed after this run.",
+        "status": "added"
+      },
+      {
+        "action": "done",
+        "path": "old.txt",
+        "reason": null,
+        "status": "deleted"
+      },
+      {
+        "action": "cannot",
+        "path": "data/dump.sql",
+        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "status": "deleted"
+      }
+    ],
+    "later_runs": [
+      "01J0LATER"
+    ],
+    "redo": false,
+    "run_id": "01J0RUN"
+  },
   "ChatGptStatus": [
     {
       "account": null,
@@ -850,6 +895,10 @@
     "dismiss_schedule_attention",
     "worktree_diff",
     "discard_worktree",
+    "run_changes",
+    "run_changes_preview",
+    "undo_run",
+    "redo_run",
     "mark_reviewed",
     "open_run_folder",
     "connector_list",
@@ -5060,6 +5109,42 @@
     "workflow_step_run_id": null,
     "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
   },
+  "RunChanges": {
+    "files": [
+      {
+        "path": "src/lib.rs",
+        "reason": null,
+        "status": "modified",
+        "undoable": true
+      },
+      {
+        "path": "notes.md",
+        "reason": null,
+        "status": "added",
+        "undoable": true
+      },
+      {
+        "path": "data/dump.sql",
+        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "status": "deleted",
+        "undoable": false
+      }
+    ],
+    "git": true,
+    "note": null,
+    "run_id": "01J0RUN",
+    "state": "recorded",
+    "undone_at": null
+  },
+  "RunChangesNone": null,
+  "RunChangesUnavailable": {
+    "files": [],
+    "git": false,
+    "note": "This folder has more than 20000 files to back up, so Dots did not back it up and this run can't be undone.",
+    "run_id": "01J0RUN",
+    "state": "unavailable",
+    "undone_at": null
+  },
   "RunEventData": [
     {
       "kind": "session_started",
@@ -6949,6 +7034,59 @@
     "dot_id": "01J0DOT",
     "root_run_id": "01J0RUN",
     "title": "Trip plans"
+  },
+  "UndoOutcome": {
+    "changes": {
+      "files": [
+        {
+          "path": "src/lib.rs",
+          "reason": null,
+          "status": "modified",
+          "undoable": true
+        },
+        {
+          "path": "notes.md",
+          "reason": null,
+          "status": "added",
+          "undoable": true
+        },
+        {
+          "path": "data/dump.sql",
+          "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+          "status": "deleted",
+          "undoable": false
+        }
+      ],
+      "git": true,
+      "note": null,
+      "run_id": "01J0RUN",
+      "state": "recorded",
+      "undone_at": "2026-10-09T12:00:00.000Z"
+    },
+    "redo": false,
+    "restored": [
+      "src/lib.rs"
+    ],
+    "skipped": [
+      {
+        "action": "conflict",
+        "path": "notes.md",
+        "reason": "The file changed after this run.",
+        "status": "added"
+      },
+      {
+        "action": "done",
+        "path": "old.txt",
+        "reason": null,
+        "status": "deleted"
+      },
+      {
+        "action": "cannot",
+        "path": "data/dump.sql",
+        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "status": "deleted"
+      }
+    ]
   },
   "UpdateNote": [
     {

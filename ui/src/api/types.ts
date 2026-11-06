@@ -2023,6 +2023,48 @@ export const WorktreeDiff = z.strictObject({
   exists: z.boolean(),
 });
 
+// What a folder run changed in its folder, from its checkpoint (undo spec section 3).
+export const ChangesState = z.enum(["recording", "recorded", "unavailable"]);
+export const ChangedFile = z.strictObject({
+  path: z.string(),
+  status: FileStatus,
+  // Dots kept what it needs to put the file back.
+  undoable: z.boolean(),
+  reason: nullable(z.string()),
+});
+export const RunChanges = z.strictObject({
+  run_id: z.string(),
+  state: ChangesState,
+  // The folder is in a git repository: files it ignores are not tracked.
+  git: z.boolean(),
+  files: z.array(ChangedFile),
+  note: nullable(z.string()),
+  undone_at: nullable(z.string()),
+});
+// What undo (or redo) would do to one file now.
+export const FileAction = z.enum(["ready", "conflict", "done", "cannot"]);
+export const PlannedFile = z.strictObject({
+  path: z.string(),
+  status: FileStatus,
+  action: FileAction,
+  reason: nullable(z.string()),
+});
+export const ChangesPreview = z.strictObject({
+  run_id: z.string(),
+  // The run's changes were undone: the action is redo.
+  redo: z.boolean(),
+  files: z.array(PlannedFile),
+  diff: WorktreeDiff,
+  // Later runs in the same folder that changed some of the same files.
+  later_runs: z.array(z.string()),
+});
+export const UndoOutcome = z.strictObject({
+  redo: z.boolean(),
+  restored: z.array(z.string()),
+  skipped: z.array(PlannedFile),
+  changes: RunChanges,
+});
+
 // `cancelled`: the user declined a native confirmation; nothing was changed.
 export const CmdErrorKind = z.enum(["not_found", "invalid", "not_allowed", "conflict", "internal", "cancelled"]);
 export const CmdError = z.strictObject({ kind: CmdErrorKind, message: z.string() });
@@ -2360,6 +2402,12 @@ export type ValueSource = z.infer<typeof ValueSource>;
 export type GrantStatus = z.infer<typeof GrantStatus>;
 export type FileDiff = z.infer<typeof FileDiff>;
 export type WorktreeDiff = z.infer<typeof WorktreeDiff>;
+export type ChangedFile = z.infer<typeof ChangedFile>;
+export type RunChanges = z.infer<typeof RunChanges>;
+export type FileAction = z.infer<typeof FileAction>;
+export type PlannedFile = z.infer<typeof PlannedFile>;
+export type ChangesPreview = z.infer<typeof ChangesPreview>;
+export type UndoOutcome = z.infer<typeof UndoOutcome>;
 export type CmdErrorKind = z.infer<typeof CmdErrorKind>;
 export type CmdError = z.infer<typeof CmdError>;
 export type StartupError = z.infer<typeof StartupError>;

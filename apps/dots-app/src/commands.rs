@@ -24,6 +24,7 @@ use dots_core::apps::screen::{AppFile, AppRow};
 use dots_core::apps::wake::RunLink;
 use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
+use dots_core::checkpoint::{ChangesPreview, RunChanges, UndoOutcome};
 use dots_core::claude_agents::{AgentImport, ScannedAgent};
 use dots_core::connectors::{self, ConnectorEntry, RuntimeCheck};
 use dots_core::inbox::InboxKey;
@@ -1219,6 +1220,43 @@ pub async fn worktree_diff(state: State<'_, AppState>, run_id: String) -> Res<Wo
 #[tauri::command]
 pub async fn discard_worktree(state: State<'_, AppState>, run_id: String) -> Res<Run> {
     Ok(state.rt()?.discard_worktree(&run_id).await?)
+}
+
+/// What a folder run changed in its folder (undo spec section 3); `null` for a run with no
+/// checkpoint.
+#[tauri::command]
+pub async fn run_changes(state: State<'_, AppState>, run_id: String) -> Res<Option<RunChanges>> {
+    Ok(state.rt()?.run_changes(&run_id).await?)
+}
+
+/// Each changed file with what undo (or redo) would do to it now, and the run's diff.
+#[tauri::command]
+pub async fn run_changes_preview(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Res<ChangesPreview> {
+    Ok(state.rt()?.run_changes_preview(&run_id).await?)
+}
+
+/// **Undo these changes**: the run's files as they were before it; files changed since are
+/// skipped unless `overwrite`.
+#[tauri::command]
+pub async fn undo_run(
+    state: State<'_, AppState>,
+    run_id: String,
+    overwrite: bool,
+) -> Res<UndoOutcome> {
+    Ok(state.rt()?.undo_run(&run_id, overwrite).await?)
+}
+
+/// **Redo**: an undone run's files as the run left them.
+#[tauri::command]
+pub async fn redo_run(
+    state: State<'_, AppState>,
+    run_id: String,
+    overwrite: bool,
+) -> Res<UndoOutcome> {
+    Ok(state.rt()?.redo_run(&run_id, overwrite).await?)
 }
 
 #[tauri::command]

@@ -11,6 +11,9 @@ use dots_core::accounts::{
     CurrentScope, DotAccess, Identity, Membership, Refusals, Role, WorkspaceRole, WorkspaceView,
 };
 use dots_core::browser::BrowserStatus;
+use dots_core::checkpoint::{
+    ChangedFile, ChangesPreview, ChangesState, FileAction, PlannedFile, RunChanges, UndoOutcome,
+};
 use dots_core::claude_agents::{AgentImport, AgentSourceKind, ImportFailure, ScannedAgent};
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
@@ -537,6 +540,69 @@ fn schedule_skip() -> ScheduleSkip {
         run_id: Some("01J0RUN".into()),
         created_at: "2026-10-09T11:00:01Z".into(),
     }
+}
+
+fn run_changes() -> RunChanges {
+    RunChanges {
+        run_id: "01J0RUN".into(),
+        state: ChangesState::Recorded,
+        git: true,
+        files: vec![
+            ChangedFile {
+                path: "src/lib.rs".into(),
+                status: FileStatus::Modified,
+                undoable: true,
+                reason: None,
+            },
+            ChangedFile {
+                path: "notes.md".into(),
+                status: FileStatus::Added,
+                undoable: true,
+                reason: None,
+            },
+            ChangedFile {
+                path: "data/dump.sql".into(),
+                status: FileStatus::Deleted,
+                undoable: false,
+                reason: Some(
+                    "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.".into(),
+                ),
+            },
+        ],
+        note: None,
+        undone_at: None,
+    }
+}
+
+fn planned_files() -> Vec<PlannedFile> {
+    vec![
+        PlannedFile {
+            path: "src/lib.rs".into(),
+            status: FileStatus::Modified,
+            action: FileAction::Ready,
+            reason: None,
+        },
+        PlannedFile {
+            path: "notes.md".into(),
+            status: FileStatus::Added,
+            action: FileAction::Conflict,
+            reason: Some("The file changed after this run.".into()),
+        },
+        PlannedFile {
+            path: "old.txt".into(),
+            status: FileStatus::Deleted,
+            action: FileAction::Done,
+            reason: None,
+        },
+        PlannedFile {
+            path: "data/dump.sql".into(),
+            status: FileStatus::Deleted,
+            action: FileAction::Cannot,
+            reason: Some(
+                "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.".into(),
+            ),
+        },
+    ]
 }
 
 fn run() -> Run {
@@ -1356,6 +1422,46 @@ pub fn samples() -> Value {
     });
     // Past the `json!` macro's recursion limit, so added here.
     samples["ScheduleSkip"] = to(schedule_skip());
+    samples["RunChanges"] = to(run_changes());
+    samples["RunChangesNone"] = to(None::<RunChanges>);
+    samples["RunChangesUnavailable"] = to(RunChanges {
+            run_id: "01J0RUN".into(),
+            state: ChangesState::Unavailable,
+            git: false,
+            files: vec![],
+            note: Some("This folder has more than 20000 files to back up, so Dots did not back it up and this run can't be undone.".into()),
+            undone_at: None,
+        });
+    samples["ChangesPreview"] = to(ChangesPreview {
+        run_id: "01J0RUN".into(),
+        redo: false,
+        files: planned_files(),
+        diff: WorktreeDiff {
+            files: vec![FileDiff {
+                path: "src/lib.rs".into(),
+                status: FileStatus::Modified,
+                patch: "diff --git a/src/lib.rs b/src/lib.rs
+@@ -1 +1 @@
+-a
++b
+"
+                .into(),
+                binary: false,
+            }],
+            truncated: false,
+            exists: true,
+        },
+        later_runs: vec!["01J0LATER".into()],
+    });
+    samples["UndoOutcome"] = to(UndoOutcome {
+        redo: false,
+        restored: vec!["src/lib.rs".into()],
+        skipped: planned_files().into_iter().skip(1).collect(),
+        changes: RunChanges {
+            undone_at: Some(TS.into()),
+            ..run_changes()
+        },
+    });
     samples["TopicInfo"] = to(TopicInfo {
         root_run_id: "01J0RUN".into(),
         dot_id: "01J0DOT".into(),
