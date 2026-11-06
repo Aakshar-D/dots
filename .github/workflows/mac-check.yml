@@ -42,9 +42,10 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
-      # preview_schedule_lists_the_next_fire_times depends on the machine's time zone.
+      # preview_schedule_lists_the_next_fire_times depends on the machine's time zone. Every
+      # failing test is listed, not only those of the first test file that fails.
       - name: Run the core tests
-        run: cargo test -p dots-core --locked -- --skip preview_schedule_lists_the_next_fire_times
+        run: cargo test -p dots-core --locked --no-fail-fast -- --skip preview_schedule_lists_the_next_fire_times
 
       - name: Run the app tests
-        run: cargo test -p dots-app --locked
+        run: cargo test -p dots-app --locked --no-fail-fast

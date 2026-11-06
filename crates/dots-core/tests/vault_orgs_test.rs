@@ -14,8 +14,8 @@ use std::time::Duration as StdDuration;
 use chrono::Duration;
 use common::fake_openbao::{Failure, FakeOpenBao};
 use common::orgs::{
-    at, code, keys, openbao, policy, public_key, sign, sops_at, stamp, token, OrgsHarness,
-    Scripted, ACME, ACME_NAME, ISSUED, START, TOKEN,
+    at, code, full_path, keys, openbao, policy, public_key, sign, sops_at, stamp, token,
+    OrgsHarness, Scripted, ACME, ACME_NAME, ISSUED, START, TOKEN,
 };
 use common::spec;
 use dots_core::accounts::Membership;
@@ -454,7 +454,12 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
         (preview.source_kind.as_str(), preview.auth),
         ("infisical", None)
     );
-    let sops = code("delta", "Delta", sops_at("C:/sync/delta.enc.json"), &h.keys);
+    let sops = code(
+        "delta",
+        "Delta",
+        sops_at(&full_path("C:/sync/delta.enc.json")),
+        &h.keys,
+    );
     assert_eq!(h.orgs.preview_join(&sops).unwrap().auth, None);
 
     h.join_acme(entries(), acme_policy()).await;
@@ -773,14 +778,14 @@ async fn a_sops_file_that_moves_keeps_this_pcs_key_and_another_kind_asks_again()
     let moved = code(
         ACME,
         ACME_NAME,
-        sops_at("C:/Sync/acme/env.enc.json"),
+        sops_at(&full_path("C:/Sync/acme/env.enc.json")),
         &h.keys,
     );
     let preview = orgs.preview_join(&moved).unwrap();
     assert!(!preview.source_changed, "{:?}", preview.changes);
     let summary = orgs.update(ACME, &moved, None).await.unwrap();
     assert_eq!(status(&summary), OrgStatus::Connected);
-    assert_eq!(summary.address, "C:/Sync/acme/env.enc.json");
+    assert_eq!(summary.address, full_path("C:/Sync/acme/env.enc.json"));
     assert_eq!(scripted.creds(), vec![stored.clone(), stored.clone()]);
     assert_eq!(stored_creds(&h, ACME), Some(stored.clone()));
 

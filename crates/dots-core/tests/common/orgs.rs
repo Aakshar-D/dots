@@ -112,6 +112,16 @@ pub fn openbao(address: &str, path: &str) -> SourceSettings {
     })
 }
 
+/// A full path on this system for a Windows-style test path `C:/...`: as written on Windows,
+/// from the root (`/...`) elsewhere, where `C:/...` is not a full path.
+pub fn full_path(windows: &str) -> String {
+    if cfg!(windows) {
+        windows.to_string()
+    } else {
+        windows.trim_start_matches("C:").to_string()
+    }
+}
+
 pub fn sops_at(location: &str) -> SourceSettings {
     SourceSettings::Sops(SopsSettings {
         location: location.into(),
