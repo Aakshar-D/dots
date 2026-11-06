@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 
 use crate::approvals::grant_key;
 use crate::checkins::{CheckIns, Tool as CheckInTool};
+use crate::checkpoint::Checkpoints;
 use crate::delivery::{wait_reason, WaitFacts};
 use crate::engine::{Engine, EngineEvent, RunContext};
 use crate::events::{Bus, RuntimeEvent};
@@ -1178,6 +1179,16 @@ impl Runner {
         }))
     }
 
+    /// The checkpoints of folder runs, beside the worktrees in Dots' data folder
+    /// (`<data>/checkpoints`).
+    pub fn checkpoints(&self) -> Checkpoints {
+        Checkpoints::new(
+            self.cfg
+                .worktrees_dir
+                .with_file_name(crate::checkpoint::DIR),
+        )
+    }
+
     /// What happens to a run's worktree when the run stops for good: a run of a workflow step has
     /// what it left uncommitted committed by Dots (teams spec section 6.1; a failure is a notice
     /// on the run), then an unchanged worktree is removed. A worktree whose chat files the dot
@@ -1588,7 +1599,23 @@ impl Runner {
             tools: tools.clone(),
         };
         self.store.set_run_quiet_limit(&run.id, quiet_secs).await?;
-        let mut rx = engine.start(ctx).await?;
+        // A folder run gets a checkpoint before its engine starts, so what it changes can be
+        // listed and undone (undo spec section 2). Worktree runs have their branch instead.
+        let checkpoint = (ws_dot.spec.workspace_mode == WorkspaceMode::Folder
+            && prepared.branch.is_none())
+        .then(|| self.checkpoints());
+        if let Some(checkpoints) = &checkpoint {
+            checkpoints.begin(&run.id, &prepared.path).await;
+        }
+        let mut rx = match engine.start(ctx).await {
+            Ok(rx) => rx,
+            Err(e) => {
+                if let Some(checkpoints) = &checkpoint {
+                    checkpoints.finish(&run.id).await;
+                }
+                return Err(e);
+            }
+        };
         // The engine has the message: the run reached its dot (delivery tracking spec
         // section 2). Recorded once; a requeued run keeps its first delivery. A failed write
         // fails the run; a failed read for the announcement only is logged, as for the
@@ -1707,6 +1734,10 @@ impl Runner {
         // Gone before the worktree's "unchanged" check: they are never a run's changes.
         self.remove_attachments(&prepared.path, &run.root_run_id)
             .await;
+        // The run's closing checkpoint: what it changed in its folder.
+        if let Some(checkpoints) = &checkpoint {
+            checkpoints.finish(&run.id).await;
+        }
 
         let user_cancelled = by_user.load(Ordering::SeqCst);
         let waiting = self.store.has_pending_for_run(&run.id).await?

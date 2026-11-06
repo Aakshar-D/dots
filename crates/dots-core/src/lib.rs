@@ -8,6 +8,7 @@ pub mod browser;
 pub mod chat_files;
 pub mod chatgpt;
 pub mod checkins;
+pub mod checkpoint;
 pub mod claude_agents;
 pub mod connectors;
 pub mod context;
