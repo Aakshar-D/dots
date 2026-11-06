@@ -81,6 +81,9 @@ export function checkInLine(
   }
 }
 
+/// The result Dots gives a call it parked for a person's approval (`approvals::parked_message`).
+export const PARKED_PREFIX = "Queued for human approval #";
+
 /// One line that says what a tool call is about.
 export function toolPreview(input: unknown): string {
   if (typeof input === "object" && input !== null) {
@@ -199,6 +202,9 @@ const SEARCH_FILES: StepPhrase = {
   many: (n) => `Searched the files ${n} times`,
 };
 const WEB_PAGE: StepPhrase = { one: "Read a web page", many: (n) => `Read ${n} web pages` };
+/// TodoWrite keeps the dot's plan, which the run's plan card shows (run plan spec section 3).
+const PLAN: StepPhrase = { one: "Updated the plan", many: (n) => `Updated the plan ${n} times` };
+const HELPER: StepPhrase = { one: "Started a helper", many: (n) => `Started ${n} helpers` };
 const WEB_SEARCH: StepPhrase = {
   one: "Searched the web",
   many: (n) => `Searched the web ${n} times`,
@@ -225,6 +231,9 @@ const STEP_PHRASES = new Map<string, StepPhrase>([
   ["list_dir", SEARCH_FILES],
   ["WebFetch", WEB_PAGE],
   ["WebSearch", WEB_SEARCH],
+  ["TodoWrite", PLAN],
+  ["Task", HELPER],
+  ["Agent", HELPER],
 ]);
 
 /// The phrase of one step: its tool's own, else "Used" and the name its chip shows.
