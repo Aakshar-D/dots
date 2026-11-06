@@ -18,7 +18,13 @@ const proposal: SetupProposal = {
   first_message: "",
   notes: "",
 };
-const trusted: Policy = { preset: "trusted", rules: [], default: "allow", mcp_default: "ask" };
+const trusted: Policy = {
+  preset: "trusted",
+  rules: [],
+  default: "allow",
+  mcp_default: "ask",
+  ask_send_delete: true,
+};
 const managed = {
   path: "C:/Program Files/ClaudeCode/managed-settings.json",
   blocks_skipping_asks: false,

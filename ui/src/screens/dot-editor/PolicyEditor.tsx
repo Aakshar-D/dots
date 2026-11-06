@@ -51,7 +51,10 @@ export function PolicyEditor(props: {
       setOpen(true);
       return custom({});
     }
-    commands.policyPreset(preset).then(onChange, notifyError);
+    // A preset sets the rules; the person's own "Always ask before sending or deleting" stays.
+    commands
+      .policyPreset(preset)
+      .then((p) => onChange({ ...p, ask_send_delete: policy.ask_send_delete }), notifyError);
   }
 
   return (
@@ -73,6 +76,10 @@ export function PolicyEditor(props: {
         {policy.preset === "custom" ? "Your own rules." : PRESET_SENTENCES[policy.preset]}
       </p>
       <ManagedPolicyNotice check={managed} />
+      <SendDeleteSwitch
+        on={policy.ask_send_delete}
+        onChange={(on) => onChange({ ...policy, ask_send_delete: on })}
+      />
       <AlwaysAllowed
         rules={policy.rules}
         onRemove={(index) => custom({ rules: policy.rules.filter((_, j) => j !== index) })}
@@ -215,6 +222,32 @@ function AlwaysAllowed(props: { rules: Rule[]; onRemove: (index: number) => void
           })}
         </ul>
       )}
+    </div>
+  );
+}
+
+/// "Always ask before sending or deleting": on by default. It is not a rule, so it leaves the
+/// preset as it is.
+function SendDeleteSwitch({ on, onChange }: { on: boolean; onChange: (on: boolean) => void }) {
+  const id = useId();
+  return (
+    <div className="flex flex-col gap-1 rounded-md border p-2">
+      <label htmlFor={id} className="flex items-center gap-2 text-sm font-medium">
+        <input
+          id={id}
+          type="checkbox"
+          role="switch"
+          aria-checked={on}
+          checked={on}
+          onChange={(e) => onChange(e.target.checked)}
+        />
+        Always ask before sending or deleting
+      </label>
+      <p className="text-xs text-muted-foreground">
+        {on
+          ? "Sending an email or message, posting, pushing, and deleting files or data always waits for your approval, even where a rule allows it. A deny rule still refuses."
+          : "Off: sending and deleting follow the rules above like any other call."}
+      </p>
     </div>
   );
 }

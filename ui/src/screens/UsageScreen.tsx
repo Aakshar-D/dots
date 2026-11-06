@@ -7,6 +7,7 @@ import { commands } from "@/api/commands";
 import type { LimitReading, UsagePeriod, UsageRow } from "@/api/types";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
+import { SpendLine, useSpendToday } from "@/components/SpendCaps";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { localDateTime } from "@/lib/format";
 import { triggerLabel } from "@/lib/home-topics";
@@ -48,6 +49,40 @@ function Limits() {
           Holding {held} runs
         </Link>
       )}
+    </section>
+  );
+}
+
+/// Today's and this month's spend of every dot against the spending caps (spend caps design),
+/// and each dot that has a cap of its own.
+function Spending() {
+  const spend = useSpendToday().data;
+  if (!spend) return null;
+  const capped = spend.dots.filter(
+    (d) => d.caps.daily_usd !== null || d.caps.daily_tokens !== null,
+  );
+  return (
+    <section aria-label="Spending" className="flex flex-col gap-1">
+      <SpendLine
+        label="Today, all dots"
+        spend={spend.today}
+        usdCap={spend.caps.daily_usd}
+        tokenCap={spend.caps.daily_tokens}
+        showTokens
+      />
+      <SpendLine label="This month" spend={spend.month} usdCap={spend.caps.monthly_usd} />
+      {capped.map((d) => (
+        <SpendLine
+          key={d.dot_id}
+          label={`Today, ${d.dot_name}`}
+          spend={d.today}
+          usdCap={d.caps.daily_usd}
+          tokenCap={d.caps.daily_tokens}
+        />
+      ))}
+      <Link to="/settings/runs" className="text-xs text-muted-foreground underline underline-offset-4">
+        Spending caps
+      </Link>
     </section>
   );
 }
@@ -148,6 +183,7 @@ export function UsageScreen() {
   return (
     <Page title="Usage">
       <Limits />
+      <Spending />
       <Tabs value={period} onValueChange={(v) => setPeriod(v as UsagePeriod)}>
         <TabsList aria-label="Period">
           {PERIODS.map((p) => (

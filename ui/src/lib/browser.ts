@@ -48,6 +48,9 @@ const BrowserAsk = z.object({
   labels: z.array(z.string().nullable()),
   risky: z.boolean(),
   dangerous: z.boolean(),
+  // It may send or delete, and the dot's "Always ask before sending or deleting" is on. Absent
+  // in a card stored before the switch existed.
+  guarded: z.boolean().optional(),
 });
 export type BrowserAsk = z.infer<typeof BrowserAsk>;
 

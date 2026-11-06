@@ -71,7 +71,7 @@ loosening the local server on 127.0.0.1.
 7. **Same decisions as the app.** The phone's actions call `Runtime::decide_approval` (with no
    rule), `Runtime::reply` and `Runtime::run_release_hold`, so account roles, the private-folder
    guard, the conflict on a second decision and the resume of a parked run are exactly the app's.
-   A decided approval records `decided_via = "phone: <name>"` (migration 0043) and is announced
+   A decided approval records `decided_via = "phone: <name>"` (migration 0041) and is announced
    with `approval_updated`. Every phone action (paired, approve, deny, answer, run anyway,
    unpaired itself) is written to `phone_actions`; Settings > Phone lists the latest.
 8. **Windows firewall.** Binding a new port may make Windows ask whether Dots may use the

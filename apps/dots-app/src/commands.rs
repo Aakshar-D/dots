@@ -24,6 +24,7 @@ use dots_core::apps::screen::{AppFile, AppRow};
 use dots_core::apps::wake::RunLink;
 use dots_core::apps::AppCall;
 use dots_core::browser::BrowserStatus;
+use dots_core::checkpoint::{ChangesPreview, RunChanges, UndoOutcome};
 use dots_core::claude_agents::{AgentImport, ScannedAgent};
 use dots_core::connectors::{self, ConnectorEntry, RuntimeCheck};
 use dots_core::inbox::InboxKey;
@@ -43,6 +44,7 @@ use dots_core::model::{
 use dots_core::phone::{PairingView, PhoneStatus};
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
+use dots_core::search::{SearchHit, SearchQuery};
 use dots_core::settings::Settings;
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest};
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
@@ -827,6 +829,13 @@ pub async fn chat(
         .await?)
 }
 
+/// "Ask the dot to fix this": sends the concerns of the run's result check to the dot as the
+/// next message of its conversation (result check spec section 4).
+#[tauri::command]
+pub async fn result_check_fix(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.ask_to_fix(&run_id).await?)
+}
+
 /// "Send again": queues a failed chat message once more in its topic.
 #[tauri::command]
 pub async fn resend_run(state: State<'_, AppState>, run_id: String) -> Res<Run> {
@@ -1198,6 +1207,17 @@ pub async fn approval_touches_private(state: State<'_, AppState>, id: String) ->
     Ok(state.rt()?.approval_touches_private(&id).await?)
 }
 
+/// What the send-and-delete guard finds in the call (it sends or deletes, and how), and
+/// whether the dot's "Always ask before sending or deleting" is on; null when the call
+/// neither sends nor deletes as far as Dots can tell.
+#[tauri::command]
+pub async fn approval_guard(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<Option<dots_core::policy::ApprovalGuard>> {
+    Ok(state.rt()?.approval_guard(&id).await?)
+}
+
 #[tauri::command]
 pub async fn decide_run_approvals(
     state: State<'_, AppState>,
@@ -1267,6 +1287,43 @@ pub async fn worktree_diff(state: State<'_, AppState>, run_id: String) -> Res<Wo
 #[tauri::command]
 pub async fn discard_worktree(state: State<'_, AppState>, run_id: String) -> Res<Run> {
     Ok(state.rt()?.discard_worktree(&run_id).await?)
+}
+
+/// What a folder run changed in its folder (undo spec section 3); `null` for a run with no
+/// checkpoint.
+#[tauri::command]
+pub async fn run_changes(state: State<'_, AppState>, run_id: String) -> Res<Option<RunChanges>> {
+    Ok(state.rt()?.run_changes(&run_id).await?)
+}
+
+/// Each changed file with what undo (or redo) would do to it now, and the run's diff.
+#[tauri::command]
+pub async fn run_changes_preview(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Res<ChangesPreview> {
+    Ok(state.rt()?.run_changes_preview(&run_id).await?)
+}
+
+/// **Undo these changes**: the run's files as they were before it; files changed since are
+/// skipped unless `overwrite`.
+#[tauri::command]
+pub async fn undo_run(
+    state: State<'_, AppState>,
+    run_id: String,
+    overwrite: bool,
+) -> Res<UndoOutcome> {
+    Ok(state.rt()?.undo_run(&run_id, overwrite).await?)
+}
+
+/// **Redo**: an undone run's files as the run left them.
+#[tauri::command]
+pub async fn redo_run(
+    state: State<'_, AppState>,
+    run_id: String,
+    overwrite: bool,
+) -> Res<UndoOutcome> {
+    Ok(state.rt()?.redo_run(&run_id, overwrite).await?)
 }
 
 #[tauri::command]
@@ -1921,6 +1978,19 @@ pub async fn memory_delete(state: State<'_, AppState>, id: String) -> Res<()> {
     Ok(state.rt()?.memory_delete(&id).await?)
 }
 
+/// The hits of `query` in the workspace `workspace` of `scope` (`personal` or an org id): what
+/// the person and the dots said, memory, goals, topic titles and chat file names, best first
+/// (search spec section 3).
+#[tauri::command]
+pub async fn search(
+    state: State<'_, AppState>,
+    scope: String,
+    workspace: String,
+    query: SearchQuery,
+) -> Res<Vec<SearchHit>> {
+    Ok(state.rt()?.search(&scope, &workspace, &query).await?)
+}
+
 /// The goals of the workspace `workspace` of `scope` (`personal` or an org id), and why this
 /// PC may not change them (Intents).
 #[tauri::command]
@@ -2256,6 +2326,19 @@ pub async fn usage_summary(
 #[tauri::command]
 pub async fn run_release_hold(state: State<'_, AppState>, run_id: String) -> Res<Run> {
     Ok(state.rt()?.run_release_hold(&run_id).await?)
+}
+
+/// **Run once anyway**: lets one of the person's own runs start past the spending cap that
+/// holds it (spend caps design).
+#[tauri::command]
+pub async fn run_release_cap(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.run_release_cap(&run_id).await?)
+}
+
+/// Today's spend against the spending caps (spend caps design).
+#[tauri::command]
+pub async fn spend_today(state: State<'_, AppState>) -> Res<dots_core::spend::SpendToday> {
+    Ok(state.rt()?.spend_today().await?)
 }
 
 /// Resumes a watcher Dots paused (too many runs, or an error).

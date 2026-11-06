@@ -22,6 +22,7 @@ async fn an_empty_table_gives_the_defaults() {
     assert_eq!(s.quiet_limit_secs, 600);
     assert_eq!(s.auto_archive_days, 30);
     assert_eq!(s.default_model, "sonnet");
+    assert_eq!(s.checker_model, "haiku");
 }
 
 #[tokio::test]
@@ -48,6 +49,16 @@ async fn settings_round_trip() {
         default_model: "opus".into(),
         phone_enabled: true,
         phone_port: 50001,
+        check_results: false,
+        checker_model: "sonnet".into(),
+        spend_daily_usd: Some(12.5),
+        spend_daily_tokens: Some(500_000),
+        spend_monthly_usd: Some(100.0),
+        auto_models: dots_core::auto_model::AutoModels {
+            small: "claude-haiku-4-5".into(),
+            standard: "sonnet".into(),
+            large: "opus".into(),
+        },
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);
@@ -90,6 +101,7 @@ async fn bad_and_unknown_rows_are_ignored_one_by_one() {
         ("claude_path", "\"\""),
         ("tested_claude_version", "\"\""),
         ("default_model", "\"\""),
+        ("checker_model", "\"\""),
     ] {
         sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
             .bind(k)

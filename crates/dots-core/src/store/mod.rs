@@ -30,6 +30,7 @@ mod report;
 mod runs;
 mod scheduled_messages;
 mod schedules;
+mod search;
 mod settings;
 mod skips;
 mod step_members;
@@ -92,6 +93,7 @@ impl Store {
         upgrade::finish_0015(&store.pool).await?;
         upgrade::finish_0016(&store.pool).await?;
         upgrade::finish_0018(&store.pool).await?;
+        store.sync_search_index().await?;
         Ok(store)
     }
 

@@ -603,6 +603,9 @@ async fn inbox(State(inner): State<Shared>) -> Response {
                     true,
                 ),
                 HoldReason::Role { text, .. } => (text.clone(), false),
+                // The phone's Run anyway releases a usage hold only; a capped run is let
+                // past its cap from the PC (spend caps design).
+                HoldReason::SpendCap { text, .. } => (text.clone(), false),
             };
             PhoneHeld {
                 run_id: h.run_id.clone(),

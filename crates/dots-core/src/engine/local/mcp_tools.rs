@@ -227,6 +227,7 @@ impl Session {
             id: call.id.clone(),
             tool: qualified.to_string(),
             input: parsed.clone().unwrap_or_else(|_| call.arguments.clone()),
+            parent: None,
         };
         if !self.emit(shown).await {
             return None;
