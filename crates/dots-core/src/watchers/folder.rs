@@ -262,8 +262,12 @@ fn settle(
             Some((event, Some(meta.len())))
         }
         Err(_) => {
-            reported.remove(path);
-            if folders.remove(path) || first == Seen::Created {
+            // On macOS a file's events keep its "created" flag to the end, so a reported file
+            // that is gone was deleted, whatever the first event said.
+            let was_reported = reported.remove(path).is_some();
+            let created_and_gone =
+                first == Seen::Created && !(cfg!(target_os = "macos") && was_reported);
+            if folders.remove(path) || created_and_gone {
                 return None;
             }
             Some((FolderEvent::Deleted, None))

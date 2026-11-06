@@ -603,11 +603,11 @@ async fn held_events_are_counted_listed_oldest_first_taken_dropped_and_cascade()
     assert_eq!(first.held_at, timestamp(t0()));
     assert_eq!(store.held_count(&w.id).await.unwrap(), 3);
     assert_eq!(store.get_watcher(&w.id).await.unwrap().held_count, 3);
+    // Both watchers were made in the same instant, so the listing's order between them is not
+    // fixed: each is found by its id.
     let listed = store.list_watchers(&dot.id).await.unwrap();
-    assert_eq!(
-        listed.iter().map(|w| w.held_count).collect::<Vec<_>>(),
-        vec![3, 1]
-    );
+    let held = |id: &str| listed.iter().find(|l| l.id == id).unwrap().held_count;
+    assert_eq!((held(&w.id), held(&w2.id)), (3, 1));
     assert_eq!(store.all_watchers().await.unwrap()[0].held_count, 3);
     let held = store.held_events(&w.id).await.unwrap();
     assert_eq!(held, vec![first.clone(), mid.clone(), late.clone()]);
