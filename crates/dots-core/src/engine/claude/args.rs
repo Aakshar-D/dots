@@ -171,13 +171,41 @@ pub fn gateway_entry(mcp_url: &str, secret: &str, server: &str) -> Value {
     })
 }
 
-/// The configured path if it is a file; otherwise search PATH.
+/// The configured path if it is a file; otherwise search PATH, and on macOS then the folders
+/// the CLI's installers use (`mac_claude_dirs`): an app opened from the Finder gets a short
+/// PATH that has none of them.
 pub fn resolve_claude(configured: Option<&Path>) -> Option<PathBuf> {
     if let Some(p) = configured {
         return p.is_file().then(|| p.to_path_buf());
     }
-    let path = std::env::var_os("PATH")?;
-    resolve_in_dirs(std::env::split_paths(&path))
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        dirs.extend(mac_claude_dirs(std::env::var_os("HOME").map(PathBuf::from)));
+    }
+    resolve_in_dirs(dirs)
+}
+
+/// Where the Claude Code CLI is installed on macOS, given the home folder: the native
+/// installer's `~/.local/bin` and `~/.claude/local`, Homebrew's `/opt/homebrew/bin` and
+/// `/usr/local/bin`, and the usual npm, Volta and Bun global folders.
+pub fn mac_claude_dirs(home: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = home.filter(|h| !h.as_os_str().is_empty()) {
+        for sub in [
+            ".local/bin",
+            ".claude/local",
+            ".npm-global/bin",
+            ".volta/bin",
+            ".bun/bin",
+        ] {
+            dirs.push(home.join(sub));
+        }
+    }
+    dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    dirs
 }
 
 /// On Windows only native `claude.exe` is spawnable; an npm `claude.cmd` shim is followed to

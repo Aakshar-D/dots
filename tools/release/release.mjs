@@ -5,9 +5,11 @@
 //       Fails unless the tag, without its "v", is the version in every version field.
 //       Prints "prerelease=true" or "prerelease=false", and appends the same line to
 //       $GITHUB_OUTPUT when it is set.
-//   node tools/release/release.mjs manifest <tag> <installer> <out>
+//   node tools/release/release.mjs manifest <tag> <installer> <out> [notes-file] [mac-archive]
 //       Writes the updater manifest (latest.json) for the NSIS installer <installer>, whose
-//       signature is <installer>.sig, to <out>.
+//       signature is <installer>.sig, to <out>. With <mac-archive>, the universal macOS app's
+//       updater archive (Dots.app.tar.gz, signature <mac-archive>.sig), the manifest offers it
+//       to Apple silicon and Intel Macs too.
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -17,6 +19,8 @@ import { fileURLToPath } from "node:url";
 const DOWNLOADS = "https://github.com/Aakshar-D/dots/releases/download";
 /// The updater's name for this platform's entry in the manifest.
 const PLATFORM = "windows-x86_64";
+/// The updater's names for the Macs the one universal macOS archive serves.
+const MAC_PLATFORMS = ["darwin-aarch64", "darwin-x86_64"];
 
 /// The version of every field the version lives in, by where it is.
 export function versionFields(root) {
@@ -81,23 +85,27 @@ export function notesFor(text, version) {
   return body || undefined;
 }
 
-/// The updater manifest for one Windows installer. `notes`: the release's notes
-/// (`release-notes.md`), when the tag has them.
-export function manifest({ version, signature, installer, date, notes }) {
+/// The updater manifest for one Windows installer, and the universal macOS archive when `mac`
+/// (`{ archive, signature }`) is given. `notes`: the release's notes (`release-notes.md`), when
+/// the tag has them.
+export function manifest({ version, signature, installer, date, notes, mac }) {
+  const entry = (file, sig) => ({
+    signature: sig.trim(),
+    url: `${DOWNLOADS}/v${version}/${encodeURIComponent(basename(file))}`,
+  });
+  const platforms = { [PLATFORM]: entry(installer, signature) };
+  if (mac) {
+    for (const platform of MAC_PLATFORMS) platforms[platform] = entry(mac.archive, mac.signature);
+  }
   return {
     version,
     notes: notes?.trim() || `Dots ${version}`,
     pub_date: date.toISOString(),
-    platforms: {
-      [PLATFORM]: {
-        signature: signature.trim(),
-        url: `${DOWNLOADS}/v${version}/${encodeURIComponent(basename(installer))}`,
-      },
-    },
+    platforms,
   };
 }
 
-function main([command, tag, installer, out, notesFile]) {
+function main([command, tag, installer, out, notesFile, macArchive]) {
   const root = fileURLToPath(new URL("../..", import.meta.url));
   const checked = tag ? checkTag(root, tag) : { errors: ["no tag given"] };
   if (checked.errors.length > 0) {
@@ -121,18 +129,22 @@ function main([command, tag, installer, out, notesFile]) {
   } else if (command === "manifest" && installer && out) {
     const signature = readFileSync(`${installer}.sig`, "utf8");
     const notes = notesFile && existsSync(notesFile) ? readFileSync(notesFile, "utf8") : undefined;
+    const mac = macArchive
+      ? { archive: macArchive, signature: readFileSync(`${macArchive}.sig`, "utf8") }
+      : undefined;
     const body = manifest({
       version: checked.version,
       signature,
       installer,
       date: new Date(),
       notes,
+      mac,
     });
     writeFileSync(out, `${JSON.stringify(body, null, 2)}\n`);
     console.log(`release: wrote ${out}`);
   } else {
     console.error(
-      "usage: release.mjs check <tag> | notes <tag> <notes-in> <notes-out> | manifest <tag> <installer> <out> [notes-file]",
+      "usage: release.mjs check <tag> | notes <tag> <notes-in> <notes-out> | manifest <tag> <installer> <out> [notes-file] [mac-archive]",
     );
     process.exit(2);
   }

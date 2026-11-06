@@ -327,12 +327,17 @@ pub fn page_urls(targets: &[Value]) -> Vec<String> {
 
 /// Where Edge is looked for: `configured` (Settings' Edge path) when it is set, else
 /// `%ProgramFiles(x86)%` and `%ProgramFiles%` under `Microsoft\Edge\Application\msedge.exe`.
+/// On macOS: Microsoft Edge, then Google Chrome (which speaks the same protocol), each in
+/// `/Applications` and then `~/Applications`.
 pub fn edge_candidates(
     configured: Option<&str>,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<PathBuf> {
     if let Some(path) = configured.map(str::trim).filter(|p| !p.is_empty()) {
         return vec![PathBuf::from(path)];
+    }
+    if cfg!(target_os = "macos") {
+        return mac_browser_candidates(env("HOME").as_deref());
     }
     ["ProgramFiles(x86)", "ProgramFiles"]
         .iter()
@@ -343,6 +348,25 @@ pub fn edge_candidates(
                 .join("Edge")
                 .join("Application")
                 .join("msedge.exe")
+        })
+        .collect()
+}
+
+/// The macOS browsers `edge_candidates` looks for, given the home folder.
+pub fn mac_browser_candidates(home: Option<&str>) -> Vec<PathBuf> {
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = home.filter(|h| !h.is_empty()) {
+        roots.push(Path::new(home).join("Applications"));
+    }
+    let apps = [
+        ("Microsoft Edge.app", "Microsoft Edge"),
+        ("Google Chrome.app", "Google Chrome"),
+    ];
+    apps.iter()
+        .flat_map(|(bundle, exe)| {
+            roots
+                .iter()
+                .map(move |root| root.join(bundle).join("Contents").join("MacOS").join(exe))
         })
         .collect()
 }
@@ -370,8 +394,13 @@ pub fn find_program(program: &str) -> Option<PathBuf> {
 }
 
 /// Whether an Edge holds `profile`: Edge keeps `<profile>/lockfile` open so that no other
-/// process can open it for writing.
+/// process can open it for writing. On macOS, Edge and Chrome instead keep a
+/// `<profile>/SingletonLock` link to `<host>-<pid>`, which counts while that process runs.
 pub fn profile_in_use(profile: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    if singleton_held(profile) {
+        return true;
+    }
     let lock = profile.join("lockfile");
     if !lock.exists() {
         return false;
@@ -380,6 +409,29 @@ pub fn profile_in_use(profile: &Path) -> bool {
         Ok(file) => matches!(file.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
         Err(_) => true,
     }
+}
+
+/// Whether `<profile>/SingletonLock` names a process that still runs. A link left by a browser
+/// that crashed names a process that is gone, and the browser clears it on its next start.
+#[cfg(target_os = "macos")]
+fn singleton_held(profile: &Path) -> bool {
+    let Ok(target) = std::fs::read_link(profile.join("SingletonLock")) else {
+        return false;
+    };
+    let target = target.to_string_lossy();
+    let Some(pid) = target
+        .rsplit('-')
+        .next()
+        .and_then(|pid| pid.parse::<u32>().ok())
+    else {
+        return false;
+    };
+    std::process::Command::new("/bin/kill")
+        .args(["-0", &pid.to_string()])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Makes the profile's folder and the download folder, and writes the download folder into the

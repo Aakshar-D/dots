@@ -102,6 +102,28 @@ test("the manifest points the updater at the release's installer and its signatu
   });
 });
 
+test("the manifest offers the universal macOS archive to both kinds of Mac", () => {
+  const body = manifest({
+    version: "0.4.0",
+    signature: "d2lu",
+    installer: "Dots_0.4.0_x64-setup.exe",
+    date: new Date("2026-11-06T09:00:00Z"),
+    mac: { archive: "/t/bundle/macos/Dots_0.4.0_universal.app.tar.gz", signature: "bWFj\n" },
+  });
+  const mac = {
+    signature: "bWFj",
+    url: "https://github.com/Aakshar-D/dots/releases/download/v0.4.0/Dots_0.4.0_universal.app.tar.gz",
+  };
+  assert.deepEqual(Object.keys(body.platforms), [
+    "windows-x86_64",
+    "darwin-aarch64",
+    "darwin-x86_64",
+  ]);
+  assert.deepEqual(body.platforms["darwin-aarch64"], mac);
+  assert.deepEqual(body.platforms["darwin-x86_64"], mac);
+  assert.equal(body.platforms["windows-x86_64"].signature, "d2lu");
+});
+
 test("the manifest carries the notes file when one is given", () => {
   const base = {
     version: "0.3.0",

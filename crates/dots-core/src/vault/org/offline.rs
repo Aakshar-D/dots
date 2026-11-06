@@ -1,8 +1,9 @@
 //! The org's offline copy (env vault spec §5.2 and §6.4): the last fetched entries and the signed
 //! policy, kept so an org still resolves while its source is unreachable, until the policy's
 //! `offline_hours` run out. The copy is JSON, protected with DPAPI for the signed-in Windows user
-//! with the org id as entropy, and written to `data_dir/vault/<org_id>.bin`. Nothing in it is
-//! ever on disk in the clear (spec §2).
+//! with the org id as entropy (on macOS, with AES-256-GCM under a key the login keychain keeps),
+//! and written to `data_dir/vault/<org_id>.bin`. Nothing in it is ever on disk in the clear
+//! (spec §2).
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -213,14 +214,152 @@ impl Protector for NoProtector {
     }
 }
 
-/// The protector of the signed-in user: DPAPI on Windows, none elsewhere (Dots ships on
-/// Windows), so an offline copy is never written in the clear.
+/// AES-256-GCM under a 32-byte key, the entropy as associated data: `nonce || sealed`. The
+/// macOS protector keeps its key in the keychain; the rest is here, where Windows tests it too.
+#[cfg(any(target_os = "macos", test))]
+mod sealed {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    use aes_gcm::{Aes256Gcm, Key, Nonce};
+    use zeroize::Zeroizing;
+
+    use crate::{Error, Result};
+
+    const NONCE_BYTES: usize = 12;
+
+    pub(super) fn seal(key: &[u8; 32], data: &[u8], entropy: &[u8]) -> Result<Vec<u8>> {
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+        let mut nonce = [0u8; NONCE_BYTES];
+        getrandom::fill(&mut nonce).expect("OS random number generator unavailable");
+        let body = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: data,
+                    aad: entropy,
+                },
+            )
+            .map_err(|_| Error::Other("protecting data failed".into()))?;
+        let mut out = Vec::with_capacity(NONCE_BYTES + body.len());
+        out.extend_from_slice(&nonce);
+        out.extend_from_slice(&body);
+        Ok(out)
+    }
+
+    pub(super) fn open(key: &[u8; 32], data: &[u8], entropy: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+        if data.len() < NONCE_BYTES {
+            return Err(Error::Other("unprotecting data failed: too short".into()));
+        }
+        let (nonce, body) = data.split_at(NONCE_BYTES);
+        let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+        cipher
+            .decrypt(
+                Nonce::from_slice(nonce),
+                Payload {
+                    msg: body,
+                    aad: entropy,
+                },
+            )
+            .map(Zeroizing::new)
+            .map_err(|_| {
+                Error::Other(
+                    "unprotecting data failed: another key, other entropy, or damaged".into(),
+                )
+            })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn data_round_trips_only_with_its_key_and_entropy() {
+            let key = [7u8; 32];
+            let sealed = seal(&key, b"the value", b"acme").unwrap();
+            assert!(!sealed.windows(9).any(|w| w == b"the value"));
+            assert_eq!(
+                open(&key, &sealed, b"acme").unwrap().as_slice(),
+                b"the value"
+            );
+            assert!(open(&key, &sealed, b"other").is_err());
+            assert!(open(&[8u8; 32], &sealed, b"acme").is_err());
+            assert!(open(&key, &sealed[..5], b"acme").is_err());
+        }
+    }
+}
+
+/// On macOS: AES-256-GCM under a random key that the login keychain keeps for the signed-in
+/// user (service `Dots`, account `offline-copy-key`), made on the first copy written.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KeychainProtector;
+
+#[cfg(target_os = "macos")]
+impl KeychainProtector {
+    const SERVICE: &'static str = "Dots";
+    const ACCOUNT: &'static str = "offline-copy-key";
+
+    /// The key, made and saved first when `create` and there is none.
+    fn key(create: bool) -> Result<Zeroizing<[u8; 32]>> {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        use security_framework::passwords::{get_generic_password, set_generic_password};
+        const NOT_FOUND: i32 = -25300;
+        let failed = |what: &str, e: security_framework::base::Error| {
+            Error::Other(format!(
+                "Keychain: {what} the offline copy's key failed: {e}"
+            ))
+        };
+        match get_generic_password(Self::SERVICE, Self::ACCOUNT) {
+            Ok(stored) => {
+                let stored = Zeroizing::new(stored);
+                let bytes = Zeroizing::new(STANDARD.decode(&*stored).map_err(|_| {
+                    Error::Other("Keychain: the offline copy's key is damaged".into())
+                })?);
+                let mut key = Zeroizing::new([0u8; 32]);
+                if bytes.len() != key.len() {
+                    return Err(Error::Other(
+                        "Keychain: the offline copy's key is damaged".into(),
+                    ));
+                }
+                key.copy_from_slice(&bytes);
+                Ok(key)
+            }
+            Err(e) if e.code() == NOT_FOUND && create => {
+                let mut key = Zeroizing::new([0u8; 32]);
+                getrandom::fill(&mut *key).expect("OS random number generator unavailable");
+                let text = Zeroizing::new(STANDARD.encode(&*key));
+                set_generic_password(Self::SERVICE, Self::ACCOUNT, text.as_bytes())
+                    .map_err(|e| failed("saving", e))?;
+                Ok(key)
+            }
+            Err(e) => Err(failed("reading", e)),
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Protector for KeychainProtector {
+    fn protect(&self, data: &[u8], entropy: &[u8]) -> Result<Vec<u8>> {
+        sealed::seal(&Self::key(true)?, data, entropy)
+    }
+
+    fn unprotect(&self, data: &[u8], entropy: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+        sealed::open(&Self::key(false)?, data, entropy)
+    }
+}
+
+/// The protector of the signed-in user: DPAPI on Windows, a keychain key on macOS, none
+/// elsewhere, so an offline copy is never written in the clear.
 pub fn os_protector() -> Arc<dyn Protector> {
     #[cfg(windows)]
     {
         Arc::new(Dpapi)
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        Arc::new(KeychainProtector)
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         tracing::warn!("no DPAPI on this system: orgs keep no offline copy");
         Arc::new(NoProtector)

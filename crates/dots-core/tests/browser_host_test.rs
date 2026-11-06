@@ -15,8 +15,8 @@ use std::time::Duration;
 use common::fake_browser::{exe, host, FakeEdges};
 use common::playwright::JSON_LIST;
 use dots_core::browser::host::{
-    edge_args, edge_candidates, find_edge, move_downloads, page_urls, BrowserHost, EdgeHost,
-    HostError, Launcher, EDGE_FLAGS, HELPER, HELPER_FILE, PIPE_FLAGS,
+    edge_args, edge_candidates, find_edge, mac_browser_candidates, move_downloads, page_urls,
+    BrowserHost, EdgeHost, HostError, Launcher, EDGE_FLAGS, HELPER, HELPER_FILE, PIPE_FLAGS,
 };
 use dots_core::browser::NO_NODE;
 use serde_json::Value;
@@ -234,10 +234,13 @@ async fn an_edge_or_a_node_that_is_not_there_is_said() {
             .join("Application")
             .join("msedge.exe")
     };
-    assert_eq!(
-        edge_candidates(None, &installed),
-        [under("C:\\PF86"), under("C:\\PF")]
-    );
+    // macOS looks in its Applications folders instead (`mac_browser_candidates`).
+    let installed_edges = if cfg!(target_os = "macos") {
+        mac_browser_candidates(None)
+    } else {
+        vec![under("C:\\PF86"), under("C:\\PF")]
+    };
+    assert_eq!(edge_candidates(None, &installed), installed_edges);
     assert_eq!(edge_candidates(Some("  "), &installed).len(), 2);
     assert_eq!(
         edge_candidates(Some(" D:/Edge/msedge.exe "), &installed),
@@ -308,4 +311,20 @@ fn finished_downloads_move_into_the_workspace() {
     );
     assert!(move_downloads(&from, &to).is_empty());
     assert!(move_downloads(&dir.path().join("none"), &to).is_empty());
+}
+
+#[test]
+fn macos_looks_for_edge_then_chrome_in_both_applications_folders() {
+    let mac = PathBuf::from;
+    assert_eq!(
+        mac_browser_candidates(Some("/Users/u")),
+        [
+            mac("/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            mac("/Users/u/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"),
+            mac("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+            mac("/Users/u/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
+        ]
+    );
+    assert_eq!(mac_browser_candidates(None).len(), 2);
+    assert_eq!(mac_browser_candidates(Some("")).len(), 2);
 }
