@@ -116,7 +116,14 @@ describe("the line a group of tool steps shows as", () => {
         owners,
       ),
     ).toBe("Used Salesforce › query 3 times · Used github › search");
-    expect(stepsLine([step("Task")], none)).toBe("Used Task");
+    expect(stepsLine([step("NotebookRead")], none)).toBe("Used NotebookRead");
+  });
+
+  it("says the plan was updated and a helper started, in words (run plan spec section 4)", () => {
+    expect(stepsLine([step("TodoWrite"), step("TodoWrite")], none)).toBe(
+      "Updated the plan 2 times",
+    );
+    expect(stepsLine([step("Task"), step("Agent")], none)).toBe("Started 2 helpers");
   });
 
   it("names a local memory call by the tool it ran", () => {

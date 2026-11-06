@@ -810,6 +810,8 @@ fn engine_events() -> Value {
             id: "t1".into(),
             tool: "Bash".into(),
             input: json!({"command": "cargo test"}),
+            // A helper's call names the call that started it; the dot's own has no key.
+            parent: Some("task-1".into()),
         },
         EngineEvent::ToolResult {
             id: "t1".into(),

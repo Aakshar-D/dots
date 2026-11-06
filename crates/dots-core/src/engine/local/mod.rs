@@ -375,6 +375,7 @@ impl Session {
                 id: id.clone(),
                 tool: approval.tool.clone(),
                 input: approval.input.clone(),
+                parent: None,
             };
             if !self.emit(shown).await {
                 return None;
@@ -516,6 +517,7 @@ impl Session {
             id: call.id.clone(),
             tool,
             input,
+            parent: None,
         };
         if !self.emit(shown).await {
             return None;

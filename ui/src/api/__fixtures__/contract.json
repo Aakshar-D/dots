@@ -5075,6 +5075,7 @@
         "command": "cargo test"
       },
       "kind": "tool_call",
+      "parent": "task-1",
       "tool": "Bash"
     },
     {

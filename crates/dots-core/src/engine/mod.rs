@@ -29,6 +29,12 @@ pub enum EngineEvent {
         id: String,
         tool: String,
         input: Value,
+        /// The call of the `claude` CLI's `Task`/`Agent` tool whose helper made this call (the
+        /// stream's `parent_tool_use_id`), so that the run's plan and timeline can tell the
+        /// helper's steps from the dot's own (run plan spec section 3). `None` for the dot's own
+        /// calls and on the local engine; absent from events recorded before it existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        parent: Option<String>,
     },
     ToolResult {
         id: String,
