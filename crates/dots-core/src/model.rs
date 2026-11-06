@@ -187,6 +187,10 @@ pub struct DotSpec {
     /// section 2).
     #[serde(default = "yes")]
     pub use_global_instructions: bool,
+    /// Each final answer gets a result check while "Check every result" is on in Settings
+    /// (result check spec section 5). A spec written before it existed reads as on.
+    #[serde(default = "yes")]
+    pub check_results: bool,
     pub use_user_settings: bool,
     pub max_turns: u32,
     pub timeout_secs: u64,
@@ -233,6 +237,7 @@ impl DotSpec {
             quiet_limit_secs: None,
             spend_cap: crate::spend::DotCaps::default(),
             use_global_instructions: true,
+            check_results: true,
             use_user_settings: false,
             max_turns: 40,
             timeout_secs: 1800,
@@ -390,6 +395,10 @@ pub struct Run {
     /// Why a waiting run has not started. The store leaves it `None`; the runtime fills it.
     #[serde(default)]
     pub wait_reason: Option<WaitReason>,
+    /// The result check of the run's final answer (result check spec); `None` when none
+    /// applies.
+    #[serde(default)]
+    pub result_check: Option<crate::result_check::ResultCheck>,
     /// The words for a `spend_cap` wait: "Scout reached its $2.00 daily cap". Filled with
     /// `wait_reason`; `None` for every other reason.
     #[serde(default)]

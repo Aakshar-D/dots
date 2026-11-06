@@ -61,6 +61,8 @@ pub const SKILLS_DIR: &str = "skills";
 pub const DRAFTS_DIR: &str = "drafts";
 
 /// Retry's and Discard's refusal for a message the dispatcher has just claimed.
+/// Why a result check Dots stopped in the middle of has no verdict.
+const CHECK_INTERRUPTED: &str = "Dots stopped before the check ended.";
 const JUST_REACHED: &str = "this message has just reached the dot";
 
 #[derive(Debug, Clone)]
@@ -369,6 +371,14 @@ impl Runtime {
         if !recovered.is_empty() {
             tracing::warn!("marked {} interrupted run(s) as failed", recovered.len());
         }
+        // A result check Dots stopped in the middle of gets no verdict (result check spec
+        // section 3); its leftover folders go.
+        match store.skip_unfinished_checks(CHECK_INTERRUPTED).await {
+            Ok(0) => {}
+            Ok(n) => tracing::warn!("marked {n} unfinished result check(s) as skipped"),
+            Err(e) => tracing::warn!("marking unfinished result checks failed: {e}"),
+        }
+        let _ = std::fs::remove_dir_all(cfg.data_dir.join(crate::result_check::CHECKS_DIR));
         // A scheduled message a crash left being sent: sent if its run was stored, else
         // scheduled again (send later spec section 4.5). Never sent twice, never lost.
         let recovered = store.recover_sending_messages(cfg.clock.now()).await?;
@@ -509,6 +519,16 @@ impl Runtime {
         .await?;
         runner.set_limits(limits.clone());
         runner.set_apps(apps.clone());
+        let shutdown = CancellationToken::new();
+        // The result check asks the CLI with no tools; it needs no local server.
+        if let Some(program) = &claude_program {
+            runner.set_checker(Arc::new(crate::result_check::CliChecker::new(
+                program.clone(),
+                cfg.claude_env.clone(),
+                cfg.data_dir.join(crate::result_check::CHECKS_DIR),
+                shutdown.clone(),
+            )));
+        }
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {
@@ -521,7 +541,6 @@ impl Runtime {
             }
             Err(e) => tracing::error!("listing awaiting runs failed: {e}"),
         }
-        let shutdown = CancellationToken::new();
         // Every org is fetched once now, without holding the start up, and then every
         // `refresh_minutes` of its policy (env vault spec §6.4).
         let org_timers = OrgTimers::new(
@@ -752,6 +771,7 @@ impl Runtime {
         change(&mut next);
         // As the store keeps it, so the live copy reads the same as the stored one.
         next.default_model = next.default_model.trim().to_string();
+        next.checker_model = next.checker_model.trim().to_string();
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
         self.watchers.set_paused(next.schedules_paused);
@@ -2418,6 +2438,24 @@ impl Runtime {
     ) -> Result<Run> {
         self.chat_with(dot_id, message, parent_run_id, ChatExtra::default())
             .await
+    }
+
+    /// "Ask the dot to fix this" (result check spec section 4): the concerns the run's result
+    /// check raised go to the dot as the person's next message in the run's conversation, after
+    /// its last message, as `chat` sends it (and refuses it). `Invalid` when the check flagged
+    /// nothing. Never sent by itself: only the person asks.
+    pub async fn ask_to_fix(&self, run_id: &str) -> Result<Run> {
+        let run = self.store.get_run(run_id).await?;
+        let text = run
+            .result_check
+            .as_ref()
+            .and_then(crate::result_check::fix_request)
+            .ok_or_else(|| Error::Invalid("This answer's check found nothing to fix.".into()))?;
+        let thread = self.store.list_thread(&run.root_run_id).await?;
+        let end = crate::send_later::thread_end(&thread)
+            .map(|r| r.id.clone())
+            .unwrap_or(run.id.clone());
+        self.chat(&run.dot_id, &text, Some(&end)).await
     }
 
     /// The chat path with files (attachments spec section 4.3): `attachment_ids` are staged

@@ -7,11 +7,12 @@ import type { Message } from "@/api/types";
 import { ApprovalCard } from "@/components/ApprovalCard";
 import { AutoLine } from "@/components/AutoLine";
 import { ErrorNote } from "@/components/ErrorNote";
+import { ResultCheckBadge } from "@/components/ResultCheckBadge";
 import { HeldNote, RunNumbers } from "@/components/RunNumbers";
 import { CapNote } from "@/components/SpendCaps";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Button } from "@/components/ui/button";
-import { oneLine, topicTitle, type Topic } from "@/lib/home-topics";
+import { isActive, oneLine, topicTitle, type Topic } from "@/lib/home-topics";
 import { isOpenQuestion } from "@/lib/messages";
 import { keys } from "@/lib/query";
 
@@ -58,6 +59,7 @@ export function RunCard(props: {
         </Button>
       </div>
       {summary && <p className="text-muted-foreground">{summary}</p>}
+      <ResultCheckBadge run={run} canFix={!topic.runs.some(isActive)} />
       <RunNumbers run={run} />
       <AutoLine run={run} />
       <HeldNote run={run} />

@@ -36,6 +36,7 @@ pub mod prompt;
 pub mod publish;
 pub mod releases;
 pub mod report;
+pub mod result_check;
 pub mod run_tools;
 pub mod runner;
 pub mod runtime;

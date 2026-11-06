@@ -144,6 +144,8 @@ const dotSpecShape = {
   // A visible Microsoft Edge with the dot's own profile (browser spec section 2.4).
   browser: z.boolean(),
   use_global_instructions: z.boolean(),
+  // Each final answer gets a result check while Settings › Check every result is on.
+  check_results: z.boolean(),
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),
   timeout_secs: z.number().int(),
@@ -169,6 +171,24 @@ export const Dot = z.strictObject({
   workspace_id: z.string(),
   ...dotSpecShape,
 });
+
+// A run's result check (result check spec): a quick second look at its final answer.
+export const Verdict = z.enum(["looks_good", "has_concerns", "failed_task"]);
+export const ResultCheck = z.discriminatedUnion("state", [
+  // Running now; the run's notification waits for it.
+  z.strictObject({ state: z.literal("checking"), model: z.string() }),
+  z.strictObject({
+    state: z.literal("done"),
+    model: z.string(),
+    verdict: Verdict,
+    // Short sentences; empty for looks_good.
+    concerns: z.array(z.string()),
+    // 0 to 1, when the checker gave one.
+    confidence: nullable(z.number()),
+  }),
+  // No verdict: why, in words for the person.
+  z.strictObject({ state: z.literal("skipped"), reason: z.string() }),
+]);
 
 const runShape = {
   id: z.string(),
@@ -226,6 +246,8 @@ const runShape = {
   model_reason: nullable(z.string()),
   // The model Auto tried first, when the CLI could not use it.
   model_fallback_from: nullable(z.string()),
+  // The result check of its final answer; null when none applies.
+  result_check: nullable(ResultCheck),
 };
 export const Run = z.strictObject(runShape);
 
@@ -428,6 +450,17 @@ export const RunEventData = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("failed"), error: z.string() }),
   // Something about the run that is not the model's doing: an item left out, a server problem.
   z.strictObject({ kind: z.literal("notice"), text: z.string() }),
+  // The result check's record, with what the checker used; not shown in the transcript.
+  z.strictObject({
+    kind: z.literal("result_check"),
+    model: z.string(),
+    verdict: nullable(Verdict),
+    skipped: nullable(z.string()),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    cache_read: z.number().int(),
+    cost_usd: nullable(z.number()),
+  }),
 ]);
 
 const approvalShape = {
@@ -909,6 +942,10 @@ export const Settings = z.strictObject({
     standard: z.string(),
     large: z.string(),
   }),
+  // Every Claude run's final answer gets a quick automatic check (result check spec).
+  check_results: z.boolean(),
+  // The Claude model the result check uses.
+  checker_model: z.string(),
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -2360,6 +2397,7 @@ export type Uses = z.infer<typeof Uses>;
 export type DotSpec = z.infer<typeof DotSpec>;
 export type Dot = z.infer<typeof Dot>;
 export type Run = z.infer<typeof Run>;
+export type ResultCheck = z.infer<typeof ResultCheck>;
 export type RunEventRecord = z.infer<typeof RunEventRecord>;
 export type RunEventData = z.infer<typeof RunEventData>;
 export type Approval = z.infer<typeof Approval>;

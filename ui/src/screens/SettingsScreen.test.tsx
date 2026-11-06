@@ -117,6 +117,26 @@ describe("the Settings screen", () => {
     );
   });
 
+  it("checks every result with Haiku by default, and saves a change to either", async () => {
+    saving();
+    const { user } = renderApp("/settings/claude");
+    const box = await screen.findByLabelText("Check every result");
+    expect(box).toBeChecked();
+    const model = screen.getByLabelText("Checker model");
+    await within(model).findByRole("option", { name: "Sonnet" });
+    expect(model).toHaveValue("haiku");
+    await user.click(box);
+    await user.selectOptions(model, "Sonnet");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, check_results: false, checker_model: "sonnet" } },
+    ]);
+    expect(settingsErrors({ port: 1, max_concurrent_runs: 1, checker_model: " " })).toEqual({
+      checker: "Name the model that checks results.",
+    });
+  });
+
   it("maps Auto's sizes to models and allows Auto as the default", async () => {
     saving();
     const { user } = renderApp("/settings/claude");

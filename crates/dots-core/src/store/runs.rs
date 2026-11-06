@@ -17,7 +17,7 @@ pub(super) const RUN_COLUMNS: &str =
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
     tokens_cache_read, cost_usd, hold_released, quiet_since, quiet_limit_secs, \
     quiet_stopped, delivered_at, undelivered_at, undelivered_reason, dismissed_at, cap_released, \
-    model, model_tier, model_reason, model_fallback_from";
+    model, model_tier, model_reason, model_fallback_from, result_check";
 
 /// The reason a run ended undelivered: the first non-empty line of its error, or `failed`.
 fn undelivered_reason(error: Option<&str>) -> String {
@@ -36,6 +36,10 @@ pub(super) fn run_from_row(row: &SqliteRow) -> Result<Run> {
         wait_reason: None,
         wait_detail: None,
         cap_released: row.try_get::<i64, _>("cap_released")? != 0,
+        // A check this Dots cannot read (written by a newer one) reads as none.
+        result_check: row
+            .try_get::<Option<String>, _>("result_check")?
+            .and_then(|s| serde_json::from_str(&s).ok()),
         delivered_at,
         undelivered_at,
         undelivered_reason: row.try_get("undelivered_reason")?,
@@ -1089,6 +1093,38 @@ impl Store {
         .execute(&self.pool)
         .await?;
         self.get_run(id).await
+    }
+
+    /// Sets the run's result check (`None` clears it) and returns the run.
+    pub async fn set_result_check(
+        &self,
+        id: &str,
+        check: Option<&crate::result_check::ResultCheck>,
+    ) -> Result<Run> {
+        let json = check.map(serde_json::to_string).transpose()?;
+        sqlx::query("UPDATE runs SET result_check = ? WHERE id = ?")
+            .bind(json)
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
+        self.get_run(id).await
+    }
+
+    /// Marks every check still `checking` as skipped with `reason`: Dots stopped while it ran.
+    /// A run that did not end succeeded (Dots stopped before it was stored) loses its check.
+    /// Answers how many it changed.
+    pub async fn skip_unfinished_checks(&self, reason: &str) -> Result<u64> {
+        let skipped = crate::result_check::ResultCheck::Skipped {
+            reason: reason.to_string(),
+        };
+        let res = sqlx::query(
+            "UPDATE runs SET result_check = ? \
+             WHERE result_check LIKE '{\"state\":\"checking\"%'",
+        )
+        .bind(serde_json::to_string(&skipped)?)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Marks a run `failed` with `error` only if it is still `running`; `None` otherwise.
