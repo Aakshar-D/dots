@@ -199,6 +199,7 @@ async fn a_run_that_already_used_a_tool_is_not_started_again() {
         id: "t1".into(),
         tool: "Read".into(),
         input: json!({"file_path": "a.txt"}),
+        parent: None,
     });
     let engine = ByModel::new(&[("opus", vec![call, failed(NO_MODEL)])]);
     let e = env(engine.clone()).await;
