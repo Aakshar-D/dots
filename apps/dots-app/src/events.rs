@@ -730,6 +730,8 @@ mod tests {
             dismissed_at: None,
             delivery: None,
             wait_reason: None,
+            wait_detail: None,
+            cap_released: false,
         }
     }
 

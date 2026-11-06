@@ -58,6 +58,13 @@ pub struct Settings {
     /// The model a new Claude dot starts with (model switcher spec section 2.2). Existing dots
     /// keep their own.
     pub default_model: String,
+    /// The most every dot together may spend in a local day, in estimated API USD (spend caps
+    /// design); `None` is no cap.
+    pub spend_daily_usd: Option<f64>,
+    /// The most tokens (in + out) every dot together may use in a local day; `None` is no cap.
+    pub spend_daily_tokens: Option<u64>,
+    /// The most every dot together may spend in a local calendar month, in estimated API USD.
+    pub spend_monthly_usd: Option<f64>,
 }
 
 impl Default for Settings {
@@ -81,6 +88,9 @@ impl Default for Settings {
             quiet_limit_secs: 600,
             auto_archive_days: 30,
             default_model: DEFAULT_CLAUDE_MODEL.to_string(),
+            spend_daily_usd: None,
+            spend_daily_tokens: None,
+            spend_monthly_usd: None,
         }
     }
 }
@@ -131,6 +141,7 @@ impl Settings {
         if self.default_model.trim().is_empty() {
             return invalid("default_model must not be empty");
         }
+        crate::spend::GlobalCaps::from(self).validate()?;
         Ok(())
     }
 

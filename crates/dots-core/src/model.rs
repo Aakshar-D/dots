@@ -43,6 +43,8 @@ str_enum!(WaitReason {
     Updating => "updating",
     DotBusy => "dot_busy",
     Queued => "queued",
+    // A spending cap is reached (spend caps design); `Run::wait_detail` names it.
+    SpendCap => "spend_cap",
 });
 
 impl Delivery {
@@ -158,6 +160,10 @@ pub struct DotSpec {
     /// dot. A spec written before it existed reads as `None`.
     #[serde(default)]
     pub quiet_limit_secs: Option<u64>,
+    /// The dot's daily spending caps (spend caps design); none by default. A spec written
+    /// before they existed reads as none.
+    #[serde(default)]
+    pub spend_cap: crate::spend::DotCaps,
     /// The first prompt starts with the global instructions of Settings (context library spec
     /// section 2).
     #[serde(default = "yes")]
@@ -206,6 +212,7 @@ impl DotSpec {
             variables: Grants::default(),
             browser: false,
             quiet_limit_secs: None,
+            spend_cap: crate::spend::DotCaps::default(),
             use_global_instructions: true,
             use_user_settings: false,
             max_turns: 40,
@@ -268,6 +275,7 @@ impl DotSpec {
                 return invalid("quiet_limit_secs must be between 60 and 86400");
             }
         }
+        self.spend_cap.validate()?;
         self.policy.validate()?;
         // Whether the Library has each item is checked by the store when the dot is saved.
         self.uses.validate()?;
@@ -359,6 +367,14 @@ pub struct Run {
     /// Why a waiting run has not started. The store leaves it `None`; the runtime fills it.
     #[serde(default)]
     pub wait_reason: Option<WaitReason>,
+    /// The words for a `spend_cap` wait: "Scout reached its $2.00 daily cap". Filled with
+    /// `wait_reason`; `None` for every other reason.
+    #[serde(default)]
+    pub wait_detail: Option<String>,
+    /// The person let this run start once past a reached spending cap (**Run once anyway**,
+    /// spend caps design): no cap holds it back or stops it.
+    #[serde(default)]
+    pub cap_released: bool,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.
@@ -972,6 +988,13 @@ pub enum HoldReason {
     /// on the account's member list. `text` says which. The run stays queued and goes when
     /// the access returns.
     Role { account: String, text: String },
+    /// A spending cap is reached (spend caps design): `text` names it ("Scout reached its $2.00
+    /// daily cap"), `scope` says whether the dot's own cap or the one for all dots. The run
+    /// starts after local midnight (the 1st for the monthly cap) or once the cap is raised.
+    SpendCap {
+        text: String,
+        scope: crate::spend::CapScope,
+    },
 }
 
 str_enum!(UsagePeriod { FiveHours => "five_hours", Week => "week", Month => "month" });

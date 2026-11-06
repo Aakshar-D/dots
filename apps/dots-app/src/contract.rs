@@ -76,6 +76,10 @@ fn spec() -> DotSpec {
         "C:/dev/app",
     );
     s.schedule = Some(Schedule::cron("0 0 2 * * *"));
+    s.spend_cap = dots_core::spend::DotCaps {
+        daily_usd: Some(2.0),
+        daily_tokens: None,
+    };
     s.uses = Uses {
         mcp_servers: vec!["github".into()],
         skills: vec!["pdf".into()],
@@ -574,6 +578,8 @@ fn run() -> Run {
         dismissed_at: None,
         delivery: Some(dots_core::model::Delivery::Delivered),
         wait_reason: None,
+        wait_detail: None,
+        cap_released: false,
     }
 }
 
@@ -606,6 +612,61 @@ fn run_waiting() -> Run {
         delivery: Some(Delivery::Waiting),
         wait_reason: Some(WaitReason::Busy),
         ..run()
+    }
+}
+
+/// A chat message waiting for its dot's spending cap (spend caps design).
+fn run_capped() -> Run {
+    Run {
+        wait_reason: Some(WaitReason::SpendCap),
+        wait_detail: Some("nightly-tests reached its $2.00 daily cap".into()),
+        ..run_waiting()
+    }
+}
+
+/// Today's spend: every dot under a $10.00 daily cap at 85%, one dot at its own cap.
+fn spend_today() -> dots_core::spend::SpendToday {
+    use dots_core::spend::{DotCaps, DotSpend, GlobalCaps, Spend, SpendToday};
+    SpendToday {
+        day_start: "2026-10-08T23:00:00.000Z".into(),
+        day_end: "2026-10-09T23:00:00.000Z".into(),
+        month_start: "2026-09-30T23:00:00.000Z".into(),
+        today: Spend {
+            cost_usd: 8.5,
+            tokens: 1_250_000,
+        },
+        month: Spend {
+            cost_usd: 61.25,
+            tokens: 9_400_000,
+        },
+        caps: GlobalCaps {
+            daily_usd: Some(10.0),
+            daily_tokens: None,
+            monthly_usd: Some(200.0),
+        },
+        dots: vec![
+            DotSpend {
+                dot_id: "01J0DOT".into(),
+                dot_name: "nightly-tests".into(),
+                today: Spend {
+                    cost_usd: 2.0,
+                    tokens: 400_000,
+                },
+                caps: DotCaps {
+                    daily_usd: Some(2.0),
+                    daily_tokens: Some(1_000_000),
+                },
+            },
+            DotSpend {
+                dot_id: "01J0DOT2".into(),
+                dot_name: "local-summarizer".into(),
+                today: Spend {
+                    cost_usd: 0.0,
+                    tokens: 850_000,
+                },
+                caps: DotCaps::default(),
+            },
+        ],
     }
 }
 
@@ -679,6 +740,18 @@ fn held_runs() -> Vec<HeldRun> {
             reason: HoldReason::Role {
                 account: "Acme Engineering".into(),
                 text: "Acme Engineering: your role no longer allows running dots".into(),
+            },
+        },
+        HeldRun {
+            run_id: "01J0RUN6".into(),
+            dot_id: "01J0DOT".into(),
+            dot_name: "nightly-tests".into(),
+            trigger: TriggerKind::Chat,
+            queued_at: TS.into(),
+            starts_after: None,
+            reason: HoldReason::SpendCap {
+                text: "nightly-tests reached its $2.00 daily cap".into(),
+                scope: dots_core::spend::CapScope::Dot,
             },
         },
     ]
@@ -1107,6 +1180,8 @@ pub fn samples() -> Value {
     let settings = Settings {
         local_endpoints: vec!["http://127.0.0.1:1234".into()],
         global_instructions: "Use British spelling.".into(),
+        spend_daily_usd: Some(10.0),
+        spend_monthly_usd: Some(200.0),
         ..Settings::default()
     };
     let mut samples = json!({
@@ -1372,6 +1447,13 @@ pub fn samples() -> Value {
     });
     samples["RunNotDelivered"] = to(run_not_delivered());
     samples["RunWaiting"] = to(run_waiting());
+    samples["RunCapped"] = to(run_capped());
+    // The spending caps' limits (spend caps design), past the `json!` macro's recursion limit.
+    samples["Limits"]["min_cap_usd"] = json!(dots_core::spend::MIN_CAP_USD);
+    samples["Limits"]["max_cap_usd"] = json!(dots_core::spend::MAX_CAP_USD);
+    samples["Limits"]["max_cap_tokens"] = json!(dots_core::spend::MAX_CAP_TOKENS);
+    samples["Limits"]["spend_warn_at"] = json!(dots_core::spend::WARN_AT);
+    samples["SpendToday"] = to(spend_today());
     samples["DeliveryCounts"] = to(DeliveryCounts {
         sent: 5,
         delivered: 4,

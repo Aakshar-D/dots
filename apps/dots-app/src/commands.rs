@@ -2210,6 +2210,19 @@ pub async fn run_release_hold(state: State<'_, AppState>, run_id: String) -> Res
     Ok(state.rt()?.run_release_hold(&run_id).await?)
 }
 
+/// **Run once anyway**: lets one of the person's own runs start past the spending cap that
+/// holds it (spend caps design).
+#[tauri::command]
+pub async fn run_release_cap(state: State<'_, AppState>, run_id: String) -> Res<Run> {
+    Ok(state.rt()?.run_release_cap(&run_id).await?)
+}
+
+/// Today's spend against the spending caps (spend caps design).
+#[tauri::command]
+pub async fn spend_today(state: State<'_, AppState>) -> Res<dots_core::spend::SpendToday> {
+    Ok(state.rt()?.spend_today().await?)
+}
+
 /// Resumes a watcher Dots paused (too many runs, or an error).
 #[tauri::command]
 pub async fn watcher_resume(state: State<'_, AppState>, id: String) -> Res<Watcher> {
