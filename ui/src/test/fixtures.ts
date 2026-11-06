@@ -33,6 +33,10 @@ export const sample = {
   limits: T.LimitsState.array().parse(contract.LimitsState),
   /// A week: nightly-tests (Claude, heaviest) and local-summarizer (local, no cost).
   usage: T.UsageSummary.parse(contract.UsageSummary),
+  /// Today: every dot at $8.50 of a $10.00 daily cap, nightly-tests at its own $2.00 cap.
+  spend: T.SpendToday.parse(contract.SpendToday),
+  /// A chat waiting for nightly-tests' $2.00 daily cap.
+  runCapped: T.Run.parse(contract.RunCapped),
   pageStates: T.PageState.array().parse(contract.PageState),
   diff: T.WorktreeDiff.parse(contract.WorktreeDiff),
   /// A scheduled message waiting for its busy topic, and one that failed.
@@ -193,6 +197,14 @@ export function installDefaults(): void {
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
+  // Nothing spent today, and no cap set.
+  backend.on("spend_today", () => ({
+    ...sample.spend,
+    today: { cost_usd: 0, tokens: 0 },
+    month: { cost_usd: 0, tokens: 0 },
+    caps: { daily_usd: null, daily_tokens: null, monthly_usd: null },
+    dots: [],
+  }));
   // Usage counts are off and were never turned on.
   backend.on("usage_counts_state", () => ({
     enabled: false, url: null, install_id: null, first_hour: null,

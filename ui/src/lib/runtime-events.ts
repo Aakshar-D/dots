@@ -21,6 +21,7 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
         keys.overview,
         keys.inbox,
         keys.approvals(event.run.id),
+        keys.spend,
       ]) {
         invalidate(qc, queryKey);
       }

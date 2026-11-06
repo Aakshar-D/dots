@@ -25,6 +25,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   AgentImport: T.AgentImport,
   Run: T.Run,
   RunWaiting: T.Run,
+  RunCapped: T.Run,
+  SpendToday: T.SpendToday,
   RunNotDelivered: T.Run,
   DeliveryCounts: T.DeliveryCounts,
   UsageCountsState: T.UsageCountsState.array(),
