@@ -480,6 +480,8 @@ const approvalShape = {
   applied_at: nullable(z.string()),
   // For an MCP call: the server's accepted fingerprint when it asked.
   mcp_fingerprint: nullable(z.string()),
+  // Where it was decided when not in the app: "phone: <name>".
+  decided_via: nullable(z.string()),
 };
 export const Approval = z.strictObject(approvalShape);
 
@@ -932,6 +934,10 @@ export const Settings = z.strictObject({
   auto_archive_days: z.number().int(),
   // The model a new Claude dot starts with (model switcher spec section 2.2).
   default_model: z.string(),
+  // "Answer from my phone": a listener on the PC's private network addresses serves the Inbox
+  // to paired phones. Off by default; applies at once.
+  phone_enabled: z.boolean(),
+  phone_port: z.number().int(),
   // Caps for all dots together (spend caps design); null is no cap.
   spend_daily_usd: nullable(z.number()),
   spend_daily_tokens: nullable(z.number().int()),
@@ -2109,6 +2115,45 @@ export const ApiKeyView = z.strictObject({
   last_used_at: nullable(z.string()),
   revoked_at: nullable(z.string()),
 });
+// Where the phone view stands (phone view spec section 10): listening or not, its https
+// addresses (the QR code's first), its certificate's SHA-256 fingerprint, and why it is not
+// listening although it is on.
+export const PhoneStatus = z.strictObject({
+  running: z.boolean(),
+  port: z.number().int(),
+  addresses: z.array(z.string()),
+  fingerprint: nullable(z.string()),
+  error: nullable(z.string()),
+  pairing: z.boolean(),
+});
+// A pairing in progress: the QR code's link with its one-time token, the code to type, and the
+// QR code as one SVG path of `qr_size` modules square.
+export const PairingView = z.strictObject({
+  url: z.string(),
+  code: z.string(),
+  address: z.string(),
+  fingerprint: z.string(),
+  expires_at: z.string(),
+  qr_size: z.number().int(),
+  qr_path: z.string(),
+});
+// A paired phone; its credential never leaves the core.
+export const PhoneDevice = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  created_at: z.string(),
+  last_seen_at: nullable(z.string()),
+  last_ip: nullable(z.string()),
+});
+// One thing a phone did (the audit trail).
+export const PhoneAction = z.strictObject({
+  device_id: z.string(),
+  device_name: z.string(),
+  action: z.string(),
+  target: z.string(),
+  summary: z.string(),
+  at: z.string(),
+});
 // What making a key answers: the key and its text, which exists only in this answer.
 export const CreatedApiKey = z.strictObject({
   key: ApiKeyView,
@@ -2562,6 +2607,10 @@ export type RosterEdit = z.infer<typeof RosterEdit>;
 export type WorkspaceView = z.infer<typeof WorkspaceView>;
 export type Refusals = z.infer<typeof Refusals>;
 export type ApiKeyView = z.infer<typeof ApiKeyView>;
+export type PhoneStatus = z.infer<typeof PhoneStatus>;
+export type PairingView = z.infer<typeof PairingView>;
+export type PhoneDevice = z.infer<typeof PhoneDevice>;
+export type PhoneAction = z.infer<typeof PhoneAction>;
 export type DotAccess = z.infer<typeof DotAccess>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;

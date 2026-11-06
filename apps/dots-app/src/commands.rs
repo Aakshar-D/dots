@@ -41,12 +41,14 @@ use dots_core::model::{
     TopicInfo, WatchHours, Watcher, WatcherConfig, Workflow, WorkflowRun, WorkflowRunFilter,
     WorkflowSpec, WorkflowTrigger, WorktreeDiff,
 };
+use dots_core::phone::{PairingView, PhoneStatus};
 use dots_core::policy::{Policy, Preset, RuleCandidate};
 use dots_core::schedule::Schedule;
 use dots_core::search::{SearchHit, SearchQuery};
 use dots_core::settings::Settings;
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest};
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
+use dots_core::store::{PhoneAction, PhoneDevice};
 use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::org::{
     CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgEntry, OrgSummary, RequestPreview,
@@ -61,6 +63,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::confirm;
 use crate::error::CmdError;
+use crate::phone::PhoneHandle;
 use crate::state::{AppState, StartupError};
 use crate::tray::Tray;
 use crate::update::{Next, UpdateNote};
@@ -198,6 +201,7 @@ pub async fn get_settings(state: State<'_, AppState>) -> Res<Settings> {
 pub async fn update_settings(
     app: AppHandle,
     state: State<'_, AppState>,
+    phone: State<'_, PhoneHandle>,
     settings: Settings,
 ) -> Res<SettingsSaved> {
     let rt = state.rt()?;
@@ -215,6 +219,8 @@ pub async fn update_settings(
     if let Some(tray) = app.try_state::<Tray>() {
         tray.set_paused(saved.settings.schedules_paused);
     }
+    // "Answer from my phone" applies at once: on starts the listener, off closes it.
+    phone.get()?.apply(&saved.settings).await;
     Ok(saved)
 }
 
@@ -664,6 +670,48 @@ pub async fn api_key_revoke(state: State<'_, AppState>, id: String) -> Res<ApiKe
 #[tauri::command]
 pub fn api_base_url(state: State<'_, AppState>) -> Res<String> {
     Ok(state.rt()?.api_base_url()?)
+}
+
+/// Where the phone view stands: listening or not, on which addresses, and its certificate's
+/// fingerprint (phone view spec section 10).
+#[tauri::command]
+pub async fn phone_status(phone: State<'_, PhoneHandle>) -> Res<PhoneStatus> {
+    Ok(phone.get()?.status().await)
+}
+
+/// Starts pairing a phone: the QR code's link with a one-time token, and the short code.
+/// `address` is one of the status's addresses; the first when `None`.
+#[tauri::command]
+pub async fn phone_pair_start(
+    phone: State<'_, PhoneHandle>,
+    address: Option<String>,
+) -> Res<PairingView> {
+    Ok(phone.get()?.start_pairing(address.as_deref()).await?)
+}
+
+/// Ends the pairing in progress.
+#[tauri::command]
+pub fn phone_pair_cancel(phone: State<'_, PhoneHandle>) -> Res<()> {
+    phone.get()?.cancel_pairing();
+    Ok(())
+}
+
+/// The paired phones, newest first.
+#[tauri::command]
+pub async fn phone_devices(phone: State<'_, PhoneHandle>) -> Res<Vec<PhoneDevice>> {
+    Ok(phone.get()?.devices().await?)
+}
+
+/// Removes a paired phone: its next request is refused.
+#[tauri::command]
+pub async fn phone_device_remove(phone: State<'_, PhoneHandle>, id: String) -> Res<()> {
+    Ok(phone.get()?.remove_device(&id).await?)
+}
+
+/// What phones did lately, newest first (the audit trail).
+#[tauri::command]
+pub async fn phone_actions(phone: State<'_, PhoneHandle>) -> Res<Vec<PhoneAction>> {
+    Ok(phone.get()?.actions(20).await?)
 }
 
 #[tauri::command]

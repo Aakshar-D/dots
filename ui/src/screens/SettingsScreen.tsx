@@ -27,6 +27,7 @@ import { tokenCapError, usdCapError } from "@/lib/spend";
 
 import { ChatGptAccount } from "./ChatGptAccount";
 import { Accounts } from "./Accounts";
+import { PhoneSection } from "./PhoneSection";
 import { ProfileSection } from "./ProfileSection";
 import { UpdatesSection } from "@/screens/UpdatesSection";
 import { UsageCountsSection } from "@/screens/UsageCountsSection";
@@ -39,6 +40,7 @@ type Errors = {
   quiet?: string;
   archive?: string;
   model?: string;
+  phonePort?: string;
   checker?: string;
   spendDailyUsd?: string;
   spendDailyTokens?: string;
@@ -53,6 +55,7 @@ export const TABS = [
   { id: "instructions", label: "Instructions" },
   { id: "claude", label: "Claude" },
   { id: "runs", label: "Runs & server" },
+  { id: "phone", label: "Phone" },
   { id: "models", label: "Local models" },
   { id: "browser", label: "Browser" },
   { id: "updates", label: "Updates" },
@@ -72,6 +75,7 @@ const ERROR_TAB: Record<keyof Errors, TabId> = {
   global: "instructions",
   share: "claude",
   model: "claude",
+  phonePort: "phone",
   checker: "claude",
   spendDailyUsd: "runs",
   spendDailyTokens: "runs",
@@ -108,6 +112,7 @@ export function settingsErrors(
         | "quiet_limit_secs"
         | "auto_archive_days"
         | "default_model"
+        | "phone_port"
         | "checker_model"
         | "spend_daily_usd"
         | "spend_daily_tokens"
@@ -142,6 +147,14 @@ export function settingsErrors(
   }
   if (draft.default_model !== undefined && draft.default_model.trim() === "") {
     errors.model = "Name the model new dots start with.";
+  }
+  const phonePort = draft.phone_port;
+  if (phonePort !== undefined) {
+    if (!whole(phonePort, 1, 65535)) {
+      errors.phonePort = "The phone port must be a whole number, 1 to 65535.";
+    } else if (phonePort === draft.port) {
+      errors.phonePort = "The phone port must differ from the local server's port.";
+    }
   }
   if (draft.checker_model !== undefined && draft.checker_model.trim() === "") {
     errors.checker = "Name the model that checks results.";
@@ -677,6 +690,51 @@ function Form({
         </Section>
 
         <SpendingSection draft={draft} set={set} errors={errors} />
+      </>
+    ),
+    phone: (
+      <>
+        <Section title="Answer from my phone">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="settings-phone"
+              checked={draft.phone_enabled}
+              onCheckedChange={(phone_enabled) => set({ phone_enabled })}
+            />
+            <Label htmlFor="settings-phone">Answer from my phone</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Dots serves a small page to phones you pair, showing what waits for you in the Inbox:
+            approvals, questions from dots and runs waiting for usage. It listens only on this PC's
+            address on your home network, never the internet, and only while this is on. Use it only
+            on a network you trust, such as your home Wi-Fi.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            The first time it turns on, Windows may ask whether Dots may use the network. Allow it for
+            private networks only. Turning this off closes it at once.
+          </p>
+          {draft.phone_enabled !== stored.phone_enabled && (
+            <p role="status" className="text-xs text-needs">
+              Save to {draft.phone_enabled ? "turn it on" : "turn it off"}.
+            </p>
+          )}
+          <Field
+            label="Phone port"
+            htmlFor="settings-phone-port"
+            error={tried ? errors.phonePort : undefined}
+            hint="The port phones open; not the local server's."
+          >
+            <Input
+              id="settings-phone-port"
+              type="number"
+              className="w-40"
+              value={shown(draft.phone_port)}
+              onChange={(e) => set({ phone_port: numberOf(e.target.value) })}
+            />
+          </Field>
+        </Section>
+
+        <PhoneSection stored={stored.phone_enabled} />
       </>
     ),
     models: (

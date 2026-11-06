@@ -3301,6 +3301,17 @@ impl Runtime {
         }
     }
 
+    /// Records where the decided approval `id` was decided ("phone: <name>", phone view spec
+    /// section 7) and announces it. An approval still pending, or one recorded already, is
+    /// left as it is.
+    pub async fn note_decided_via(&self, id: &str, via: &str) -> Result<()> {
+        if self.store.set_decided_via(id, via).await? {
+            let approval = self.store.get_approval(id).await?;
+            let _ = self.bus.send(RuntimeEvent::ApprovalUpdated { approval });
+        }
+        Ok(())
+    }
+
     /// Gives pending approvals of one run the same answer, in the order they were asked, and
     /// resumes the run once. With `only`, just the approvals of the run whose ids it lists
     /// (what the person was shown: a snoozed approval of the same run is not decided with

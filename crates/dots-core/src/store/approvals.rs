@@ -12,7 +12,7 @@ use crate::vault::redact::global;
 use crate::{Error, Result};
 
 const APPROVAL_COLUMNS: &str = "id, run_id, tool, input, input_hash, status, note, parked, \
-    resolved, created_at, decided_at, self_apply, apply_state, applied_at, mcp_fingerprint";
+    resolved, created_at, decided_at, self_apply, apply_state, applied_at, mcp_fingerprint, decided_via";
 
 fn approval_from_row(row: &SqliteRow) -> Result<Approval> {
     Ok(Approval {
@@ -35,6 +35,7 @@ fn approval_from_row(row: &SqliteRow) -> Result<Approval> {
             .transpose()?,
         applied_at: row.try_get("applied_at")?,
         mcp_fingerprint: row.try_get("mcp_fingerprint")?,
+        decided_via: row.try_get("decided_via")?,
     })
 }
 
@@ -257,6 +258,20 @@ impl Store {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Records where a decided approval was decided ("phone: <name>"), once: a pending
+    /// approval, or one whose place is recorded already, is left as it is. True when written.
+    pub async fn set_decided_via(&self, id: &str, via: &str) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE approvals SET decided_via = ? \
+             WHERE id = ? AND status IN ('approved', 'denied') AND decided_via IS NULL",
+        )
+        .bind(via)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() == 1)
     }
 
     pub async fn expire_pending_for_run(&self, run_id: &str) -> Result<u64> {

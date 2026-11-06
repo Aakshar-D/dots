@@ -623,6 +623,7 @@
     "apply_state": null,
     "created_at": "2026-10-09T12:00:00.000Z",
     "decided_at": null,
+    "decided_via": null,
     "id": "01J0APR",
     "input": {
       "command": "git push origin main"
@@ -635,6 +636,26 @@
     "run_id": "01J0RUN",
     "self_apply": false,
     "status": "pending",
+    "tool": "Bash"
+  },
+  "ApprovalFromPhone": {
+    "applied_at": null,
+    "apply_state": null,
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "decided_at": "2026-10-09T12:00:00.000Z",
+    "decided_via": "phone: iPhone",
+    "id": "01J0APR",
+    "input": {
+      "command": "git push origin main"
+    },
+    "input_hash": "h1",
+    "mcp_fingerprint": null,
+    "note": null,
+    "parked": false,
+    "resolved": false,
+    "run_id": "01J0RUN",
+    "self_apply": false,
+    "status": "approved",
     "tool": "Bash"
   },
   "ApprovalGuard": {
@@ -850,6 +871,12 @@
     "api_key_create",
     "api_key_revoke",
     "api_base_url",
+    "phone_status",
+    "phone_pair_start",
+    "phone_pair_cancel",
+    "phone_devices",
+    "phone_device_remove",
+    "phone_actions",
     "update_dot",
     "delete_dot",
     "set_dot_enabled",
@@ -2926,6 +2953,7 @@
         "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": null,
+        "decided_via": null,
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
         "id": "01J0APR",
@@ -5038,6 +5066,61 @@
       }
     }
   ],
+  "PairingView": {
+    "address": "https://192.168.1.20:47323",
+    "code": "ABCD-EFGH",
+    "expires_at": "2026-10-09T12:00:00.000Z",
+    "fingerprint": "AB:CD:EF:01",
+    "qr_path": "M4 4h1v1h-1z",
+    "qr_size": 37,
+    "url": "https://192.168.1.20:47323/#t=abc&fp=ABCDEF01"
+  },
+  "PhoneAction": [
+    {
+      "action": "approve",
+      "at": "2026-10-09T12:00:00.000Z",
+      "device_id": "01J0PHN",
+      "device_name": "iPhone",
+      "summary": "Approved Bash",
+      "target": "01J0APR"
+    }
+  ],
+  "PhoneDevice": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0PHN",
+      "last_ip": "192.168.1.31",
+      "last_seen_at": "2026-10-09T12:00:00.000Z",
+      "name": "iPhone"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "id": "01J0PHN2",
+      "last_ip": null,
+      "last_seen_at": null,
+      "name": "Pixel"
+    }
+  ],
+  "PhoneStatus": [
+    {
+      "addresses": [
+        "https://192.168.1.20:47323"
+      ],
+      "error": null,
+      "fingerprint": "AB:CD:EF:01",
+      "pairing": true,
+      "port": 47323,
+      "running": true
+    },
+    {
+      "addresses": [],
+      "error": "This PC has no private network address.",
+      "fingerprint": null,
+      "pairing": false,
+      "port": 47323,
+      "running": false
+    }
+  ],
   "Project": {
     "created_at": "2026-10-09T12:00:00.000Z",
     "default_branch": "main",
@@ -5780,6 +5863,7 @@
         "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": null,
+        "decided_via": null,
         "id": "01J0APR",
         "input": {
           "command": "git push origin main"
@@ -5802,6 +5886,7 @@
         "apply_state": null,
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": "2026-10-09T12:00:00.000Z",
+        "decided_via": null,
         "id": "01J0APR",
         "input": {
           "command": "git push origin main"
@@ -5824,6 +5909,7 @@
         "apply_state": "applied",
         "created_at": "2026-10-09T12:00:00.000Z",
         "decided_at": "2026-10-09T12:00:00.000Z",
+        "decided_via": null,
         "id": "01J0APR",
         "input": {
           "command": "git push origin main"
@@ -6792,6 +6878,8 @@
     ],
     "max_concurrent_runs": 2,
     "notify_on_notes": true,
+    "phone_enabled": false,
+    "phone_port": 47323,
     "port": 47321,
     "publish_token": null,
     "quiet_limit_secs": 600,
@@ -6826,6 +6914,8 @@
       ],
       "max_concurrent_runs": 2,
       "notify_on_notes": true,
+      "phone_enabled": false,
+      "phone_port": 47323,
       "port": 47321,
       "publish_token": null,
       "quiet_limit_secs": 600,

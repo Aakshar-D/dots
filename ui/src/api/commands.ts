@@ -216,6 +216,15 @@ export const commands = {
   apiKeyRevoke: (id: string) => call(T.ApiKeyView, "api_key_revoke", { id }),
   /// The address the API answers on; rejects when the local server is not running.
   apiBaseUrl: () => call(text, "api_base_url", {}),
+  /// The phone view (Settings > Phone).
+  phoneStatus: () => call(T.PhoneStatus, "phone_status"),
+  /// Starts pairing a phone on `address` (one of the status's; the first when null).
+  phonePairStart: (address: string | null) =>
+    call(T.PairingView, "phone_pair_start", { address }),
+  phonePairCancel: () => call(nothing, "phone_pair_cancel"),
+  phoneDevices: () => call(T.PhoneDevice.array(), "phone_devices"),
+  phoneDeviceRemove: (id: string) => call(nothing, "phone_device_remove", { id }),
+  phoneActions: () => call(T.PhoneAction.array(), "phone_actions"),
   updateDot: (id: string, spec: DotSpec) => call(T.Dot, "update_dot", { id, spec }),
   deleteDot: (id: string) => call(nothing, "delete_dot", { id }),
   setDotEnabled: (id: string, enabled: boolean) =>

@@ -835,6 +835,7 @@ mod tests {
                 apply_state: None,
                 applied_at: None,
                 mcp_fingerprint: None,
+                decided_via: None,
             },
         }
     }

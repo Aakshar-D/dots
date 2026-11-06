@@ -30,6 +30,7 @@ use dots_core::library_service::{
 use dots_core::managed_policy::ManagedPolicy;
 use dots_core::mcp::McpTool;
 use dots_core::model::*;
+use dots_core::phone::{PairingView, PhoneStatus};
 use dots_core::policy::guard::classify;
 use dots_core::policy::{allow_candidates, Action, ApprovalGuard, Policy, Preset};
 use dots_core::result_check::{CheckEvent, ResultCheck, Verdict};
@@ -38,6 +39,7 @@ use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
+use dots_core::store::{PhoneAction, PhoneDevice};
 use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::org::{
     BaoAuth, CreatedInvite, DraftView, EditOutcome, InviteOffer, InviteState, InviteView,
@@ -921,6 +923,7 @@ fn approval() -> Approval {
         apply_state: None,
         applied_at: None,
         mcp_fingerprint: None,
+        decided_via: None,
     }
 }
 
@@ -2067,6 +2070,65 @@ pub fn samples() -> Value {
             refusals: Refusals::default(),
         },
     ]);
+    // What the phone view's commands answer (phone view spec section 10): listening, and off
+    // with a reason; a pairing; the paired phones; what they did.
+    samples["ApprovalFromPhone"] = to(Approval {
+        status: ApprovalStatus::Approved,
+        decided_at: Some(TS.into()),
+        decided_via: Some("phone: iPhone".into()),
+        ..approval()
+    });
+    samples["PhoneStatus"] = to([
+        PhoneStatus {
+            running: true,
+            port: 47323,
+            addresses: vec!["https://192.168.1.20:47323".into()],
+            fingerprint: Some("AB:CD:EF:01".into()),
+            error: None,
+            pairing: true,
+        },
+        PhoneStatus {
+            running: false,
+            port: 47323,
+            addresses: Vec::new(),
+            fingerprint: None,
+            error: Some("This PC has no private network address.".into()),
+            pairing: false,
+        },
+    ]);
+    samples["PairingView"] = to(PairingView {
+        url: "https://192.168.1.20:47323/#t=abc&fp=ABCDEF01".into(),
+        code: "ABCD-EFGH".into(),
+        address: "https://192.168.1.20:47323".into(),
+        fingerprint: "AB:CD:EF:01".into(),
+        expires_at: TS.into(),
+        qr_size: 37,
+        qr_path: "M4 4h1v1h-1z".into(),
+    });
+    samples["PhoneDevice"] = to([
+        PhoneDevice {
+            id: "01J0PHN".into(),
+            name: "iPhone".into(),
+            created_at: TS.into(),
+            last_seen_at: Some(TS.into()),
+            last_ip: Some("192.168.1.31".into()),
+        },
+        PhoneDevice {
+            id: "01J0PHN2".into(),
+            name: "Pixel".into(),
+            created_at: TS.into(),
+            last_seen_at: None,
+            last_ip: None,
+        },
+    ]);
+    samples["PhoneAction"] = to([PhoneAction {
+        device_id: "01J0PHN".into(),
+        device_name: "iPhone".into(),
+        action: "approve".into(),
+        target: "01J0APR".into(),
+        summary: "Approved Bash".into(),
+        at: TS.into(),
+    }]);
     // What `api_key_list` answers: a live key, a revoked one, and one in an account's
     // workspace. None carries the key text.
     let live_key = ApiKeyView {

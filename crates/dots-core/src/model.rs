@@ -1122,6 +1122,9 @@ pub struct Approval {
     /// call asked, `None` when it had no accepted list. A decided call goes through later only
     /// while the server's accepted fingerprint is still this one (MCP/skills spec section 4).
     pub mcp_fingerprint: Option<String>,
+    /// Where it was decided when not in the app: "phone: <name>" (phone view spec section 7).
+    #[serde(default)]
+    pub decided_via: Option<String>,
 }
 
 str_enum!(MessageKind { Note => "note", Question => "question" });

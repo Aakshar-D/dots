@@ -31,6 +31,7 @@ pub mod mcp;
 pub mod memory;
 pub mod model;
 pub mod models;
+pub mod phone;
 pub mod policy;
 pub mod proc;
 pub mod prompt;
