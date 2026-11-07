@@ -211,8 +211,42 @@ pub(crate) fn read_file(path: &str, what: &str) -> Result<String> {
     std::fs::read_to_string(path).map_err(|e| failed(format!("could not read {what} {path}: {e}")))
 }
 
-/// Writes a result file, replacing one that is there.
-pub(crate) fn write_file(path: &str, text: &str) -> Result<()> {
-    std::fs::write(Path::new(path), text)
-        .map_err(|e| failed(format!("could not write {path}: {e}")))
+/// Writes a result file, replacing one that is there. It never replaces a minisign key file
+/// (the old policy key may be the one every join code names), nor one of `inputs`, the files
+/// the command read: an `--out` that names the policy being signed would lose it.
+pub(crate) fn write_file(path: &str, text: &str, inputs: &[&str]) -> Result<()> {
+    let target = Path::new(path);
+    if let Ok(existing) = std::fs::canonicalize(target) {
+        let input = inputs
+            .iter()
+            .any(|i| std::fs::canonicalize(i).is_ok_and(|i| i == existing));
+        if input {
+            return Err(failed(format!(
+                "{path} is a file this command reads; choose another output file"
+            )));
+        }
+        if holds_a_key(&existing) {
+            return Err(failed(format!(
+                "{path} holds a minisign key; dots-admin never overwrites a key. Choose \
+                 another output file"
+            )));
+        }
+    }
+    std::fs::write(target, text).map_err(|e| failed(format!("could not write {path}: {e}")))
+}
+
+/// Whether the file at `path` is a minisign key: a comment line, then one base64 line whose
+/// bytes start with the `Ed` algorithm tag. A signature has more lines, and a policy or a
+/// join code is not one at all.
+fn holds_a_key(path: &Path) -> bool {
+    use base64::Engine;
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines.len() == 2
+        && lines[0].starts_with("untrusted comment:")
+        && base64::engine::general_purpose::STANDARD
+            .decode(lines[1].trim())
+            .is_ok_and(|bytes| bytes.starts_with(b"Ed"))
 }

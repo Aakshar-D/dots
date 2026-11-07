@@ -70,7 +70,8 @@ pub(crate) fn join_code_command(args: &[String], io: &mut Io<'_>) -> Result<()> 
     let args = Args::parse(args, &options, &[])?;
     args.none()?;
     let source = source_settings(&args)?;
-    let public_key = read_public_key(&read_file(args.required("pub")?, "the public key")?)?;
+    let pub_path = args.required("pub")?;
+    let public_key = read_public_key(&read_file(pub_path, "the public key")?)?;
     let code = join_code(
         args.required("org-id")?,
         args.required("name")?,
@@ -91,7 +92,7 @@ pub(crate) fn join_code_command(args: &[String], io: &mut Io<'_>) -> Result<()> 
     ];
     match args.value("file") {
         Some(path) => {
-            write_file(path, &format!("{}\n", code.encode()))?;
+            write_file(path, &format!("{}\n", code.encode()), &[pub_path])?;
             say(io.out, &format!("wrote {path}"))?;
             notes.iter().try_for_each(|note| say(io.out, note))
         }

@@ -66,7 +66,7 @@ fn read_roster(path: &str) -> Result<Roster> {
 fn write_roster(path: &str, roster: &Roster) -> Result<()> {
     let text = render(roster)?;
     parse_roster(&text, &roster.org_id).map_err(refused)?;
-    write_file(path, &text)
+    write_file(path, &text, &[])
 }
 
 fn parse_role(text: &str) -> Result<Role> {
@@ -538,7 +538,8 @@ fn summarize(roster: &Roster, io: &mut Io<'_>) -> Result<()> {
 fn sign_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let args = Args::parse(args, &["key", "out"], &[])?;
     let path = args.one("the member list")?;
-    let key_text = read_file(args.required("key")?, "the key")?;
+    let key_path = args.required("key")?;
+    let key_text = read_file(key_path, "the key")?;
     let mut roster = read_roster(path)?;
     roster.seq += 1;
     roster.issued_at = timestamp(Utc::now());
@@ -561,7 +562,7 @@ fn sign_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let public_key = public_key.to_base64();
     verify_roster(&signed, &public_key, &[], &roster.org_id)
         .map_err(|e| failed(format!("the signed member list does not verify: {e}")))?;
-    write_file(path, &text)?;
+    write_file(path, &text, &[])?;
 
     let note = format!(
         "signed member list #{} for org '{}', issued_at {}, with key {}; store the signed text as DOTS_ROSTER",
@@ -572,7 +573,7 @@ fn sign_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     );
     match args.value("out") {
         Some(out) => {
-            write_file(out, &format!("{signed}\n"))?;
+            write_file(out, &format!("{signed}\n"), &[path, key_path])?;
             say(io.out, &note)?;
             say(io.out, &format!("wrote {out}"))
         }

@@ -209,7 +209,7 @@ pub(crate) fn sign_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     );
     match args.value("out") {
         Some(out) => {
-            write_file(out, &format!("{}\n", signed.text))?;
+            write_file(out, &format!("{}\n", signed.text), &[path, key_path])?;
             say(io.out, &note)?;
             say(
                 io.out,
@@ -277,7 +277,7 @@ pub(crate) fn admins_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     }
     let edited = set_admins(&text, &admins)?;
     parse_policy(&edited).map_err(refused)?;
-    write_file(path, &edited)?;
+    write_file(path, &edited, &[])?;
     let fingerprint = key_fingerprint(admin).map_err(core_failed)?;
     let note = if adding {
         format!("added admin key {fingerprint} to {path}")

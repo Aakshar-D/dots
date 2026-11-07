@@ -1483,6 +1483,93 @@ fn set_workspaces_by_email() {
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
 }
 
+/// An output never replaces the files the command read, nor a key.
+#[test]
+fn an_output_file_never_replaces_the_input_or_a_key() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().to_str().unwrap();
+    ok(&["keygen", "--out", out, "--no-password"]);
+    let policy_file = path(dir.path(), "policy.json");
+    ok(&[
+        "policy",
+        "new",
+        "--org-id",
+        "acme-eng",
+        "--out",
+        &policy_file,
+    ]);
+    let key_file = path(dir.path(), "policy.key");
+    let pub_file = path(dir.path(), "policy.pub");
+    let (policy, key, public) = (
+        std::fs::read_to_string(&policy_file).unwrap(),
+        std::fs::read_to_string(&key_file).unwrap(),
+        std::fs::read_to_string(&pub_file).unwrap(),
+    );
+
+    let sign = |target: &str| {
+        failure(&[
+            "policy",
+            "sign",
+            &policy_file,
+            "--key",
+            &key_file,
+            "--out",
+            target,
+        ])
+        .to_string()
+    };
+    assert_eq!(
+        sign(&policy_file),
+        format!("{policy_file} is a file this command reads; choose another output file")
+    );
+    assert_eq!(
+        sign(&key_file),
+        format!("{key_file} is a file this command reads; choose another output file")
+    );
+    assert_eq!(
+        sign(&pub_file),
+        format!(
+            "{pub_file} holds a minisign key; dots-admin never overwrites a key. Choose another \
+             output file"
+        )
+    );
+    let join = failure(&[
+        "join-code",
+        "--org-id",
+        "acme-eng",
+        "--name",
+        "Acme Engineering",
+        "--source",
+        "openbao",
+        "--address",
+        "https://bao.acme.internal",
+        "--path",
+        "dots",
+        "--pub",
+        &pub_file,
+        "--file",
+        &key_file,
+    ]);
+    assert!(join.to_string().contains("holds a minisign key"), "{join}");
+    assert_eq!(std::fs::read_to_string(&policy_file).unwrap(), policy);
+    assert_eq!(std::fs::read_to_string(&key_file).unwrap(), key);
+    assert_eq!(std::fs::read_to_string(&pub_file).unwrap(), public);
+
+    // Another file is still replaced, as before.
+    let signed = path(dir.path(), "signed.txt");
+    std::fs::write(&signed, "old").unwrap();
+    ok(&[
+        "policy",
+        "sign",
+        &policy_file,
+        "--key",
+        &key_file,
+        "--out",
+        &signed,
+    ]);
+    assert!(std::fs::read_to_string(&signed).unwrap().starts_with('{'));
+}
+
 // audit verify (env vault spec §12)
 
 /// `n` chained records of acme-eng on one install, as the endpoint stored them.

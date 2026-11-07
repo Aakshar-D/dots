@@ -170,8 +170,14 @@ fn write_new(path: &Path, text: &str, secret: bool) -> Result<()> {
         ErrorKind::AlreadyExists => exists(path),
         _ => failed(format!("could not write {}: {e}", path.display())),
     })?;
-    file.write_all(text.as_bytes())
-        .map_err(|e| failed(format!("could not write {}: {e}", path.display())))
+    if let Err(e) = file.write_all(text.as_bytes()) {
+        // Half a key is no key: it goes, rather than stay where the next keygen refuses to
+        // write.
+        drop(file);
+        let _ = std::fs::remove_file(path);
+        return Err(failed(format!("could not write {}: {e}", path.display())));
+    }
+    Ok(())
 }
 
 fn exists(path: &Path) -> crate::AdminError {
