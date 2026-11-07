@@ -222,9 +222,10 @@ wrote policy.signed.json; store its text as DOTS_POLICY
 Without `--out`, the signed text goes to standard output and the note to standard error. The
 signed text is one line of JSON. Store it in the source as section 4 says.
 
-An `--out` (or `join-code --file`) never replaces a file the command reads (the policy, the key)
-or any minisign key file: `dots-admin` says so and writes nothing. Another file there is
-replaced. A key file that is only half written is deleted, not left behind.
+`keygen`, `policy new --out` and `roster new --out` refuse any file that already exists.
+`policy sign --out`, `roster sign --out` and `join-code --file` replace an existing file, except
+a file the command reads (the policy, the key) or any minisign key file: `dots-admin` says so and
+writes nothing. A key file that is only half written is deleted, not left behind.
 
 To see what a Dots client would accept:
 
