@@ -210,6 +210,16 @@ impl Store {
         seq_of(n)
     }
 
+    /// Deletes the org's History. A Remove whose row was already gone calls this: the refused
+    /// attempts the half-removed account recorded must not list again after a re-join.
+    pub async fn delete_audit_history(&self, org_id: &str) -> Result<()> {
+        sqlx::query("DELETE FROM audit_history WHERE org_id = ?")
+            .bind(org_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// The org's History, newest first, at most `limit` rows.
     pub async fn audit_history(&self, org_id: &str, limit: u64) -> Result<Vec<HistoryRow>> {
         let rows = sqlx::query(

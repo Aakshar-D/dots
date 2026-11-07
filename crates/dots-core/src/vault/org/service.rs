@@ -865,6 +865,10 @@ impl Orgs {
     async fn finish_remove(&self, org_id: &str, has_row: bool) -> Result<()> {
         if has_row {
             self.inner.store.remove_org(org_id).await?;
+        } else {
+            // The row went in an earlier Remove, which took its History; the attempts the
+            // damaged account recorded since are History too.
+            self.inner.store.delete_audit_history(org_id).await?;
         }
         let (dir, id) = (self.inner.dir.clone(), org_id.to_string());
         blocking(move || delete_offline(&dir, &id)).await?;

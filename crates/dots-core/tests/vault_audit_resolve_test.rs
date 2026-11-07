@@ -374,6 +374,24 @@ async fn a_half_removed_account_still_records_each_attempt() {
     std::fs::remove_dir_all(&copy).unwrap();
 }
 
+/// The refused attempts of a half-removed account are History rows for an account whose row is
+/// already gone, so the second Remove must delete them too: a re-join does not list them.
+#[tokio::test]
+async fn the_second_remove_of_a_half_removed_account_deletes_its_history() {
+    let (h, _vault) = setup(json!({})).await;
+    let copy = h.copy_path(ACME);
+    std::fs::remove_file(&copy).unwrap();
+    std::fs::create_dir(&copy).unwrap();
+    std::fs::write(copy.join("held"), "x").unwrap();
+    h.orgs.remove(ACME).await.unwrap_err();
+    refused(&h, &h.orgs).await;
+    assert_eq!(h.store.audit_history(ACME, 100).await.unwrap().len(), 1);
+
+    std::fs::remove_dir_all(&copy).unwrap();
+    h.orgs.remove(ACME).await.unwrap();
+    assert_eq!(h.store.audit_history(ACME, 100).await.unwrap().len(), 0);
+}
+
 /// An account whose stored settings don't read still records a run's refused attempt, queued
 /// by its last accepted target; its source kind can't be read, so `source` is null.
 #[tokio::test]
