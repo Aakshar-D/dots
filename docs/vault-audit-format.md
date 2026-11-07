@@ -12,7 +12,7 @@ The account's signed policy names the endpoint and the token:
 "audit": { "endpoint": "https://audit.acme.internal/dots", "token_entry": "DOTS_AUDIT_TOKEN" }
 ```
 
-- `endpoint` is an `https://` URL. `http://` is accepted only for `localhost` and `127.0.0.1`, for a test sink on the same PC.
+- `endpoint` is an `https://` URL. `http://` is accepted only for `localhost` and `127.0.0.1`, for a test sink on the same PC. The URL holds no user name, password, query or fragment; the token is the vault entry `token_entry` names.
 - `token_entry` names an ordinary entry of the account. Dots sends its value as the bearer token. Grant nothing for it: Dots reads it itself.
 
 Without `audit`, Dots sends nothing. It still lists what happened in the account's **History** on that PC, but those records get no `seq` and are never sent. Records are queued from the first fetch that accepts a policy with `audit`.
@@ -42,7 +42,7 @@ Authorization: Bearer <value of token_entry>
 
 ### The queue
 
-Each install queues at most 100,000 records per account. When that is reached, the oldest 1,000 are deleted unsent, and an `expired` record with reason `queue_full` says which (`dropped`). A receiver then sees a gap those records name: one `expired` record per drop, and when the queue stays full, drops in a row whose ranges meet end to end (1 to 1,000, then 1,001 to 2,000, and so on).
+Each install queues at most 100,000 records per account. When that is reached, the oldest 1,000 are deleted unsent, and an `expired` record with reason `queue_full` says which (`dropped`). A receiver then sees a gap those records name: one `expired` record per drop, and when the queue stays full, drops in a row whose ranges meet end to end (1 to 1,000, then 1,001 to 2,000, and so on). After more than 100 drops in a row, the first drop's own `expired` record is itself dropped, so no record the receiver holds names that range, and `dots-admin audit verify` reports that part as a gap (a false failure, not a lost record it could have caught).
 
 Leaving an account on a PC keeps that account's queue and its chain. Joining it again sends what was queued and carries on from the next `seq`.
 
