@@ -18,6 +18,7 @@ use common::fake_openbao::FakeOpenBao;
 use common::orgs::{at, code, keys, openbao, policy, sign, token, ACME, ACME_NAME, START, TOKEN};
 use common::{spec, wait_status};
 use dots_core::model::{RunStatus, WorkspaceMode};
+use dots_core::store::HistoryState;
 use dots_core::vault::audit::{verify_lines, AuditDot, AuditRecord, Event};
 use dots_core::vault::{Grants, MemorySecrets};
 use dots_core::{Config, Runtime};
@@ -191,5 +192,29 @@ async fn a_runs_records_reach_a_local_sink_as_a_whole_chain_with_the_bearer_toke
     );
     assert_eq!(resolved.run_id.as_deref(), Some(run.id.as_str()));
     assert_eq!(resolved.install, rt.store().install_id().await.unwrap());
+
+    // The account's page: its endpoint, nothing waiting, and the run's record sent. The fetch
+    // is not listed.
+    let view = rt.org_audit(ACME).await.unwrap();
+    assert_eq!(view.endpoint.as_deref(), Some(endpoint.as_str()));
+    assert_eq!(view.queued, 0);
+    assert!(view.send.last_sent_at.is_some());
+    let rows: Vec<(Event, Option<String>, HistoryState)> = view
+        .history
+        .into_iter()
+        .map(|row| (row.event, row.name, row.state))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![(
+            Event::Resolved,
+            Some("DOTS_TEST_LEVEL".into()),
+            HistoryState::Sent
+        )]
+    );
+    assert!(matches!(
+        rt.org_audit("beta").await,
+        Err(dots_core::Error::NotFound(_))
+    ));
     rt.shutdown();
 }

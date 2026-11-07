@@ -479,6 +479,8 @@ export const commands = {
   orgRemove: (orgId: string) => call(nothing, "org_remove", { orgId }),
   /// The org's entries for the Env tab; a secret's value is never in the answer.
   orgEntries: (orgId: string) => call(T.OrgEntry.array(), "org_entries", { orgId }),
+  /// The org's History on this PC and how sending its audit records stands. Never a value.
+  orgAudit: (orgId: string) => call(T.AuditView, "org_audit", { orgId }),
 
   /// Every message that waits (open questions, unread notes) and the newest others, newest
   /// first; of one dot with `dotId`.

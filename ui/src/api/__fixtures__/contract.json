@@ -631,6 +631,72 @@
     "status": "pending",
     "tool": "Bash"
   },
+  "AuditView": [
+    {
+      "endpoint": "https://audit.acme.example/dots",
+      "history": [
+        {
+          "at": "2026-10-22T09:05:00Z",
+          "consumer": "mcp:github",
+          "dot_name": "acme-release",
+          "event": "denied",
+          "id": "01J0AUDIT0003",
+          "name": "PROD_TOKEN",
+          "reason": "denied_by_policy",
+          "state": "queued"
+        },
+        {
+          "at": "2026-10-22T09:00:00Z",
+          "consumer": "mcp:github",
+          "dot_name": "acme-release",
+          "event": "resolved",
+          "id": "01J0AUDIT0002",
+          "name": "GITHUB_TOKEN",
+          "reason": null,
+          "state": "sent"
+        },
+        {
+          "at": "2026-10-21T18:00:00Z",
+          "consumer": null,
+          "dot_name": null,
+          "event": "expired",
+          "id": "01J0AUDIT0001",
+          "name": null,
+          "reason": "queue_full",
+          "state": "dropped"
+        }
+      ],
+      "queued": 2,
+      "send": {
+        "failed_at": "2026-10-22T09:05:00Z",
+        "last_error": "the endpoint answered 503",
+        "last_sent_at": "2026-10-22T09:00:00Z",
+        "next_try_at": "2026-10-22T09:05:30Z"
+      }
+    },
+    {
+      "endpoint": null,
+      "history": [
+        {
+          "at": "2026-10-22T09:00:00Z",
+          "consumer": null,
+          "dot_name": null,
+          "event": "offline",
+          "id": "01J0AUDIT0004",
+          "name": null,
+          "reason": null,
+          "state": "local"
+        }
+      ],
+      "queued": 0,
+      "send": {
+        "failed_at": null,
+        "last_error": null,
+        "last_sent_at": null,
+        "next_try_at": null
+      }
+    }
+  ],
   "BrowserStatus": {
     "edge": "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
     "npx": "C:/Program Files/nodejs/npx.cmd"
@@ -905,6 +971,7 @@
     "org_request_access",
     "org_remove",
     "org_entries",
+    "org_audit",
     "messages_list",
     "message_reply",
     "message_dismiss",
@@ -2384,6 +2451,15 @@
       "denied",
       "expired"
     ],
+    "AuditEvent": [
+      "resolved",
+      "denied",
+      "fetched",
+      "offline",
+      "revoked",
+      "expired",
+      "policy_invalid"
+    ],
     "AuthKind": [
       "key",
       "oauth",
@@ -2472,6 +2548,12 @@
       "policy_invalid",
       "org_removed",
       "not_member"
+    ],
+    "HistoryState": [
+      "local",
+      "queued",
+      "sent",
+      "dropped"
     ],
     "InboxKind": [
       "message",

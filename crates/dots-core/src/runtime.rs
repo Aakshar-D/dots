@@ -1541,6 +1541,30 @@ impl Runtime {
         &self.audit_sender
     }
 
+    /// The joined account `org_id`'s History and how sending its records stands (env vault
+    /// spec §10). Never a value.
+    pub async fn org_audit(&self, org_id: &str) -> Result<crate::vault::audit::AuditView> {
+        if !self.orgs.is_joined(org_id) {
+            return Err(Error::NotFound(format!(
+                "no org '{org_id}' is joined on this PC"
+            )));
+        }
+        let limits = self.orgs.audit().limits();
+        Ok(crate::vault::audit::AuditView {
+            endpoint: self
+                .orgs
+                .policy(org_id)
+                .and_then(|p| p.audit)
+                .map(|a| a.endpoint),
+            queued: self.store.audit_queued(org_id).await?,
+            send: self.audit_sender.state(org_id),
+            history: self
+                .store
+                .audit_history(org_id, limits.history_rows)
+                .await?,
+        })
+    }
+
     /// The Library: what the `library_*` commands call (MCP/skills spec section 9).
     pub fn library(&self) -> &LibraryService {
         &self.library

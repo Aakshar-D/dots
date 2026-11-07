@@ -1980,6 +1980,47 @@ export const OrgEntry = z.strictObject({
   // The org's dots that grant this name.
   used_by: z.array(DotRef),
 });
+// What an audit record says happened (env vault spec §10): a variable given or refused, or what
+// a fetch of the account's source came to.
+export const AuditEvent = z.enum([
+  "resolved",
+  "denied",
+  "fetched",
+  "offline",
+  "revoked",
+  "expired",
+  "policy_invalid",
+]);
+// A History row: kept on this PC only (`local`, the account sends no records), waiting to be
+// sent, sent, or dropped unsent from a full queue.
+export const HistoryState = z.enum(["local", "queued", "sent", "dropped"]);
+// One row of an account's History. Never a value.
+export const HistoryRow = z.strictObject({
+  id: z.string(),
+  at: z.string(),
+  event: AuditEvent,
+  name: nullable(z.string()),
+  consumer: nullable(z.string()),
+  dot_name: nullable(z.string()),
+  // A code: why a variable was refused, or what an expiry or revocation was.
+  reason: nullable(z.string()),
+  state: HistoryState,
+});
+// How sending an account's records stands; times are RFC 3339.
+export const SendState = z.strictObject({
+  last_sent_at: nullable(z.string()),
+  last_error: nullable(z.string()),
+  failed_at: nullable(z.string()),
+  next_try_at: nullable(z.string()),
+});
+// An account's History, newest first, and how sending stands. `endpoint` is null when the
+// account sends no records.
+export const AuditView = z.strictObject({
+  endpoint: nullable(z.string()),
+  queued: z.number().int().nonnegative(),
+  send: SendState,
+  history: z.array(HistoryRow),
+});
 // Whether a dot's grant resolves in its scope now, or why not.
 export const GrantState = z.enum([
   "ok",
@@ -2353,6 +2394,9 @@ export type DotAccess = z.infer<typeof DotAccess>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
+export type AuditEvent = z.infer<typeof AuditEvent>;
+export type HistoryRow = z.infer<typeof HistoryRow>;
+export type AuditView = z.infer<typeof AuditView>;
 export type PersonalMode = z.infer<typeof PersonalMode>;
 export type UseRules = z.infer<typeof UseRules>;
 export type GrantState = z.infer<typeof GrantState>;

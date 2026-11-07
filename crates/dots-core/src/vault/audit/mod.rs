@@ -7,6 +7,7 @@
 pub mod record;
 pub mod sender;
 pub mod verify;
+pub mod view;
 pub mod writer;
 
 pub use record::{
@@ -14,4 +15,5 @@ pub use record::{
 };
 pub use sender::{AuditSender, AuditTransport, HttpTransport, SendState};
 pub use verify::{verify_lines, ChainReport, ChainSummary, Finding};
+pub use view::AuditView;
 pub use writer::{Audit, Happened, OrgAudit, Usage};

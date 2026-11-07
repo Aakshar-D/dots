@@ -33,7 +33,9 @@ use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
+use dots_core::store::{HistoryRow, HistoryState};
 use dots_core::usage_counts::{Report, UsageCountsState};
+use dots_core::vault::audit::{AuditView, Event as AuditEvent, SendState};
 use dots_core::vault::org::{
     BaoAuth, CreatedInvite, DraftView, EditOutcome, InviteOffer, InviteState, InviteView,
     JoinPreview, JoinsMember, KeyView, MemberView, MembersView, OrgEntry, OrgStatus, OrgSummary,
@@ -1780,9 +1782,72 @@ pub fn samples() -> Value {
             used_by: vec![],
         },
     ]);
+    // What `org_audit` answers: an account whose last send failed, with a row of each state, and
+    // one that sends no records.
+    samples["AuditView"] = to([
+        AuditView {
+            endpoint: Some("https://audit.acme.example/dots".into()),
+            queued: 2,
+            send: SendState {
+                last_sent_at: Some("2026-10-22T09:00:00Z".into()),
+                last_error: Some("the endpoint answered 503".into()),
+                failed_at: Some("2026-10-22T09:05:00Z".into()),
+                next_try_at: Some("2026-10-22T09:05:30Z".into()),
+            },
+            history: vec![
+                HistoryRow {
+                    id: "01J0AUDIT0003".into(),
+                    at: "2026-10-22T09:05:00Z".into(),
+                    event: AuditEvent::Denied,
+                    name: Some("PROD_TOKEN".into()),
+                    consumer: Some("mcp:github".into()),
+                    dot_name: Some("acme-release".into()),
+                    reason: Some("denied_by_policy".into()),
+                    state: HistoryState::Queued,
+                },
+                HistoryRow {
+                    id: "01J0AUDIT0002".into(),
+                    at: "2026-10-22T09:00:00Z".into(),
+                    event: AuditEvent::Resolved,
+                    name: Some("GITHUB_TOKEN".into()),
+                    consumer: Some("mcp:github".into()),
+                    dot_name: Some("acme-release".into()),
+                    reason: None,
+                    state: HistoryState::Sent,
+                },
+                HistoryRow {
+                    id: "01J0AUDIT0001".into(),
+                    at: "2026-10-21T18:00:00Z".into(),
+                    event: AuditEvent::Expired,
+                    name: None,
+                    consumer: None,
+                    dot_name: None,
+                    reason: Some("queue_full".into()),
+                    state: HistoryState::Dropped,
+                },
+            ],
+        },
+        AuditView {
+            endpoint: None,
+            queued: 0,
+            send: SendState::default(),
+            history: vec![HistoryRow {
+                id: "01J0AUDIT0004".into(),
+                at: "2026-10-22T09:00:00Z".into(),
+                event: AuditEvent::Offline,
+                name: None,
+                consumer: None,
+                dot_name: None,
+                reason: None,
+                state: HistoryState::Local,
+            }],
+        },
+    ]);
     samples["SourceCreds"] = source_creds();
     samples["GrantStatus"] = to(grant_statuses());
     samples["Enums"]["GrantState"] = to(GrantState::ALL);
+    samples["Enums"]["AuditEvent"] = to(AuditEvent::ALL);
+    samples["Enums"]["HistoryState"] = to(HistoryState::ALL);
     samples["Enums"]["ValueSource"] = to(ValueSource::ALL);
     samples["Enums"]["PersonalMode"] = to(PersonalMode::ALL);
     samples["Enums"]["InviteState"] = to(InviteState::ALL);

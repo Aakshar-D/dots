@@ -208,6 +208,7 @@ command_list![
     org_request_access,
     org_remove,
     org_entries,
+    org_audit,
     messages_list,
     message_reply,
     message_dismiss,
