@@ -23,8 +23,8 @@ pub struct ChainSummary {
 pub enum Finding {
     /// The line is not a record.
     Unreadable { line: usize, why: String },
-    /// Records `from` to `to` of the chain are missing before `line`. `dropped`: an `expired`
-    /// record of the chain says its queue was full and dropped them unsent.
+    /// Records `from` to `to` of the chain are missing before `line`. `dropped`: the chain's
+    /// `expired` records, alone or together, say its queue was full and dropped them unsent.
     Gap {
         org_id: String,
         install: String,
@@ -171,6 +171,12 @@ pub fn verify_lines(text: &str) -> ChainReport {
             }
         }
     }
+    // Drops in a row take the oldest end of the queue each time, so their ranges meet end to
+    // end (1-1000, 1001-2000, ...). Join ranges that overlap or meet, so one gap can be
+    // explained by several records together.
+    for ranges in dropped.values_mut() {
+        *ranges = merge_ranges(std::mem::take(ranges));
+    }
     let mut chains: HashMap<(String, String), Chain> = HashMap::new();
     for (line, text, record) in read {
         let key = (record.org_id.clone(), record.install.clone());
@@ -255,4 +261,17 @@ pub fn verify_lines(text: &str) -> ChainReport {
         chain.last = Some((seq, hash));
     }
     report
+}
+
+/// `ranges` sorted, with those that overlap or meet end to end joined into one.
+fn merge_ranges(mut ranges: Vec<(u64, u64)>) -> Vec<(u64, u64)> {
+    ranges.sort_unstable();
+    let mut merged: Vec<(u64, u64)> = Vec::with_capacity(ranges.len());
+    for (from, to) in ranges {
+        match merged.last_mut() {
+            Some((_, end)) if from <= end.saturating_add(1) => *end = (*end).max(to),
+            _ => merged.push((from, to)),
+        }
+    }
+    merged
 }

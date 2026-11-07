@@ -1079,5 +1079,5 @@ acme-eng (01J9…): 1240 records, seq 1 to 1240
 ok: every chain is whole
 ```
 
-A gap the PC's own `queue_full` record explains is named but not a failure. The command exits 1
-when a chain is not whole.
+A gap the PC's own `queue_full` records explain, alone or together (drops in a row), is named
+but not a failure. The command exits 1 when a chain is not whole.

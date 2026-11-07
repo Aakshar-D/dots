@@ -42,7 +42,7 @@ Authorization: Bearer <value of token_entry>
 
 ### The queue
 
-Each install queues at most 100,000 records per account. When that is reached, the oldest 1,000 are deleted unsent, and an `expired` record with reason `queue_full` says which (`dropped`). A receiver then sees a gap of exactly that range, explained by the record.
+Each install queues at most 100,000 records per account. When that is reached, the oldest 1,000 are deleted unsent, and an `expired` record with reason `queue_full` says which (`dropped`). A receiver then sees a gap those records name: one `expired` record per drop, and when the queue stays full, drops in a row whose ranges meet end to end (1 to 1,000, then 1,001 to 2,000, and so on).
 
 Leaving an account on a PC keeps that account's queue and its chain. Joining it again sends what was queued and carries on from the next `seq`.
 
@@ -118,6 +118,6 @@ Fetches happen when Dots starts, every `refresh_minutes`, on **Refresh**, on **U
 - each `prev` is the hash of the line before;
 - `seq` 1 has no `prev`, and a later record has one.
 
-It reports each gap, a changed record (the next record's `prev` no longer matches), a `seq` lower than the one before, and another record with a `seq` already read. A file may start part way through a chain, and a line sent twice is counted, not reported. A gap that the install's own `queue_full` record names is reported as dropped, and does not fail the check. It exits 0 when every chain is whole, 1 otherwise.
+It reports each gap, a changed record (the next record's `prev` no longer matches), a `seq` lower than the one before, and another record with a `seq` already read. A file may start part way through a chain, and a line sent twice is counted, not reported. A gap that the install's own `queue_full` records name, alone or together, is reported as dropped, and does not fail the check. It exits 0 when every chain is whole, 1 otherwise.
 
 Records are not signed: a per-device key needs device registration, which is project 2's. The chain shows a gap or an edit to records already received; it does not prove which PC wrote them.

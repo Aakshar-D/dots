@@ -182,6 +182,72 @@ fn a_gap_the_queue_dropped_is_named_but_not_a_failure() {
 }
 
 #[test]
+fn drops_that_meet_end_to_end_explain_one_gap_together() {
+    // Three full-queue drops in a row, 1,000 records each: 2 to 1001, 1002 to 2001 and 2002
+    // to 3001. Each wrote its own expired record (seq 3002 to 3004). No single range holds
+    // the receiver's gap, 2 to 3001, but together they do.
+    let drops = [(2, 1001), (1002, 2001), (2002, 3001)];
+    let mut lines: Vec<String> = Vec::new();
+    for seq in 1..=3004u64 {
+        let prev = lines.last().map(|line| line_hash(line));
+        let mut next = record("acme-eng", seq, prev);
+        if seq > 3001 {
+            let (from, to) = drops[(seq - 3002) as usize];
+            next.event = Event::Expired;
+            next.reason = Some(REASON_QUEUE_FULL.into());
+            next.dropped = Some(Dropped { from, to });
+            next.name = None;
+            next.consumer = None;
+        }
+        lines.push(next.line());
+    }
+    lines.drain(1..3001);
+    let report = verify_lines(&file(&lines));
+    assert!(report.ok(), "{:?}", report.findings);
+    assert_eq!(
+        report.findings,
+        vec![Finding::Gap {
+            org_id: "acme-eng".into(),
+            install: INSTALL.into(),
+            line: 2,
+            from: 2,
+            to: 3001,
+            dropped: true,
+        }]
+    );
+
+    // A range with a hole in it does not: 1002 to 1003 are named by no record.
+    let mut holed: Vec<String> = Vec::new();
+    for seq in 1..=1006u64 {
+        let prev = holed.last().map(|line| line_hash(line));
+        let mut next = record("acme-eng", seq, prev);
+        if seq > 1004 {
+            let (from, to) = [(2, 1001), (1004, 1004)][(seq - 1005) as usize];
+            next.event = Event::Expired;
+            next.reason = Some(REASON_QUEUE_FULL.into());
+            next.dropped = Some(Dropped { from, to });
+            next.name = None;
+            next.consumer = None;
+        }
+        holed.push(next.line());
+    }
+    holed.drain(1..1004);
+    let report = verify_lines(&file(&holed));
+    assert!(!report.ok());
+    assert_eq!(
+        report.findings,
+        vec![Finding::Gap {
+            org_id: "acme-eng".into(),
+            install: INSTALL.into(),
+            line: 2,
+            from: 2,
+            to: 1004,
+            dropped: false,
+        }]
+    );
+}
+
+#[test]
 fn a_changed_record_breaks_the_link_after_it() {
     let mut lines = chain("acme-eng", 3);
     lines[1] = lines[1].replace("GITHUB_TOKEN", "OTHER_TOKEN");

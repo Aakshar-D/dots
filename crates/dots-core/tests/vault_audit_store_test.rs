@@ -206,6 +206,47 @@ async fn a_full_queue_drops_its_oldest_records_and_says_which() {
 }
 
 #[tokio::test]
+async fn two_drops_in_a_row_name_the_whole_gap_between_them() {
+    let (_dir, store) = store().await;
+    let limits = AuditLimits {
+        max_queued: 5,
+        drop_chunk: 2,
+        ..AuditLimits::default()
+    };
+    let mut received = String::new();
+    let first = queue(&store, &limits, "A").await;
+    received.push_str(&format!("{}
+", first[0].line()));
+    store.audit_sent("acme-eng", 1).await.unwrap();
+    for name in ["B", "C", "D", "E", "F"] {
+        queue(&store, &limits, name).await;
+    }
+    // G drops 2 and 3 (expired seq 7); H drops 4 and 5 (expired seq 9).
+    let g = queue(&store, &limits, "G").await;
+    assert_eq!(g[0].dropped, Some(Dropped { from: 2, to: 3 }));
+    let h = queue(&store, &limits, "H").await;
+    assert_eq!(h[0].dropped, Some(Dropped { from: 4, to: 5 }));
+
+    let batch = store.audit_batch("acme-eng", 500).await.unwrap();
+    let seqs: Vec<u64> = batch.iter().map(|(seq, _)| *seq).collect();
+    assert_eq!(seqs, vec![6, 7, 8, 9, 10]);
+    received.push_str(&lines(&batch));
+    let report = verify_lines(&received);
+    assert!(report.ok(), "{:?}", report.findings);
+    assert_eq!(
+        report.findings,
+        vec![Finding::Gap {
+            org_id: "acme-eng".into(),
+            install: "01J9INSTALL".into(),
+            line: 2,
+            from: 2,
+            to: 5,
+            dropped: true,
+        }]
+    );
+}
+
+#[tokio::test]
 async fn history_keeps_thirty_days_and_at_most_its_row_limit() {
     let (_dir, store) = store().await;
     let limits = AuditLimits {
