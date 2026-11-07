@@ -26,6 +26,7 @@ import { accessOf, accessRole, roleLabel } from "@/lib/access";
 import { localDateTime } from "@/lib/format";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
+import { AccountHistory, AuditProblem } from "@/screens/accounts/AccountHistory";
 import { AccountMembers } from "@/screens/accounts/AccountMembers";
 import { AccountWorkspaces } from "@/screens/accounts/AccountWorkspaces";
 import { ApiKeys } from "@/screens/accounts/ApiKeys";
@@ -139,6 +140,7 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
           {org.roster_error && !org.status_text.includes(org.roster_error) && (
             <p className="text-xs text-needs">{org.roster_error}</p>
           )}
+          <AuditProblem orgId={org.id} />
           {org.member_count !== null && org.roster_seq !== null && (
             <p className="text-xs text-muted-foreground">
               {org.member_count} {org.member_count === 1 ? "member" : "members"} · list #
@@ -224,6 +226,7 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
           {org.membership === "active" && <TabsTrigger value="members">Members</TabsTrigger>}
           <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
           <TabsTrigger value="api-keys">API keys</TabsTrigger>
+          <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
         <TabsContent value="overview" className="flex flex-col gap-2">
           {overview}
@@ -238,6 +241,9 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
         </TabsContent>
         <TabsContent value="api-keys">
           <ApiKeys scope={org.id} />
+        </TabsContent>
+        <TabsContent value="history">
+          <AccountHistory org={org} />
         </TabsContent>
       </Tabs>
     </li>
