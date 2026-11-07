@@ -767,6 +767,21 @@ impl Orgs {
         self.write().remove(org_id);
         self.failed_at().remove(org_id);
         self.identities().remove(org_id);
+        if let Err(e) = self.finish_remove(org_id, has_row).await {
+            // A joined org that is half removed stays listed, giving no values, so the person
+            // sees it and can remove it again.
+            if let Some((_, name)) = names.into_iter().find(|(id, _)| id == org_id) {
+                let error = format!("removing it did not finish ({e}); remove it again");
+                self.write()
+                    .insert(org_id.to_string(), Slot::Damaged { name, error });
+            }
+            return Err(e);
+        }
+        Ok(())
+    }
+
+    /// What Remove deletes after the values: the copy, the sign-in details and the row.
+    async fn finish_remove(&self, org_id: &str, has_row: bool) -> Result<()> {
         let (dir, id) = (self.inner.dir.clone(), org_id.to_string());
         blocking(move || delete_offline(&dir, &id)).await?;
         SourceCreds::forget(self.inner.secrets.as_ref(), org_id)?;
@@ -774,6 +789,20 @@ impl Orgs {
             self.inner.store.remove_org(org_id).await?;
         }
         Ok(())
+    }
+
+    /// The org ids this PC keeps sign-in details for while no such org is joined: a SOPS key
+    /// made for a join that never finished, or one waiting for the admin. Settings lists them,
+    /// and **Remove** takes them back. Never a value.
+    pub fn leftover_keys(&self) -> Result<Vec<String>> {
+        let keys = self.inner.secrets.keys("org/")?;
+        let slots = self.read();
+        Ok(keys
+            .iter()
+            .filter_map(|key| key.strip_prefix("org/")?.strip_suffix("/source"))
+            .filter(|id| !matches!(slots.get(*id), Some(Slot::Joined(_) | Slot::Damaged { .. })))
+            .map(str::to_string)
+            .collect())
     }
 
     /// Fetches the org now (**Refresh**, the timer) and applies the outcome: `Connected` with

@@ -1747,6 +1747,13 @@ pub async fn org_entries(state: State<'_, AppState>, org_id: String) -> Res<Vec<
     Ok(state.rt()?.orgs().entries(&org_id).await?)
 }
 
+/// The org ids this PC keeps sign-in details for while none such is joined (a SOPS key for a
+/// join that never finished); `org_remove` takes them back.
+#[tauri::command]
+pub fn org_leftover_keys(state: State<'_, AppState>) -> Res<Vec<String>> {
+    Ok(state.rt()?.orgs().leftover_keys()?)
+}
+
 /// The account's History on this PC and how sending its audit records stands (env vault spec
 /// section 10). Never a value.
 #[tauri::command]

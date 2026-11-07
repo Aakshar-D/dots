@@ -748,10 +748,44 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
   );
 }
 
+/// Sign-in details this PC keeps for an account that is not joined (a SOPS key made for a join
+/// that never finished), and Remove.
+function LeftoverKey({ orgId }: { orgId: string }) {
+  const qc = useQueryClient();
+  const remove = useMutation({
+    mutationFn: () => commands.orgRemove(orgId),
+    onSuccess: () => invalidate(qc, keys.orgs),
+    onError: notifyError,
+  });
+  return (
+    <li aria-label={orgId} className="flex flex-wrap items-center gap-2 text-xs">
+      <span className="flex-1">
+        This PC keeps sign-in details for '{orgId}', which is not joined.
+      </span>
+      <ConfirmButton
+        title={`Remove the sign-in details for '${orgId}'?`}
+        description={
+          "Joining this account later needs new ones. For a SOPS file, send your admin the " +
+          "new key then."
+        }
+        confirmLabel="Remove"
+        disabled={remove.isPending}
+        onConfirm={() => remove.mutate()}
+      >
+        Remove
+      </ConfirmButton>
+    </li>
+  );
+}
+
 /// Settings → Accounts (env vault spec §9): the orgs joined on this PC, Join, and per org
 /// Refresh, Update and Remove. Nothing here ever shows a value or sign-in details.
 export function Accounts() {
   const list = useQuery({ queryKey: keys.orgs, queryFn: commands.orgList });
+  const leftover = useQuery({
+    queryKey: keys.orgLeftoverKeys,
+    queryFn: commands.orgLeftoverKeys,
+  });
   // The org to update; null to join a new one; undefined while the dialog is closed.
   const [joining, setJoining] = useState<OrgSummary | null>();
   const orgs = list.data ?? [];
@@ -775,6 +809,16 @@ export function Accounts() {
         <ul className="flex flex-col gap-2">
           {orgs.map((org) => (
             <OrgRow key={org.id} org={org} onUpdate={() => setJoining(org)} />
+          ))}
+        </ul>
+      )}
+      {(leftover.data ?? []).length > 0 && (
+        <ul
+          aria-label="Sign-in details kept for accounts not joined"
+          className="flex flex-col gap-1"
+        >
+          {(leftover.data ?? []).map((id) => (
+            <LeftoverKey key={id} orgId={id} />
           ))}
         </ul>
       )}

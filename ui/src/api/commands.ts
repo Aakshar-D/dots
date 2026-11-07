@@ -479,6 +479,9 @@ export const commands = {
   orgRemove: (orgId: string) => call(nothing, "org_remove", { orgId }),
   /// The org's entries for the Env tab; a secret's value is never in the answer.
   orgEntries: (orgId: string) => call(T.OrgEntry.array(), "org_entries", { orgId }),
+  /// The org ids this PC keeps sign-in details for while none such is joined; `orgRemove`
+  /// takes them back.
+  orgLeftoverKeys: () => call(z.array(z.string()), "org_leftover_keys"),
   /// The org's History on this PC and how sending its audit records stands. Never a value.
   orgAudit: (orgId: string) => call(T.AuditView, "org_audit", { orgId }),
 

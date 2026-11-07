@@ -66,6 +66,8 @@ export const keys = {
   orgs: ["orgs"] as const,
   /// An org's entries for the Library's Env tab, under the orgs' key.
   orgEntries: (orgId: string) => ["orgs", orgId, "entries"] as const,
+  /// The org ids this PC keeps sign-in details for while none such is joined.
+  orgLeftoverKeys: ["orgs", "leftover-keys"] as const,
   /// An org's History and audit sending, under the orgs' key.
   orgAudit: (orgId: string) => ["orgs", orgId, "audit"] as const,
   /// An org's member list for the Members tab, under the orgs' key.

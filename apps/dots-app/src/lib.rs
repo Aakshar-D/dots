@@ -209,6 +209,7 @@ command_list![
     org_remove,
     org_entries,
     org_audit,
+    org_leftover_keys,
     messages_list,
     message_reply,
     message_dismiss,

@@ -142,6 +142,54 @@ fn dot_spec(name: &str) -> DotSpec {
     spec
 }
 
+/// A Remove that fails after the values are gone keeps the org listed, with no values, so it
+/// can be removed again.
+#[tokio::test]
+async fn a_remove_that_does_not_finish_keeps_the_org_listed_without_values() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), acme_policy()).await;
+    // The copy can't be deleted: a folder stands where it is.
+    let copy = h.copy_path(ACME);
+    std::fs::remove_file(&copy).unwrap();
+    std::fs::create_dir(&copy).unwrap();
+    std::fs::write(copy.join("held"), "x").unwrap();
+
+    let e = h.orgs.remove(ACME).await.unwrap_err();
+    assert!(other(e).contains("deleting its offline copy failed"));
+    let listed = h.orgs.summaries().await;
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, ACME_NAME);
+    assert!(
+        listed[0].status_text.contains(
+            "removing it did not finish (org 'acme-eng': deleting its offline copy failed"
+        ),
+        "{}",
+        listed[0].status_text
+    );
+    assert!(matches!(
+        h.orgs.lookup(ACME, "API_KEY").await,
+        OrgLookup::PolicyInvalid(_)
+    ));
+
+    std::fs::remove_dir_all(&copy).unwrap();
+    h.orgs.remove(ACME).await.unwrap();
+    assert_eq!(h.orgs.summaries().await, vec![]);
+    assert!(h.store.get_org(ACME).await.unwrap().is_none());
+}
+
+/// Sign-in details kept for an org that is not joined (a SOPS key made for a join that never
+/// finished) are listed by org id, and Remove takes them back.
+#[tokio::test]
+async fn sign_in_details_for_an_org_not_joined_are_listed_and_removable() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), acme_policy()).await;
+    h.orgs.sops_identity("design").await.unwrap();
+    assert_eq!(h.orgs.leftover_keys().unwrap(), vec!["design".to_string()]);
+    h.orgs.remove("design").await.unwrap();
+    assert_eq!(h.orgs.leftover_keys().unwrap(), Vec::<String>::new());
+    assert_eq!(stored_creds(&h, ACME), Some(token()));
+}
+
 // Join
 
 #[tokio::test]

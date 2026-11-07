@@ -657,3 +657,32 @@ describe("Settings, Accounts, invites and request codes", () => {
     expect(await navigator.clipboard.readText()).toBe(REQUEST);
   });
 });
+
+describe("Settings, Accounts, sign-in details kept for an account not joined", () => {
+  it("lists them by account id, and Remove takes them back", async () => {
+    orgs([]);
+    let kept = ["design"];
+    backend.on("org_leftover_keys", () => kept);
+    backend.on("org_remove", () => {
+      kept = [];
+      return null;
+    });
+    const { user } = renderApp("/settings/account");
+    const list = await within(await section()).findByRole("list", {
+      name: "Sign-in details kept for accounts not joined",
+    });
+    const item = within(list).getByRole("listitem", { name: "design" });
+    expect(item).toHaveTextContent(
+      "This PC keeps sign-in details for 'design', which is not joined.",
+    );
+    await user.click(within(item).getByRole("button", { name: "Remove" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.click(within(dialog).getByRole("button", { name: "Remove" }));
+    await waitFor(() => expect(backend.callsTo("org_remove")).toEqual([{ orgId: "design" }]));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("list", { name: "Sign-in details kept for accounts not joined" }),
+      ).toBeNull(),
+    );
+  });
+});
