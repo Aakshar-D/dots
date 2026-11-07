@@ -785,7 +785,9 @@ impl Orgs {
         self.summary_now(org_id).ok_or_else(|| not_joined(org_id))
     }
 
-    /// Fetches every joined org at once, at start, after `load`. A failure is logged.
+    /// Fetches every joined org at once, at start, after `load`. A failure is logged. The
+    /// fetches belong to this call: when it is dropped (the app shuts down while a source
+    /// hangs), they stop with it.
     pub async fn refresh_all(&self) {
         let ids: Vec<String> = self
             .read()
@@ -793,19 +795,17 @@ impl Orgs {
             .filter(|(_, slot)| matches!(slot, Slot::Joined(_)))
             .map(|(id, _)| id.clone())
             .collect();
-        let tasks: Vec<_> = ids
-            .into_iter()
-            .map(|id| {
-                let orgs = self.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = orgs.refresh(&id).await {
-                        tracing::warn!("org {id:?} was not refreshed: {e}");
-                    }
-                })
-            })
-            .collect();
-        for task in tasks {
-            if let Err(e) = task.await {
+        let mut tasks = tokio::task::JoinSet::new();
+        for id in ids {
+            let orgs = self.clone();
+            tasks.spawn(async move {
+                if let Err(e) = orgs.refresh(&id).await {
+                    tracing::warn!("org {id:?} was not refreshed: {e}");
+                }
+            });
+        }
+        while let Some(done) = tasks.join_next().await {
+            if let Err(e) = done {
                 tracing::warn!("an org refresh did not finish: {e}");
             }
         }
@@ -965,6 +965,11 @@ impl Orgs {
     /// Fetches the org and applies the outcome; with `only_if_stale`, only when it is stale.
     /// Whether it fetched.
     async fn refresh_org(&self, org_id: &str, only_if_stale: bool) -> Result<bool> {
+        // A run's start does not wait behind a fetch under way (a timer's, a Refresh) for an
+        // org that is fresh: only a stale one waits for the lock, and is looked at again then.
+        if only_if_stale && !self.wants_refresh(org_id) {
+            return Ok(false);
+        }
         let _guard = self.lock(org_id).await;
         let (row, source, refresh_minutes, kept) = match self.read().get(org_id) {
             Some(Slot::Joined(joined)) => (
@@ -981,14 +986,8 @@ impl Orgs {
         if row.member.membership == Membership::Removed {
             return Ok(false);
         }
-        if only_if_stale {
-            let now = self.inner.clock.now();
-            let failed = self.failed_at().get(org_id).copied();
-            if !is_stale(&row, refresh_minutes, now)
-                || failed.is_some_and(|at| now - at < RETRY_AFTER)
-            {
-                return Ok(false);
-            }
+        if only_if_stale && !self.due(&row, refresh_minutes) {
+            return Ok(false);
         }
         let outcome = self.fetch(&row, source.as_ref()).await;
         let denied = matches!(outcome, Outcome::Denied(_));
@@ -1056,6 +1055,28 @@ impl Orgs {
                 .await;
         }
         Ok(true)
+    }
+
+    /// Whether a run's start should fetch the org: it is joined, on the member list or never
+    /// was, and `due`. Read without the org's lock, so a fetch under way doesn't hold it up; an
+    /// org that is not joined says yes, and the locked path gives the error.
+    fn wants_refresh(&self, org_id: &str) -> bool {
+        let (row, refresh_minutes) = match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => (
+                joined.row.clone(),
+                joined.policy.as_ref().map(|p| p.refresh_minutes),
+            ),
+            Some(Slot::Damaged { .. }) => return false,
+            Some(Slot::Pending(_)) | None => return true,
+        };
+        row.member.membership != Membership::Removed && self.due(&row, refresh_minutes)
+    }
+
+    /// Whether the org of `row` is stale, and not within `RETRY_AFTER` of a failed fetch.
+    fn due(&self, row: &OrgRow, refresh_minutes: Option<u32>) -> bool {
+        let now = self.inner.clock.now();
+        let failed = self.failed_at().get(&row.id).copied();
+        is_stale(row, refresh_minutes, now) && failed.is_none_or(|at| now - at >= RETRY_AFTER)
     }
 
     /// One fetch with the org's stored sign-in details, and the policy checked against the

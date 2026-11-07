@@ -643,7 +643,9 @@ async fn a_run_whose_org_is_removed_while_it_waits_to_refresh_does_not_start() {
         .await
         .unwrap();
 
-    // A Refresh holds the org's lock while its source answers.
+    // The org is stale, so the run's start waits for the org's lock. A Refresh holds it
+    // while its source answers.
+    h.advance(Duration::minutes(16));
     let gate = scripted.hold();
     let refreshing = tokio::spawn({
         let orgs = orgs.clone();
@@ -667,6 +669,45 @@ async fn a_run_whose_org_is_removed_while_it_waits_to_refresh_does_not_start() {
         }
         other => panic!("expected the run refused, got {other:?}"),
     }
+}
+
+/// A run's start does not wait behind a fetch under way when the org is fresh: it uses what it
+/// has, and the fetch goes on.
+#[tokio::test]
+async fn a_run_of_a_fresh_org_starts_while_a_refresh_is_under_way() {
+    let h = OrgsHarness::new().await;
+    let scripted = Scripted::new();
+    let orgs = h.service().with_sources(scripted.factory());
+    let signed = sign(&h.keys, &policy(ACME, ISSUED, json!({})));
+    scripted.serve(&[("BOTH", ORG_BOTH)], &signed);
+    orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+    scripted.entered().await;
+    let vault = Vault::new(h.store.clone(), h.secrets.clone()).with_orgs(orgs.clone());
+    let dot = h
+        .store
+        .create_dot(&spec(DOT), Some(ACME), "default")
+        .await
+        .unwrap();
+
+    let gate = scripted.hold();
+    let refreshing = tokio::spawn({
+        let orgs = orgs.clone();
+        async move { orgs.refresh(ACME).await }
+    });
+    scripted.entered().await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), vault.before_run(&dot))
+        .await
+        .expect("the run's start waited for the refresh")
+        .unwrap();
+    // Stale, it waits for the refresh under way, and does not fetch again.
+    h.advance(Duration::minutes(16));
+    let start = vault.before_run(&dot);
+    tokio::pin!(start);
+    assert!(futures_util::poll!(&mut start).is_pending());
+    gate.add_permits(1);
+    refreshing.await.unwrap().unwrap();
+    start.await.unwrap();
+    assert_eq!(scripted.creds().len(), 2);
 }
 
 #[tokio::test]

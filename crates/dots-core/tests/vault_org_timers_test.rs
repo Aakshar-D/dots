@@ -12,7 +12,7 @@ use std::time::Duration as StdDuration;
 use chrono::{DateTime, Duration, Utc};
 use common::clock::FakeClock;
 use common::fake_openbao::Failure;
-use common::orgs::{at, policy, sign, token, OrgsHarness, ACME, START};
+use common::orgs::{at, policy, sign, token, OrgsHarness, Scripted, ACME, START};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::vault::org::OrgTimers;
 use serde_json::json;
@@ -204,6 +204,37 @@ async fn the_start_up_fetch_fetches_every_org_once_and_starts_its_timer() {
     assert_eq!((h.env_reads("dots"), h.env_reads("beta")), (2, 2));
     assert_eq!(timers.running(), [ACME, "beta"]);
     eventually("the start-up fetch's end", || !timers.starting_up()).await;
+}
+
+/// A start-up fetch that the shutdown stops does not finish later: its outcome is never
+/// applied, and nothing is recorded for it.
+#[tokio::test]
+async fn a_start_up_fetch_stopped_by_the_shutdown_never_lands() {
+    let h = OrgsHarness::new().await;
+    let scripted = Scripted::new();
+    let orgs = h.service().with_sources(scripted.factory());
+    let extra = json!({"audit": {"endpoint": "https://audit.acme.test", "token_entry": "API_KEY"}});
+    let signed = sign(&h.keys, &policy(ACME, "2026-10-22T08:00:00Z", extra));
+    scripted.serve(&[("API_KEY", ORG_VALUE)], &signed);
+    orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+    scripted.entered().await;
+    h.advance(Duration::minutes(1));
+    let shutdown = CancellationToken::new();
+    let timers = OrgTimers::new(orgs.clone(), h.clock.clone(), new_bus(), shutdown.clone());
+
+    let gate = scripted.hold();
+    timers.start_up();
+    scripted.entered().await;
+    shutdown.cancel();
+    eventually("the start-up fetch's end", || !timers.starting_up()).await;
+    gate.add_permits(1);
+    tokio::time::sleep(StdDuration::from_millis(200)).await;
+    let row = h.store.get_org(ACME).await.unwrap().unwrap();
+    assert_eq!(
+        row.last_fetch_at.as_deref(),
+        Some("2026-10-22T09:00:00.000Z")
+    );
+    assert_eq!(h.store.audit_queued(ACME).await.unwrap(), 1);
 }
 
 /// Every timer, and a start-up fetch that hangs, stop with the shutdown token.
