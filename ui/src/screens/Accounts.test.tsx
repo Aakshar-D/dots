@@ -149,6 +149,21 @@ describe("Settings, Accounts", () => {
     expect(backend.callsTo("org_remove")).toEqual([{ orgId: "acme-eng" }]);
   });
 
+  it("reads the list again when a Remove fails, so a half-removed account shows", async () => {
+    const DAMAGED = "removing it did not finish (copy not deleted); remove it again";
+    const list = orgs([acme]);
+    backend.on("org_remove", () => {
+      list.set([{ ...acme, status_text: DAMAGED }]);
+      throw { kind: "internal", message: "copy not deleted" };
+    });
+    const { user } = renderApp("/settings/account");
+    await user.click(within(await row("Acme Engineering")).getByRole("button", { name: "Remove" }));
+    const ask = await screen.findByRole("alertdialog", { name: "Remove Acme Engineering?" });
+    await user.click(within(ask).getByRole("button", { name: "Remove" }));
+    expect(await screen.findByText(DAMAGED)).toBeVisible();
+    expect(backend.callsTo("org_remove")).toEqual([{ orgId: "acme-eng" }]);
+  });
+
   it("joins with a token: the preview, then the token, which is cleared once sent", async () => {
     const list = orgs([]);
     backend.on("org_preview", () => newCode);

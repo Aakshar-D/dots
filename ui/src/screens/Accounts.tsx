@@ -73,7 +73,11 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
       invalidate(qc, keys.orgs);
       toast.success(`Left ${org.name}`);
     },
-    onError: notifyError,
+    // A Remove that stopped half way leaves the account listed as damaged: read the list again.
+    onError: (e) => {
+      invalidate(qc, keys.orgs);
+      notifyError(e);
+    },
   });
   const requestAccess = useMutation({
     mutationFn: () => commands.orgRequestAccess(org.id),

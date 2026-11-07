@@ -285,6 +285,39 @@ async fn the_runtime_keeps_one_timer_per_joined_org() {
     eventually("the timers' end", || timers.running().is_empty()).await;
 }
 
+/// A Remove that fails after the values are gone leaves the org listed as damaged; the runtime
+/// publishes `OrgUpdated` so the screens read the list again, and the error is still returned.
+#[tokio::test]
+async fn a_remove_that_does_not_finish_publishes_org_updated() {
+    let t = Rt::start().await;
+    t.join_acme().await;
+    // The copy can't be deleted: a folder stands where it is.
+    let copy = t
+        .dir
+        .path()
+        .join("data")
+        .join(dots_core::vault::org::OFFLINE_DIR);
+    std::fs::create_dir_all(&copy).unwrap();
+    let copy = copy.join(format!("{ACME}.bin"));
+    let _ = std::fs::remove_file(&copy);
+    std::fs::create_dir(&copy).unwrap();
+    std::fs::write(copy.join("held"), "x").unwrap();
+    let mut events = t.rt.subscribe();
+
+    let e = t.rt.remove_org(ACME).await.unwrap_err();
+    assert!(e.to_string().contains("deleting its offline copy failed"));
+    let mut said = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let RuntimeEvent::OrgUpdated { org_id } = event {
+            said.push(org_id);
+        }
+    }
+    assert_eq!(said, [ACME]);
+    let listed = t.orgs().summaries().await;
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].status_text.contains("removing it did not finish"));
+}
+
 /// A restarted runtime fetches every joined org once, and starts its timer.
 #[tokio::test]
 async fn a_restarted_runtime_fetches_each_org_and_starts_its_timer() {

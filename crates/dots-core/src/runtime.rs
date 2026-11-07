@@ -3457,6 +3457,9 @@ impl Runtime {
             if self.orgs.is_joined(org_id) {
                 self.org_timers.start(org_id);
             }
+            // A Remove that failed after the values were gone leaves the org listed as damaged;
+            // the screens read the list again to show it.
+            self.org_updated(org_id);
             return Err(e);
         }
         self.org_updated(org_id);
