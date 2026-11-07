@@ -747,8 +747,8 @@ impl Orgs {
         self.summary_now(org_id).ok_or_else(|| not_joined(org_id))
     }
 
-    /// Leaves an org (§6.4, **Remove**): wipes its offline copy, its sign-in details and its
-    /// row. Its dots keep their `org_id`, and resolve as removed until it is joined again. It
+    /// Leaves an org (§6.4, **Remove**): deletes its row, then wipes its offline copy and its
+    /// sign-in details. Its dots keep their `org_id`, and resolve as removed until it is joined again. It
     /// also takes back the age key of a SOPS org that was never joined.
     pub async fn remove(&self, org_id: &str) -> Result<()> {
         check_org_id(org_id)?;
@@ -768,8 +768,9 @@ impl Orgs {
         self.failed_at().remove(org_id);
         self.identities().remove(org_id);
         if let Err(e) = self.finish_remove(org_id, has_row).await {
-            // A joined org that is half removed stays listed, giving no values, so the person
-            // sees it and can remove it again.
+            // A joined org that is half removed stays listed for this session, giving no
+            // values, so the person sees it and can remove it again. Its row is gone, so the
+            // next start does not load it.
             if let Some((_, name)) = names.into_iter().find(|(id, _)| id == org_id) {
                 let error = format!("removing it did not finish ({e}); remove it again");
                 self.write()
@@ -780,19 +781,23 @@ impl Orgs {
         Ok(())
     }
 
-    /// What Remove deletes after the values: the copy, the sign-in details and the row.
+    /// What Remove deletes after the values: the row, the copy, then the sign-in details. The
+    /// row goes first, so a step that fails after it leaves nothing for the next start to load:
+    /// the account does not come back. Details left behind are listed by `leftover_keys`, and
+    /// a Remove of them deletes the copy and the details.
     async fn finish_remove(&self, org_id: &str, has_row: bool) -> Result<()> {
-        let (dir, id) = (self.inner.dir.clone(), org_id.to_string());
-        blocking(move || delete_offline(&dir, &id)).await?;
-        SourceCreds::forget(self.inner.secrets.as_ref(), org_id)?;
         if has_row {
             self.inner.store.remove_org(org_id).await?;
         }
+        let (dir, id) = (self.inner.dir.clone(), org_id.to_string());
+        blocking(move || delete_offline(&dir, &id)).await?;
+        SourceCreds::forget(self.inner.secrets.as_ref(), org_id)?;
         Ok(())
     }
 
     /// The org ids this PC keeps sign-in details for while no such org is joined: a SOPS key
-    /// made for a join that never finished, or one waiting for the admin. Settings lists them,
+    /// made for a join that never finished, one waiting for the admin, or the details a Remove
+    /// that did not finish left behind. Settings lists them,
     /// and **Remove** takes them back. Never a value.
     pub fn leftover_keys(&self) -> Result<Vec<String>> {
         let keys = self.inner.secrets.keys("org/")?;

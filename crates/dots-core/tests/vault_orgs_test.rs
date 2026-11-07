@@ -28,7 +28,7 @@ use dots_core::vault::org::{
     OrgSummary, OrgView, Orgs, PersonalMode, Protector, SourceCreds, SourceError, SourceSettings,
     TestProtector, UseRules, RETRY_AFTER,
 };
-use dots_core::vault::{redact, Grants};
+use dots_core::vault::{redact, Grants, MemorySecrets, SecretStore};
 use dots_core::{Error, Result};
 use serde_json::{json, Value};
 use sqlx::sqlite::SqlitePool;
@@ -175,6 +175,101 @@ async fn a_remove_that_does_not_finish_keeps_the_org_listed_without_values() {
     h.orgs.remove(ACME).await.unwrap();
     assert_eq!(h.orgs.summaries().await, vec![]);
     assert!(h.store.get_org(ACME).await.unwrap().is_none());
+}
+
+/// A Remove whose copy can't be deleted has already deleted the row, so a restart does not
+/// bring the account back. Its sign-in details are left over, listed, and a Remove takes them.
+#[tokio::test]
+async fn a_remove_that_fails_at_the_copy_stays_removed_after_a_restart() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), acme_policy()).await;
+    let copy = h.copy_path(ACME);
+    std::fs::remove_file(&copy).unwrap();
+    std::fs::create_dir(&copy).unwrap();
+    std::fs::write(copy.join("held"), "x").unwrap();
+    h.orgs.remove(ACME).await.unwrap_err();
+
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert!(!restarted.is_joined(ACME));
+    assert_eq!(restarted.summaries().await, vec![]);
+    assert_eq!(restarted.lookup(ACME, "API_KEY").await, OrgLookup::Removed);
+    restarted.refresh_all().await;
+    assert_eq!(restarted.lookup(ACME, "API_KEY").await, OrgLookup::Removed);
+    assert_eq!(restarted.leftover_keys().unwrap(), vec![ACME.to_string()]);
+
+    std::fs::remove_dir_all(&copy).unwrap();
+    restarted.remove(ACME).await.unwrap();
+    assert_eq!(restarted.leftover_keys().unwrap(), Vec::<String>::new());
+    assert_eq!(stored_creds(&h, ACME), None);
+}
+
+/// Secrets whose deletes fail while `failing` is set.
+#[derive(Debug)]
+struct FailingDeletes {
+    inner: Arc<MemorySecrets>,
+    failing: std::sync::atomic::AtomicBool,
+}
+
+impl SecretStore for FailingDeletes {
+    fn put(&self, key: &str, value: &str) -> Result<()> {
+        self.inner.put(key, value)
+    }
+    fn get(&self, key: &str) -> Result<Option<Zeroizing<String>>> {
+        self.inner.get(key)
+    }
+    fn delete(&self, key: &str) -> Result<()> {
+        if self.failing.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::Other("the credential store is busy".into()));
+        }
+        self.inner.delete(key)
+    }
+    fn keys(&self, prefix: &str) -> Result<Vec<String>> {
+        self.inner.keys(prefix)
+    }
+}
+
+/// A Remove whose sign-in details can't be deleted has deleted the row and the copy: after a
+/// restart the account is not joined and fetches nothing, and the details are left over.
+#[tokio::test]
+async fn a_remove_that_fails_at_the_sign_in_details_stays_removed_after_a_restart() {
+    let h = OrgsHarness::new().await;
+    let secrets = Arc::new(FailingDeletes {
+        inner: h.secrets.clone(),
+        failing: false.into(),
+    });
+    let orgs = Orgs::new(
+        h.store.clone(),
+        secrets.clone(),
+        h.protector.clone(),
+        h.vault_dir(),
+        dots_core::vault::org::http_client_with_timeout(StdDuration::from_secs(5)),
+        h.clock.clone(),
+    );
+    h.serve_acme(entries(), acme_policy());
+    orgs.join(&h.acme_code(), Some(token())).await.unwrap();
+    secrets
+        .failing
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let e = orgs.remove(ACME).await.unwrap_err();
+    assert!(error_text(&e).contains("the credential store is busy"));
+    assert!(matches!(
+        orgs.lookup(ACME, "API_KEY").await,
+        OrgLookup::PolicyInvalid(_)
+    ));
+
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    let reads = h.env_reads("dots");
+    restarted.refresh_all().await;
+    assert_eq!(h.env_reads("dots"), reads, "nothing is fetched");
+    assert!(!restarted.is_joined(ACME));
+    assert_eq!(restarted.summaries().await, vec![]);
+    assert_eq!(restarted.lookup(ACME, "API_KEY").await, OrgLookup::Removed);
+    assert!(!h.copy_path(ACME).exists());
+    assert_eq!(restarted.leftover_keys().unwrap(), vec![ACME.to_string()]);
+    restarted.remove(ACME).await.unwrap();
+    assert_eq!(stored_creds(&h, ACME), None);
 }
 
 /// Sign-in details kept for an org that is not joined (a SOPS key made for a join that never
