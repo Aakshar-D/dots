@@ -995,9 +995,8 @@ async fn an_unreachable_refresh_keeps_the_copy_until_offline_hours() {
     assert_eq!(
         summary.status_text,
         format!(
-            "offline ({} is sealed or not ready (HTTP 503)); using the saved copy until {}",
-            h.bao.address(),
-            start_plus(24)
+            "offline ({} is sealed or not ready (HTTP 503)); using the saved copy",
+            h.bao.address()
         )
     );
     assert_eq!(summary.last_fetch_at, Some(start_plus(0)));
@@ -1029,10 +1028,7 @@ async fn an_invalid_answer_or_a_bad_signature_keeps_the_last_good_copy() {
     );
     assert_eq!(
         summary.status_text,
-        format!(
-            "policy invalid: no secrets at secret/dots/env; using the saved copy until {}",
-            start_plus(24)
-        )
+        "policy invalid: no secrets at secret/dots/env; using the saved copy"
     );
     assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, value(API_KEY, false));
 
@@ -1192,10 +1188,7 @@ async fn load_uses_a_copy_that_holds_and_drops_one_that_ran_out() {
             until: Some(start_plus(24))
         }
     );
-    assert_eq!(
-        summary.status_text,
-        format!("offline; using the saved copy until {}", start_plus(24))
-    );
+    assert_eq!(summary.status_text, "offline; using the saved copy");
     assert_eq!(
         summary.policy_summary,
         h.orgs.policy(ACME).unwrap().summary()

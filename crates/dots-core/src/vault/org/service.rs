@@ -1886,18 +1886,17 @@ impl Joined {
             .map(stamp);
         match (&self.status, copy) {
             (OrgStatus::Connected, _) => "connected".into(),
-            (OrgStatus::Offline { until: Some(until) }, _) => {
-                format!(
-                    "{}; using the saved copy until {until}",
-                    with_reason("offline")
-                )
+            // The time the copy holds until is the summary's `copy_until`, which the UI shows in
+            // local time beside the status: the words don't repeat it in UTC.
+            (OrgStatus::Offline { until: Some(_) }, _) => {
+                format!("{}; using the saved copy", with_reason("offline"))
             }
             (OrgStatus::Offline { until: None }, _) => {
                 format!("{}, with no saved copy", with_reason("offline"))
             }
             (OrgStatus::Revoked, _) => with_reason("access revoked"),
-            (OrgStatus::PolicyInvalid { error }, Some(until)) => {
-                format!("policy invalid: {error}; using the saved copy until {until}")
+            (OrgStatus::PolicyInvalid { error }, Some(_)) => {
+                format!("policy invalid: {error}; using the saved copy")
             }
             (OrgStatus::PolicyInvalid { error }, None) => format!("policy invalid: {error}"),
             (OrgStatus::Expired, _) => "secrets expired offline; reconnect to refresh".into(),

@@ -4629,7 +4629,7 @@
       "shell_secrets": false,
       "source_kind": "openbao",
       "status": "offline",
-      "status_text": "offline (connection refused); using the saved copy until 2026-10-10T12:00:00.000Z",
+      "status_text": "offline (connection refused); using the saved copy",
       "until": "2026-10-10T12:00:00.000Z",
       "use_rules": {
         "allow": [
@@ -4728,7 +4728,7 @@
       "shell_secrets": false,
       "source_kind": "openbao",
       "status": "policy_invalid",
-      "status_text": "policy invalid: signature does not match; using the saved copy until 2026-10-10T12:00:00.000Z; member list not accepted: the member list is not signed by the owner or an admin",
+      "status_text": "policy invalid: signature does not match; using the saved copy; member list not accepted: the member list is not signed by the owner or an admin",
       "use_rules": {
         "allow": [
           "*"

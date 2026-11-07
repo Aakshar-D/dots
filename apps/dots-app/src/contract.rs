@@ -2526,7 +2526,7 @@ fn org_summaries() -> Vec<OrgSummary> {
             OrgStatus::Offline {
                 until: Some("2026-10-10T12:00:00.000Z".into()),
             },
-            "offline (connection refused); using the saved copy until 2026-10-10T12:00:00.000Z",
+            "offline (connection refused); using the saved copy",
         ),
         OrgSummary {
             copy_until: None,
@@ -2552,9 +2552,8 @@ fn org_summaries() -> Vec<OrgSummary> {
                 OrgStatus::PolicyInvalid {
                     error: "signature does not match".into(),
                 },
-                "policy invalid: signature does not match; using the saved copy until \
-                 2026-10-10T12:00:00.000Z; member list not accepted: the member list is not \
-                 signed by the owner or an admin",
+                "policy invalid: signature does not match; using the saved copy; member list \
+                 not accepted: the member list is not signed by the owner or an admin",
             )
         },
         OrgSummary {

@@ -18,8 +18,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { ORG_TONE } from "@/screens/Accounts";
@@ -38,29 +36,38 @@ export function VariableDialog(props: {
   onClose: () => void;
   /// The name a new variable starts with (a watcher's form offers one).
   initialName?: string;
+  /// The kind a new variable starts with, when the caller knows it (a watcher's app password
+  /// is a secret); otherwise the person picks one.
+  initialKind?: EnvEntry["kind"];
   /// Gets what the core saved.
   onSaved?: (entry: EnvEntry) => void;
 }) {
   const qc = useQueryClient();
   const { entry } = props;
   const [name, setName] = useState(entry?.name ?? props.initialName ?? "");
-  const [secret, setSecret] = useState(entry ? entry.kind === "secret" : true);
+  // A new variable has no kind until the person picks one (smoke follow-up of plan B): a
+  // secret can't be made plain later, and a plain value is shown.
+  const [kind, setKind] = useState<EnvEntry["kind"] | null>(
+    entry ? entry.kind : (props.initialKind ?? null),
+  );
+  const secret = kind === "secret";
   const [value, setValue] = useState(entry?.kind === "plain" ? (entry.value ?? "") : "");
   const [tried, setTried] = useState(false);
   const [state, setState] = useState<{ busy: boolean; error?: string }>({ busy: false });
   const errors = {
     name: entry || validVariableName(name) ? undefined : NAME_RULE,
+    kind: kind === null ? "Choose Plain or Secret." : undefined,
     value: secret && value === "" ? "A secret needs a value." : undefined,
   };
 
   async function save() {
     setTried(true);
-    if (errors.name || errors.value) return;
+    if (errors.name || errors.kind || errors.value) return;
     setState({ busy: true });
     try {
       const saved = entry
         ? await commands.envSet(entry.name, value)
-        : await commands.envAdd(name, secret ? "secret" : "plain", value);
+        : await commands.envAdd(name, kind ?? "secret", value);
       invalidate(qc, keys.env);
       invalidate(qc, keys.library);
       props.onSaved?.(saved);
@@ -100,21 +107,36 @@ export function VariableDialog(props: {
                 onChange={(e) => setName(e.target.value)}
               />
             </Field>
-            <div className="flex items-center gap-2">
-              <Switch id="env-secret" checked={secret} onCheckedChange={setSecret} />
-              <Label htmlFor="env-secret">Secret</Label>
+            <fieldset className="flex flex-col gap-1">
+              <legend className="text-sm font-medium">Kind</legend>
+              <div className="flex items-center gap-4">
+                {(["plain", "secret"] as const).map((k) => (
+                  <label key={k} className="flex items-center gap-1.5 text-sm">
+                    <input
+                      type="radio"
+                      name="env-kind"
+                      value={k}
+                      checked={kind === k}
+                      onChange={() => setKind(k)}
+                    />
+                    {k === "plain" ? "Plain" : "Secret"}
+                  </label>
+                ))}
+              </div>
               <span className="text-xs text-muted-foreground">
-                {secret
+                {kind === "secret"
                   ? "Kept in Windows Credential Manager and never shown again."
-                  : "Plain config: shown here and editable."}
+                  : kind === "plain"
+                    ? "Plain config: shown here and editable."
+                    : "A secret is never shown again and can't be made plain later."}
               </span>
-            </div>
+            </fieldset>
           </>
         )}
         <Field label="Value" htmlFor="env-value" error={tried ? errors.value : undefined}>
           <Input
             id="env-value"
-            type={secret ? "password" : "text"}
+            type={kind === "plain" ? "text" : "password"}
             autoComplete="off"
             className="font-mono"
             value={value}
@@ -126,7 +148,11 @@ export function VariableDialog(props: {
           <Button type="button" variant="outline" onClick={props.onClose}>
             Cancel
           </Button>
-          <Button type="button" disabled={state.busy} onClick={() => void save()}>
+          <Button
+            type="button"
+            disabled={state.busy || errors.kind !== undefined}
+            onClick={() => void save()}
+          >
             Save
           </Button>
         </DialogFooter>

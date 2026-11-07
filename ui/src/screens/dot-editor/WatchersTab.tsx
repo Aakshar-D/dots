@@ -172,6 +172,7 @@ export function VaultChooser(props: {
         <VariableDialog
           entry={null}
           initialName={props.initialName}
+          initialKind="secret"
           onSaved={(saved) => props.onChange(saved.name)}
           onClose={() => {
             setAdding(false);
