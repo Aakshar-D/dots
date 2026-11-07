@@ -380,14 +380,21 @@ fn count(n: u32, unit: &str) -> String {
     }
 }
 
+/// The audit endpoint is `https://`, or `http://` only to `localhost` or `127.0.0.1`, as a
+/// join code's address: a sink on the same PC, for a test.
 fn check_audit(audit: &AuditTarget) -> Result<(), PolicyError> {
     let url = reqwest::Url::parse(&audit.endpoint);
-    let https = url
+    let allowed = url
         .as_ref()
-        .is_ok_and(|u| u.scheme() == "https" && u.host_str().is_some_and(|h| !h.is_empty()));
-    if !https {
+        .is_ok_and(|u| match (u.scheme(), u.host_str()) {
+            ("https", Some(host)) => !host.is_empty(),
+            ("http", Some(host)) => matches!(host, "localhost" | "127.0.0.1"),
+            _ => false,
+        });
+    if !allowed {
         return Err(invalid(format!(
-            "audit.endpoint '{}' must be an https:// URL",
+            "audit.endpoint '{}' must be an https:// URL (http:// only for localhost or \
+             127.0.0.1)",
             audit.endpoint
         )));
     }

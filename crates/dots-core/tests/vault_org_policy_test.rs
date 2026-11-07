@@ -228,7 +228,17 @@ fn the_audit_target_needs_an_https_endpoint_and_an_entry_name() {
     ] {
         assert_eq!(
             invalid(&audit(bad, "DOTS_AUDIT_TOKEN")),
-            format!("audit.endpoint '{bad}' must be an https:// URL")
+            format!(
+                "audit.endpoint '{bad}' must be an https:// URL (http:// only for localhost or \
+                 127.0.0.1)"
+            )
+        );
+    }
+    // A sink on this PC may take plain http.
+    for local in ["http://127.0.0.1:8080/dots", "http://localhost/audit"] {
+        assert!(
+            parse_policy(&audit(local, "DOTS_AUDIT_TOKEN")).is_ok(),
+            "{local}"
         );
     }
     assert_eq!(

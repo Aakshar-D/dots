@@ -5,11 +5,13 @@
 //! `docs/vault-audit-format.md`.
 
 pub mod record;
+pub mod sender;
 pub mod verify;
 pub mod writer;
 
 pub use record::{
     canonical, line_hash, stamp, AuditDot, AuditRecord, AuditUser, Dropped, Event, RECORD_VERSION,
 };
+pub use sender::{AuditSender, AuditTransport, HttpTransport, SendState};
 pub use verify::{verify_lines, ChainReport, ChainSummary, Finding};
 pub use writer::{Audit, Happened, OrgAudit, Usage};
