@@ -1028,7 +1028,12 @@ fn roster_sign_with_a_refused_out_writes_nothing() {
     std::fs::write(&key_file, secret).unwrap();
     // A minisign public key file that the command does not read.
     let other = TempDir::new().unwrap();
-    ok(&["keygen", "--out", other.path().to_str().unwrap(), "--no-password"]);
+    ok(&[
+        "keygen",
+        "--out",
+        other.path().to_str().unwrap(),
+        "--no-password",
+    ]);
     let pub_file = path(other.path(), "policy.pub");
     let public = std::fs::read_to_string(&pub_file).unwrap();
     let before = std::fs::read_to_string(&file).unwrap();

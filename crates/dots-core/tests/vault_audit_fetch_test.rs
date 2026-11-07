@@ -300,8 +300,7 @@ async fn after_a_restart_with_no_copy_records_still_queue_with_the_next_seq() {
         ]
     );
     let batch = h.store.audit_batch(ACME, 500).await.unwrap();
-    let body: String = batch.iter().map(|(_, l)| format!("{l}
-")).collect();
+    let body: String = batch.iter().map(|(_, l)| format!("{l}\n")).collect();
     assert!(verify_lines(&body).ok());
     assert_eq!(
         history(&h).await,
@@ -311,7 +310,9 @@ async fn after_a_restart_with_no_copy_records_still_queue_with_the_next_seq() {
             HistoryState::Queued
         )]
     );
-    let target = restarted.audit_target(ACME).expect("the last accepted target");
+    let target = restarted
+        .audit_target(ACME)
+        .expect("the last accepted target");
     assert_eq!(
         (target.endpoint.as_str(), target.token_entry.as_str()),
         ("https://audit.acme.test/dots", "DOTS_AUDIT_TOKEN")

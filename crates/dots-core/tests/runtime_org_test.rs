@@ -364,10 +364,7 @@ async fn after_a_restart_with_no_copy_history_still_names_the_endpoint() {
         json!({"DOTS_TEST_LEVEL": LEVEL_ONE, "DOTS_AUDIT_TOKEN": AUDIT_TOKEN}),
     );
     t.bao.put_policy("secret", "dots", &signed);
-    t.orgs()
-        .join(&t.acme_code(), Some(token()))
-        .await
-        .unwrap();
+    t.orgs().join(&t.acme_code(), Some(token())).await.unwrap();
     assert!(t.rt.close(StdDuration::from_secs(10)).await);
     let Rt {
         dir,
@@ -393,7 +390,10 @@ async fn after_a_restart_with_no_copy_history_still_names_the_endpoint() {
         view = t.rt.org_audit(ACME).await.unwrap();
     }
     assert_eq!(view.endpoint.as_deref(), Some(ENDPOINT));
-    assert_eq!(view.queued, 2, "the join's fetched, then the start-up fetch's revoked");
+    assert_eq!(
+        view.queued, 2,
+        "the join's fetched, then the start-up fetch's revoked"
+    );
     assert_eq!(
         view.history
             .iter()

@@ -191,7 +191,10 @@ impl Audit {
             event: what.event,
             name: what.name.map(str::to_string),
             consumer: what.consumer.map(str::to_string),
-            source: what.source.map(str::to_string).or_else(|| org.source.clone()),
+            source: what
+                .source
+                .map(str::to_string)
+                .or_else(|| org.source.clone()),
             reason: what.reason.map(str::to_string),
             dropped: None,
         };

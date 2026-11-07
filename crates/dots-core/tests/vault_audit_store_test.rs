@@ -215,8 +215,7 @@ async fn two_drops_in_a_row_name_the_whole_gap_between_them() {
     };
     let mut received = String::new();
     let first = queue(&store, &limits, "A").await;
-    received.push_str(&format!("{}
-", first[0].line()));
+    received.push_str(&format!("{}\n", first[0].line()));
     store.audit_sent("acme-eng", 1).await.unwrap();
     for name in ["B", "C", "D", "E", "F"] {
         queue(&store, &limits, name).await;

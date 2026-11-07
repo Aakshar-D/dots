@@ -528,8 +528,13 @@ impl Orgs {
             Ok(())
         })
         .await?;
-        let targets: HashMap<String, AuditTarget> =
-            self.inner.store.audit_targets().await?.into_iter().collect();
+        let targets: HashMap<String, AuditTarget> = self
+            .inner
+            .store
+            .audit_targets()
+            .await?
+            .into_iter()
+            .collect();
         *self.audit_targets() = targets;
         let mut loaded = BTreeMap::new();
         for (id, name) in self.inner.store.list_org_names().await? {
