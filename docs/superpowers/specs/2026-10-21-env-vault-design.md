@@ -508,7 +508,7 @@ Plan C covers audit records, the outbox, sending and `dots-admin audit verify` (
   - `sender` (`AuditSender`, `AuditTransport`, `HttpTransport`, `SendState`, `retry_after`)
   - `view` (`AuditView`)
 
-  The store has `audit_chain`, `audit_outbox` and `audit_history` (migration `0037_audit.sql`, after master's `0036_intents.sql`). The new commands are `org_audit` and `org_leftover_keys`. The account page's new tab is "History".
+  The store has `audit_chain`, `audit_outbox` and `audit_history` (migration `0042_audit.sql`, after master's `0041_phone.sql`). The new commands are `org_audit` and `org_leftover_keys`. The account page's new tab is "History".
 - **The record.** As §10's example, plus a top-level `install` (the install id, which keys the chain with `org_id`) and `user.dots_id` (the Dots ID fingerprint), and `dropped` (`{from, to}`) on a full queue's `expired` record. `user.source_identity` is an OpenBao login's user name, an Infisical client id or this PC's SOPS age public key; `null` for an OpenBao token. Every key is always present (`null` when it says nothing).
 - **The line and the chain.** A line is canonical JSON: the keys of every object sorted by their bytes, no white space. `prev` is `sha256:` and the hex SHA-256 of the previous line's bytes; `null` for seq 1. A receiver hashes the lines as it got them.
 - **Reasons are codes, never text.** `denied` gives the `Unresolved` code (`not_granted`, `not_defined`, `denied_by_policy`, `denied_by_workspace`, `shell_secrets_forbidden`, `org_offline`, `org_expired`, `org_revoked`, `policy_invalid`, `org_removed`, `not_member`); `revoked` gives `denied` (the source refused) or `removed` (off the member list); `expired` gives `offline_copy` or `queue_full`. The other events have none.
