@@ -312,6 +312,12 @@ impl Store {
         if done.rows_affected() == 0 {
             return Err(not_joined(id));
         }
+        // Its History goes; its audit queue and chain stay, so a re-join sends what is queued
+        // and goes on from the next seq (env vault spec §10).
+        sqlx::query("DELETE FROM audit_history WHERE org_id = ?")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
         // `workspaces.scope` can't be a foreign key (it can be 'personal'), so they go here.
         sqlx::query("DELETE FROM workspaces WHERE scope = ?")
             .bind(id)
