@@ -1482,3 +1482,94 @@ fn set_workspaces_by_email() {
     assert!(err.to_string().contains("default"), "{err}");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
 }
+
+// audit verify (env vault spec §12)
+
+/// `n` chained records of acme-eng on one install, as the endpoint stored them.
+fn audit_lines(n: u64) -> Vec<String> {
+    use dots_core::vault::audit::{line_hash, AuditRecord, AuditUser, Event};
+    let mut lines: Vec<String> = Vec::new();
+    for seq in 1..=n {
+        let record = AuditRecord {
+            v: 1,
+            id: format!("01J9REC{seq:04}"),
+            seq,
+            prev: lines.last().map(|l| line_hash(l)),
+            at: "2026-10-21T09:12:03Z".into(),
+            org_id: "acme-eng".into(),
+            install: "01J9INSTALL".into(),
+            user: AuditUser::default(),
+            dot: None,
+            run_id: None,
+            event: Event::Fetched,
+            name: None,
+            consumer: None,
+            source: Some("openbao".into()),
+            reason: None,
+            dropped: None,
+        };
+        lines.push(record.line());
+    }
+    lines
+}
+
+fn records_file(dir: &Path, lines: &[String]) -> String {
+    let file = path(dir, "records.ndjson");
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(&file, text).unwrap();
+    file
+}
+
+#[test]
+fn audit_verify_prints_each_chain_and_ok_for_a_whole_file() {
+    let dir = TempDir::new().unwrap();
+    let file = records_file(dir.path(), &audit_lines(3));
+    let ran = ok(&["audit", "verify", &file]);
+    assert_eq!(
+        ran.out,
+        "acme-eng (01J9INSTALL): 3 records, seq 1 to 3\nok: every chain is whole\n"
+    );
+}
+
+#[test]
+fn audit_verify_fails_on_a_gap_and_names_it() {
+    let dir = TempDir::new().unwrap();
+    let mut lines = audit_lines(5);
+    lines.remove(2);
+    let file = records_file(dir.path(), &lines);
+    let ran = run_with(&["audit", "verify", &file], None);
+    assert_eq!(
+        ran.out,
+        "acme-eng (01J9INSTALL): 4 records, seq 1 to 5\n\
+         acme-eng (01J9INSTALL): record 3 is missing before line 3\n"
+    );
+    let err = ran.result.unwrap_err();
+    assert_eq!(err.to_string(), "the records are not whole: 1 problem");
+    assert_eq!(err.exit_code(), 1);
+}
+
+#[test]
+fn audit_verify_counts_a_batch_sent_twice_and_passes() {
+    let dir = TempDir::new().unwrap();
+    let mut lines = audit_lines(3);
+    lines.extend(audit_lines(3)[1..].iter().cloned());
+    let file = records_file(dir.path(), &lines);
+    let ran = ok(&["audit", "verify", &file]);
+    assert!(ran
+        .out
+        .contains("2 lines repeat a record already read (a batch sent twice)"));
+    assert!(ran.out.ends_with("ok: every chain is whole\n"));
+}
+
+#[test]
+fn audit_verify_refuses_an_empty_file_and_a_wrong_command_line() {
+    let dir = TempDir::new().unwrap();
+    let file = records_file(dir.path(), &[]);
+    assert_eq!(
+        failure(&["audit", "verify", &file]).to_string(),
+        format!("{file} holds no records")
+    );
+    let err = failure(&["audit", "verify"]);
+    assert_eq!(err.exit_code(), 2);
+    assert_eq!(failure(&["audit", "check", &file]).exit_code(), 2);
+}

@@ -1,6 +1,7 @@
 //! `dots-admin`, the org admin's helper (env vault spec §12): the policy signing key, the policy
-//! itself and the join codes people paste into Dots. It uses `dots-core`'s policy and join code
-//! types and checks, so what it writes is what Dots reads.
+//! itself, the join codes people paste into Dots, and the check of a file of audit records. It
+//! uses `dots-core`'s policy, join code and audit record types and checks, so what it writes is
+//! what Dots reads.
 //!
 //! Every command is a function here, so tests call them without a terminal; `main` only wires
 //! `run` to the console.
@@ -9,6 +10,7 @@ use std::io::Write;
 use std::path::Path;
 
 mod args;
+mod audit;
 pub mod join;
 pub mod keys;
 pub mod policy;
@@ -118,6 +120,9 @@ Commands:
       infisical: --site-url <url> --project-id <id> --environment <slug>
                  [--secret-path </path>]
       sops:      --location <full path or https:// url>
+  dots-admin audit verify <records.ndjson>
+      Checks audit records as an endpoint received them: for each account and install, seq
+      counts up by one and each prev is the hash of the record before. Reports each gap.
 
 A key's password is read from DOTS_ADMIN_PASSWORD when it is set, else from the terminal.
 ";
@@ -148,6 +153,7 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
         "request" => request::request_command(rest, io),
         "roster" => roster::roster_command(rest, io),
         "join-code" => join::join_code_command(rest, io),
+        "audit" => audit::audit_command(rest, io),
         other => Err(usage(format!("unknown command '{other}'"))),
     }
 }
