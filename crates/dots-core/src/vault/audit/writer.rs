@@ -14,12 +14,14 @@ use crate::store::{AuditLimits, NewAudit, Store};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OrgAudit {
     pub org_id: String,
-    /// The org's source kind: `openbao`, `infisical` or `sops`.
-    pub source: String,
+    /// The org's source kind: `openbao`, `infisical` or `sops`; `None` for an org whose
+    /// stored settings are damaged so badly that even the kind does not read.
+    pub source: Option<String>,
     /// Who the source knows this PC as (`AuditUser::source_identity`).
     pub source_identity: Option<String>,
-    /// Whether the org's accepted policy has `audit`: its records are queued and sent. Without
-    /// it they are only listed in History.
+    /// Whether the org's accepted policy has `audit` (with none in memory, whether the last one
+    /// accepted had): its records are queued and sent. Without it they are only listed in
+    /// History.
     pub queue: bool,
 }
 
@@ -189,7 +191,7 @@ impl Audit {
             event: what.event,
             name: what.name.map(str::to_string),
             consumer: what.consumer.map(str::to_string),
-            source: Some(what.source.unwrap_or(&org.source).to_string()),
+            source: what.source.map(str::to_string).or_else(|| org.source.clone()),
             reason: what.reason.map(str::to_string),
             dropped: None,
         };

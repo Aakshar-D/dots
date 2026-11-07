@@ -159,7 +159,7 @@ impl AuditSender {
         // An org that lost its target may have no queue left to come up in `waiting`.
         let stale: Vec<String> = self.states().keys().cloned().collect();
         for org_id in stale {
-            if self.orgs.policy(&org_id).and_then(|p| p.audit).is_none() {
+            if self.orgs.audit_target(&org_id).is_none() {
                 self.clear_wait(&org_id);
             }
         }
@@ -180,7 +180,7 @@ impl AuditSender {
 
     /// Sends the org's queue, a batch at a time, until it is empty or a send fails.
     async fn send_org(&self, org_id: &str) -> usize {
-        let Some(target) = self.orgs.policy(org_id).and_then(|p| p.audit) else {
+        let Some(target) = self.orgs.audit_target(org_id) else {
             // Nothing to send to (removed, damaged, or no `audit` now): the queue stays, and
             // so does no wait or old error, which would be due again at once or show after a
             // rejoin.

@@ -6,6 +6,7 @@ use sqlx::Row;
 use super::Store;
 use crate::accounts::{Membership, Role};
 use crate::vault::org::policy::plain_serde;
+use crate::vault::org::AuditTarget;
 use crate::vault::org::{check_org_id, MemberRow, OrgRow, PendingRequest, SourceSettings};
 use crate::{Error, Result};
 
@@ -92,6 +93,43 @@ fn org_from_row(row: &SqliteRow) -> Result<OrgRow> {
     })
 }
 
+fn target_from_row(row: &SqliteRow) -> Result<AuditTarget> {
+    Ok(AuditTarget {
+        endpoint: row.try_get("endpoint")?,
+        token_entry: row.try_get("token_entry")?,
+    })
+}
+
+/// Keeps `audit` as the org's `audit_target`, or deletes it for `None`. It holds the endpoint
+/// and the token entry's name, never a token.
+async fn set_audit_target(
+    tx: &mut sqlx::SqliteConnection,
+    id: &str,
+    audit: Option<&AuditTarget>,
+) -> Result<()> {
+    match audit {
+        Some(target) => {
+            sqlx::query(
+                "INSERT INTO audit_target (org_id, endpoint, token_entry) VALUES (?, ?, ?) \
+                 ON CONFLICT (org_id) DO UPDATE SET endpoint = excluded.endpoint, \
+                 token_entry = excluded.token_entry",
+            )
+            .bind(id)
+            .bind(&target.endpoint)
+            .bind(&target.token_entry)
+            .execute(&mut *tx)
+            .await?;
+        }
+        None => {
+            sqlx::query("DELETE FROM audit_target WHERE org_id = ?")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    Ok(())
+}
+
 fn not_joined(id: &str) -> Error {
     Error::NotFound(format!("no org '{id}' is joined on this PC"))
 }
@@ -99,6 +137,15 @@ fn not_joined(id: &str) -> Error {
 impl Store {
     /// Adds a joined org. An id already joined is a `Conflict`.
     pub async fn add_org(&self, org: &OrgRow) -> Result<()> {
+        self.add_org_with_audit(org, None).await
+    }
+
+    /// `add_org`, with the `audit` of the policy the join accepted kept in the same write.
+    pub async fn add_org_with_audit(
+        &self,
+        org: &OrgRow,
+        audit: Option<&AuditTarget>,
+    ) -> Result<()> {
         check_org_id(&org.id)?;
         let (workspaces, seq) = member_columns(&org.member)?;
         let pending_request = org
@@ -146,8 +193,43 @@ impl Store {
         .bind(crate::util::now())
         .execute(&mut *tx)
         .await?;
+        set_audit_target(&mut tx, &org.id, audit).await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    /// The `audit` of the last policy the org `id` accepted; `None` when it had none.
+    pub async fn audit_target(&self, id: &str) -> Result<Option<AuditTarget>> {
+        let row = sqlx::query("SELECT endpoint, token_entry FROM audit_target WHERE org_id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        row.as_ref().map(target_from_row).transpose()
+    }
+
+    /// Every org's `audit_target`, by org id.
+    pub async fn audit_targets(&self) -> Result<Vec<(String, AuditTarget)>> {
+        let rows = sqlx::query("SELECT org_id, endpoint, token_entry FROM audit_target")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|row| Ok((row.try_get("org_id")?, target_from_row(row)?)))
+            .collect()
+    }
+
+    /// The source kind (`openbao`, `infisical` or `sops`) of the org `id`'s stored settings,
+    /// read without the rest of the row, for an org whose settings are damaged. `None` when it
+    /// is not joined, or even that does not read.
+    pub async fn org_source_kind(&self, id: &str) -> Result<Option<String>> {
+        let source: Option<String> = sqlx::query_scalar("SELECT source FROM orgs WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let kind = source
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .and_then(|value| value.get("kind")?.as_str().map(str::to_string))
+            .filter(|kind| ["openbao", "infisical", "sops"].contains(&kind.as_str()));
+        Ok(kind)
     }
 
     /// The org `id`, if it is joined.
@@ -250,15 +332,18 @@ impl Store {
 
     /// Records a good fetch and this PC's place on the member list it brought, in one write
     /// (`record_org_fetch` and `record_membership` together), so a refresh never keeps one
-    /// without the other.
+    /// without the other. `audit` is the accepted policy's, kept as `audit_target` in the
+    /// same write.
     pub async fn record_org_fetch_and_membership(
         &self,
         id: &str,
         last_fetch_at: &str,
         last_issued_at: &str,
         member: &MemberRow,
+        audit: Option<&AuditTarget>,
     ) -> Result<()> {
         let (workspaces, seq) = member_columns(member)?;
+        let mut tx = self.pool.begin().await?;
         let done = sqlx::query(
             "UPDATE orgs SET last_fetch_at = ?, last_issued_at = ?, membership = ?, \
              my_member_id = ?, my_role = ?, my_workspaces = ?, last_roster_seq = ?, my_key = ?, \
@@ -275,11 +360,13 @@ impl Store {
         .bind(&member.roster_hash)
         .bind(&member.owners_hash)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if done.rows_affected() == 0 {
             return Err(not_joined(id));
         }
+        set_audit_target(&mut tx, id, audit).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -313,11 +400,13 @@ impl Store {
             return Err(not_joined(id));
         }
         // Its History goes; its audit queue and chain stay, so a re-join sends what is queued
-        // and goes on from the next seq (env vault spec §10).
+        // and goes on from the next seq (env vault spec §10). Its last audit target goes: the
+        // next join's policy says it again.
         sqlx::query("DELETE FROM audit_history WHERE org_id = ?")
             .bind(id)
             .execute(&mut *tx)
             .await?;
+        set_audit_target(&mut tx, id, None).await?;
         // `workspaces.scope` can't be a foreign key (it can be 'personal'), so they go here.
         sqlx::query("DELETE FROM workspaces WHERE scope = ?")
             .bind(id)

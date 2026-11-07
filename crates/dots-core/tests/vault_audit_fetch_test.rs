@@ -16,6 +16,7 @@ use dots_core::vault::audit::{
 };
 use dots_core::vault::org::sources::sops;
 use dots_core::vault::org::SourceCreds;
+use dots_core::vault::{Consumer, DotScope, Grants, Unresolved, Vault};
 use serde_json::{json, Value};
 use zeroize::Zeroizing;
 
@@ -253,4 +254,99 @@ fn the_source_identity_is_a_login_name_a_client_id_or_the_age_public_key() {
     assert_eq!(machine.identity(), Some("ci-7f2a".into()));
     let (identity, public) = sops::new_identity();
     assert_eq!(SourceCreds::Age { identity }.identity(), Some(public));
+}
+
+/// A run start that asks the restarted service for `API_KEY` in the shell.
+async fn refused_run(h: &OrgsHarness, orgs: &dots_core::vault::org::Orgs) -> Unresolved {
+    let vault = Vault::new(h.store.clone(), h.secrets.clone()).with_orgs(orgs.clone());
+    let granted = Grants([("shell".to_string(), vec!["API_KEY".to_string()])].into());
+    vault
+        .resolve_in(
+            &DotScope::Org(ACME.into()),
+            "default",
+            &granted,
+            &Consumer::Shell,
+            &["API_KEY".to_string()],
+            &Usage::run("01J9DOT", "Triage", "01J9RUN"),
+        )
+        .await
+        .unwrap()
+        .unwrap_err()
+        .why
+}
+
+/// After a restart with no saved copy there is no policy in memory, but the last one accepted
+/// had `audit`: a refused run is still queued, with the next seq, on the same chain.
+#[tokio::test]
+async fn after_a_restart_with_no_copy_records_still_queue_with_the_next_seq() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), audited()).await;
+    std::fs::remove_file(h.copy_path(ACME)).unwrap();
+
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert_eq!(restarted.policy(ACME), None);
+    assert_eq!(refused_run(&h, &restarted).await, Unresolved::OrgOffline);
+
+    let records = queued(&h).await;
+    assert_eq!(
+        records
+            .iter()
+            .map(|r| (r.seq, r.event, r.reason.clone()))
+            .collect::<Vec<_>>(),
+        vec![
+            (1, Event::Fetched, None),
+            (2, Event::Denied, Some("org_offline".to_string())),
+        ]
+    );
+    let batch = h.store.audit_batch(ACME, 500).await.unwrap();
+    let body: String = batch.iter().map(|(_, l)| format!("{l}
+")).collect();
+    assert!(verify_lines(&body).ok());
+    assert_eq!(
+        history(&h).await,
+        vec![(
+            Event::Denied,
+            Some("org_offline".to_string()),
+            HistoryState::Queued
+        )]
+    );
+    let target = restarted.audit_target(ACME).expect("the last accepted target");
+    assert_eq!(
+        (target.endpoint.as_str(), target.token_entry.as_str()),
+        ("https://audit.acme.test/dots", "DOTS_AUDIT_TOKEN")
+    );
+}
+
+/// An accepted policy without `audit` forgets the target, and so does Remove: after a restart
+/// with no copy, records are only listed again.
+#[tokio::test]
+async fn a_policy_without_audit_and_a_remove_forget_the_audit_target() {
+    let h = OrgsHarness::new().await;
+    h.join_acme(entries(), audited()).await;
+    assert!(h.store.audit_target(ACME).await.unwrap().is_some());
+    h.serve_acme(entries(), json!({}));
+    h.orgs.refresh(ACME).await.unwrap();
+    assert_eq!(h.store.audit_target(ACME).await.unwrap(), None);
+    assert_eq!(h.orgs.audit_target(ACME), None);
+    std::fs::remove_file(h.copy_path(ACME)).unwrap();
+
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    assert_eq!(refused_run(&h, &restarted).await, Unresolved::OrgOffline);
+    assert_eq!(queued(&h).await.len(), 1, "only the join's fetched");
+    assert_eq!(
+        history(&h).await[0],
+        (
+            Event::Denied,
+            Some("org_offline".to_string()),
+            HistoryState::Local
+        )
+    );
+
+    h.serve_acme(entries(), audited());
+    restarted.refresh(ACME).await.unwrap();
+    assert!(h.store.audit_target(ACME).await.unwrap().is_some());
+    restarted.remove(ACME).await.unwrap();
+    assert_eq!(h.store.audit_target(ACME).await.unwrap(), None);
 }

@@ -305,3 +305,25 @@ async fn the_loop_sends_a_new_record_five_seconds_after_it_is_written() {
         .unwrap()
         .unwrap();
 }
+
+/// After a restart with no saved copy, the account's last accepted target still holds: the
+/// sender tries it, and says why the token is not there, instead of nothing.
+#[tokio::test]
+async fn after_a_restart_with_no_copy_the_sender_says_why_the_token_is_missing() {
+    let (h, _, _) = joined(audited()).await;
+    std::fs::remove_file(h.copy_path(ACME)).unwrap();
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+    let transport = Arc::new(FakeTransport::default());
+    let sender = AuditSender::new(restarted.clone(), transport.clone());
+
+    assert_eq!(sender.pass().await, 0);
+    assert!(transport.posts().is_empty());
+    let state = sender.state(ACME);
+    assert_eq!(
+        state.last_error.as_deref(),
+        Some("the audit token DOTS_AUDIT_TOKEN is not available: offline, with no saved copy")
+    );
+    assert!(state.failed_at.is_some());
+    assert_no_value(&h, &transport, &sender).await;
+}

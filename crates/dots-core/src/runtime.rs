@@ -1666,11 +1666,9 @@ impl Runtime {
             )));
         }
         let audit = self.orgs.audit();
-        let endpoint = self
-            .orgs
-            .policy(org_id)
-            .and_then(|p| p.audit)
-            .map(|a| a.endpoint);
+        // The last accepted target, also while no policy is in memory (no saved copy after a
+        // restart): such an account still sends, so History must not say it has no endpoint.
+        let endpoint = self.orgs.audit_target(org_id).map(|a| a.endpoint);
         Ok(crate::vault::audit::AuditView::new(
             endpoint,
             self.store.audit_queued(org_id).await?,

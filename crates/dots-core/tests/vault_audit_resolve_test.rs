@@ -322,3 +322,93 @@ fn every_reason_has_its_code() {
         ]
     );
 }
+
+/// The shell asks `orgs` for `API_KEY`; why it is refused.
+async fn refused(h: &OrgsHarness, orgs: &dots_core::vault::org::Orgs) -> Unresolved {
+    let vault = Vault::new(h.store.clone(), h.secrets.clone()).with_orgs(orgs.clone());
+    vault
+        .resolve_in(
+            &DotScope::Org(ACME.into()),
+            "default",
+            &grants("shell", &["API_KEY"]),
+            &Consumer::Shell,
+            &names(&["API_KEY"]),
+            &usage(),
+        )
+        .await
+        .unwrap()
+        .unwrap_err()
+        .why
+}
+
+/// A half-done Remove leaves the account damaged for the session: a run against it is refused
+/// as `policy_invalid`, and that attempt is recorded and queued like any other.
+#[tokio::test]
+async fn a_half_removed_account_still_records_each_attempt() {
+    let (h, _vault) = setup(json!({})).await;
+    let copy = h.copy_path(ACME);
+    std::fs::remove_file(&copy).unwrap();
+    std::fs::create_dir(&copy).unwrap();
+    std::fs::write(copy.join("held"), "x").unwrap();
+    h.orgs.remove(ACME).await.unwrap_err();
+
+    assert!(matches!(
+        refused(&h, &h.orgs).await,
+        Unresolved::PolicyInvalid(_)
+    ));
+    let records = resolutions(&h).await;
+    assert_eq!(
+        records.iter().map(row).collect::<Vec<_>>(),
+        vec![(
+            Event::Denied,
+            s("API_KEY"),
+            s("shell"),
+            s("openbao"),
+            s("policy_invalid")
+        )]
+    );
+    assert_eq!(records[0].seq, 2);
+    let history = h.store.audit_history(ACME, 100).await.unwrap();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].state, dots_core::store::HistoryState::Queued);
+    std::fs::remove_dir_all(&copy).unwrap();
+}
+
+/// An account whose stored settings don't read still records a run's refused attempt, queued
+/// by its last accepted target; its source kind can't be read, so `source` is null.
+#[tokio::test]
+async fn an_account_with_damaged_settings_still_records_each_attempt() {
+    let (h, _vault) = setup(json!({})).await;
+    let pool = sqlx::sqlite::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        h.data.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    sqlx::query("UPDATE orgs SET source = ? WHERE id = ?")
+        .bind(json!({"kind": "dropbox", "folder": "x"}).to_string())
+        .bind(ACME)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    let restarted = h.service();
+    restarted.load().await.unwrap();
+
+    assert!(matches!(
+        refused(&h, &restarted).await,
+        Unresolved::PolicyInvalid(_)
+    ));
+    let records = resolutions(&h).await;
+    assert_eq!(
+        records.iter().map(row).collect::<Vec<_>>(),
+        vec![(
+            Event::Denied,
+            s("API_KEY"),
+            s("shell"),
+            None,
+            s("policy_invalid")
+        )]
+    );
+    assert_eq!(records[0].seq, 2);
+}

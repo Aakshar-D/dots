@@ -30,7 +30,7 @@ use super::join::{
 };
 use super::members::{changed_text, draft_stand, DraftStand};
 use super::offline::{delete_offline, read_offline, write_offline, OfflineCopy, Protector};
-use super::policy::{OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules};
+use super::policy::{AuditTarget, OrgPolicy, PersonalMode, PolicyError, RosterMode, UseRules};
 use super::row::{MemberRow, OrgRow, PendingRequest};
 use super::signed::verify_policy;
 use super::sources::sops::{self, NOT_A_RECIPIENT};
@@ -261,14 +261,20 @@ struct Inner {
     audit: Audit,
     /// Who each org's source knows this PC as, from the sign-in details last used.
     identities: Mutex<HashMap<String, Option<String>>>,
+    /// The `audit` of each org's last accepted policy, as the store keeps it (`audit_target`):
+    /// what its records go by while no policy is in memory (no saved copy after a restart, or
+    /// damaged settings).
+    audit_targets: Mutex<HashMap<String, AuditTarget>>,
 }
 
 enum Slot {
     Joined(Box<Joined>),
-    /// A row whose settings don't read. It gives no values until it is removed.
+    /// A row whose settings don't read, or one a Remove did not finish. It gives no values
+    /// until it is removed. `source` is its source kind, when that reads, for its records.
     Damaged {
         name: String,
         error: String,
+        source: Option<String>,
     },
     /// A SOPS join that waits for the admin, with the code it was tried with. In memory only.
     Pending(Box<JoinCode>),
@@ -363,6 +369,7 @@ impl Orgs {
                 failed_at: Mutex::default(),
                 audit,
                 identities: Mutex::default(),
+                audit_targets: Mutex::default(),
             }),
         }
     }
@@ -382,25 +389,74 @@ impl Orgs {
         &self.inner.audit
     }
 
-    /// What a record of the org `org_id` says about it; `None` when it is not joined, or its
-    /// settings are damaged: no record is written for it.
+    /// What a record of the org `org_id` says about it; `None` when it is not joined: no record
+    /// is written for it. A damaged org (settings that don't read, or a Remove that did not
+    /// finish) still has its records, queued when its last accepted policy had `audit`.
     pub fn org_audit(&self, org_id: &str) -> Option<OrgAudit> {
         let (row, policy) = match self.read().get(org_id) {
             Some(Slot::Joined(joined)) => (joined.row.clone(), joined.policy.clone()),
-            _ => return None,
+            Some(Slot::Damaged { source, .. }) => {
+                return Some(OrgAudit {
+                    org_id: org_id.to_string(),
+                    source: source.clone(),
+                    source_identity: self.identity_of(org_id),
+                    queue: self.saved_target(org_id).is_some(),
+                })
+            }
+            Some(Slot::Pending(_)) | None => return None,
         };
         Some(self.audit_of(&row, policy.as_ref()))
     }
 
     /// What a record says about the org of `row` under `policy`: its records are queued only
-    /// while the policy has `audit`.
+    /// while the policy has `audit`. With no policy in memory (no saved copy after a restart),
+    /// the last accepted one decides.
     fn audit_of(&self, row: &OrgRow, policy: Option<&OrgPolicy>) -> OrgAudit {
+        let queue = match policy {
+            Some(policy) => policy.audit.is_some(),
+            None => self.saved_target(&row.id).is_some(),
+        };
         OrgAudit {
             org_id: row.id.clone(),
-            source: row.source.kind().to_string(),
+            source: Some(row.source.kind().to_string()),
             source_identity: self.identity_of(&row.id),
-            queue: policy.is_some_and(|p| p.audit.is_some()),
+            queue,
         }
+    }
+
+    /// Where the org `org_id`'s records go: its accepted policy's `audit`, or the last accepted
+    /// one's while no policy is in memory, or while it is damaged. `None` when it is not joined
+    /// or sends no records. It names the token entry, never holds the token.
+    pub fn audit_target(&self, org_id: &str) -> Option<AuditTarget> {
+        match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => match &joined.policy {
+                Some(policy) => policy.audit.clone(),
+                None => self.saved_target(org_id),
+            },
+            Some(Slot::Damaged { .. }) => self.saved_target(org_id),
+            Some(Slot::Pending(_)) | None => None,
+        }
+    }
+
+    /// The last accepted policy's `audit` of the org, as the store keeps it.
+    fn saved_target(&self, org_id: &str) -> Option<AuditTarget> {
+        self.audit_targets().get(org_id).cloned()
+    }
+
+    /// Keeps `target` as the org's last accepted `audit`, after the store has.
+    fn keep_target(&self, org_id: &str, target: Option<&AuditTarget>) {
+        let mut targets = self.audit_targets();
+        match target {
+            Some(target) => targets.insert(org_id.to_string(), target.clone()),
+            None => targets.remove(org_id),
+        };
+    }
+
+    fn audit_targets(&self) -> std::sync::MutexGuard<'_, HashMap<String, AuditTarget>> {
+        self.inner
+            .audit_targets
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Who the org's source knows this PC as, from its saved sign-in details, read once.
@@ -472,6 +528,9 @@ impl Orgs {
             Ok(())
         })
         .await?;
+        let targets: HashMap<String, AuditTarget> =
+            self.inner.store.audit_targets().await?.into_iter().collect();
+        *self.audit_targets() = targets;
         let mut loaded = BTreeMap::new();
         for (id, name) in self.inner.store.list_org_names().await? {
             let slot = match self.inner.store.get_org(&id).await {
@@ -482,6 +541,7 @@ impl Orgs {
                     Slot::Damaged {
                         name,
                         error: format!("its settings are damaged: {e}"),
+                        source: self.inner.store.org_source_kind(&id).await.ok().flatten(),
                     }
                 }
             };
@@ -621,10 +681,12 @@ impl Orgs {
         };
         let evaluated = self.evaluate(&row, None, &policy, &fetched).await;
         row.member = evaluated.member.clone();
-        if let Err(e) = self.inner.store.add_org(&row).await {
+        let target = policy.audit.as_ref();
+        if let Err(e) = self.inner.store.add_org_with_audit(&row, target).await {
             self.forget_creds(&code);
             return Err(e);
         }
+        self.keep_target(&id, target);
         self.keep_fetch(row, source, fetched, policy, evaluated, now)
             .await;
         if let Some(invite) = &code.invite {
@@ -736,12 +798,13 @@ impl Orgs {
         let evaluated = self.evaluate(&row, kept.as_ref(), &policy, &fetched).await;
         row.member = evaluated.member.clone();
         self.settle_requests(&mut row).await;
-        if let Err(e) = self.store_settings(&row, &old).await {
+        if let Err(e) = self.store_settings(&row, &old, policy.audit.as_ref()).await {
             if given {
                 restore_creds(secrets, org_id, old_creds.as_ref());
             }
             return Err(e);
         }
+        self.keep_target(org_id, policy.audit.as_ref());
         self.keep_fetch(row, source, fetched, policy, evaluated, now)
             .await;
         self.summary_now(org_id).ok_or_else(|| not_joined(org_id))
@@ -764,7 +827,11 @@ impl Orgs {
             return Err(not_joined(org_id));
         }
         // The values go first: a step below that fails must not leave them served.
-        self.write().remove(org_id);
+        let source = match self.write().remove(org_id) {
+            Some(Slot::Joined(joined)) => Some(joined.row.source.kind().to_string()),
+            Some(Slot::Damaged { source, .. }) => source,
+            Some(Slot::Pending(_)) | None => None,
+        };
         self.failed_at().remove(org_id);
         self.identities().remove(org_id);
         if let Err(e) = self.finish_remove(org_id, has_row).await {
@@ -773,11 +840,16 @@ impl Orgs {
             // next start does not load it.
             if let Some((_, name)) = names.into_iter().find(|(id, _)| id == org_id) {
                 let error = format!("removing it did not finish ({e}); remove it again");
-                self.write()
-                    .insert(org_id.to_string(), Slot::Damaged { name, error });
+                let slot = Slot::Damaged {
+                    name,
+                    error,
+                    source,
+                };
+                self.write().insert(org_id.to_string(), slot);
             }
             return Err(e);
         }
+        self.keep_target(org_id, None);
         Ok(())
     }
 
@@ -1025,10 +1097,7 @@ impl Orgs {
         }
         let outcome = self.fetch(&row, source.as_ref()).await;
         let denied = matches!(outcome, Outcome::Denied(_));
-        if !matches!(outcome, Outcome::Accepted(..)) {
-            self.failed_at()
-                .insert(org_id.to_string(), self.inner.clock.now());
-        }
+        let failed = !matches!(outcome, Outcome::Accepted(..));
         match outcome {
             Outcome::Accepted(fetched, policy) => {
                 let now = self.inner.clock.now();
@@ -1040,8 +1109,10 @@ impl Orgs {
                         &stamp(now),
                         &policy.issued_at,
                         &evaluated.member,
+                        policy.audit.as_ref(),
                     )
                     .await?;
+                self.keep_target(org_id, policy.audit.as_ref());
                 let mut row = OrgRow {
                     last_issued_at: Some(policy.issued_at.clone()),
                     last_fetch_at: Some(stamp(now)),
@@ -1083,6 +1154,12 @@ impl Orgs {
                 self.record_failed(org_id, Event::PolicyInvalid, ran_out)
                     .await;
             }
+        }
+        // Only now that the outcome is in the slot: a run start that finds the failure (and so
+        // does not wait for this lock) must read the slot after the answer, never before it.
+        if failed {
+            self.failed_at()
+                .insert(org_id.to_string(), self.inner.clock.now());
         }
         if denied {
             self.record_outcome(org_id, Event::Revoked, Some(REASON_DENIED))
@@ -1689,7 +1766,12 @@ impl Orgs {
 
     /// Writes an Update's settings, then its fetch. If the fetch can't be recorded, the old
     /// settings are put back.
-    async fn store_settings(&self, row: &OrgRow, old: &OrgRow) -> Result<()> {
+    async fn store_settings(
+        &self,
+        row: &OrgRow,
+        old: &OrgRow,
+        audit: Option<&AuditTarget>,
+    ) -> Result<()> {
         let store = &self.inner.store;
         store
             .update_org_settings(&row.id, &row.name, &row.source, &row.policy_key)
@@ -1697,7 +1779,13 @@ impl Orgs {
         let last_fetch_at = row.last_fetch_at.as_deref().unwrap_or_default();
         let last_issued_at = row.last_issued_at.as_deref().unwrap_or_default();
         let recorded = store
-            .record_org_fetch_and_membership(&row.id, last_fetch_at, last_issued_at, &row.member)
+            .record_org_fetch_and_membership(
+                &row.id,
+                last_fetch_at,
+                last_issued_at,
+                &row.member,
+                audit,
+            )
             .await;
         if let Err(e) = recorded {
             let restored = store
@@ -1949,7 +2037,7 @@ fn summary_of(id: &str, slot: &Slot) -> OrgSummary {
                 .filter(|_| joined.row.member.membership == Membership::Waiting)
                 .map(|request| request.code.clone()),
         },
-        Slot::Damaged { name, error } => OrgSummary {
+        Slot::Damaged { name, error, .. } => OrgSummary {
             id: id.to_string(),
             name: name.clone(),
             source_kind: String::new(),

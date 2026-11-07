@@ -343,6 +343,77 @@ async fn a_restarted_runtime_fetches_each_org_and_starts_its_timer() {
     t.rt.shutdown();
 }
 
+/// After a restart, an account with no saved copy (`offline_hours: 0`, and its access now
+/// revoked) has no policy in memory. The last one accepted had `audit`: History still names
+/// the endpoint, the start-up fetch's record is queued on the chain, and the send state says
+/// why nothing goes.
+#[tokio::test]
+async fn after_a_restart_with_no_copy_history_still_names_the_endpoint() {
+    const ENDPOINT: &str = "http://127.0.0.1:9/dots";
+    const AUDIT_TOKEN: &str = "audit-token-value-5c1e77";
+    let t = Rt::start().await;
+    let extra = json!({
+        "plain": ["DOTS_TEST_LEVEL"],
+        "offline_hours": 0,
+        "audit": {"endpoint": ENDPOINT, "token_entry": "DOTS_AUDIT_TOKEN"},
+    });
+    let signed = sign(&t.keys, &policy(ACME, "2026-10-22T08:00:00Z", extra));
+    t.bao.put_env(
+        "secret",
+        "dots",
+        json!({"DOTS_TEST_LEVEL": LEVEL_ONE, "DOTS_AUDIT_TOKEN": AUDIT_TOKEN}),
+    );
+    t.bao.put_policy("secret", "dots", &signed);
+    t.orgs()
+        .join(&t.acme_code(), Some(token()))
+        .await
+        .unwrap();
+    assert!(t.rt.close(StdDuration::from_secs(10)).await);
+    let Rt {
+        dir,
+        rt,
+        bao,
+        keys,
+        secrets,
+        ..
+    } = t;
+    drop(rt);
+    bao.revoke_all_tokens();
+    let t = Rt::on(dir, secrets, bao, keys).await;
+    let timers = t.rt.org_timers();
+    eventually("the start-up fetch", || !timers.starting_up()).await;
+    assert_eq!(t.orgs().policy(ACME), None);
+
+    let mut view = t.rt.org_audit(ACME).await.unwrap();
+    for _ in 0..500 {
+        if view.send.last_error.is_some() && view.queued == 2 {
+            break;
+        }
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+        view = t.rt.org_audit(ACME).await.unwrap();
+    }
+    assert_eq!(view.endpoint.as_deref(), Some(ENDPOINT));
+    assert_eq!(view.queued, 2, "the join's fetched, then the start-up fetch's revoked");
+    assert_eq!(
+        view.history
+            .iter()
+            .map(|r| (r.event, r.state))
+            .collect::<Vec<_>>(),
+        [(
+            dots_core::vault::audit::Event::Revoked,
+            dots_core::store::HistoryState::Queued
+        )]
+    );
+    let why = view.send.last_error.clone().expect("the send state");
+    assert!(
+        why.starts_with("the audit token DOTS_AUDIT_TOKEN is not available: "),
+        "{why}"
+    );
+    let shown = format!("{view:?}");
+    assert!(!shown.contains(AUDIT_TOKEN) && !shown.contains(LEVEL_ONE));
+    t.rt.shutdown();
+}
+
 /// A SOPS join that waits for the admin to add this PC's key joins nothing: the runtime starts
 /// no timer for it and says nothing of it.
 #[tokio::test]
