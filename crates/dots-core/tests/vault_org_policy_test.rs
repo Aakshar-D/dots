@@ -228,7 +228,7 @@ fn the_audit_endpoint_holds_no_credential() {
         ));
         assert_eq!(
             text,
-            "audit.endpoint must not hold a user name, password, query or fragment; put the              token in audit.token_entry",
+            "audit.endpoint must not hold a user name, password, query or fragment; put the token in audit.token_entry",
             "{bad}"
         );
         assert!(!text.contains("pw") && !text.contains("token=x"), "{text}");

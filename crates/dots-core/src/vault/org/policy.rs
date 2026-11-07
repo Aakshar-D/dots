@@ -394,7 +394,8 @@ fn check_audit(audit: &AuditTarget) -> Result<(), PolicyError> {
             || u.fragment().is_some()
     }) {
         return Err(invalid(
-            "audit.endpoint must not hold a user name, password, query or fragment; put the              token in audit.token_entry",
+            "audit.endpoint must not hold a user name, password, query or fragment; put the \
+             token in audit.token_entry",
         ));
     }
     let allowed = url
