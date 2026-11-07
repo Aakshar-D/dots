@@ -43,6 +43,8 @@ use crate::accounts::{
 use crate::model::DotRef;
 use crate::scheduler::Clock;
 use crate::store::Store;
+use crate::vault::audit::record::{REASON_DENIED, REASON_OFFLINE_COPY, REASON_REMOVED};
+use crate::vault::audit::{Audit, Event, Happened, OrgAudit, Usage};
 use crate::vault::entries::EntryKind;
 use crate::vault::grants::dots_granting;
 use crate::vault::redact;
@@ -255,6 +257,10 @@ struct Inner {
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     /// When each org's last fetch failed, if the last one did. In memory only.
     failed_at: Mutex<HashMap<String, DateTime<Utc>>>,
+    /// The audit writer: a record for each fetch outcome, and for each resolution in an org.
+    audit: Audit,
+    /// Who each org's source knows this PC as, from the sign-in details last used.
+    identities: Mutex<HashMap<String, Option<String>>>,
 }
 
 enum Slot {
@@ -343,6 +349,7 @@ impl Orgs {
     ) -> Orgs {
         let sources: SourceFactory =
             Arc::new(move |settings: &SourceSettings| source_for(settings, http.clone()));
+        let audit = Audit::new(store.clone(), clock.clone());
         Orgs {
             inner: Arc::new(Inner {
                 store,
@@ -354,6 +361,8 @@ impl Orgs {
                 orgs: RwLock::default(),
                 locks: Mutex::default(),
                 failed_at: Mutex::default(),
+                audit,
+                identities: Mutex::default(),
             }),
         }
     }
@@ -366,6 +375,89 @@ impl Orgs {
             .write()
             .unwrap_or_else(PoisonError::into_inner) = sources;
         self
+    }
+
+    /// The audit writer, which the resolver and the sender use too.
+    pub fn audit(&self) -> &Audit {
+        &self.inner.audit
+    }
+
+    /// What a record of the org `org_id` says about it; `None` when it is not joined, or its
+    /// settings are damaged: no record is written for it.
+    pub fn org_audit(&self, org_id: &str) -> Option<OrgAudit> {
+        let (row, policy) = match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => (joined.row.clone(), joined.policy.clone()),
+            _ => return None,
+        };
+        Some(self.audit_of(&row, policy.as_ref()))
+    }
+
+    /// What a record says about the org of `row` under `policy`: its records are queued only
+    /// while the policy has `audit`.
+    fn audit_of(&self, row: &OrgRow, policy: Option<&OrgPolicy>) -> OrgAudit {
+        OrgAudit {
+            org_id: row.id.clone(),
+            source: row.source.kind().to_string(),
+            source_identity: self.identity_of(&row.id),
+            queue: policy.is_some_and(|p| p.audit.is_some()),
+        }
+    }
+
+    /// Who the org's source knows this PC as, from its saved sign-in details, read once.
+    fn identity_of(&self, org_id: &str) -> Option<String> {
+        if let Some(known) = self.identities().get(org_id) {
+            return known.clone();
+        }
+        let identity = match SourceCreds::load(self.inner.secrets.as_ref(), org_id) {
+            Ok(Some(creds)) => creds.identity(),
+            _ => None,
+        };
+        self.identities()
+            .insert(org_id.to_string(), identity.clone());
+        identity
+    }
+
+    /// Keeps who `creds` sign in as, for the org's records.
+    fn remember_identity(&self, org_id: &str, creds: &SourceCreds) {
+        self.identities()
+            .insert(org_id.to_string(), creds.identity());
+    }
+
+    /// Records a fetch outcome of the org of `row`, under `policy`.
+    async fn record_fetch(
+        &self,
+        row: &OrgRow,
+        policy: Option<&OrgPolicy>,
+        event: Event,
+        reason: Option<&str>,
+    ) {
+        let org = self.audit_of(row, policy);
+        let what = Happened::fetch(event, reason);
+        self.inner.audit.record(&org, &Usage::default(), what).await;
+    }
+
+    /// Records a fetch outcome of the joined org `org_id`, under its accepted policy.
+    async fn record_outcome(&self, org_id: &str, event: Event, reason: Option<&str>) {
+        if let Some(org) = self.org_audit(org_id) {
+            let what = Happened::fetch(event, reason);
+            self.inner.audit.record(&org, &Usage::default(), what).await;
+        }
+    }
+
+    /// Records a fetch that failed with `event`, then the copy running out if it did.
+    async fn record_failed(&self, org_id: &str, event: Event, ran_out: bool) {
+        self.record_outcome(org_id, event, None).await;
+        if ran_out {
+            self.record_outcome(org_id, Event::Expired, Some(REASON_OFFLINE_COPY))
+                .await;
+        }
+    }
+
+    fn identities(&self) -> std::sync::MutexGuard<'_, HashMap<String, Option<String>>> {
+        self.inner
+            .identities
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Reads every joined org and its offline copy, at start. A copy that ran out is deleted,
@@ -498,6 +590,7 @@ impl Orgs {
             }
         };
 
+        self.remember_identity(&id, &creds);
         let source = self.source(&code.source);
         let fetched = match source.fetch(&creds).await {
             Ok(fetched) => fetched,
@@ -622,6 +715,7 @@ impl Orgs {
         if given {
             creds.save(secrets, org_id)?;
         }
+        self.remember_identity(org_id, &creds);
         let now = self.inner.clock.now();
         let mut row = OrgRow {
             name: code.name.clone(),
@@ -672,6 +766,7 @@ impl Orgs {
         // The values go first: a step below that fails must not leave them served.
         self.write().remove(org_id);
         self.failed_at().remove(org_id);
+        self.identities().remove(org_id);
         let (dir, id) = (self.inner.dir.clone(), org_id.to_string());
         blocking(move || delete_offline(&dir, &id)).await?;
         SourceCreds::forget(self.inner.secrets.as_ref(), org_id)?;
@@ -896,6 +991,7 @@ impl Orgs {
             }
         }
         let outcome = self.fetch(&row, source.as_ref()).await;
+        let denied = matches!(outcome, Outcome::Denied(_));
         if !matches!(outcome, Outcome::Accepted(..)) {
             self.failed_at()
                 .insert(org_id.to_string(), self.inner.clock.now());
@@ -945,8 +1041,19 @@ impl Orgs {
                 });
                 self.delete_copy(org_id).await;
             }
-            Outcome::Unreachable(reason) => self.fall_back(org_id, None, Some(reason)).await,
-            Outcome::Invalid(error) => self.fall_back(org_id, Some(error), None).await,
+            Outcome::Unreachable(reason) => {
+                let ran_out = self.fall_back(org_id, None, Some(reason)).await;
+                self.record_failed(org_id, Event::Offline, ran_out).await;
+            }
+            Outcome::Invalid(error) => {
+                let ran_out = self.fall_back(org_id, Some(error), None).await;
+                self.record_failed(org_id, Event::PolicyInvalid, ran_out)
+                    .await;
+            }
+        }
+        if denied {
+            self.record_outcome(org_id, Event::Revoked, Some(REASON_DENIED))
+                .await;
         }
         Ok(true)
     }
@@ -955,7 +1062,10 @@ impl Orgs {
     /// row: its key, its org and the last `issued_at` accepted.
     async fn fetch(&self, row: &OrgRow, source: &dyn Source) -> Outcome {
         let creds = match SourceCreds::load(self.inner.secrets.as_ref(), &row.id) {
-            Ok(Some(creds)) => creds,
+            Ok(Some(creds)) => {
+                self.remember_identity(&row.id, &creds);
+                creds
+            }
             Ok(None) => {
                 return Outcome::Invalid(
                     "its sign-in details are missing; give them again with Update".into(),
@@ -978,12 +1088,14 @@ impl Orgs {
     }
 
     /// After a fetch that failed but did not revoke: the values stay while the copy holds.
-    /// `error` makes the org `PolicyInvalid`; otherwise it is offline for `reason`.
-    async fn fall_back(&self, org_id: &str, error: Option<String>, reason: Option<String>) {
+    /// `error` makes the org `PolicyInvalid`; otherwise it is offline for `reason`. Whether the
+    /// copy ran out with it, taking the values it gave.
+    async fn fall_back(&self, org_id: &str, error: Option<String>, reason: Option<String>) -> bool {
         let now = self.inner.clock.now();
         let expired = self.with_joined(org_id, |joined| {
             let kept = joined.copy_until.filter(|until| now < *until);
             let expired = joined.copy_until.is_some() && kept.is_none();
+            let had = joined.entries.is_some();
             if kept.is_none() {
                 joined.entries = None;
                 joined.copy_until = None;
@@ -1003,11 +1115,13 @@ impl Orgs {
             if !was_revoked || joined.status != OrgStatus::Revoked {
                 joined.reason = reason;
             }
-            expired
+            (expired, expired && had)
         });
-        if expired == Some(true) {
+        let (expired, ran_out) = expired.unwrap_or_default();
+        if expired {
             self.delete_copy(org_id).await;
         }
+        ran_out
     }
 
     /// Lets an org that is not `Connected` lose its copy once `offline_hours` have passed since
@@ -1028,19 +1142,24 @@ impl Orgs {
         let locked = guard.is_some();
         let expired = self.with_joined(org_id, |joined| {
             if !due(joined) {
-                return false;
+                return (false, false);
             }
-            joined.entries = None;
+            let had = joined.entries.take().is_some();
             if locked {
                 joined.copy_until = None;
             }
             if matches!(joined.status, OrgStatus::Offline { .. }) {
                 joined.status = OrgStatus::Expired;
             }
-            true
+            (true, had)
         });
-        if expired == Some(true) && locked {
+        let (expired, had) = expired.unwrap_or_default();
+        if expired && locked {
             self.delete_copy(org_id).await;
+        }
+        if had {
+            self.record_outcome(org_id, Event::Expired, Some(REASON_OFFLINE_COPY))
+                .await;
         }
     }
 
@@ -1180,10 +1299,14 @@ impl Orgs {
         at: DateTime<Utc>,
     ) {
         if row.member.membership != Membership::Removed {
+            self.record_fetch(&row, Some(&policy), Event::Fetched, None)
+                .await;
             return self
                 .settle(row, source, fetched, policy, evaluated, at)
                 .await;
         }
+        self.record_fetch(&row, Some(&policy), Event::Revoked, Some(REASON_REMOVED))
+            .await;
         self.failed_at().remove(&row.id);
         let id = row.id.clone();
         let joined = Joined {
@@ -1354,6 +1477,13 @@ impl Orgs {
         if policy.offline_hours == 0 || now >= until || fetched_at > now + COPY_CLOCK_SKEW {
             let id = row.id.clone();
             self.delete_copy(&id).await;
+            self.record_fetch(
+                row,
+                Some(&policy),
+                Event::Expired,
+                Some(REASON_OFFLINE_COPY),
+            )
+            .await;
             joined.policy = Some(policy);
             joined.status = OrgStatus::Expired;
             return joined;
