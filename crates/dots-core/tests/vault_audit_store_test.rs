@@ -245,3 +245,46 @@ async fn history_keeps_thirty_days_and_at_most_its_row_limit() {
         vec!["D", "C", "B"]
     );
 }
+
+#[tokio::test]
+async fn history_read_after_time_passes_without_an_append_drops_the_old_rows() {
+    use chrono::{TimeZone, Utc};
+    let (_dir, store) = store().await;
+    let limits = AuditLimits::default();
+    for (at, name) in [
+        ("2026-10-01T09:00:00Z", "OLD"),
+        ("2026-10-20T09:00:00Z", "NEW"),
+    ] {
+        let new = NewAudit {
+            record: record("acme-eng", at, name),
+            queue: false,
+            history: true,
+        };
+        store.append_audit(new, &limits).await.unwrap();
+    }
+    let names = |rows: Vec<HistoryRow>| -> Vec<String> {
+        rows.into_iter().filter_map(|r| r.name).collect()
+    };
+    // 21 days after the first: both are within 30 days.
+    let day21 = Utc.with_ymd_and_hms(2026, 10, 22, 9, 0, 0).unwrap();
+    assert_eq!(
+        names(
+            store
+                .audit_history_as_of("acme-eng", day21, &limits)
+                .await
+                .unwrap()
+        ),
+        vec!["NEW", "OLD"]
+    );
+    // 40 days after the first, with no append since: the old row is gone from the read.
+    let day40 = Utc.with_ymd_and_hms(2026, 11, 10, 9, 0, 0).unwrap();
+    assert_eq!(
+        names(
+            store
+                .audit_history_as_of("acme-eng", day40, &limits)
+                .await
+                .unwrap()
+        ),
+        vec!["NEW"]
+    );
+}

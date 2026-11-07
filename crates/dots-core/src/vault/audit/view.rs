@@ -17,3 +17,26 @@ pub struct AuditView {
     /// `fetched`.
     pub history: Vec<HistoryRow>,
 }
+
+impl AuditView {
+    /// An account without an endpoint sends nothing, so it shows no send state (the sender's
+    /// may still hold a failure from before its policy dropped `audit`).
+    pub fn new(
+        endpoint: Option<String>,
+        queued: u64,
+        send: SendState,
+        history: Vec<HistoryRow>,
+    ) -> AuditView {
+        let send = if endpoint.is_some() {
+            send
+        } else {
+            SendState::default()
+        };
+        AuditView {
+            endpoint,
+            queued,
+            send,
+            history,
+        }
+    }
+}

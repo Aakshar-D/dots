@@ -222,6 +222,30 @@ impl Store {
         .await?;
         rows.iter().map(history_from_row).collect()
     }
+
+    /// The org's History as of `now`, newest first: the rows of the last `history_days` days
+    /// (the cutoff `append_audit` prunes by), at most `history_rows` of them.
+    pub async fn audit_history_as_of(
+        &self,
+        org_id: &str,
+        now: DateTime<Utc>,
+        limits: &AuditLimits,
+    ) -> Result<Vec<HistoryRow>> {
+        let rows = sqlx::query(
+            "SELECT id, at, event, name, consumer, dot_name, reason, state FROM audit_history              WHERE org_id = ? AND at >= ? ORDER BY n DESC LIMIT ?",
+        )
+        .bind(org_id)
+        .bind(history_cutoff(now, limits))
+        .bind(as_i64(limits.history_rows)?)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(history_from_row).collect()
+    }
+}
+
+/// The oldest `at` History keeps: `history_days` before `now`.
+fn history_cutoff(now: DateTime<Utc>, limits: &AuditLimits) -> String {
+    crate::vault::audit::record::stamp(now - Duration::days(limits.history_days))
 }
 
 /// Gives `record` the next `seq` and the `prev` after `seq` and `prev`, queues its line and
@@ -324,10 +348,9 @@ async fn prune_history(
     let now = DateTime::parse_from_rfc3339(now)
         .map_err(|e| Error::Other(format!("an audit record's time is not valid: {e}")))?
         .with_timezone(&Utc);
-    let cutoff = crate::vault::audit::record::stamp(now - Duration::days(limits.history_days));
     sqlx::query("DELETE FROM audit_history WHERE org_id = ? AND at < ?")
         .bind(org_id)
-        .bind(cutoff)
+        .bind(history_cutoff(now, limits))
         .execute(&mut **tx)
         .await?;
     sqlx::query(

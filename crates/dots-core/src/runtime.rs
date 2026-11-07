@@ -1549,20 +1549,20 @@ impl Runtime {
                 "no org '{org_id}' is joined on this PC"
             )));
         }
-        let limits = self.orgs.audit().limits();
-        Ok(crate::vault::audit::AuditView {
-            endpoint: self
-                .orgs
-                .policy(org_id)
-                .and_then(|p| p.audit)
-                .map(|a| a.endpoint),
-            queued: self.store.audit_queued(org_id).await?,
-            send: self.audit_sender.state(org_id),
-            history: self
-                .store
-                .audit_history(org_id, limits.history_rows)
+        let audit = self.orgs.audit();
+        let endpoint = self
+            .orgs
+            .policy(org_id)
+            .and_then(|p| p.audit)
+            .map(|a| a.endpoint);
+        Ok(crate::vault::audit::AuditView::new(
+            endpoint,
+            self.store.audit_queued(org_id).await?,
+            self.audit_sender.state(org_id),
+            self.store
+                .audit_history_as_of(org_id, audit.clock().now(), &audit.limits())
                 .await?,
-        })
+        ))
     }
 
     /// The Library: what the `library_*` commands call (MCP/skills spec section 9).

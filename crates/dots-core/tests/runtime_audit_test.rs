@@ -19,7 +19,7 @@ use common::orgs::{at, code, keys, openbao, policy, sign, token, ACME, ACME_NAME
 use common::{spec, wait_status};
 use dots_core::model::{RunStatus, WorkspaceMode};
 use dots_core::store::HistoryState;
-use dots_core::vault::audit::{verify_lines, AuditDot, AuditRecord, Event};
+use dots_core::vault::audit::{verify_lines, AuditDot, AuditRecord, AuditView, Event, SendState};
 use dots_core::vault::{Grants, MemorySecrets};
 use dots_core::{Config, Runtime};
 use serde_json::json;
@@ -199,6 +199,12 @@ async fn a_runs_records_reach_a_local_sink_as_a_whole_chain_with_the_bearer_toke
     assert_eq!(view.endpoint.as_deref(), Some(endpoint.as_str()));
     assert_eq!(view.queued, 0);
     assert!(view.send.last_sent_at.is_some());
+    assert_eq!(view.send.last_error, None);
+    assert_eq!(view.send.failed_at, None);
+    assert_eq!(view.send.next_try_at, None);
+    // Nothing the run served is in what the page shows.
+    let shown = serde_json::to_string(&view).unwrap();
+    assert!(!shown.contains(LEVEL) && !shown.contains(AUDIT_TOKEN) && !shown.contains(TOKEN));
     let rows: Vec<(Event, Option<String>, HistoryState)> = view
         .history
         .into_iter()
@@ -217,4 +223,24 @@ async fn a_runs_records_reach_a_local_sink_as_a_whole_chain_with_the_bearer_toke
         Err(dots_core::Error::NotFound(_))
     ));
     rt.shutdown();
+}
+
+#[test]
+fn an_account_without_an_endpoint_shows_no_send_state() {
+    let failed = SendState {
+        last_sent_at: Some("2026-10-22T09:00:00Z".into()),
+        last_error: Some("the endpoint answered 503".into()),
+        failed_at: Some("2026-10-22T09:05:00Z".into()),
+        next_try_at: Some("2026-10-22T09:05:30Z".into()),
+    };
+    let view = AuditView::new(None, 3, failed.clone(), Vec::new());
+    assert_eq!(view.send, SendState::default());
+    assert_eq!(view.queued, 3);
+    let view = AuditView::new(
+        Some("https://audit.example/dots".into()),
+        3,
+        failed.clone(),
+        Vec::new(),
+    );
+    assert_eq!(view.send, failed);
 }
