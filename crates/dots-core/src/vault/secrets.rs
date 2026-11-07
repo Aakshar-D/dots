@@ -1,6 +1,8 @@
 //! Where secret values are kept (env vault spec §5.2): Windows Credential Manager, one generic
-//! credential per value, its target `Dots/<install_id>/<key>`. The install id keeps a test or
-//! dev data folder away from the installed app's secrets. Tests use `MemorySecrets`.
+//! credential per value, its target `Dots/<install_id>/<key>`. On macOS the login keychain, one
+//! generic password per value, its service `Dots/<install_id>` and its account `<key>`. The
+//! install id keeps a test or dev data folder away from the installed app's secrets. Tests use
+//! `MemorySecrets`.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -114,13 +116,17 @@ impl WindowsCredentials {
 }
 
 /// The secret store of the signed-in user for the data folder `install_id`: Credential Manager
-/// on Windows, memory elsewhere (Dots ships on Windows; a keychain is later).
+/// on Windows, the login keychain on macOS, memory elsewhere.
 pub fn os_secrets(install_id: &str) -> std::sync::Arc<dyn SecretStore> {
     #[cfg(windows)]
     {
         std::sync::Arc::new(WindowsCredentials::new(install_id))
     }
-    #[cfg(not(windows))]
+    #[cfg(target_os = "macos")]
+    {
+        std::sync::Arc::new(MacKeychain::new(install_id))
+    }
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         tracing::warn!("no keychain on this system: secrets of {install_id} last until Dots ends");
         std::sync::Arc::new(MemorySecrets::new())
@@ -255,6 +261,89 @@ impl SecretStore for WindowsCredentials {
             CredFree(list as *const _);
         }
         keys.sort();
+        Ok(keys)
+    }
+}
+
+/// The macOS login keychain, for the signed-in user. Each value is a generic password whose
+/// service is `Dots/<install_id>` and whose account is the key.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+pub struct MacKeychain {
+    /// `Dots/<install_id>`.
+    service: String,
+}
+
+#[cfg(target_os = "macos")]
+impl MacKeychain {
+    pub fn new(install_id: &str) -> MacKeychain {
+        MacKeychain {
+            service: format!("Dots/{install_id}"),
+        }
+    }
+}
+
+/// `errSecItemNotFound`: no item matched.
+#[cfg(target_os = "macos")]
+const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+#[cfg(target_os = "macos")]
+fn keychain_error(what: &str, e: security_framework::base::Error) -> Error {
+    Error::Other(format!("Keychain: {what} failed: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+impl SecretStore for MacKeychain {
+    fn put(&self, key: &str, value: &str) -> Result<()> {
+        check(key, Some(value))?;
+        security_framework::passwords::set_generic_password(&self.service, key, value.as_bytes())
+            .map_err(|e| keychain_error("saving a secret", e))
+    }
+
+    fn get(&self, key: &str) -> Result<Option<Zeroizing<String>>> {
+        check(key, None)?;
+        match security_framework::passwords::get_generic_password(&self.service, key) {
+            Ok(bytes) => {
+                let bytes = Zeroizing::new(bytes);
+                let text = std::str::from_utf8(&bytes)
+                    .map_err(|_| Error::Other("Keychain: a secret is not UTF-8".into()))?;
+                Ok(Some(Zeroizing::new(text.to_string())))
+            }
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+            Err(e) => Err(keychain_error("reading a secret", e)),
+        }
+    }
+
+    fn delete(&self, key: &str) -> Result<()> {
+        check(key, None)?;
+        match security_framework::passwords::delete_generic_password(&self.service, key) {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+            Err(e) => Err(keychain_error("deleting a secret", e)),
+        }
+    }
+
+    fn keys(&self, prefix: &str) -> Result<Vec<String>> {
+        use security_framework::item::{ItemClass, ItemSearchOptions, Limit};
+        let found = ItemSearchOptions::new()
+            .class(ItemClass::generic_password())
+            .service(&self.service)
+            .load_attributes(true)
+            .limit(Limit::All)
+            .search();
+        let results = match found {
+            Ok(results) => results,
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => return Ok(Vec::new()),
+            Err(e) => return Err(keychain_error("listing secrets", e)),
+        };
+        let mut keys: Vec<String> = results
+            .iter()
+            .filter_map(|r| r.simplify_dict())
+            .filter_map(|attrs| attrs.get("acct").cloned())
+            .filter(|key| key.starts_with(prefix))
+            .collect();
+        keys.sort();
+        keys.dedup();
         Ok(keys)
     }
 }

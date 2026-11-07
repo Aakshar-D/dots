@@ -49,6 +49,24 @@ describe("the run view", () => {
     );
   });
 
+  it("says which model a run used, and why when Auto picked it", async () => {
+    const picked: Run = { ...run, model_fallback_from: null };
+    thread([picked]);
+    renderApp(`/runs/${run.id}`);
+    const details = await screen.findByText("Model");
+    expect(details.nextElementSibling).toHaveTextContent("Auto · Sonnet — code work: refactor");
+    // Under the reply too.
+    expect(screen.getAllByText("Auto · Sonnet — code work: refactor").length).toBe(2);
+  });
+
+  it("says only the model for a dot with its own", async () => {
+    thread([{ ...run, model: "opus", model_tier: null, model_reason: null, model_fallback_from: null }]);
+    renderApp(`/runs/${run.id}`);
+    const details = await screen.findByText("Model");
+    expect(details.nextElementSibling).toHaveTextContent(/^Opus$/);
+    expect(screen.queryByText(/^Auto ·/)).toBeNull();
+  });
+
   it("shows the conversation with each tool call folded around its result", async () => {
     thread(
       [run],
@@ -370,11 +388,12 @@ describe("the run view", () => {
     expect(backend.callsTo("worktree_diff")).toEqual([{ runId: run.id }]);
   });
 
-  it("has no changes tab, discard or review for a folder run that succeeded", async () => {
+  it("has its own Changes tab, no discard and no review for a folder run that succeeded", async () => {
     thread([folderRun]);
     renderApp(`/runs/${run.id}`);
     await screen.findByRole("heading", { name: `${sample.dot.name} run` });
-    expect(screen.queryByRole("tab", { name: "Changes" })).toBeNull();
+    // The folder run's changes come from its checkpoint, not a worktree (undo spec section 5).
+    expect(screen.getByRole("tab", { name: "Changes" })).toBeVisible();
     expect(screen.queryByRole("button", { name: "Discard worktree" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Mark reviewed" })).toBeNull();
     expect(backend.callsTo("worktree_diff")).toEqual([]);

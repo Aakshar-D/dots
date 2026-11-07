@@ -736,6 +736,12 @@ pub async fn ask(app: &AppHandle, title: &str, message: String) -> bool {
         tracing::warn!("{CONFIRM_ENV}=yes: confirmed without a dialog: {title}");
         return true;
     }
+    ask_in_dialog(app, title, message).await
+}
+
+/// `ask`, always in the dialog: no environment answers it. For a question that lets another
+/// device in (pairing a phone), which only the person at the PC may answer.
+pub async fn ask_in_dialog(app: &AppHandle, title: &str, message: String) -> bool {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let mut dialog = app
         .dialog()

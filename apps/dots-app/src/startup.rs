@@ -70,6 +70,97 @@ pub fn early_log_dir(
     data_dir(local, env_override).ok().map(|d| log_dir(&d))
 }
 
+/// The folder Tauri's `local_data_dir` is, read from the environment alone, for
+/// `early_log_dir`: `%LOCALAPPDATA%` on Windows, `~/Library/Application Support` on macOS.
+pub fn local_data_from_env(
+    local_app_data: Option<OsString>,
+    home: Option<OsString>,
+) -> Option<OsString> {
+    if cfg!(target_os = "macos") {
+        home.filter(|h| !h.is_empty())
+            .map(|h| mac_local_data(Path::new(&h)).into_os_string())
+    } else {
+        local_app_data
+    }
+}
+
+/// `~/Library/Application Support` under the home folder `home`.
+fn mac_local_data(home: &Path) -> PathBuf {
+    home.join("Library").join("Application Support")
+}
+
+/// The marker before the PATH the login shell prints, so that what its startup files print
+/// first is skipped.
+#[cfg(target_os = "macos")]
+const PATH_MARKER: &str = "__DOTS_LOGIN_PATH__=";
+
+/// The PATH in the output of the login shell `adopt_login_shell_path` starts: the text after
+/// the last marker, to the end of its line. `None` when there is none or it is empty.
+pub fn login_shell_path(output: &str, marker: &str) -> Option<String> {
+    let (_, rest) = output.rsplit_once(marker)?;
+    let path = rest.lines().next().unwrap_or_default().trim();
+    (!path.is_empty()).then(|| path.to_string())
+}
+
+/// On macOS an app opened from the Finder, the Dock or at login gets launchd's short PATH
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`), without Homebrew, Node.js or the Claude Code CLI. So
+/// before anything starts, Dots asks the person's login shell for its PATH and takes it on.
+/// The shell has `LOGIN_SHELL_WAIT` to answer; one that fails or hangs leaves PATH as it was.
+#[cfg(target_os = "macos")]
+pub fn adopt_login_shell_path() {
+    use std::io::Read as _;
+    use std::process::{Command, Stdio};
+    const LOGIN_SHELL_WAIT: Duration = Duration::from_secs(3);
+    let shell = std::env::var("SHELL")
+        .ok()
+        .filter(|s| s.starts_with('/'))
+        .unwrap_or_else(|| "/bin/zsh".to_string());
+    let script = format!("printf '\\n{PATH_MARKER}%s\\n' \"$PATH\"");
+    let mut child = match Command::new(&shell)
+        .args(["-ilc", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(e) => {
+            eprintln!("dots: could not ask {shell} for its PATH: {e}");
+            return;
+        }
+    };
+    let Some(mut stdout) = child.stdout.take() else {
+        return;
+    };
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        text
+    });
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if started.elapsed() < LOGIN_SHELL_WAIT => {
+                std::thread::sleep(Duration::from_millis(25))
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                eprintln!("dots: {shell} did not give its PATH in time; PATH left as it was");
+                return;
+            }
+        }
+    }
+    if let Some(path) = reader
+        .join()
+        .ok()
+        .and_then(|text| login_shell_path(&text, PATH_MARKER))
+    {
+        std::env::set_var("PATH", path);
+    }
+}
+
 /// The file every running Dots holds a lock on, in its data folder.
 pub const LOCK_FILE: &str = "dots.lock";
 
@@ -612,6 +703,40 @@ mod tests {
                 .ok();
             assert_eq!(early_log_dir(Some(local.into()), env), in_setup);
         }
+    }
+
+    #[test]
+    fn the_early_local_data_folder_follows_the_platform() {
+        let local = Some(OsString::from("C:/Users/u/AppData/Local"));
+        let home = Some(OsString::from("/Users/u"));
+        let found = local_data_from_env(local.clone(), home);
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                found,
+                Some(mac_local_data(Path::new("/Users/u")).into_os_string())
+            );
+            assert_eq!(local_data_from_env(local, Some("".into())), None);
+        } else {
+            assert_eq!(found, local);
+        }
+        assert_eq!(
+            mac_local_data(Path::new("/Users/u")),
+            Path::new("/Users/u/Library/Application Support")
+        );
+    }
+
+    #[test]
+    fn the_login_shell_path_is_read_after_its_marker() {
+        let marker = "__M__=";
+        assert_eq!(
+            login_shell_path(
+                "Last login: today\n\n__M__=/opt/homebrew/bin:/usr/bin\n",
+                marker
+            ),
+            Some("/opt/homebrew/bin:/usr/bin".to_string())
+        );
+        assert_eq!(login_shell_path("no marker here\n", marker), None);
+        assert_eq!(login_shell_path("__M__=\n", marker), None);
     }
 
     const NO_WAIT: Duration = Duration::from_millis(150);

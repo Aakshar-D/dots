@@ -16,7 +16,7 @@ pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, end
     workdir, workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
     quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id, \
-    workspace_id";
+    workspace_id, spend_daily_usd, spend_daily_tokens, check_results";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
@@ -46,7 +46,14 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
             quiet_limit_secs: row
                 .try_get::<Option<i64>, _>("quiet_limit_secs")?
                 .map(|n| n as u64),
+            spend_cap: crate::spend::DotCaps {
+                daily_usd: row.try_get("spend_daily_usd")?,
+                daily_tokens: row
+                    .try_get::<Option<i64>, _>("spend_daily_tokens")?
+                    .map(|n| n as u64),
+            },
             use_global_instructions: row.try_get::<i64, _>("use_global_instructions")? != 0,
+            check_results: row.try_get::<i64, _>("check_results")? != 0,
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
             max_turns: row.try_get::<i64, _>("max_turns")? as u32,
             timeout_secs: row.try_get::<i64, _>("timeout_secs")? as u64,
@@ -162,8 +169,8 @@ impl Store {
              workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
              quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
              timeout_secs, approval_wait_secs, enabled, created_at, updated_at, org_id, \
-             workspace_id) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             workspace_id, spend_daily_usd, spend_daily_tokens, check_results) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -191,6 +198,9 @@ impl Store {
         .bind(&ts)
         .bind(org_id)
         .bind(workspace_id)
+        .bind(spec.spend_cap.daily_usd)
+        .bind(spec.spend_cap.daily_tokens.map(|n| n as i64))
+        .bind(spec.check_results as i64)
         .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
@@ -248,9 +258,9 @@ impl Store {
         let res = sqlx::query(
             "UPDATE dots SET name = ?, instructions = ?, engine = ?, model = ?, endpoint_url = ?, \
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \
-             browser = ?, quiet_limit_secs = ?, \
+             browser = ?, quiet_limit_secs = ?, spend_daily_usd = ?, spend_daily_tokens = ?, \
              use_global_instructions = ?, use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
-             enabled = ?, updated_at = ? WHERE id = ? \
+             enabled = ?, check_results = ?, updated_at = ? WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
              WHERE dot_id = ? AND status IN ('queued','running','awaiting_approval')))",
         )
@@ -267,12 +277,15 @@ impl Store {
         .bind(serde_json::to_string(&spec.variables)?)
         .bind(spec.browser as i64)
         .bind(spec.quiet_limit_secs.map(|n| n as i64))
+        .bind(spec.spend_cap.daily_usd)
+        .bind(spec.spend_cap.daily_tokens.map(|n| n as i64))
         .bind(spec.use_global_instructions as i64)
         .bind(spec.use_user_settings as i64)
         .bind(spec.max_turns as i64)
         .bind(spec.timeout_secs as i64)
         .bind(spec.approval_wait_secs as i64)
         .bind(spec.enabled as i64)
+        .bind(spec.check_results as i64)
         .bind(now())
         .bind(id)
         .bind(&spec.workdir)

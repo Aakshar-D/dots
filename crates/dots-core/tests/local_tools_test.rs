@@ -863,6 +863,7 @@ async fn walking_tools_leave_out_what_the_policy_denies() {
         rules: vec![Rule::new("Read(secret/**)", Action::Deny)],
         default: Action::Allow,
         mcp_default: Action::Ask,
+        ask_send_delete: false,
     };
 
     let out = run_filtered(p, &policy, "grep", json!({"pattern": "hello"})).await;
@@ -918,6 +919,7 @@ fn walking_policy(rules: Vec<Rule>, default: Action) -> Policy {
         rules: all,
         default,
         mcp_default: Action::Ask,
+        ask_send_delete: false,
     }
 }
 
@@ -1225,6 +1227,7 @@ async fn walking_tools_refuse_a_directory_root_a_deny_rule_matches() {
             rules: vec![Rule::new(&format!("{alias}(secret/**)"), Action::Deny)],
             default: Action::Allow,
             mcp_default: Action::Ask,
+            ask_send_delete: false,
         };
         assert_eq!(
             policy.resolve_in("Read", &json!({"file_path": "secret/key.txt"}), Some(p)),
@@ -1294,6 +1297,7 @@ async fn a_deny_rule_elsewhere_leaves_the_search_root_alone() {
         rules: vec![Rule::new("Read(secret/**)", Action::Deny)],
         default: Action::Allow,
         mcp_default: Action::Ask,
+        ask_send_delete: false,
     };
     // The workspace root, named or left out, is walked as before: `secret` is the hidden entry.
     for args in [

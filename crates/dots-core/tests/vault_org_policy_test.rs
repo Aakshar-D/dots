@@ -601,10 +601,13 @@ fn every_source_kind_round_trips_with_its_defaults_spelled_out() {
     };
     assert_eq!(settings.login_mount(), Some("userpass"));
 
-    for location in [
-        r"C:\Shared\acme\dots.sops.json",
-        "https://files.acme.example/dots.json",
-    ] {
+    // A full path on this system: a drive on Windows, from the root elsewhere.
+    let local = if cfg!(windows) {
+        r"C:\Shared\acme\dots.sops.json"
+    } else {
+        "/Shared/acme/dots.sops.json"
+    };
+    for location in [local, "https://files.acme.example/dots.json"] {
         let sops = parse_join_code(&code_for(&join_value(
             &key,
             json!({"kind": "sops", "location": location}),
@@ -799,6 +802,8 @@ fn a_source_address_that_is_not_https_is_refused() {
     );
 }
 
+/// Windows paths: drives, UNC shares and device paths.
+#[cfg(windows)]
 #[test]
 fn a_sops_location_on_a_network_path_is_refused() {
     let key = keys().pk.to_base64();

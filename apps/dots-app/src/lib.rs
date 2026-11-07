@@ -6,6 +6,7 @@ pub mod contract;
 pub mod error;
 pub mod events;
 pub mod notify_routes;
+pub mod phone;
 pub mod publishing;
 pub mod startup;
 pub mod state;
@@ -97,6 +98,12 @@ command_list![
     api_key_create,
     api_key_revoke,
     api_base_url,
+    phone_status,
+    phone_pair_start,
+    phone_pair_cancel,
+    phone_devices,
+    phone_device_remove,
+    phone_actions,
     update_dot,
     delete_dot,
     set_dot_enabled,
@@ -113,6 +120,7 @@ command_list![
     run_now,
     chat,
     resend_run,
+    result_check_fix,
     attachment_add_path,
     attachment_add_bytes,
     attachment_remove,
@@ -143,6 +151,7 @@ command_list![
     decide_approval,
     approval_rule_candidates,
     approval_touches_private,
+    approval_guard,
     decide_run_approvals,
     inbox,
     inbox_count,
@@ -153,6 +162,10 @@ command_list![
     dismiss_schedule_attention,
     worktree_diff,
     discard_worktree,
+    run_changes,
+    run_changes_preview,
+    undo_run,
+    redo_run,
     mark_reviewed,
     open_run_folder,
     connector_list,
@@ -226,6 +239,7 @@ command_list![
     memory_add,
     memory_update,
     memory_delete,
+    search,
     intents_list,
     intent_create,
     intent_update,
@@ -263,6 +277,8 @@ command_list![
     limits_get,
     usage_summary,
     run_release_hold,
+    run_release_cap,
+    spend_today,
     teams_list,
     team_get,
     team_create,
@@ -410,6 +426,7 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
     }
     app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
     app.manage(publishing::Publisher::default());
+    phone::manage(app, runtime.as_ref().ok().map(|(rt, _)| rt.clone()));
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
     // A failed start always shows its error page, even when launched hidden; so does a start
     // that "Restart Dots" asked for.
@@ -423,8 +440,11 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
 pub fn run() {
     // First thing: a panic while Tauri builds the app or runs `setup` is logged too, and a
     // release build has no console to read it from.
+    // Before any thread starts: on macOS, the login shell's PATH (`adopt_login_shell_path`).
+    #[cfg(target_os = "macos")]
+    startup::adopt_login_shell_path();
     let early = startup::early_log_dir(
-        std::env::var_os("LOCALAPPDATA"),
+        startup::local_data_from_env(std::env::var_os("LOCALAPPDATA"), std::env::var_os("HOME")),
         std::env::var_os(startup::DATA_DIR_ENV),
     );
     let panics_logged = early.is_some();
@@ -492,6 +512,11 @@ pub fn run() {
             if let Some(rt) = state::runtime_of(app.try_state::<AppState>().as_deref()) {
                 rt.shutdown();
             }
+        }
+        // On macOS a click on the Dock icon brings back a window that closing hid.
+        #[cfg(target_os = "macos")]
+        if let RunEvent::Reopen { .. } = event {
+            show_main(app);
         }
     });
 }

@@ -1,6 +1,6 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FolderOpen } from "lucide-react";
-import { Link, useParams } from "react-router";
+import { FolderOpen, RotateCw } from "lucide-react";
+import { Link, useNavigate, useParams } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { Approval, Run, RunEventRecord } from "@/api/types";
@@ -11,16 +11,19 @@ import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
 import { Markdown } from "@/components/Markdown";
 import { Page } from "@/components/Page";
 import { ReviewActions } from "@/components/ReviewActions";
+import { isFolderRun, RunChangesPanel } from "@/components/RunChanges";
 import { HeldNote } from "@/components/RunNumbers";
+import { modelLine } from "@/lib/auto-model";
 import { StatusBadge } from "@/components/StatusBadge";
-import { Transcript } from "@/components/Transcript";
+import { chatMessage, Transcript } from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { isActive } from "@/lib/home-topics";
 import { duration, localDateTime } from "@/lib/format";
 import { formatCost } from "@/lib/usage-format";
 import { notifyError } from "@/lib/notify";
-import { eventsQuery, keys } from "@/lib/query";
+import { eventsQuery, invalidate, keys } from "@/lib/query";
+import { onSingleClick } from "@/lib/single-click";
 import { useNow } from "@/lib/use-now";
 import { QuietCard } from "@/screens/home/QuietCard";
 
@@ -29,6 +32,7 @@ import { QuietCard } from "@/screens/home/QuietCard";
 function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
   const qc = useQueryClient();
   const latest = runs.at(-1)!;
+  const first = runs[0];
   const active = runs.find(isActive);
   const now = useNow(active !== undefined);
   const dot = useQuery({
@@ -62,6 +66,26 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
   const pending = asked.filter((a) => a.status === "pending");
 
   const cancel = useMutation({ mutationFn: commands.cancelRun, onError: notifyError });
+  const navigate = useNavigate();
+  // Run again (replay): the thread's first message to the same dot as a new conversation, or a
+  // run like Run now for a run no message started.
+  const message = chatMessage(first);
+  const again = useMutation({
+    mutationFn: () =>
+      message !== null
+        ? commands.chat(first.dot_id, message, null)
+        : commands.runNow(first.dot_id),
+    onSuccess: (run) => {
+      invalidate(qc, ["runs"]);
+      invalidate(qc, keys.overview);
+      void navigate(`/runs/${run.id}`);
+    },
+    onError: notifyError,
+  });
+  const canRunAgain =
+    !active && (message !== null || first.trigger === "manual" || first.trigger === "schedule");
+  // Folder runs of the thread that ended: each has its own changes and its own Undo.
+  const folderRuns = runs.filter((run) => isFolderRun(run) && !isActive(run));
   const openFolder = useMutation({
     mutationFn: () => commands.openRunFolder(runId),
     onError: notifyError,
@@ -78,7 +102,6 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
   // What the thread would cost on the API, when the engine said (usage and limits spec §5).
   const costs = runs.flatMap((r) => (r.cost_usd === null ? [] : [r.cost_usd]));
   const costUsd = costs.length > 0 ? costs.reduce((a, b) => a + b, 0) : null;
-  const first = runs[0];
   const took = duration(first.started_at, active ? null : latest.ended_at, now);
 
   const actions = (
@@ -102,6 +125,16 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
           onClick={() => openFolder.mutate()}
         >
           <FolderOpen aria-hidden /> Open folder
+        </Button>
+      )}
+      {canRunAgain && (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={again.isPending}
+          onClick={onSingleClick(() => again.mutate())}
+        >
+          <RotateCw aria-hidden /> Run again
         </Button>
       )}
       <ReviewActions
@@ -172,6 +205,12 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
             <dd className="text-foreground">{formatCost(costUsd)}</dd>
           </div>
         )}
+        {modelLine(latest) !== null && (
+          <div className="flex gap-1">
+            <dt>Model</dt>
+            <dd className="text-foreground">{modelLine(latest)}</dd>
+          </div>
+        )}
         {latest.branch && (
           <div className="flex gap-1">
             <dt>Branch</dt>
@@ -207,6 +246,19 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
             ) : (
               diff.data && <DiffView diff={diff.data} />
             )}
+          </TabsContent>
+        </Tabs>
+      ) : folderRuns.length > 0 ? (
+        <Tabs defaultValue="transcript">
+          <TabsList>
+            <TabsTrigger value="transcript">Transcript</TabsTrigger>
+            <TabsTrigger value="changes">Changes</TabsTrigger>
+          </TabsList>
+          <TabsContent value="transcript">{transcript}</TabsContent>
+          <TabsContent value="changes" className="flex flex-col gap-6">
+            {folderRuns.map((run) => (
+              <RunChangesPanel key={run.id} run={run} />
+            ))}
           </TabsContent>
         </Tabs>
       ) : (

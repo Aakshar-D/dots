@@ -10,6 +10,9 @@ use crate::policy::{cli_private_ask_rules, PLUMBING_TOOLS};
 /// The CLI's search and listing tools, never in its allow list.
 const SEARCH_TOOLS: &[&str] = &["Grep", "Glob", "LS"];
 
+/// The CLI's shell tools.
+const COMMAND_TOOLS: &[&str] = &["Bash", "PowerShell"];
+
 pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     let spec = &ctx.dot.spec;
     let mut a: Vec<String> = vec![
@@ -45,6 +48,16 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         let name = rule.split('(').next().unwrap_or(rule).trim();
         !SEARCH_TOOLS.contains(&name)
     });
+    // While "Always ask before sending or deleting" is on, every shell command reaches
+    // `approve`: the CLI would run one its allow list matches (`Bash(git:*)` covers
+    // `git push --force`) without asking, and only `Policy::resolve_in` reads a command for
+    // sends and deletes. Dots answers the rest with an allow at once.
+    if spec.policy.ask_send_delete {
+        allow.retain(|rule| {
+            let name = rule.split('(').next().unwrap_or(rule).trim();
+            !COMMAND_TOOLS.contains(&name)
+        });
+    }
     // The gateway checks every call of a run's MCP server (spec section 4), so the CLI does not
     // ask the `approve` tool for them first.
     allow.extend(
@@ -171,13 +184,41 @@ pub fn gateway_entry(mcp_url: &str, secret: &str, server: &str) -> Value {
     })
 }
 
-/// The configured path if it is a file; otherwise search PATH.
+/// The configured path if it is a file; otherwise search PATH, and on macOS then the folders
+/// the CLI's installers use (`mac_claude_dirs`): an app opened from the Finder gets a short
+/// PATH that has none of them.
 pub fn resolve_claude(configured: Option<&Path>) -> Option<PathBuf> {
     if let Some(p) = configured {
         return p.is_file().then(|| p.to_path_buf());
     }
-    let path = std::env::var_os("PATH")?;
-    resolve_in_dirs(std::env::split_paths(&path))
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
+        .map(|path| std::env::split_paths(&path).collect())
+        .unwrap_or_default();
+    if cfg!(target_os = "macos") {
+        dirs.extend(mac_claude_dirs(std::env::var_os("HOME").map(PathBuf::from)));
+    }
+    resolve_in_dirs(dirs)
+}
+
+/// Where the Claude Code CLI is installed on macOS, given the home folder: the native
+/// installer's `~/.local/bin` and `~/.claude/local`, Homebrew's `/opt/homebrew/bin` and
+/// `/usr/local/bin`, and the usual npm, Volta and Bun global folders.
+pub fn mac_claude_dirs(home: Option<PathBuf>) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(home) = home.filter(|h| !h.as_os_str().is_empty()) {
+        for sub in [
+            ".local/bin",
+            ".claude/local",
+            ".npm-global/bin",
+            ".volta/bin",
+            ".bun/bin",
+        ] {
+            dirs.push(home.join(sub));
+        }
+    }
+    dirs.push(PathBuf::from("/opt/homebrew/bin"));
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    dirs
 }
 
 /// On Windows only native `claude.exe` is spawnable; an npm `claude.cmd` shim is followed to

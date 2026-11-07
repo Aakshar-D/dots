@@ -1,13 +1,11 @@
 mod common;
 
-use std::path::Path;
-#[cfg(not(windows))]
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::fake_dot;
 use dots_core::engine::claude::args::{
-    build_args, cli_settings, gateway_entry, mcp_config, resolve_claude, resolve_in_dirs,
-    settings_path,
+    build_args, cli_settings, gateway_entry, mac_claude_dirs, mcp_config, resolve_claude,
+    resolve_in_dirs, settings_path,
 };
 use dots_core::engine::claude::parse::parse_line;
 use dots_core::engine::{EngineEvent, RunContext};
@@ -43,8 +41,39 @@ fn parses_init_text_and_tool_use() {
             id: "toolu_1".into(),
             tool: "Bash".into(),
             input: json!({"command": "git status", "description": "Check"}),
+            parent: None,
         }]
     );
+}
+
+#[test]
+fn a_helpers_call_names_the_call_that_started_it() {
+    // A `Task` helper's TodoWrite (run plan spec section 3): its line carries the helper's call.
+    let helper = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_2","name":"TodoWrite","input":{"todos":[{"content":"Read the logs","status":"in_progress","activeForm":"Reading the logs"}]}}]},"parent_tool_use_id":"toolu_task"}"#;
+    assert_eq!(
+        parse_line(helper),
+        vec![EngineEvent::ToolCall {
+            id: "toolu_2".into(),
+            tool: "TodoWrite".into(),
+            input: json!({"todos": [{"content": "Read the logs", "status": "in_progress", "activeForm": "Reading the logs"}]}),
+            parent: Some("toolu_task".into()),
+        }]
+    );
+    // The dot's own call: `null`, or no field, names no helper, and the stored event has no key.
+    let own = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Read","input":{}}]},"parent_tool_use_id":null}"#;
+    let events = parse_line(own);
+    assert!(matches!(
+        &events[..],
+        [EngineEvent::ToolCall { parent: None, .. }]
+    ));
+    let stored = serde_json::to_value(&events[0]).unwrap();
+    assert!(stored.get("parent").is_none(), "{stored}");
+    // An event stored before the field existed still reads.
+    let old: EngineEvent = serde_json::from_value(
+        json!({"kind": "tool_call", "id": "t", "tool": "Read", "input": {}}),
+    )
+    .unwrap();
+    assert!(matches!(old, EngineEvent::ToolCall { parent: None, .. }));
 }
 
 #[test]
@@ -356,4 +385,54 @@ fn resolve_finds_plain_binary_on_path() {
         resolve_in_dirs(vec![PathBuf::from(tmp.path())]),
         Some(tmp.path().join("claude"))
     );
+}
+
+#[test]
+fn macos_also_looks_where_the_cli_installers_put_it() {
+    let dirs = mac_claude_dirs(Some(PathBuf::from("/Users/u")));
+    assert_eq!(dirs[0], PathBuf::from("/Users/u/.local/bin"));
+    assert!(dirs.contains(&PathBuf::from("/Users/u/.claude/local")));
+    assert!(dirs.contains(&PathBuf::from("/opt/homebrew/bin")));
+    assert!(dirs.contains(&PathBuf::from("/usr/local/bin")));
+    assert_eq!(
+        mac_claude_dirs(None),
+        [
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin")
+        ]
+    );
+}
+
+fn allowed_tools(args: &[String]) -> Vec<String> {
+    args.iter()
+        .skip_while(|a| *a != "--allowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn with_the_guard_on_every_shell_command_reaches_approve() {
+    let mut c = ctx(None);
+    c.dot.spec.policy = Policy::preset(Preset::Sandboxed);
+    // Sandboxed allows `git status`, `git diff` and `git add`; a wide rule covers `git push`.
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("PowerShell(git:*)", Action::Allow));
+    let on = allowed_tools(&build_args(&c, Path::new("m.json")));
+    assert!(
+        !on.iter()
+            .any(|a| a.starts_with("Bash(") || a.starts_with("PowerShell(")),
+        "{on:?}"
+    );
+    // The other allow rules stay with the CLI.
+    assert!(on.iter().any(|a| a == "Write(./**)"), "{on:?}");
+    // Switched off, the CLI gets the shell rules as before.
+    c.dot.spec.policy.ask_send_delete = false;
+    let off = allowed_tools(&build_args(&c, Path::new("m.json")));
+    assert!(off.iter().any(|a| a == "Bash(git status:*)"), "{off:?}");
+    assert!(off.iter().any(|a| a == "PowerShell(git:*)"), "{off:?}");
 }

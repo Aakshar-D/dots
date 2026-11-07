@@ -33,6 +33,10 @@ export const sample = {
   limits: T.LimitsState.array().parse(contract.LimitsState),
   /// A week: nightly-tests (Claude, heaviest) and local-summarizer (local, no cost).
   usage: T.UsageSummary.parse(contract.UsageSummary),
+  /// Today: every dot at $8.50 of a $10.00 daily cap, nightly-tests at its own $2.00 cap.
+  spend: T.SpendToday.parse(contract.SpendToday),
+  /// A chat waiting for nightly-tests' $2.00 daily cap.
+  runCapped: T.Run.parse(contract.RunCapped),
   pageStates: T.PageState.array().parse(contract.PageState),
   diff: T.WorktreeDiff.parse(contract.WorktreeDiff),
   /// A scheduled message waiting for its busy topic, and one that failed.
@@ -106,7 +110,7 @@ export const sample = {
   stepDotRuns: T.StepDotRun.array().parse(contract.StepDotRun),
   /// The builder's live check: a step's problem, then the workflow name's.
   workflowProblems: T.WorkflowProblem.array().parse(contract.WorkflowProblem),
-  /// The Claude models (Opus, Sonnet, Haiku), then one a local endpoint lists.
+  /// The Claude models (Auto, Opus, Sonnet, Haiku), then one a local endpoint lists.
   models: T.ModelOption.array().parse(contract.ModelOption),
 };
 
@@ -182,6 +186,8 @@ export function installDefaults(): void {
   backend.on("approval_rule_candidates", () => []);
   // And whether the call touches a private folder; by default it does not.
   backend.on("approval_touches_private", () => false);
+  // And what the send-and-delete guard finds in the call; by default nothing.
+  backend.on("approval_guard", () => null);
   // The policy editor asks which always-allowed rules cover a private folder; by default none.
   backend.on("rules_touch_private", ({ patterns }) => (patterns as string[]).map(() => false));
   // No company Claude Code policy is installed on this PC.
@@ -194,6 +200,14 @@ export function installDefaults(): void {
   backend.on("dot_overview", () => []);
   backend.on("list_dots", () => []);
   backend.on("get_settings", () => sample.settings);
+  // Nothing spent today, and no cap set.
+  backend.on("spend_today", () => ({
+    ...sample.spend,
+    today: { cost_usd: 0, tokens: 0 },
+    month: { cost_usd: 0, tokens: 0 },
+    caps: { daily_usd: null, daily_tokens: null, monthly_usd: null },
+    dots: [],
+  }));
   // Usage counts are off and were never turned on.
   backend.on("usage_counts_state", () => ({
     enabled: false, url: null, install_id: null, first_hour: null,
@@ -256,6 +270,8 @@ export function installDefaults(): void {
   backend.on("memories_list", () => []);
   // No goals yet, and the person may change them.
   backend.on("intents_list", () => ({ intents: [], refusal: null }));
+  // A search finds nothing.
+  backend.on("search", () => []);
   backend.on("watchers_list", () => []);
   // Nothing is unread; looking at a dot and saying which one is viewed are taken.
   backend.on("unread_total", () => 0);

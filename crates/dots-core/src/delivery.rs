@@ -30,6 +30,7 @@ impl WaitReason {
             WaitReason::Updating => "Dots is updating",
             WaitReason::DotBusy => "this dot is busy with another run",
             WaitReason::Queued => "next in line",
+            WaitReason::SpendCap => "a spending cap is reached",
         }
     }
 }
@@ -39,6 +40,8 @@ impl WaitReason {
 pub struct WaitFacts {
     /// The usage limits hold it (a background Claude run).
     pub usage_held: bool,
+    /// A spending cap holds it (spend caps design).
+    pub spend_capped: bool,
     /// The runner's queue is held (an update is installing).
     pub runner_held: bool,
     /// Another run of its dot, not of a workflow step, is active in the runner: the dispatcher
@@ -49,11 +52,13 @@ pub struct WaitFacts {
     pub max_concurrent: usize,
 }
 
-/// Why a queued run waits, the first that applies: the usage hold, an update, its dot busy
-/// with another run, every slot taken, else it is next in line.
+/// Why a queued run waits, the first that applies: the usage hold, a spending cap, an update,
+/// its dot busy with another run, every slot taken, else it is next in line.
 pub fn wait_reason(f: &WaitFacts) -> WaitReason {
     if f.usage_held {
         WaitReason::UsageHold
+    } else if f.spend_capped {
+        WaitReason::SpendCap
     } else if f.runner_held {
         WaitReason::Updating
     } else if f.dot_has_active_run {
@@ -80,7 +85,11 @@ pub fn local_day_bounds<Tz: TimeZone>(
 
 /// Local midnight of `date` in `tz` as an instant (`schedule::resolve`'s rules: earliest of
 /// two, forward out of a gap). Should `tz` give no instant at all, `now`'s offset is used.
-fn midnight<Tz: TimeZone>(tz: &Tz, date: NaiveDate, now: DateTime<Utc>) -> DateTime<Utc> {
+pub(crate) fn midnight<Tz: TimeZone>(
+    tz: &Tz,
+    date: NaiveDate,
+    now: DateTime<Utc>,
+) -> DateTime<Utc> {
     let local: NaiveDateTime = date.and_time(NaiveTime::MIN);
     match crate::schedule::resolve(tz, local) {
         Some(t) => t.with_timezone(&Utc),
@@ -92,8 +101,8 @@ fn midnight<Tz: TimeZone>(tz: &Tz, date: NaiveDate, now: DateTime<Utc>) -> DateT
 }
 
 /// Marks the runs that waited 30 minutes without reaching their dot (delivery tracking spec
-/// section 3), every 30 seconds of its clock. A run held for the usage limit or for a member's
-/// role is left alone: both holds are deliberate.
+/// section 3), every 30 seconds of its clock. A run held for the usage limit, for a spending
+/// cap or for a member's role is left alone: those holds are deliberate.
 pub struct DeliverySweeper {
     store: Store,
     runner: Arc<Runner>,
@@ -126,7 +135,8 @@ impl DeliverySweeper {
         let mut marked = Vec::new();
         for run in runs {
             let reason = match run.wait_reason {
-                Some(WaitReason::UsageHold) | None => continue,
+                // A spending cap holds a run as deliberately as the usage hold.
+                Some(WaitReason::UsageHold | WaitReason::SpendCap) | None => continue,
                 Some(reason) => reason,
             };
             // A run held for its member's role waits until the role returns (members spec

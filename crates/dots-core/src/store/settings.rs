@@ -86,13 +86,16 @@ impl Store {
     /// Validates `settings` and stores every field in one transaction.
     pub async fn put_settings(&self, settings: &Settings) -> Result<()> {
         settings.validate()?;
-        // The default model is stored without the spaces around it.
+        // The models are stored without the spaces around them.
         let trimmed;
-        let settings = if settings.default_model.trim() == settings.default_model {
+        let settings = if settings.default_model.trim() == settings.default_model
+            && settings.checker_model.trim() == settings.checker_model
+        {
             settings
         } else {
             trimmed = Settings {
                 default_model: settings.default_model.trim().to_string(),
+                checker_model: settings.checker_model.trim().to_string(),
                 ..settings.clone()
             };
             &trimmed

@@ -77,6 +77,12 @@ export function BrowserApprovalCard({
           ))}
         </ul>
       )}
+      {ask.guarded && (
+        <p className="text-xs text-muted-foreground">
+          This may send or delete, so it always asks while "Always ask before sending or deleting"
+          is on for {dotName ?? "this dot"}.
+        </p>
+      )}
       {ask.dangerous && (
         <p className="text-xs text-muted-foreground">No rule can allow this: it asks every time.</p>
       )}

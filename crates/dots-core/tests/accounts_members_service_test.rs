@@ -12,8 +12,8 @@ use std::time::Duration as StdDuration;
 use async_trait::async_trait;
 use chrono::Duration;
 use common::orgs::{
-    code, keys, policy, public_key, roster, sign, sign_roster, sops_at, token, OrgsHarness,
-    Scripted, ACME, ACME_NAME, ISSUED,
+    code, full_path, keys, policy, public_key, roster, sign, sign_roster, sops_at, token,
+    OrgsHarness, Scripted, ACME, ACME_NAME, ISSUED,
 };
 use dots_core::accounts::edit::RosterEdit;
 use dots_core::accounts::{
@@ -643,7 +643,12 @@ async fn sops_edit_is_a_draft_to_copy() {
     };
     scripted.answer(file(&sign_roster(&h.keys, &text)));
     let orgs = h.orgs.clone().with_sources(scripted.factory());
-    let sops = code(ACME, ACME_NAME, sops_at("C:/sync/acme.enc.json"), &h.keys);
+    let sops = code(
+        ACME,
+        ACME_NAME,
+        sops_at(&full_path("C:/sync/acme.enc.json")),
+        &h.keys,
+    );
     let creds = SourceCreds::Age {
         identity: Zeroizing::new("AGE-SECRET-KEY-not-read-by-the-scripted-source".into()),
     };
