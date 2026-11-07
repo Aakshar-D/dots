@@ -156,6 +156,13 @@ impl AuditSender {
                 return 0;
             }
         };
+        // An org that lost its target may have no queue left to come up in `waiting`.
+        let stale: Vec<String> = self.states().keys().cloned().collect();
+        for org_id in stale {
+            if self.orgs.policy(&org_id).and_then(|p| p.audit).is_none() {
+                self.clear_wait(&org_id);
+            }
+        }
         let now = self.orgs.audit().clock().now();
         let mut sent = 0;
         for (org_id, _) in waiting {
@@ -174,6 +181,10 @@ impl AuditSender {
     /// Sends the org's queue, a batch at a time, until it is empty or a send fails.
     async fn send_org(&self, org_id: &str) -> usize {
         let Some(target) = self.orgs.policy(org_id).and_then(|p| p.audit) else {
+            // Nothing to send to (removed, damaged, or no `audit` now): the queue stays, and
+            // so does no wait or old error, which would be due again at once or show after a
+            // rejoin.
+            self.clear_wait(org_id);
             return 0;
         };
         let token = match self.orgs.lookup(org_id, &target.token_entry).await {
@@ -202,6 +213,7 @@ impl AuditSender {
                 Ok(batch) => batch,
                 Err(e) => {
                     tracing::warn!("org {org_id:?}: its audit queue could not be read: {e}");
+                    self.fail(org_id, "the send did not go through".to_string());
                     return sent;
                 }
             };
@@ -213,6 +225,7 @@ impl AuditSender {
                 Ok(()) => {
                     if let Err(e) = store.audit_sent(org_id, through).await {
                         tracing::warn!("org {org_id:?}: sent audit records stay queued: {e}");
+                        self.fail(org_id, "the send did not go through".to_string());
                         return sent;
                     }
                     sent += batch.len();
@@ -231,23 +244,45 @@ impl AuditSender {
                 }
                 Err(why) => {
                     tracing::warn!("org {org_id:?}: audit records were not sent: {why}");
-                    self.update(org_id, |s, now| {
-                        s.failures += 1;
-                        let next = now + retry_after(s.failures, jitter());
-                        s.shown.last_error = Some(why);
-                        s.shown.failed_at = Some(stamp(now));
-                        s.shown.next_try_at = Some(stamp(next));
-                        s.next_try = Some(next);
-                    });
+                    self.fail(org_id, why);
                     return sent;
                 }
             }
         }
     }
 
-    /// The soonest try due after a failure, if any.
+    /// Forgets the org's wait and its last error.
+    fn clear_wait(&self, org_id: &str) {
+        if let Some(s) = self.states().get_mut(org_id) {
+            s.failures = 0;
+            s.next_try = None;
+            s.shown.last_error = None;
+            s.shown.failed_at = None;
+            s.shown.next_try_at = None;
+        }
+    }
+
+    /// Counts a failure for the org and sets the wait before its next try.
+    fn fail(&self, org_id: &str, why: String) {
+        self.update(org_id, |s, now| {
+            s.failures += 1;
+            let next = now + retry_after(s.failures, jitter());
+            s.shown.last_error = Some(why);
+            s.shown.failed_at = Some(stamp(now));
+            s.shown.next_try_at = Some(stamp(next));
+            s.next_try = Some(next);
+        });
+    }
+
+    /// The soonest try due after a failure, if any. A deadline that is not ahead has had its
+    /// pass already, so it is no reason to wake again.
     fn next_due(&self) -> Option<DateTime<Utc>> {
-        self.states().values().filter_map(|s| s.next_try).min()
+        let now = self.orgs.audit().clock().now();
+        self.states()
+            .values()
+            .filter_map(|s| s.next_try)
+            .filter(|next| *next > now)
+            .min()
     }
 
     /// Sends what is queued now, then again `SEND_AFTER` after each new record and when a

@@ -19,6 +19,7 @@ use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
 const AUDIT_TOKEN: &str = "audit-token-value-5e92b1";
+const SECRET: &str = "org-secret-api-key-90c4d1";
 const ENDPOINT: &str = "https://audit.acme.test/dots";
 
 #[derive(Debug, Clone)]
@@ -89,6 +90,17 @@ async fn resolve(h: &OrgsHarness, n: usize) {
     }
 }
 
+/// No served value in any body posted, in the state shown, or in History.
+async fn assert_no_value(h: &OrgsHarness, transport: &FakeTransport, sender: &AuditSender) {
+    for post in transport.posts() {
+        assert!(!post.body.contains(SECRET));
+    }
+    let shown = format!("{:?}", sender.state(ACME));
+    assert!(!shown.contains(SECRET) && !shown.contains(AUDIT_TOKEN));
+    let history = format!("{:?}", h.store.audit_history(ACME, 1000).await.unwrap());
+    assert!(!history.contains(SECRET) && !history.contains(AUDIT_TOKEN));
+}
+
 fn at(text: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(text)
         .unwrap()
@@ -142,6 +154,7 @@ async fn a_pass_posts_the_queue_with_the_token_and_a_2xx_empties_it() {
     // Nothing is left to send.
     assert_eq!(sender.pass().await, 0);
     assert_eq!(transport.posts().len(), 1);
+    assert_no_value(&h, &transport, &sender).await;
 }
 
 #[tokio::test]
@@ -157,6 +170,7 @@ async fn more_than_five_hundred_records_go_five_hundred_at_a_time() {
     assert_eq!(sizes, vec![500, 101]);
     let all: String = transport.posts().iter().map(|p| p.body.clone()).collect();
     assert!(verify_lines(&all).findings.is_empty());
+    assert_no_value(&h, &transport, &sender).await;
 }
 
 #[tokio::test]
@@ -200,6 +214,7 @@ async fn a_failed_send_keeps_the_batch_and_waits_before_the_next_try() {
     let state = sender.state(ACME);
     assert_eq!((state.last_error, state.next_try_at), (None, None));
     assert_eq!(h.store.audit_queued(ACME).await.unwrap(), 0);
+    assert_no_value(&h, &transport, &sender).await;
 }
 
 #[tokio::test]
@@ -221,6 +236,40 @@ async fn without_audit_or_without_the_token_nothing_is_posted() {
         sender.state(ACME).last_error.as_deref(),
         Some("the audit token DOTS_AUDIT_TOKEN is not available: the account has no such entry")
     );
+    assert_no_value(&h, &transport, &sender).await;
+}
+
+#[tokio::test]
+async fn an_account_that_loses_its_target_during_a_wait_does_not_make_the_loop_spin() {
+    let (h, transport, sender) = joined(audited()).await;
+    transport.answer(Err("the endpoint answered 503".into()));
+    let shutdown = CancellationToken::new();
+    let task = sender.clone().spawn(shutdown.clone());
+    // The first try fails and the loop sleeps until the retry.
+    let retry = h.clock.nth_sleep(1).await;
+    assert_eq!(transport.posts().len(), 1);
+    assert!(sender.state(ACME).next_try_at.is_some());
+
+    // The person removes the account; the queue stays, and the wait ends.
+    h.orgs.remove(ACME).await.unwrap();
+    h.clock.set(retry + Duration::seconds(1));
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    let settled = h.clock.sleeps();
+    assert!(settled <= 3, "{settled}");
+    tokio::time::sleep(StdDuration::from_millis(300)).await;
+    assert_eq!(h.clock.sleeps(), settled);
+    assert_eq!(transport.posts().len(), 1);
+    // Its old error and wait are gone, so they do not show after a rejoin.
+    let state = sender.state(ACME);
+    assert_eq!((state.last_error, state.next_try_at), (None, None));
+    assert_eq!(sender.pass().await, 0);
+    assert_no_value(&h, &transport, &sender).await;
+
+    shutdown.cancel();
+    tokio::time::timeout(StdDuration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -249,6 +298,7 @@ async fn the_loop_sends_a_new_record_five_seconds_after_it_is_written() {
     h.clock.set(deadline);
     waited(2).await;
     assert_eq!(transport.posts()[1].body.lines().count(), 1);
+    assert_no_value(&h, &transport, &sender).await;
     shutdown.cancel();
     tokio::time::timeout(StdDuration::from_secs(5), task)
         .await
