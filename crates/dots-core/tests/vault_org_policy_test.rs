@@ -216,6 +216,30 @@ fn every_value_is_checked() {
 }
 
 #[test]
+fn the_audit_endpoint_holds_no_credential() {
+    for bad in [
+        "https://user:pw@sink.example/a",
+        "https://user@sink.example/a",
+        "https://sink.example/a?token=x",
+        "https://sink.example/a#x",
+    ] {
+        let text = invalid(&policy_with(
+            json!({"audit": {"endpoint": bad, "token_entry": "DOTS_AUDIT_TOKEN"}}),
+        ));
+        assert_eq!(
+            text,
+            "audit.endpoint must not hold a user name, password, query or fragment; put the              token in audit.token_entry",
+            "{bad}"
+        );
+        assert!(!text.contains("pw") && !text.contains("token=x"), "{text}");
+    }
+    assert!(parse_policy(&policy_with(
+        json!({"audit": {"endpoint": "https://sink.example/a", "token_entry": "T"}})
+    ))
+    .is_ok());
+}
+
+#[test]
 fn the_audit_target_needs_an_https_endpoint_and_an_entry_name() {
     let audit = |endpoint: &str, token_entry: &str| {
         policy_with(json!({"audit": {"endpoint": endpoint, "token_entry": token_entry}}))

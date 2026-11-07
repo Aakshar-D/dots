@@ -167,7 +167,8 @@ memory only while the source answers, and an offline PC has none.
 
 **`audit`** is either `null` or `{"endpoint": "https://...", "token_entry": "NAME"}`. The
 endpoint must be an `https://` URL (`http://` only for `localhost` or `127.0.0.1`, for a test
-sink on the same PC), and the entry a variable name. With it, each PC sends its audit records to
+sink on the same PC) with no user name, password, query or fragment (put the token in the
+entry, not in the URL), and the entry a variable name. With it, each PC sends its audit records to
 the endpoint, with the entry's value as the bearer token (section 11). Without it, nothing is
 sent; each person still sees their own records in the account's History.
 

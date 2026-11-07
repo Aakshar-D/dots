@@ -381,9 +381,22 @@ fn count(n: u32, unit: &str) -> String {
 }
 
 /// The audit endpoint is `https://`, or `http://` only to `localhost` or `127.0.0.1`, as a
-/// join code's address: a sink on the same PC, for a test.
+/// join code's address: a sink on the same PC, for a test. It holds no user name, password,
+/// query or fragment.
 fn check_audit(audit: &AuditTarget) -> Result<(), PolicyError> {
     let url = reqwest::Url::parse(&audit.endpoint);
+    // The endpoint is stored and shown, so it holds no credential: the token is a vault entry.
+    // The text does not repeat the endpoint, which may carry one.
+    if url.as_ref().is_ok_and(|u| {
+        !u.username().is_empty()
+            || u.password().is_some()
+            || u.query().is_some()
+            || u.fragment().is_some()
+    }) {
+        return Err(invalid(
+            "audit.endpoint must not hold a user name, password, query or fragment; put the              token in audit.token_entry",
+        ));
+    }
     let allowed = url
         .as_ref()
         .is_ok_and(|u| match (u.scheme(), u.host_str()) {
