@@ -24,7 +24,7 @@ use crate::args::Args;
 use crate::keys::{read_public_key, unlock_secret_key};
 use crate::policy::{check_dots_id, timestamp};
 use crate::request::read_request;
-use crate::{core_failed, failed, read_file, say, usage, write_file, Io, Result};
+use crate::{check_out, core_failed, failed, read_file, say, usage, write_file, Io, Result};
 
 /// The signature's untrusted comment. Nothing reads it; it tells a person what the box is.
 const UNTRUSTED_COMMENT: &str = "dots roster signature from dots-admin";
@@ -535,10 +535,15 @@ fn summarize(roster: &Roster, io: &mut Io<'_>) -> Result<()> {
 /// 4. verifies the envelope with `verify_roster`, as a Dots client will;
 /// 5. only then writes the new `seq` and `issued_at` back to the file, so the next signing
 ///    grows from them.
+///
+/// An `--out` that `write_file` would refuse is refused first, so it writes nothing.
 fn sign_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let args = Args::parse(args, &["key", "out"], &[])?;
     let path = args.one("the member list")?;
     let key_path = args.required("key")?;
+    if let Some(out) = args.value("out") {
+        check_out(out, &[path, key_path])?;
+    }
     let key_text = read_file(key_path, "the key")?;
     let mut roster = read_roster(path)?;
     roster.seq += 1;

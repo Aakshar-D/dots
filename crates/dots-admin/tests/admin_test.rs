@@ -1018,6 +1018,42 @@ fn roster_sign_bumps_seq() {
     }
 }
 
+/// A refused `--out` writes nothing: the member list keeps its `seq`, so the next signing
+/// does not skip a number.
+#[test]
+fn roster_sign_with_a_refused_out_writes_nothing() {
+    let (dir, secret, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let key_file = path(dir.path(), "root.key");
+    std::fs::write(&key_file, secret).unwrap();
+    // A minisign public key file that the command does not read.
+    let other = TempDir::new().unwrap();
+    ok(&["keygen", "--out", other.path().to_str().unwrap(), "--no-password"]);
+    let pub_file = path(other.path(), "policy.pub");
+    let public = std::fs::read_to_string(&pub_file).unwrap();
+    let before = std::fs::read_to_string(&file).unwrap();
+    for target in [&file, &key_file, &pub_file] {
+        let ran = run_with(
+            &["roster", "sign", &file, "--key", &key_file, "--out", target],
+            None,
+        );
+        let e = ran.result.expect_err("a refused --out").to_string();
+        assert!(
+            e.contains("is a file this command reads") || e.contains("holds a minisign key"),
+            "{e}"
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before, "{target}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&pub_file).unwrap(),
+        public,
+        "the key is kept"
+    );
+    let ran = run_with(&["roster", "sign", &file, "--key", &key_file], None);
+    ran.result.unwrap();
+    assert_eq!(read_json(&file)["seq"], 1);
+}
+
 #[test]
 fn add_same_email_adds_key() {
     let (dir, _, _) = keys();

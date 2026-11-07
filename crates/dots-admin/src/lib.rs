@@ -215,6 +215,13 @@ pub(crate) fn read_file(path: &str, what: &str) -> Result<String> {
 /// (the old policy key may be the one every join code names), nor one of `inputs`, the files
 /// the command read: an `--out` that names the policy being signed would lose it.
 pub(crate) fn write_file(path: &str, text: &str, inputs: &[&str]) -> Result<()> {
+    check_out(path, inputs)?;
+    std::fs::write(path, text).map_err(|e| failed(format!("could not write {path}: {e}")))
+}
+
+/// `write_file`'s refusals, without writing: a command that writes more than one file checks
+/// its `--out` first, so a refused one leaves every file as it was.
+pub(crate) fn check_out(path: &str, inputs: &[&str]) -> Result<()> {
     let target = Path::new(path);
     if let Ok(existing) = std::fs::canonicalize(target) {
         let input = inputs
@@ -232,7 +239,7 @@ pub(crate) fn write_file(path: &str, text: &str, inputs: &[&str]) -> Result<()> 
             )));
         }
     }
-    std::fs::write(target, text).map_err(|e| failed(format!("could not write {path}: {e}")))
+    Ok(())
 }
 
 /// Whether the file at `path` is a minisign key: a comment line, then one base64 line whose
