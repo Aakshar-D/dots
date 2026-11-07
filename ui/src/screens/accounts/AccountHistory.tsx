@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { commands } from "@/api/commands";
 import type { AuditEvent, AuditView, HistoryRow, OrgSummary } from "@/api/types";
 import { ErrorNote } from "@/components/ErrorNote";
-import { localDateTime, localTime } from "@/lib/format";
+import { localDateTime, localDayTime } from "@/lib/format";
 import { keys } from "@/lib/query";
 
 /// How often an account's audit view is read again while it is on screen: a send changes it
@@ -66,7 +66,8 @@ function consumerText(consumer: string | null): string {
 export function auditProblem(view: AuditView | undefined): string | null {
   if (!view?.endpoint || !view.send.last_error) return null;
   const waiting = `${view.queued.toLocaleString()} ${view.queued === 1 ? "record" : "records"}`;
-  const when = localTime(view.send.failed_at);
+  // A failure can be days old (no token, nothing written since): give its date then.
+  const when = localDayTime(view.send.failed_at);
   return `Audit: ${waiting} waiting; last send failed ${when}: ${view.send.last_error}`;
 }
 

@@ -2,7 +2,7 @@ import { screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { AuditView } from "@/api/types";
-import { localTime } from "@/lib/format";
+import { localDateTime, localDayTime, localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -60,13 +60,24 @@ describe("Settings, Accounts, History", () => {
   it("says when sending fails, on History and on Overview", async () => {
     account(failing);
     const { item, user } = await row();
-    const line =
-      `Audit: 2 records waiting; last send failed ${localTime(failing.send.failed_at)}: ` +
-      "the endpoint answered 503";
+    // The failure is from an earlier day, so the line gives its date too.
+    const when = localDateTime(failing.send.failed_at);
+    expect(localDayTime(failing.send.failed_at)).toBe(when);
+    const line = `Audit: 2 records waiting; last send failed ${when}: the endpoint answered 503`;
     expect(await within(item).findByText(line)).toBeInTheDocument();
     await user.click(within(item).getByRole("tab", { name: "History" }));
     const panel = await within(item).findByRole("tabpanel");
     expect(await within(panel).findByText(line)).toBeInTheDocument();
+  });
+
+  it("gives only the time of a failure from today", async () => {
+    const failedAt = new Date().toISOString();
+    account({ ...failing, send: { ...failing.send, failed_at: failedAt } });
+    const { item } = await row();
+    const line =
+      `Audit: 2 records waiting; last send failed ${localTime(failedAt)}: ` +
+      "the endpoint answered 503";
+    expect(await within(item).findByText(line)).toBeInTheDocument();
   });
 
   it("an account with no audit endpoint keeps its records on this PC", async () => {
