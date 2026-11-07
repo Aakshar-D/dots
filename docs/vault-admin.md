@@ -1048,7 +1048,10 @@ holds a value. The format, the request and every field are in
 - **The token.** `token_entry` names an ordinary entry of the account, for example
   `DOTS_AUDIT_TOKEN`. Every member's Dots reads it to send; grant it to no dot. A PC that gives
   no values (access revoked, offline with no copy, not on the member list) keeps its records
-  until it has the token again.
+  until it has the token again. It remembers the last policy's endpoint and token entry name
+  (never the token), so after a restart with no saved copy its records still queue.
+- **A damaged account.** One whose settings no longer read, or a half-done Remove, gives no
+  values; each run start against it still records `denied` with `policy_invalid`.
 - **Sending.** Records go about 5 seconds after they are written, at most 500 to a request, as
   `application/x-ndjson`. A `2xx` takes them off the PC's queue. Anything else keeps them: the
   next try waits 30 seconds, then twice as long each time, up to an hour. A batch can arrive
@@ -1057,8 +1060,10 @@ holds a value. The format, the request and every field are in
   dropped and an `expired` record with reason `queue_full` names them.
 - **Leaving.** A person who removes the account keeps its queue: joining again sends it and the
   numbering goes on. If a Remove does not finish, the account stays listed as "removing it did not
-  finish (<error>); remove it again", gives no values, and can be removed again. Sign-in details
-  left for an account that was never joined show in **Settings › Accounts**, each with **Remove**.
+  finish (<error>); remove it again", gives no values, and can be removed again. Its row goes
+  first, so it does not come back after a restart. Sign-in details left for an account that is
+  not joined (never joined, or a Remove that did not finish) show in **Settings › Accounts**,
+  each with **Remove**.
 - **What the person sees.** The account's **History** tab lists that PC's records of the last 30
   days (at most 1,000; successful fetches are left out), and whether each was sent. Older rows
   are hidden even before they are cleared. While sending fails, Overview and History say how many
