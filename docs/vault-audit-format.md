@@ -72,7 +72,7 @@ One JSON object per line, in canonical form: the keys of every object sorted by 
 | `event` | string | See below. |
 | `name` | string or null | The variable. `null` for a fetch outcome. |
 | `consumer` | string or null | `mcp:<server>` or `shell`. `null` for a fetch outcome. |
-| `source` | string or null | For `resolved`, where the value came from: `openbao`, `infisical`, `sops`, or `personal` (the person's own entry, where the policy's `personal` mode allows it). For every other event, the account's source kind. |
+| `source` | string or null | For `resolved`, where the value came from: `openbao`, `infisical`, `sops`, or `personal` (the person's own entry, where the policy's `personal` mode allows it). For every other event, the account's source kind; `null` when a damaged account's stored settings do not give even that. |
 | `reason` | string or null | A code, below. |
 | `dropped` | object or null | `{ "from", "to" }`, both included, on an `expired` record with reason `queue_full`. |
 
