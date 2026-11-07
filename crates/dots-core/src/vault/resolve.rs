@@ -14,6 +14,7 @@ use super::service::Vault;
 use crate::accounts::{NotMember, Permission};
 use crate::library::PERSONAL_SCOPE;
 use crate::model::Dot;
+use crate::vault::audit::{Event, Happened, Usage};
 use crate::{Error, Result};
 
 /// Where a dot's variables resolve: Personal, or the org the dot was made in (`Dot.org_id`).
@@ -68,6 +69,25 @@ pub enum Unresolved {
     OrgRemoved,
     /// This PC is not on the account's member list, and why (members spec §6.4).
     NotMember(NotMember),
+}
+
+impl Unresolved {
+    /// The reason's code in an audit record's `reason` (`docs/vault-audit-format.md`).
+    pub fn code(&self) -> &'static str {
+        match self {
+            Unresolved::NotGranted => "not_granted",
+            Unresolved::NotDefined => "not_defined",
+            Unresolved::DeniedByPolicy => "denied_by_policy",
+            Unresolved::DeniedByWorkspace(_) => "denied_by_workspace",
+            Unresolved::ShellSecretsForbidden => "shell_secrets_forbidden",
+            Unresolved::OrgOffline => "org_offline",
+            Unresolved::OrgExpired => "org_expired",
+            Unresolved::OrgRevoked => "org_revoked",
+            Unresolved::PolicyInvalid(_) => "policy_invalid",
+            Unresolved::OrgRemoved => "org_removed",
+            Unresolved::NotMember(_) => "not_member",
+        }
+    }
 }
 
 /// A variable that did not resolve for a consumer.
@@ -232,13 +252,14 @@ impl Vault {
         names: &[String],
     ) -> Result<std::result::Result<Resolved, Missing>> {
         let granted = |name: &str| grants.allows(consumer, name);
-        self.resolve_where(scope, None, &granted, consumer, names)
+        self.resolve_where(scope, None, &granted, consumer, names, None)
             .await
     }
 
     /// `resolve` for a dot of the workspace `workspace_id`: after the org's `use` rules, the
     /// workspace's own narrow the names its dots may use (members spec §6.3). A workspace with
-    /// no `use` rules narrows nothing.
+    /// no `use` rules narrows nothing. In an org, each name asked for is recorded for `usage`
+    /// (env vault spec §10): those that resolve, and the first that does not.
     pub async fn resolve_in(
         &self,
         scope: &DotScope,
@@ -246,10 +267,18 @@ impl Vault {
         grants: &Grants,
         consumer: &Consumer,
         names: &[String],
+        usage: &Usage,
     ) -> Result<std::result::Result<Resolved, Missing>> {
         let granted = |name: &str| grants.allows(consumer, name);
-        self.resolve_where(scope, Some(workspace_id), &granted, consumer, names)
-            .await
+        self.resolve_where(
+            scope,
+            Some(workspace_id),
+            &granted,
+            consumer,
+            names,
+            Some(usage),
+        )
+        .await
     }
 
     /// The values of `names` for the Library's Check of an MCP server in `scope` (§8), as if
@@ -257,7 +286,7 @@ impl Vault {
     /// does: a name it lacks is left out, and the server says so when it starts. An org
     /// resolves each name as a run in it would: its state, its `use` rules, then its
     /// `personal` mode; the first that does not resolve is the answer. An org not joined on
-    /// this PC is `NotFound`.
+    /// this PC is `NotFound`. In an org, each name is recorded, with no dot or run.
     pub async fn check_values(
         &self,
         scope: &DotScope,
@@ -272,11 +301,19 @@ impl Vault {
                 "no org '{org_id}' is joined on this PC"
             )));
         }
-        self.resolve_where(scope, None, &|_| true, consumer, names)
-            .await
+        self.resolve_where(
+            scope,
+            None,
+            &|_| true,
+            consumer,
+            names,
+            Some(&Usage::default()),
+        )
+        .await
     }
 
-    /// `resolve`, with `granted` saying which names are granted to `consumer`.
+    /// `resolve`, with `granted` saying which names are granted to `consumer`. With `usage`, a
+    /// dot in an org records each name it asks for; a Personal one records nothing.
     async fn resolve_where(
         &self,
         scope: &DotScope,
@@ -284,13 +321,40 @@ impl Vault {
         granted: &(dyn Fn(&str) -> bool + Sync),
         consumer: &Consumer,
         names: &[String],
+        usage: Option<&Usage>,
     ) -> Result<std::result::Result<Resolved, Missing>> {
         let read = self.in_scope(scope, workspace_id, names).await?;
+        let audit = match (usage, scope, self.orgs()) {
+            (Some(usage), DotScope::Org(org_id), Some(orgs)) => orgs
+                .org_audit(org_id)
+                .map(|org| (orgs.audit().clone(), org, usage)),
+            _ => None,
+        };
+        let key = consumer.key();
         let mut out = BTreeMap::new();
         for (i, name) in names.iter().enumerate() {
             let answer = self
                 .resolve_one(&read, i, name, granted(name), consumer, &Reading::Values)
                 .await?;
+            if let Some((audit, org, usage)) = &audit {
+                let what = match &answer {
+                    Ok(found) => Happened {
+                        event: Event::Resolved,
+                        name: Some(name),
+                        consumer: Some(&key),
+                        source: (found.source == ValueSource::Personal).then_some("personal"),
+                        reason: None,
+                    },
+                    Err((missing, _)) => Happened {
+                        event: Event::Denied,
+                        name: Some(name),
+                        consumer: Some(&key),
+                        source: None,
+                        reason: Some(missing.why.code()),
+                    },
+                };
+                audit.record(org, usage, what).await;
+            }
             match answer {
                 Ok(Found {
                     value: Some(value), ..

@@ -8,6 +8,7 @@ use dots_core::events::new_bus;
 use dots_core::library::Uses;
 use dots_core::run_tools::{OpenRequest, RunTools};
 use dots_core::store::WorkspaceRow;
+use dots_core::vault::audit::Usage;
 use dots_core::vault::org::{may_use_in, UseRules};
 use dots_core::vault::{Consumer, DotScope, GrantState, Grants, Unresolved, Vault};
 use serde_json::json;
@@ -55,6 +56,7 @@ async fn resolve(vault: &Vault, name: &str) -> Result<String, (Unresolved, Strin
             &grants,
             &consumer,
             &names,
+            &Usage::default(),
         )
         .await
         .unwrap()
@@ -142,7 +144,14 @@ async fn a_missing_workspace_row_refuses_unless_it_is_default() {
     let scope = DotScope::Org(ACME.into());
     // A workspace the mirror does not know refuses every name, by its id.
     let ghost = vault
-        .resolve_in(&scope, "ghost", &grants, &consumer, &names)
+        .resolve_in(
+            &scope,
+            "ghost",
+            &grants,
+            &consumer,
+            &names,
+            &Usage::default(),
+        )
         .await
         .unwrap()
         .unwrap_err();
@@ -154,7 +163,7 @@ async fn a_missing_workspace_row_refuses_unless_it_is_default() {
     // `default` with no row narrows nothing; a row without rules (`pay`) narrows nothing.
     for id in ["default", "pay"] {
         let ok = vault
-            .resolve_in(&scope, id, &grants, &consumer, &names)
+            .resolve_in(&scope, id, &grants, &consumer, &names, &Usage::default())
             .await
             .unwrap();
         assert_eq!(ok.unwrap().get("API_KEY").unwrap(), "a-1", "{id}");
