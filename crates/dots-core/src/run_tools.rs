@@ -34,6 +34,7 @@ use crate::library_service::{record_check, refresh_plugin, skill_problem};
 use crate::mcp::{McpError, McpSession, McpTool, SessionOptions};
 use crate::policy::McpTrust;
 use crate::store::Store;
+use crate::vault::audit::{AuditDot, Usage};
 use crate::vault::{Consumer, DotScope, Grants, Resolved, Vault};
 use crate::Result;
 
@@ -369,6 +370,15 @@ impl RunTools {
             dot_name,
         } = req;
         let mut notices = Vec::new();
+        // A dot in an org records each variable it resolves, with the dot and the run (env
+        // vault spec §10).
+        let usage = Usage {
+            dot: store.get_run(run_id).await.ok().map(|run| AuditDot {
+                id: run.dot_id,
+                name: dot_name.to_string(),
+            }),
+            run_id: Some(run_id.to_string()),
+        };
 
         // Plugins first: reading one brings its MCP server items in line.
         // Each with whether its hooks run, as stored after the reading.
@@ -425,7 +435,14 @@ impl RunTools {
             }
             let consumer = Consumer::Mcp(item.name.clone());
             match vault
-                .resolve_in(scope, workspace_id, grants, &consumer, &config.variables())
+                .resolve_in(
+                    scope,
+                    workspace_id,
+                    grants,
+                    &consumer,
+                    &config.variables(),
+                    &usage,
+                )
                 .await?
             {
                 Ok(env) => match unconfirmed_origin(store, &item, config, &env, scope).await? {
@@ -435,8 +452,16 @@ impl RunTools {
                 Err(missing) => notices.push(missing.text(dot_name)),
             }
         }
-        let shell_env =
-            shell_env(vault, scope, workspace_id, grants, dot_name, &mut notices).await?;
+        let shell_env = shell_env(
+            vault,
+            scope,
+            workspace_id,
+            grants,
+            dot_name,
+            &usage,
+            &mut notices,
+        )
+        .await?;
         let Some(mut opened) = open_sessions(&items, workspace, cancel).await else {
             return Ok((RunTools::default(), Vec::new()));
         };
@@ -465,7 +490,14 @@ impl RunTools {
             };
             let consumer = Consumer::Mcp(item.name.clone());
             let Ok(env) = vault
-                .resolve_in(scope, workspace_id, grants, &consumer, &config.variables())
+                .resolve_in(
+                    scope,
+                    workspace_id,
+                    grants,
+                    &consumer,
+                    &config.variables(),
+                    &usage,
+                )
                 .await?
             else {
                 continue;
@@ -726,13 +758,14 @@ async fn shell_env(
     workspace_id: &str,
     grants: &Grants,
     dot_name: &str,
+    usage: &Usage,
     notices: &mut Vec<String>,
 ) -> Result<Vec<(String, Zeroizing<String>)>> {
     let mut out = Vec::new();
     for name in grants.names(&Consumer::Shell) {
         let names = std::slice::from_ref(name);
         match vault
-            .resolve_in(scope, workspace_id, grants, &Consumer::Shell, names)
+            .resolve_in(scope, workspace_id, grants, &Consumer::Shell, names, usage)
             .await?
         {
             Ok(env) => {

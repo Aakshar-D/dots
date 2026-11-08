@@ -210,6 +210,10 @@ describe("commands", () => {
     expect(await commands.orgRemove("acme-eng")).toBeNull();
     reply = async () => fixture.OrgEntry;
     expect(await commands.orgEntries("acme-eng")).toEqual(fixture.OrgEntry);
+    reply = async () => fixture.AuditView[0];
+    expect(await commands.orgAudit("acme-eng")).toEqual(fixture.AuditView[0]);
+    reply = async () => ["design"];
+    expect(await commands.orgLeftoverKeys()).toEqual(["design"]);
     expect(calls).toEqual([
       ["org_list", undefined],
       ["org_preview", { code: "code" }],
@@ -221,7 +225,13 @@ describe("commands", () => {
       ["org_refresh", { orgId: "acme-eng" }],
       ["org_remove", { orgId: "acme-eng" }],
       ["org_entries", { orgId: "acme-eng" }],
+      ["org_audit", { orgId: "acme-eng" }],
+      ["org_leftover_keys", undefined],
     ]);
+    // A History row holding a value is a shape this UI refuses.
+    const row = { ...fixture.AuditView[0].history[0], value: "x" };
+    reply = async () => ({ ...fixture.AuditView[0], history: [row] });
+    expect((await failure(commands.orgAudit("acme-eng"))).kind).toBe("internal");
     // An answer holding a value or the sign-in details is a shape this UI refuses.
     reply = async () => [{ ...fixture.OrgEntry[1], secret: "x" }];
     expect((await failure(commands.orgEntries("acme-eng"))).kind).toBe("internal");

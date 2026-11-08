@@ -105,6 +105,9 @@ pub struct Config {
     /// What posts the usage counts. `Config::new` posts over HTTP, as the app does; nothing is
     /// sent until the person turns the counts on.
     pub usage_sender: Arc<dyn crate::usage_counts::CountsSender>,
+    /// What posts audit records to each account's endpoint (env vault spec §10). `Config::new`
+    /// posts over HTTP, as the app does; an account whose policy has no `audit` sends nothing.
+    pub audit_transport: Arc<dyn crate::vault::audit::AuditTransport>,
 }
 
 impl Config {
@@ -127,6 +130,7 @@ impl Config {
             claude_home: None,
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             usage_sender: Arc::new(crate::usage_counts::HttpSender::default()),
+            audit_transport: Arc::new(crate::vault::audit::HttpTransport::default()),
         }
     }
 
@@ -284,6 +288,8 @@ pub struct Runtime {
     chat_files: crate::chat_files::ChatFiles,
     /// The hourly usage counts, off until turned on (usage counts spec).
     usage_counts: Arc<crate::usage_counts::UsageCounts>,
+    /// Sends each account's audit records (env vault spec §10).
+    audit_sender: Arc<crate::vault::audit::AuditSender>,
     shutdown: CancellationToken,
 }
 
@@ -580,6 +586,10 @@ impl Runtime {
             cfg.app_version.clone(),
         );
         usage_counts.clone().spawn(shutdown.clone());
+        // What each account queued goes to its audit endpoint, now and as it is written.
+        let audit_sender =
+            crate::vault::audit::AuditSender::new(orgs.clone(), cfg.audit_transport.clone());
+        audit_sender.clone().spawn(shutdown.clone());
         // The runs apps start are queued as the runner's, and apps hear when a run of a topic
         // they started ends (app library spec section 7).
         let starting = Arc::downgrade(&runner);
@@ -689,6 +699,7 @@ impl Runtime {
             send_later_wake: Arc::new(tokio::sync::Notify::new()),
             chat_files,
             usage_counts,
+            audit_sender,
             shutdown,
         })
     }
@@ -1639,6 +1650,33 @@ impl Runtime {
     /// ID (usage counts spec).
     pub fn usage_counts(&self) -> &Arc<crate::usage_counts::UsageCounts> {
         &self.usage_counts
+    }
+
+    /// The audit sender: how sending stands for each account, and a pass on demand.
+    pub fn audit_sender(&self) -> &Arc<crate::vault::audit::AuditSender> {
+        &self.audit_sender
+    }
+
+    /// The joined account `org_id`'s History and how sending its records stands (env vault
+    /// spec §10). Never a value.
+    pub async fn org_audit(&self, org_id: &str) -> Result<crate::vault::audit::AuditView> {
+        if !self.orgs.is_joined(org_id) {
+            return Err(Error::NotFound(format!(
+                "no org '{org_id}' is joined on this PC"
+            )));
+        }
+        let audit = self.orgs.audit();
+        // The last accepted target, also while no policy is in memory (no saved copy after a
+        // restart): such an account still sends, so History must not say it has no endpoint.
+        let endpoint = self.orgs.audit_target(org_id).map(|a| a.endpoint);
+        Ok(crate::vault::audit::AuditView::new(
+            endpoint,
+            self.store.audit_queued(org_id).await?,
+            self.audit_sender.state(org_id),
+            self.store
+                .audit_history_as_of(org_id, audit.clock().now(), &audit.limits())
+                .await?,
+        ))
     }
 
     /// The Library: what the `library_*` commands call (MCP/skills spec section 9).
@@ -3598,6 +3636,9 @@ impl Runtime {
             if self.orgs.is_joined(org_id) {
                 self.org_timers.start(org_id);
             }
+            // A Remove that failed after the values were gone leaves the org listed as damaged;
+            // the screens read the list again to show it.
+            self.org_updated(org_id);
             return Err(e);
         }
         self.org_updated(org_id);

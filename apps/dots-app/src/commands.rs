@@ -50,6 +50,7 @@ use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest};
 use dots_core::skill_creator::{check_draft, DraftRequest, DraftSummary};
 use dots_core::store::{PhoneAction, PhoneDevice};
 use dots_core::usage_counts::{Report, UsageCountsState};
+use dots_core::vault::audit::AuditView;
 use dots_core::vault::org::{
     CreatedInvite, EditOutcome, JoinPreview, MembersView, OrgEntry, OrgSummary, RequestPreview,
     SourceCreds,
@@ -1849,6 +1850,20 @@ pub async fn org_remove(state: State<'_, AppState>, org_id: String) -> Res<()> {
 #[tauri::command]
 pub async fn org_entries(state: State<'_, AppState>, org_id: String) -> Res<Vec<OrgEntry>> {
     Ok(state.rt()?.orgs().entries(&org_id).await?)
+}
+
+/// The org ids this PC keeps sign-in details for while none such is joined (a SOPS key for a
+/// join that never finished); `org_remove` takes them back.
+#[tauri::command]
+pub fn org_leftover_keys(state: State<'_, AppState>) -> Res<Vec<String>> {
+    Ok(state.rt()?.orgs().leftover_keys()?)
+}
+
+/// The account's History on this PC and how sending its audit records stands (env vault spec
+/// section 10). Never a value.
+#[tauri::command]
+pub async fn org_audit(state: State<'_, AppState>, org_id: String) -> Res<AuditView> {
+    Ok(state.rt()?.org_audit(&org_id).await?)
 }
 
 /// Every message that waits for the person and the newest others, newest first; of one dot

@@ -162,6 +162,18 @@ impl SourceCreds {
         }
     }
 
+    /// Who these details sign in as, for an audit record (`AuditUser::source_identity`): a
+    /// login's user name, an Infisical client id or this PC's age public key; `None` for a
+    /// token. Never a secret.
+    pub fn identity(&self) -> Option<String> {
+        match self {
+            Self::Token { .. } => None,
+            Self::Login { username, .. } => Some(username.to_string()),
+            Self::Machine { client_id, .. } => Some(client_id.to_string()),
+            Self::Age { identity } => sops::public_key(identity).ok(),
+        }
+    }
+
     /// The secret store key of an org's sign-in details: `org/<org_id>/source`.
     pub fn store_key(org_id: &str) -> String {
         format!("org/{org_id}/source")

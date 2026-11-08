@@ -113,7 +113,7 @@ whole policy invalid: Dots fails closed.
 | `shell_secrets` | `false` | Whether a secret may be granted to a dot's shell. |
 | `refresh_minutes` | `15` | How often Dots fetches the org. At least 1. |
 | `offline_hours` | `24` | How long the saved copy lasts after the last good fetch. |
-| `audit` | `null` | Read and checked, but not used yet. |
+| `audit` | `null` | Where each PC sends its audit records (section 11). |
 
 **`org_id`** is 1 to 63 characters of `a-z`, `0-9` and `-`, starting with a letter or digit. The
 id `personal` is reserved.
@@ -166,8 +166,11 @@ until the PC reconnects. With `0`, Dots writes no copy at all: the org's values 
 memory only while the source answers, and an offline PC has none.
 
 **`audit`** is either `null` or `{"endpoint": "https://...", "token_entry": "NAME"}`. The
-endpoint must be an `https://` URL and the entry a variable name. Dots checks it and does
-nothing else with it yet. A later release will send audit records there.
+endpoint must be an `https://` URL (`http://` only for `localhost` or `127.0.0.1`, for a test
+sink on the same PC) with no user name, password, query or fragment (put the token in the
+entry, not in the URL), and the entry a variable name. With it, each PC sends its audit records to
+the endpoint, with the entry's value as the bearer token (section 11). Without it, nothing is
+sent; each person still sees their own records in the account's History.
 
 ### Making, checking and signing
 
@@ -219,6 +222,11 @@ wrote policy.signed.json; store its text as DOTS_POLICY
 
 Without `--out`, the signed text goes to standard output and the note to standard error. The
 signed text is one line of JSON. Store it in the source as section 4 says.
+
+`keygen`, `policy new --out` and `roster new --out` refuse any file that already exists.
+`policy sign --out`, `roster sign --out` and `join-code --file` replace an existing file, except
+a file the command reads (the policy, the key) or any minisign key file: `dots-admin` says so and
+writes nothing. A key file that is only half written is deleted, not left behind.
 
 To see what a Dots client would accept:
 
@@ -614,13 +622,13 @@ last good fetch.
 Each status, as Dots words it. Settings and the Env tab show it with a capital first letter:
 
 - `connected`: the last fetch worked.
-- `offline (<why>); using the saved copy until <time>`: the source can't be reached. Runs use
-  the copy.
+- `offline (<why>); using the saved copy`: the source can't be reached. Runs use the copy.
+  "Saved copy until", beside it, says until when, in the PC's local time.
 - `offline (<why>), with no saved copy`: the source can't be reached, and there is no copy. Runs
   that need the org fail. Right after Dots starts, the status is offline until the first fetch.
 - `access revoked (<why>)`: the source refused the person. Their copy is gone.
-- `policy invalid: <error>; using the saved copy until <time>`: the fetch, or its policy, was
-  refused. Runs use the last good copy.
+- `policy invalid: <error>; using the saved copy`: the fetch, or its policy, was refused.
+  Runs use the last good copy.
 - `policy invalid: <error>`: the same, with no copy left.
 - `secrets expired offline; reconnect to refresh`: the copy ran out while offline.
 - `waiting for the admin to add this PC's key`: a SOPS join waits for you to add the PC's key.
@@ -701,8 +709,9 @@ If you change a value that forms a server's host, each person confirms the new o
 - **Bedrock and Vertex.** Dots does not pass its own `AWS_*` and `GOOGLE_*` variables to the
   `claude` CLI, so a CLI set up for Amazon Bedrock or Google Vertex AI that way does not work in
   Dots.
-- **Audit records are not sent yet.** The policy's `audit` field is checked, and a later release
-  will use it. Until then, your source's own audit log is the record of who fetched what.
+- **Audit records are chained, not signed.** A gap or an edit after sending shows (section 11);
+  which PC wrote a record is not proven, since that needs a key per device. Your source's own
+  audit log stays the record of who fetched what.
 - **Windows only.** Dots keeps secrets in Windows Credential Manager and DPAPI.
 - **What Dots can't stop.** Dots stops mistakes and honest use. It can't stop malware running as
   the same Windows user, a person who extracts a value they were granted, or a granted MCP server
@@ -1025,3 +1034,56 @@ Not protected against:
   real cut-off is revoking the source credential, the same trade-off as for the vault.
 - A removed person's PC that stays offline. It keeps its saved copy until `offline_hours` run out.
 - A stolen PC while its Windows login is unlocked.
+
+## 11. Audit records
+
+With `audit` in the policy, every PC in the account keeps a record of each variable a dot of the
+account asks for, and of each fetch of the source, and sends them to the endpoint. A record never
+holds a value. The format, the request and every field are in
+[`vault-audit-format.md`](vault-audit-format.md); that is what your receiver implements.
+
+- **What is recorded.** For each name a run asks for, at its start, for each MCP server and for
+  the shell: `resolved`, or `denied` with the reason. A Library **Check** in the account records
+  too, without a dot. Each fetch records `fetched`, `offline`, `revoked`, `expired` or
+  `policy_invalid`. Personal dots record nothing.
+- **The token.** `token_entry` names an ordinary entry of the account, for example
+  `DOTS_AUDIT_TOKEN`. Every member's Dots reads it to send; grant it to no dot. A PC that gives
+  no values (access revoked, offline with no copy, not on the member list) keeps its records
+  until it has the token again. It remembers the last policy's endpoint and token entry name
+  (never the token), so after a restart with no saved copy its records still queue.
+- **A damaged account.** One whose settings no longer read, or a half-done Remove, gives no
+  values; each run start against it still records `denied` with `policy_invalid`.
+- **Sending.** Records go about 5 seconds after they are written, at most 500 to a request, as
+  `application/x-ndjson`. A `2xx` takes them off the PC's queue. Anything else keeps them: the
+  next try waits 30 seconds, then twice as long each time, up to an hour. A batch can arrive
+  twice when your `2xx` is lost: keep records by account, install and `seq`.
+- **Limits.** Each PC queues at most 100,000 records per account. Past that, the oldest 1,000 are
+  dropped and an `expired` record with reason `queue_full` names them.
+- **Leaving.** A person who removes the account keeps its queue: joining again sends it and the
+  numbering goes on. If a Remove does not finish, the account stays listed as "removing it did not
+  finish (<error>); remove it again", gives no values, and can be removed again. Its row goes
+  first, so it does not come back after a restart. Sign-in details left for an account that is
+  not joined (never joined, or a Remove that did not finish) show in **Settings › Accounts**,
+  each with **Remove**.
+- **What the person sees.** The account's **History** tab lists that PC's records of the last 30
+  days (at most 1,000; successful fetches are left out), and whether each was sent. Older rows
+  are hidden even before they are cleared. While sending fails, Overview and History say how many
+  wait and why ("the send did not go through" when the PC itself could not read or mark its
+  queue). An account whose policy has no `audit` shows no send line.
+
+To check what your endpoint received:
+
+```bash
+dots-admin audit verify records.ndjson
+```
+
+It checks, for each account and install, that `seq` counts up by one and that each `prev` is the
+hash of the record before, and names each gap:
+
+```text
+acme-eng (01J9…): 1240 records, seq 1 to 1240
+ok: every chain is whole
+```
+
+A gap the PC's own `queue_full` records explain, alone or together (drops in a row), is named
+but not a failure. The command exits 1 when a chain is not whole.

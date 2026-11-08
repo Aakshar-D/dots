@@ -216,6 +216,30 @@ fn every_value_is_checked() {
 }
 
 #[test]
+fn the_audit_endpoint_holds_no_credential() {
+    for bad in [
+        "https://user:pw@sink.example/a",
+        "https://user@sink.example/a",
+        "https://sink.example/a?token=x",
+        "https://sink.example/a#x",
+    ] {
+        let text = invalid(&policy_with(
+            json!({"audit": {"endpoint": bad, "token_entry": "DOTS_AUDIT_TOKEN"}}),
+        ));
+        assert_eq!(
+            text,
+            "audit.endpoint must not hold a user name, password, query or fragment; put the token in audit.token_entry",
+            "{bad}"
+        );
+        assert!(!text.contains("pw") && !text.contains("token=x"), "{text}");
+    }
+    assert!(parse_policy(&policy_with(
+        json!({"audit": {"endpoint": "https://sink.example/a", "token_entry": "T"}})
+    ))
+    .is_ok());
+}
+
+#[test]
 fn the_audit_target_needs_an_https_endpoint_and_an_entry_name() {
     let audit = |endpoint: &str, token_entry: &str| {
         policy_with(json!({"audit": {"endpoint": endpoint, "token_entry": token_entry}}))
@@ -228,7 +252,17 @@ fn the_audit_target_needs_an_https_endpoint_and_an_entry_name() {
     ] {
         assert_eq!(
             invalid(&audit(bad, "DOTS_AUDIT_TOKEN")),
-            format!("audit.endpoint '{bad}' must be an https:// URL")
+            format!(
+                "audit.endpoint '{bad}' must be an https:// URL (http:// only for localhost or \
+                 127.0.0.1)"
+            )
+        );
+    }
+    // A sink on this PC may take plain http.
+    for local in ["http://127.0.0.1:8080/dots", "http://localhost/audit"] {
+        assert!(
+            parse_policy(&audit(local, "DOTS_AUDIT_TOKEN")).is_ok(),
+            "{local}"
         );
     }
     assert_eq!(

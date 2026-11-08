@@ -1,6 +1,7 @@
 //! `dots-admin`, the org admin's helper (env vault spec §12): the policy signing key, the policy
-//! itself and the join codes people paste into Dots. It uses `dots-core`'s policy and join code
-//! types and checks, so what it writes is what Dots reads.
+//! itself, the join codes people paste into Dots, and the check of a file of audit records. It
+//! uses `dots-core`'s policy, join code and audit record types and checks, so what it writes is
+//! what Dots reads.
 //!
 //! Every command is a function here, so tests call them without a terminal; `main` only wires
 //! `run` to the console.
@@ -9,6 +10,7 @@ use std::io::Write;
 use std::path::Path;
 
 mod args;
+mod audit;
 pub mod join;
 pub mod keys;
 pub mod policy;
@@ -118,6 +120,9 @@ Commands:
       infisical: --site-url <url> --project-id <id> --environment <slug>
                  [--secret-path </path>]
       sops:      --location <full path or https:// url>
+  dots-admin audit verify <records.ndjson>
+      Checks audit records as an endpoint received them: for each account and install, seq
+      counts up by one and each prev is the hash of the record before. Reports each gap.
 
 A key's password is read from DOTS_ADMIN_PASSWORD when it is set, else from the terminal.
 ";
@@ -148,6 +153,7 @@ pub fn run(args: &[String], io: &mut Io<'_>) -> Result<()> {
         "request" => request::request_command(rest, io),
         "roster" => roster::roster_command(rest, io),
         "join-code" => join::join_code_command(rest, io),
+        "audit" => audit::audit_command(rest, io),
         other => Err(usage(format!("unknown command '{other}'"))),
     }
 }
@@ -205,8 +211,49 @@ pub(crate) fn read_file(path: &str, what: &str) -> Result<String> {
     std::fs::read_to_string(path).map_err(|e| failed(format!("could not read {what} {path}: {e}")))
 }
 
-/// Writes a result file, replacing one that is there.
-pub(crate) fn write_file(path: &str, text: &str) -> Result<()> {
-    std::fs::write(Path::new(path), text)
-        .map_err(|e| failed(format!("could not write {path}: {e}")))
+/// Writes a result file, replacing one that is there. It never replaces a minisign key file
+/// (the old policy key may be the one every join code names), nor one of `inputs`, the files
+/// the command read: an `--out` that names the policy being signed would lose it.
+pub(crate) fn write_file(path: &str, text: &str, inputs: &[&str]) -> Result<()> {
+    check_out(path, inputs)?;
+    std::fs::write(path, text).map_err(|e| failed(format!("could not write {path}: {e}")))
+}
+
+/// `write_file`'s refusals, without writing: a command that writes more than one file checks
+/// its `--out` first, so a refused one leaves every file as it was.
+pub(crate) fn check_out(path: &str, inputs: &[&str]) -> Result<()> {
+    let target = Path::new(path);
+    if let Ok(existing) = std::fs::canonicalize(target) {
+        let input = inputs
+            .iter()
+            .any(|i| std::fs::canonicalize(i).is_ok_and(|i| i == existing));
+        if input {
+            return Err(failed(format!(
+                "{path} is a file this command reads; choose another output file"
+            )));
+        }
+        if holds_a_key(&existing) {
+            return Err(failed(format!(
+                "{path} holds a minisign key; dots-admin never overwrites a key. Choose \
+                 another output file"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Whether the file at `path` is a minisign key: a comment line, then one base64 line whose
+/// bytes start with the `Ed` algorithm tag. A signature has more lines, and a policy or a
+/// join code is not one at all.
+fn holds_a_key(path: &Path) -> bool {
+    use base64::Engine;
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
+    lines.len() == 2
+        && lines[0].starts_with("untrusted comment:")
+        && base64::engine::general_purpose::STANDARD
+            .decode(lines[1].trim())
+            .is_ok_and(|bytes| bytes.starts_with(b"Ed"))
 }

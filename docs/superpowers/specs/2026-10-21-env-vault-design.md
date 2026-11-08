@@ -432,7 +432,7 @@ The plan is split into three: **A** Personal (§5), grants (§7), resolution and
   2. orgs, policy, adapters, offline copy and `dots-admin`
   3. audit
 
-  *Settled for stages 1 and 2: the split into plans A, B and C (§14), and the service calls, crates and zeroizing type in §14 and §16. Stage 3 is still open.*
+  *Settled for stages 1 and 2: the split into plans A, B and C (§14), and the service calls, crates and zeroizing type in §14 and §16. Stage 3 is plan C (§17).*
 - The UI layout details within the screens in §9, following the existing Library and dot editor patterns. *Settled for the screens plans A and B built (§14, §16).*
 - Error wording beyond the examples here, keeping the rule that every failure names the variable, the org and the reason. *Settled for plans A and B: the texts in §14 and §16.*
 
@@ -496,3 +496,41 @@ Plan B (§14) covers orgs, sources, policy, the offline copy, per-scope catalogs
   - The Update dialog for a new policy key asks exactly when the core's `JoinPreview.key_changed` is true (the whole key is compared, not its id).
   - `dots-admin keygen --no-password` writes an unprotected key, for tests only (§12 says the key is password-protected). On Windows `policy.key` gets its folder's permissions.
 - **Not in plan B:** audit records, the outbox and `dots-admin audit verify` (plan C); OIDC login; macOS and Linux.
+
+## 17. Changes made while building (plan C)
+
+Plan C covers audit records, the outbox, sending and `dots-admin audit verify` (§10, §12), the History list, and the findings plans A and B left open. The owner's answers (2026-11-06) and the prototype settled these:
+
+- **Names.** The core module is `vault::audit`:
+  - `record` (`AuditRecord`, `AuditUser`, `AuditDot`, `Dropped`, `Event`, `canonical`, `line_hash`, `stamp`, the `REASON_` codes)
+  - `verify` (`verify_lines`, `ChainReport`, `ChainSummary`, `Finding`)
+  - `writer` (`Audit`, `OrgAudit`, `Usage`, `Happened`)
+  - `sender` (`AuditSender`, `AuditTransport`, `HttpTransport`, `SendState`, `retry_after`)
+  - `view` (`AuditView`)
+
+  The store has `audit_chain`, `audit_outbox`, `audit_history` and `audit_target` (migration `0042_audit.sql`, after master's `0041_phone.sql`). The new commands are `org_audit` and `org_leftover_keys`. The account page's new tab is "History".
+- **The record.** As §10's example, plus a top-level `install` (the install id, which keys the chain with `org_id`) and `user.dots_id` (the Dots ID fingerprint), and `dropped` (`{from, to}`) on a full queue's `expired` record. `user.source_identity` is an OpenBao login's user name, an Infisical client id or this PC's SOPS age public key; `null` for an OpenBao token. Every key is always present (`null` when it says nothing).
+- **The line and the chain.** A line is canonical JSON: the keys of every object sorted by their bytes, no white space. `prev` is `sha256:` and the hex SHA-256 of the previous line's bytes; `null` for seq 1. A receiver hashes the lines as it got them.
+- **Reasons are codes, never text.** `denied` gives the `Unresolved` code (`not_granted`, `not_defined`, `denied_by_policy`, `denied_by_workspace`, `shell_secrets_forbidden`, `org_offline`, `org_expired`, `org_revoked`, `policy_invalid`, `org_removed`, `not_member`); `revoked` gives `denied` (the source refused) or `removed` (off the member list); `expired` gives `offline_copy` or `queue_full`. The other events have none.
+- **What is recorded.** A run's start records each name it asks for, for each MCP server, the shell and the retry after a sign-in refresh: those that resolve, and the first that does not (later names are not asked for). `source` is `personal` when the value came from Personal. A Library Check or probe in an account records with `dot` and `run_id` null. The dot editor's status reads record nothing. Each fetch of a joined org records its outcome: Refresh, the timers, the start-up fetch, a run start's refresh, Join and Update when they work, and an expiry (also one found at start). A Join or an Update that fails records nothing: the account did not change.
+- **An account without `audit`** queues nothing and spends no `seq`; its records are only listed in History (`local`). A policy that turns `audit` on queues from then on.
+- **The last accepted audit target is kept** in `audit_target` (the endpoint and the token entry's name, never a token), written with each accepted policy and deleted when one has no `audit`, and on Remove. After a restart with no saved copy, the account's records still queue, and History still names the endpoint and its send state.
+- **History** is `audit_history`: this PC's records, newest first, 30 days and at most 1,000 rows per account, with no `fetched` (the queue still sends them). Each row says `local`, `queued`, `sent` or `dropped`. It holds no value. It is deleted when the account is removed. The 30 days are applied when History is read, so older rows are hidden before the next write prunes them. An account with no endpoint shows no send state (no last-sent or failed line).
+- **The queue keeps at most 100,000 records per account.** Reaching it drops the oldest 1,000 at once and writes one `expired` record (`queue_full`, `dropped`) naming them.
+- **Remove keeps the queue and the chain.** They hold no values. Joining the same account again sends what is queued and goes on from the next `seq`.
+- **Sending.** One sender for the app. Every org's queue goes to its policy's endpoint, at most 500 records a `POST`, `Content-Type: application/x-ndjson`, `Authorization: Bearer <token_entry's value>`, with the vault's HTTP client (20 seconds, no redirects). A 2xx deletes the batch. Anything else waits 30 seconds, doubling to 1 hour, each wait ±20%, reset by a 2xx. New records go 5 seconds after they are written. With no value for the token entry (the account gives none), the try is not counted against the wait: the next record written tries again. The answer's body and the token are never logged. A queue that cannot be read, or a 2xx whose sent-marking fails, counts as a failed send (backoff applies) and shows "the send did not go through". When the policy has no `audit` (or the account is gone), the sender clears the wait, the failure count and the shown error; the queue stays.
+- **The endpoint** may be `http://` for `localhost` and `127.0.0.1`, as a join code's address, so a sink on the same PC can take records. The endpoint holds no user name, password, query or fragment, since Dots stores it and shows it: the token is the vault entry `token_entry` names.
+- **A failed send shows on the account page only**: Overview says "Audit: <n> records waiting; last send failed <time>: <why>", and History says it at its top. No Inbox item or notification.
+- **`dots-admin audit verify <records.ndjson>`** uses the core's `verify_lines`. Per org and install it reports gaps, a record changed after it (`prev` no longer matches), a seq out of order and another record with a seq read before; a line sent twice is counted, not reported. A gap the PC's own `queue_full` records name, alone or together (drops in a row meet end to end), is reported but is no failure. It exits 0 when every chain is whole.
+- **Findings of plans A and B, folded in.**
+  - A run's start no longer waits behind a fetch under way when the org is fresh (a freshly joined one included); a stale org still waits for it and does not fetch again.
+  - The start-up fetches stop when the app shuts down (they belong to one `JoinSet`).
+  - A Remove that fails after the values are gone keeps the account listed, giving no values ("removing it did not finish (…); remove it again"), so it can be removed again. The screens read the account list again after a Remove that fails.
+  - Remove deletes the row first, then the copy, then the sign-in details, so a half-done Remove does not come back after a restart; details it left are listed with the leftover keys.
+  - A damaged account (settings that don't read, or a half-done Remove) still writes a record for each resolution attempt (`denied`, `policy_invalid`), queued when its last accepted policy had `audit`; its `source` is `null` when even the source kind does not read.
+  - Sign-in details kept for an account that is not joined (a SOPS key made for a join that never finished) are listed in Settings › Accounts by id, with **Remove** (`org_leftover_keys`).
+  - `dots-admin`: an `--out` or `--file` never replaces a file the command reads, or a minisign key file. A key file whose write fails is deleted. A refused `--out` writes nothing.
+  - The dot editor says "Not in Personal" (not "Not set in Dots' environment"), and only for a Personal dot: an account's dot reads its variables from the account, which Variables shows. The Library's server row says "Not in Personal" too.
+  - An org's status says "using the saved copy" without the time in UTC: "Saved copy until" beside it gives it in local time.
+  - The Env tab's **Add** has no kind chosen: the person picks Plain or Secret before **Save**. A watcher's "Add to vault…" starts as Secret.
+- **Not in plan C:** signing records per device, and the admin server (project 2); OIDC login; macOS and Linux.

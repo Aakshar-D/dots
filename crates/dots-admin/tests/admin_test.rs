@@ -1018,6 +1018,47 @@ fn roster_sign_bumps_seq() {
     }
 }
 
+/// A refused `--out` writes nothing: the member list keeps its `seq`, so the next signing
+/// does not skip a number.
+#[test]
+fn roster_sign_with_a_refused_out_writes_nothing() {
+    let (dir, secret, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let key_file = path(dir.path(), "root.key");
+    std::fs::write(&key_file, secret).unwrap();
+    // A minisign public key file that the command does not read.
+    let other = TempDir::new().unwrap();
+    ok(&[
+        "keygen",
+        "--out",
+        other.path().to_str().unwrap(),
+        "--no-password",
+    ]);
+    let pub_file = path(other.path(), "policy.pub");
+    let public = std::fs::read_to_string(&pub_file).unwrap();
+    let before = std::fs::read_to_string(&file).unwrap();
+    for target in [&file, &key_file, &pub_file] {
+        let ran = run_with(
+            &["roster", "sign", &file, "--key", &key_file, "--out", target],
+            None,
+        );
+        let e = ran.result.expect_err("a refused --out").to_string();
+        assert!(
+            e.contains("is a file this command reads") || e.contains("holds a minisign key"),
+            "{e}"
+        );
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), before, "{target}");
+    }
+    assert_eq!(
+        std::fs::read_to_string(&pub_file).unwrap(),
+        public,
+        "the key is kept"
+    );
+    let ran = run_with(&["roster", "sign", &file, "--key", &key_file], None);
+    ran.result.unwrap();
+    assert_eq!(read_json(&file)["seq"], 1);
+}
+
 #[test]
 fn add_same_email_adds_key() {
     let (dir, _, _) = keys();
@@ -1481,4 +1522,182 @@ fn set_workspaces_by_email() {
     ]);
     assert!(err.to_string().contains("default"), "{err}");
     assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+}
+
+/// An output never replaces the files the command read, nor a key.
+#[test]
+fn an_output_file_never_replaces_the_input_or_a_key() {
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().to_str().unwrap();
+    ok(&["keygen", "--out", out, "--no-password"]);
+    let policy_file = path(dir.path(), "policy.json");
+    ok(&[
+        "policy",
+        "new",
+        "--org-id",
+        "acme-eng",
+        "--out",
+        &policy_file,
+    ]);
+    let key_file = path(dir.path(), "policy.key");
+    let pub_file = path(dir.path(), "policy.pub");
+    let (policy, key, public) = (
+        std::fs::read_to_string(&policy_file).unwrap(),
+        std::fs::read_to_string(&key_file).unwrap(),
+        std::fs::read_to_string(&pub_file).unwrap(),
+    );
+
+    let sign = |target: &str| {
+        failure(&[
+            "policy",
+            "sign",
+            &policy_file,
+            "--key",
+            &key_file,
+            "--out",
+            target,
+        ])
+        .to_string()
+    };
+    assert_eq!(
+        sign(&policy_file),
+        format!("{policy_file} is a file this command reads; choose another output file")
+    );
+    assert_eq!(
+        sign(&key_file),
+        format!("{key_file} is a file this command reads; choose another output file")
+    );
+    assert_eq!(
+        sign(&pub_file),
+        format!(
+            "{pub_file} holds a minisign key; dots-admin never overwrites a key. Choose another \
+             output file"
+        )
+    );
+    let join = failure(&[
+        "join-code",
+        "--org-id",
+        "acme-eng",
+        "--name",
+        "Acme Engineering",
+        "--source",
+        "openbao",
+        "--address",
+        "https://bao.acme.internal",
+        "--path",
+        "dots",
+        "--pub",
+        &pub_file,
+        "--file",
+        &key_file,
+    ]);
+    assert!(join.to_string().contains("holds a minisign key"), "{join}");
+    assert_eq!(std::fs::read_to_string(&policy_file).unwrap(), policy);
+    assert_eq!(std::fs::read_to_string(&key_file).unwrap(), key);
+    assert_eq!(std::fs::read_to_string(&pub_file).unwrap(), public);
+
+    // Another file is still replaced, as before.
+    let signed = path(dir.path(), "signed.txt");
+    std::fs::write(&signed, "old").unwrap();
+    ok(&[
+        "policy",
+        "sign",
+        &policy_file,
+        "--key",
+        &key_file,
+        "--out",
+        &signed,
+    ]);
+    assert!(std::fs::read_to_string(&signed).unwrap().starts_with('{'));
+}
+
+// audit verify (env vault spec §12)
+
+/// `n` chained records of acme-eng on one install, as the endpoint stored them.
+fn audit_lines(n: u64) -> Vec<String> {
+    use dots_core::vault::audit::{line_hash, AuditRecord, AuditUser, Event};
+    let mut lines: Vec<String> = Vec::new();
+    for seq in 1..=n {
+        let record = AuditRecord {
+            v: 1,
+            id: format!("01J9REC{seq:04}"),
+            seq,
+            prev: lines.last().map(|l| line_hash(l)),
+            at: "2026-10-21T09:12:03Z".into(),
+            org_id: "acme-eng".into(),
+            install: "01J9INSTALL".into(),
+            user: AuditUser::default(),
+            dot: None,
+            run_id: None,
+            event: Event::Fetched,
+            name: None,
+            consumer: None,
+            source: Some("openbao".into()),
+            reason: None,
+            dropped: None,
+        };
+        lines.push(record.line());
+    }
+    lines
+}
+
+fn records_file(dir: &Path, lines: &[String]) -> String {
+    let file = path(dir, "records.ndjson");
+    let text: String = lines.iter().map(|l| format!("{l}\n")).collect();
+    std::fs::write(&file, text).unwrap();
+    file
+}
+
+#[test]
+fn audit_verify_prints_each_chain_and_ok_for_a_whole_file() {
+    let dir = TempDir::new().unwrap();
+    let file = records_file(dir.path(), &audit_lines(3));
+    let ran = ok(&["audit", "verify", &file]);
+    assert_eq!(
+        ran.out,
+        "acme-eng (01J9INSTALL): 3 records, seq 1 to 3\nok: every chain is whole\n"
+    );
+}
+
+#[test]
+fn audit_verify_fails_on_a_gap_and_names_it() {
+    let dir = TempDir::new().unwrap();
+    let mut lines = audit_lines(5);
+    lines.remove(2);
+    let file = records_file(dir.path(), &lines);
+    let ran = run_with(&["audit", "verify", &file], None);
+    assert_eq!(
+        ran.out,
+        "acme-eng (01J9INSTALL): 4 records, seq 1 to 5\n\
+         acme-eng (01J9INSTALL): record 3 is missing before line 3\n"
+    );
+    let err = ran.result.unwrap_err();
+    assert_eq!(err.to_string(), "the records are not whole: 1 problem");
+    assert_eq!(err.exit_code(), 1);
+}
+
+#[test]
+fn audit_verify_counts_a_batch_sent_twice_and_passes() {
+    let dir = TempDir::new().unwrap();
+    let mut lines = audit_lines(3);
+    lines.extend(audit_lines(3)[1..].iter().cloned());
+    let file = records_file(dir.path(), &lines);
+    let ran = ok(&["audit", "verify", &file]);
+    assert!(ran
+        .out
+        .contains("2 lines repeat a record already read (a batch sent twice)"));
+    assert!(ran.out.ends_with("ok: every chain is whole\n"));
+}
+
+#[test]
+fn audit_verify_refuses_an_empty_file_and_a_wrong_command_line() {
+    let dir = TempDir::new().unwrap();
+    let file = records_file(dir.path(), &[]);
+    assert_eq!(
+        failure(&["audit", "verify", &file]).to_string(),
+        format!("{file} holds no records")
+    );
+    let err = failure(&["audit", "verify"]);
+    assert_eq!(err.exit_code(), 2);
+    assert_eq!(failure(&["audit", "check", &file]).exit_code(), 2);
 }

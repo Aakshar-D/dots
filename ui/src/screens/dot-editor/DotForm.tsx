@@ -427,6 +427,7 @@ export function DotForm(props: {
         <ToolsAndSkills
           uses={spec.uses}
           engine={spec.engine}
+          orgId={orgId}
           onChange={(uses) => set("uses", uses)}
         />
       </Section>

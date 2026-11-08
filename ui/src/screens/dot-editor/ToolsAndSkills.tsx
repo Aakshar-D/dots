@@ -80,6 +80,9 @@ export function ToolsAndSkills(props: {
   uses: Uses;
   engine: EngineKind;
   onChange: (uses: Uses) => void;
+  /// The dot's account; null or absent for Personal. An account's dot reads its variables from
+  /// the account, which Variables shows per grant, so Personal's gaps are not named here.
+  orgId?: string | null;
 }) {
   const { uses } = props;
   const library = useQuery({ queryKey: keys.library, queryFn: commands.libraryList });
@@ -184,10 +187,10 @@ export function ToolsAndSkills(props: {
           {note}
         </p>
       ))}
-      {missing.length > 0 && (
+      {missing.length > 0 && !props.orgId && (
         <p role="status" className="text-xs text-needs">
-          Not set in Dots' environment: {missing.join(", ")}. A server that needs one cannot start
-          until it is set.
+          Not in Personal: {missing.join(", ")}. A server that needs one cannot start until it
+          is set.
         </p>
       )}
     </div>

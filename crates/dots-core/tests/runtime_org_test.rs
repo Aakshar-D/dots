@@ -285,6 +285,39 @@ async fn the_runtime_keeps_one_timer_per_joined_org() {
     eventually("the timers' end", || timers.running().is_empty()).await;
 }
 
+/// A Remove that fails after the values are gone leaves the org listed as damaged; the runtime
+/// publishes `OrgUpdated` so the screens read the list again, and the error is still returned.
+#[tokio::test]
+async fn a_remove_that_does_not_finish_publishes_org_updated() {
+    let t = Rt::start().await;
+    t.join_acme().await;
+    // The copy can't be deleted: a folder stands where it is.
+    let copy = t
+        .dir
+        .path()
+        .join("data")
+        .join(dots_core::vault::org::OFFLINE_DIR);
+    std::fs::create_dir_all(&copy).unwrap();
+    let copy = copy.join(format!("{ACME}.bin"));
+    let _ = std::fs::remove_file(&copy);
+    std::fs::create_dir(&copy).unwrap();
+    std::fs::write(copy.join("held"), "x").unwrap();
+    let mut events = t.rt.subscribe();
+
+    let e = t.rt.remove_org(ACME).await.unwrap_err();
+    assert!(e.to_string().contains("deleting its offline copy failed"));
+    let mut said = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let RuntimeEvent::OrgUpdated { org_id } = event {
+            said.push(org_id);
+        }
+    }
+    assert_eq!(said, [ACME]);
+    let listed = t.orgs().summaries().await;
+    assert_eq!(listed.len(), 1);
+    assert!(listed[0].status_text.contains("removing it did not finish"));
+}
+
 /// A restarted runtime fetches every joined org once, and starts its timer.
 #[tokio::test]
 async fn a_restarted_runtime_fetches_each_org_and_starts_its_timer() {
@@ -307,6 +340,77 @@ async fn a_restarted_runtime_fetches_each_org_and_starts_its_timer() {
     })
     .await;
     assert_eq!(timers.running(), [ACME]);
+    t.rt.shutdown();
+}
+
+/// After a restart, an account with no saved copy (`offline_hours: 0`, and its access now
+/// revoked) has no policy in memory. The last one accepted had `audit`: History still names
+/// the endpoint, the start-up fetch's record is queued on the chain, and the send state says
+/// why nothing goes.
+#[tokio::test]
+async fn after_a_restart_with_no_copy_history_still_names_the_endpoint() {
+    const ENDPOINT: &str = "http://127.0.0.1:9/dots";
+    const AUDIT_TOKEN: &str = "audit-token-value-5c1e77";
+    let t = Rt::start().await;
+    let extra = json!({
+        "plain": ["DOTS_TEST_LEVEL"],
+        "offline_hours": 0,
+        "audit": {"endpoint": ENDPOINT, "token_entry": "DOTS_AUDIT_TOKEN"},
+    });
+    let signed = sign(&t.keys, &policy(ACME, "2026-10-22T08:00:00Z", extra));
+    t.bao.put_env(
+        "secret",
+        "dots",
+        json!({"DOTS_TEST_LEVEL": LEVEL_ONE, "DOTS_AUDIT_TOKEN": AUDIT_TOKEN}),
+    );
+    t.bao.put_policy("secret", "dots", &signed);
+    t.orgs().join(&t.acme_code(), Some(token())).await.unwrap();
+    assert!(t.rt.close(StdDuration::from_secs(10)).await);
+    let Rt {
+        dir,
+        rt,
+        bao,
+        keys,
+        secrets,
+        ..
+    } = t;
+    drop(rt);
+    bao.revoke_all_tokens();
+    let t = Rt::on(dir, secrets, bao, keys).await;
+    let timers = t.rt.org_timers();
+    eventually("the start-up fetch", || !timers.starting_up()).await;
+    assert_eq!(t.orgs().policy(ACME), None);
+
+    let mut view = t.rt.org_audit(ACME).await.unwrap();
+    for _ in 0..500 {
+        if view.send.last_error.is_some() && view.queued == 2 {
+            break;
+        }
+        tokio::time::sleep(StdDuration::from_millis(10)).await;
+        view = t.rt.org_audit(ACME).await.unwrap();
+    }
+    assert_eq!(view.endpoint.as_deref(), Some(ENDPOINT));
+    assert_eq!(
+        view.queued, 2,
+        "the join's fetched, then the start-up fetch's revoked"
+    );
+    assert_eq!(
+        view.history
+            .iter()
+            .map(|r| (r.event, r.state))
+            .collect::<Vec<_>>(),
+        [(
+            dots_core::vault::audit::Event::Revoked,
+            dots_core::store::HistoryState::Queued
+        )]
+    );
+    let why = view.send.last_error.clone().expect("the send state");
+    assert!(
+        why.starts_with("the audit token DOTS_AUDIT_TOKEN is not available: "),
+        "{why}"
+    );
+    let shown = format!("{view:?}");
+    assert!(!shown.contains(AUDIT_TOKEN) && !shown.contains(LEVEL_ONE));
     t.rt.shutdown();
 }
 

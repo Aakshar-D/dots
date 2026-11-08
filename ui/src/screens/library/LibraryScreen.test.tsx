@@ -70,7 +70,7 @@ describe("the Library screen", () => {
     const row = await screen.findByRole("listitem", { name: "github" });
     expect(within(row).getByText("Tools changed")).toBeVisible();
     expect(within(row).getByText("stdio")).toBeVisible();
-    expect(within(row).getByText("Missing variable: GITHUB_TOKEN")).toBeVisible();
+    expect(within(row).getByText("Not in Personal: GITHUB_TOKEN")).toBeVisible();
     expect(within(row).getByText("Used by nightly-tests")).toBeVisible();
     const fromPlugin = screen.getByRole("listitem", { name: "plugin-pdf-tools-render" });
     expect(within(fromPlugin).getByText("Accepted")).toBeVisible();
@@ -1124,6 +1124,11 @@ describe("the Library's Env tab", () => {
     await user.click(screen.getByRole("button", { name: "Add variable" }));
     const dialog = await screen.findByRole("dialog", { name: "Add variable" });
     expect(within(dialog).getByLabelText("Value")).toHaveAttribute("type", "password");
+    // Neither kind is chosen for the person: Save waits for one.
+    expect(within(dialog).getByLabelText("Plain")).not.toBeChecked();
+    expect(within(dialog).getByLabelText("Secret")).not.toBeChecked();
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    await user.click(within(dialog).getByLabelText("Secret"));
     await user.type(within(dialog).getByLabelText("Name"), "1BAD");
     await user.type(within(dialog).getByLabelText("Value"), "ghp_x");
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
@@ -1145,7 +1150,7 @@ describe("the Library's Env tab", () => {
     const { user } = await openTab();
     await user.click(await screen.findByRole("button", { name: "Add variable" }));
     const dialog = await screen.findByRole("dialog", { name: "Add variable" });
-    await user.click(within(dialog).getByLabelText("Secret"));
+    await user.click(within(dialog).getByLabelText("Plain"));
     expect(within(dialog).getByLabelText("Value")).toHaveAttribute("type", "text");
     await user.type(within(dialog).getByLabelText("Name"), "log_level");
     await user.type(within(dialog).getByLabelText("Value"), "info");

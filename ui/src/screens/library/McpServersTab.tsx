@@ -130,7 +130,7 @@ function ServerRow(props: {
         </Badge>
         {entry.missing_variables.length > 0 && (
           <Badge variant="secondary" className="border-needs-border bg-transparent text-needs">
-            {`Missing variable: ${entry.missing_variables.join(", ")}`}
+            {`Not in Personal: ${entry.missing_variables.join(", ")}`}
           </Badge>
         )}
       </div>

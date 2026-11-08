@@ -14,13 +14,22 @@ import { sample } from "@/test/fixtures";
 const [github, pluginServer, pdf, pdfTools, company, projects] = sample.library;
 const none: Uses = { mcp_servers: [], skills: [], plugins: [], context: [], apps: [] };
 
-function setup(opts: { uses?: Uses; engine?: EngineKind; library?: LibraryEntry[] } = {}) {
+function setup(
+  opts: { uses?: Uses; engine?: EngineKind; library?: LibraryEntry[]; orgId?: string } = {},
+) {
   backend.on("library_list", () => opts.library ?? sample.library);
   let latest = opts.uses ?? none;
   function Host() {
     const [uses, setUses] = useState(opts.uses ?? none);
     latest = uses;
-    return <ToolsAndSkills uses={uses} engine={opts.engine ?? "claude"} onChange={setUses} />;
+    return (
+      <ToolsAndSkills
+        uses={uses}
+        engine={opts.engine ?? "claude"}
+        orgId={opts.orgId ?? null}
+        onChange={setUses}
+      />
+    );
   }
   render(
     <QueryClientProvider client={createQueryClient()}>
@@ -120,18 +129,26 @@ describe("the editor's Tools and skills section", () => {
     expect(screen.getAllByRole("link", { name: "Library" })[0]).toHaveAttribute("href", "/library");
   });
 
-  it("lists the variables the chosen servers and plugins need and the environment lacks", async () => {
+  it("lists the variables the chosen servers and plugins need and Personal lacks", async () => {
     const needy = { ...pluginServer!, missing_variables: ["PDF_KEY"] } as LibraryEntry;
     const { user } = setup({ library: [github!, needy, pdf!, pdfTools!] });
     await screen.findByLabelText("github");
-    expect(screen.queryByText(/Not set in Dots' environment/)).toBeNull();
+    expect(screen.queryByText(/Not in Personal/)).toBeNull();
 
     // github needs a variable only once it is ticked
     await user.click(screen.getByLabelText("github"));
-    expect(screen.getByRole("status")).toHaveTextContent("Not set in Dots' environment: " + github!.missing_variables.join(", "));
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Not in Personal: " + github!.missing_variables.join(", "),
+    );
     // a plugin's own server counts when its plugin is ticked
     await user.click(screen.getByLabelText("pdf-tools"));
     expect(screen.getByRole("status")).toHaveTextContent("PDF_KEY");
+  });
+
+  it("names no Personal gap for an account's dot, which reads the account", async () => {
+    const { user } = setup({ library: [github!], orgId: "acme-eng" });
+    await user.click(await screen.findByLabelText("github"));
+    expect(screen.queryByText(/Not in Personal/)).toBeNull();
   });
 
   it("warns about a server whose tools wait for a review", async () => {

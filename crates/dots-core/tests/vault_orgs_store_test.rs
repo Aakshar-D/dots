@@ -293,6 +293,7 @@ async fn a_fetch_and_its_membership_are_recorded_together() {
             "2026-10-22T09:00:05.000Z",
             "2026-10-22T08:00:00Z",
             &active,
+            None,
         )
         .await
         .unwrap();
@@ -312,6 +313,7 @@ async fn a_fetch_and_its_membership_are_recorded_together() {
             "2026-10-22T09:00:05.000Z",
             "2026-10-22T08:00:00Z",
             &active,
+            None,
         )
         .await
         .unwrap_err();

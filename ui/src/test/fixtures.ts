@@ -77,6 +77,7 @@ export const sample = {
   /// Acme Engineering's API_BASE_URL (plain, locked, granted to acme-release) and GITHUB_TOKEN
   /// (a secret, not locked, not granted).
   orgEntries: T.OrgEntry.array().parse(contract.OrgEntry),
+  audit: T.AuditView.array().parse(contract.AuditView),
   /// acme-release's grants in Acme Engineering: GITHUB_TOKEN from the org, LOG_LEVEL from
   /// Personal, API_KEY not in the org, PROD_DB_URL denied, GITHUB_TOKEN refused to the shell;
   /// then a grant of a dot whose org was removed.
