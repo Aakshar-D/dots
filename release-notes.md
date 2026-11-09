@@ -1,10 +1,22 @@
-<!-- dots:notes 0.3.0 -->
-- Accounts, part 1: your Dots ID and Profile, Organisations renamed Accounts, and an account switcher that filters Home
-- Accounts, part 2: a signed member list with roles (Owner, Admin, Member, Viewer), waiting and removed states, and held runs when a role no longer allows them
-- Accounts, part 3: invites, request codes and a Members tab to invite, approve, change roles and remove people, with in-app signing, publishing and drafts
-- Accounts, part 4: workspaces. Split an account into workspaces with their own members' roles, filter Home by workspace, move dots between them, and narrow what each may use
-- Accounts, part 5: API keys for a workspace, made in Dots, to list dots, trigger a run and read its status over the local server, plus a Host check on every route of it. If you forward webhooks through a tunnel, have it rewrite Host to 127.0.0.1:PORT (ngrok `--host-header=rewrite`, cloudflared `httpHostHeader`).
-- Conversational chat: a dot answers you in the conversation and proposes new instructions for you to accept (#33)
-- The conversation gets a new layout (conversational chat, part B) (#37)
-- Projects, the app that comes with Dots (app library, plan C) (#35)
-- An approval answered the moment it is asked now reaches the waiting dot instead of being queued (#43)
+<!-- dots:notes 0.4.0 -->
+- Setup agent: describe a dot in one sentence and Dots sets it up and starts it (#54)
+- Import your Claude Code agents as dots (#52)
+- Choose a dot's model: a picker, a default model, and a switch above the conversation (#63); or let a dot pick Haiku, Sonnet or Opus for each task (#70)
+- Connectors: connect Gmail, GitHub, Slack, Notion and more with a key or a sign-in (#64)
+- Teams and workflows: delegate, send-backs, branches, deploy, schedule and webhook steps, with their own screens (#55, #67)
+- Live plan: see each step a dot plans, who owns it and where it is (#68)
+- Search everything: one box across chats, results, memory and files (#69)
+- Intents: a tab of your goals grouped by urgency, each handed to a dot (#61)
+- Inbox: Snooze and Done on every item (#56), and answer Inbox cards from your phone on the same Wi-Fi (#76)
+- Chat: attachments and a Files panel (#58), send a message later (#57), topic tools to rename, move, merge and archive (#53), and a dot writing a reply shows it is working (#65)
+- Delivery: Dots tells you when a message did not reach its dot (#48), and a message cut off by a restart is sent again (#50)
+- Undo a run: see every file a run changed and put it back in one click (#74)
+- Result check: a quick second look at every answer before it reaches you (#73)
+- Ask first: a dot always asks before it sends or deletes (#72); private folders always ask, an always-allowed list, and harmless tools stop asking (#49)
+- Your company's Claude Code policy: Dots tells you when it keeps asks on (#60)
+- Spending caps: a daily limit per dot and for all dots (#71)
+- Schedules and watchers: skip a schedule while the dot is busy (#46), watch hours (#47), and a stuck-run watchdog that warns when a run goes quiet and stops it at twice the limit (#45)
+- Audit records: each use of an account's variables and each fetch is recorded and sent to its audit endpoint (#77)
+- Settings in tabs, one page per topic (#66); Report a problem with a scrubbed report (#51); opt-in hourly usage counts, counts only (#62)
+- Each dot gets its own generated avatar shape (#59)
+- Dots for macOS: the release also makes a Mac app (#75)
