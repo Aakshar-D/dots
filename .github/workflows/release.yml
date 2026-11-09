@@ -101,7 +101,8 @@ jobs:
           if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
             echo "release: no Apple signing secrets; the macOS app is not code-signed"
           fi
-          bun run tauri build -- --locked --target universal-apple-darwin --bundles app,dmg
+          # Tauri's own options go before "--"; what follows it is passed to cargo.
+          bun run tauri build --target universal-apple-darwin --bundles app,dmg -- --locked
 
       # The updater replaces the app from a .tar.gz of Dots.app, signed with the updater key
       # as the Windows installer is.
