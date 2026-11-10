@@ -46,11 +46,11 @@ Everything else is **Your own sessions**. Each message is in exactly one of the 
 
 ## 5. Scanning
 
-- **What is remembered per file** (table `claude_transcript_files`): path, size, modification time, and the byte offset read up to. A file whose size equals the offset is skipped without opening. A file smaller than its offset (rewritten) is read again from the start; the dedupe keeps it from counting twice.
+- **What is remembered per file** (table `claude_transcript_files`): path, size, modification time, the byte offset read up to, and a hash of its first bytes read (at most 4 KiB). A file whose size equals the offset and whose modification time is unchanged is skipped without opening. A file smaller than its offset, or whose first bytes no longer match the hash (rewritten), is read again from the start; the dedupe keeps it from counting twice.
 - **Only complete lines**: reading stops before a last line with no newline yet; it is read next time.
 - **Only what can matter**: lines without `"assistant"` and `"usage"` are skipped before JSON parsing. Messages older than 35 days are not stored, and a file last modified more than 35 days ago is marked read without opening. Stored messages older than 35 days are deleted at each scan.
 - **Cap**: at most 32 MiB of new bytes per scan; files are taken newest first, so the current block is right first. A scan that stops at the cap says so (`more`), and the page asks for the next scan at once.
-- **When**: when the Usage page opens (not again within 30 seconds of the last one), and in the background every 10 minutes, the first 2 minutes after start. One scan at a time; a second asker waits for the running one and gets its result.
+- **When**: when the Usage page opens, then every minute while it stays open (not again within 30 seconds of the last scan, which answers instead, so a background scan shows up on an open page), and in the background every 10 minutes, the first 2 minutes after start. One scan at a time; a second asker waits for the running one and gets its result.
 - **Off the UI thread**: file reading runs on Tokio's blocking pool, database writes in one transaction per file; the commands are async.
 - A file that cannot be read is skipped (logged at debug) and tried next scan.
 - Read-only: files are opened for reading; nothing under `<config>` is written, moved or locked.
@@ -65,7 +65,7 @@ Everything else is **Your own sessions**. Each message is in exactly one of the 
 
 - Three totals: Your own sessions, Dots, All. Each shows messages, sessions, tokens and cache reads.
 - **Tokens** are `input + cache creation + output`. Cache reads are shown on their own ("cache reads 48M"): they are by far the largest number and are cheap, and folding them in would hide the rest.
-- A project table, heaviest first by tokens: project (the cwd's folder name; the full path on hover and as the cell's description), messages, sessions, tokens, cache reads. All Dots' messages are one row, "Dots (all dots)", so the dots' many worktree folders do not crowd the table. At most 50 project rows.
+- A project table, heaviest first by tokens: project (the cwd's folder name; the full path on hover and as the cell's description), messages, sessions, tokens, cache reads. Messages with no cwd are one row, "(unknown folder)". All Dots' messages are one row, "Dots (all dots)", so the dots' many worktree folders do not crowd the table. At most 50 project rows.
 - "Read 3 min ago from C:\Users\me\.claude\projects" under the table; "Reading Claude Code's transcripts…" while a scan goes on.
 - **Empty states:** no `projects` folder: "No Claude Code transcripts on this PC (looked in …)". A folder with nothing in the period: "No Claude Code use in the last 7 days."
 
@@ -79,7 +79,7 @@ Everything else is **Your own sessions**. Each message is in exactly one of the 
 
 Migration `0043_claude_usage.sql`. The shared brief reserved `0030` for this PR, but master already has `0030_delivery.sql` to `0042_audit.sql`, and sqlx refuses two migrations with one number, so this phase takes the next free one.
 
-- `claude_transcript_files(path PRIMARY KEY, size, mtime_ms, offset, scanned_at)`.
+- `claude_transcript_files(path PRIMARY KEY, size, mtime_ms, offset, head_hash, scanned_at)`.
 - `claude_messages(message_id, request_id, ts, session_id, cwd, model, input_tokens, cache_creation_tokens, cache_read_tokens, output_tokens, dots, PRIMARY KEY (message_id, request_id))`, index on `ts`.
 - Index `runs(session_id)` for the Dots check.
 
