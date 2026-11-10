@@ -115,13 +115,39 @@ pub fn to_graphify(graph: &Graph, commit: Option<&str>) -> Value {
 pub fn write(root: &Path, graph: &Graph, commit: Option<&str>) -> Result<PathBuf, String> {
     let dir = root.join("graphify-out");
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
+    // The folder must be the project's own: a link (a symlink or a Windows junction) could
+    // send the export anywhere on the disk.
+    let linked = std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink())
+        || match (dir.canonicalize(), root.canonicalize()) {
+            (Ok(d), Ok(r)) => d != r.join("graphify-out"),
+            _ => true,
+        };
+    if linked {
+        return Err(format!(
+            "{} is a link to another folder; Dots does not export through it",
+            dir.display()
+        ));
+    }
     let target = dir.join("graph.json");
+    if std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(format!(
+            "{} is a link; Dots does not write through it",
+            target.display()
+        ));
+    }
     if target.is_file() && !written_by_dots(&target) {
-        let secs = std::time::SystemTime::now()
+        let millis = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
+            .map(|d| d.as_millis())
             .unwrap_or(0);
-        let backup = dir.join(format!("graph.json.bak-{secs}"));
+        // Unique: the time in milliseconds, then a counter.
+        let backup = (0u32..)
+            .map(|n| match n {
+                0 => dir.join(format!("graph.json.bak-{millis}")),
+                n => dir.join(format!("graph.json.bak-{millis}-{n}")),
+            })
+            .find(|p| std::fs::symlink_metadata(p).is_err())
+            .expect("a free name");
         std::fs::rename(&target, &backup)
             .map_err(|e| format!("cannot keep the existing graph.json: {e}"))?;
     }
@@ -137,9 +163,9 @@ pub fn write(root: &Path, graph: &Graph, commit: Option<&str>) -> Result<PathBuf
 /// `dots`. Only its head is read.
 fn written_by_dots(path: &Path) -> bool {
     use std::io::Read;
-    let mut head = String::new();
-    let _ = std::fs::File::open(path).and_then(|f| f.take(4096).read_to_string(&mut head));
-    head.contains("\"generator\": \"dots\"")
+    let mut head = Vec::new();
+    let _ = std::fs::File::open(path).and_then(|f| f.take(4096).read_to_end(&mut head));
+    String::from_utf8_lossy(&head).contains("\"generator\": \"dots\"")
 }
 
 #[cfg(test)]
@@ -211,5 +237,54 @@ mod tests {
         write(tmp.path(), &graph(), None).unwrap();
         let count = std::fs::read_dir(&dir).unwrap().count();
         assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn backups_never_overwrite_each_other_and_odd_bytes_are_read() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("graphify-out");
+        std::fs::create_dir_all(&dir).unwrap();
+        for _ in 0..3 {
+            // Not UTF-8, and not Dots': kept aside each time, under its own name.
+            std::fs::write(dir.join("graph.json"), b"{\"nodes\": [\xff\xfe]}").unwrap();
+            write(tmp.path(), &graph(), None).unwrap();
+        }
+        let backups = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("graph.json.bak-")
+            })
+            .count();
+        assert_eq!(backups, 3);
+    }
+
+    #[test]
+    fn a_linked_graphify_out_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let elsewhere = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let root = tmp.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let link = root.join("graphify-out");
+        #[cfg(windows)]
+        {
+            let ok = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(&elsewhere)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "a junction can be made");
+        }
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&elsewhere, &link).unwrap();
+        let err = write(&root, &graph(), None).unwrap_err();
+        assert!(err.contains("link"), "{err}");
+        assert!(std::fs::read_dir(&elsewhere).unwrap().next().is_none());
     }
 }

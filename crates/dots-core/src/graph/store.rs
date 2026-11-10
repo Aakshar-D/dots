@@ -290,6 +290,20 @@ pub fn write_build(
 
 /// The stored graph, its maps and meta.
 pub fn load(conn: &Connection) -> rusqlite::Result<Option<(Graph, Maps, Meta)>> {
+    // One read transaction: a build that commits meanwhile is seen whole or not at all.
+    let tx = conn.unchecked_transaction()?;
+    let loaded = load_in(&tx)?;
+    tx.finish()?;
+    Ok(loaded)
+}
+
+/// The prompt's map of the last good build, read alone.
+pub fn read_prompt_map(conn: &Connection) -> Option<String> {
+    read_meta(conn)?.built_at?;
+    get(conn, "map_prompt").ok().flatten()
+}
+
+fn load_in(conn: &Connection) -> rusqlite::Result<Option<(Graph, Maps, Meta)>> {
     let Some(meta) = read_meta(conn) else {
         return Ok(None);
     };
