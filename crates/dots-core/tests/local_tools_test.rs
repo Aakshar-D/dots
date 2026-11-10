@@ -159,10 +159,11 @@ fn prepare_validates_calls_before_the_policy() {
     // with apps adds, `start_workflow`, which a chat run that may start a workflow gets, and
     // `start_member`, `report_outcome` and `send_back`, which a run of an open agent step gets
     // (`team::schemas`), and `propose_instructions`, which a run of a chat the person started
-    // gets (`instructions::schema`).
+    // gets (`instructions::schema`), and `graph`, which a run whose dot uses the project graph
+    // gets (`graph::schema`).
     assert_eq!(
         tools::schemas().as_array().unwrap().len(),
-        tools::TOOLS.len() - 15
+        tools::TOOLS.len() - 16
     );
 }
 
@@ -239,6 +240,7 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
             "propose_instructions",
             json!({"instructions": "Do it twice.", "reason": "Twice"}),
         ),
+        ("graph", json!({"action": "node", "node": "Runner", "depth": 2})),
     ];
     let mut tools_seen = std::collections::BTreeSet::new();
     for (name, args) in &calls {
