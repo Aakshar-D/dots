@@ -23,8 +23,14 @@ pub struct ContextEvent {
     pub fill_before: u64,
     /// `None` for a fresh start until its first turn reports a fill.
     pub fill_after: Option<u64>,
-    /// The session a fresh start left: the link from the new session to the old one.
+    /// The session compacted, or the one a fresh start left: the link from the new session
+    /// to the old one.
     pub from_session: Option<String>,
+    /// What Dots' extra CLI call (the compaction or the hand-off note) used, in and out;
+    /// `None` for the CLI's own compaction and for a call that reported nothing.
+    pub tokens: Option<u64>,
+    /// False for a compaction that failed or left the session over the compact threshold.
+    pub ok: bool,
     pub at: String,
 }
 
@@ -39,6 +45,8 @@ pub struct NewContextEvent<'a> {
     pub fill_before: u64,
     pub fill_after: Option<u64>,
     pub from_session: Option<&'a str>,
+    pub tokens: Option<u64>,
+    pub ok: bool,
 }
 
 /// The newest fill of a session or topic: the run's fill, the window it reported and its
@@ -73,6 +81,8 @@ fn event_from_row(row: &SqliteRow) -> Result<ContextEvent> {
         fill_before: u(row.try_get("fill_before")?),
         fill_after: row.try_get::<Option<i64>, _>("fill_after")?.map(u),
         from_session: row.try_get("from_session")?,
+        tokens: row.try_get::<Option<i64>, _>("tokens")?.map(u),
+        ok: row.try_get::<i64, _>("ok")? != 0,
         at: row.try_get("at")?,
     })
 }
@@ -207,7 +217,7 @@ impl Store {
         let id = new_id();
         sqlx::query(
             "INSERT INTO context_events (id, run_id, dot_id, root_run_id, kind, trigger, \
-             fill_before, fill_after, from_session, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             fill_before, fill_after, from_session, tokens, ok, at)              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(new.run_id)
@@ -218,6 +228,8 @@ impl Store {
         .bind(new.fill_before as i64)
         .bind(new.fill_after.map(|n| n as i64))
         .bind(new.from_session)
+        .bind(new.tokens.map(|n| n as i64))
+        .bind(new.ok as i64)
         .bind(now())
         .execute(&self.pool)
         .await?;
@@ -249,6 +261,19 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Whether Dots holds back its own compaction of `session_id` (context rules spec section
+    /// 5): its last compaction that failed or left the session over the threshold was at most
+    /// `BACKOFF_TURNS` turns ago. The turn asking counts, since it is queued.
+    pub async fn compact_backoff(&self, session_id: &str) -> Result<bool> {
+        let turns: Option<i64> = sqlx::query_scalar(
+            "SELECT (SELECT COUNT(*) FROM runs r WHERE r.session_id = ?1              AND r.queued_at > b.queued_at) FROM context_events e              JOIN runs b ON b.id = e.run_id              WHERE e.from_session = ?1 AND e.kind = 'compact' AND e.ok = 0              ORDER BY e.at DESC, e.id DESC LIMIT 1",
+        )
+        .bind(session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(turns.is_some_and(|n| n <= crate::context_rules::BACKOFF_TURNS))
     }
 
     /// The run's compactions and fresh starts, oldest first.

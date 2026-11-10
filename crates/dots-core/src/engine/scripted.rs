@@ -5,7 +5,9 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use super::{Compaction, Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext};
+use super::{
+    Compaction, Engine, EngineEvent, Handoff, PermissionGate, PermissionOutcome, RunContext,
+};
 use crate::model::ApplyState;
 use crate::Result;
 
@@ -47,6 +49,10 @@ pub struct ScriptedEngine {
     /// What the runner asked, in order: `compact <session>`, `handoff <session>`,
     /// `start <session or ->`, each start followed by its prompt (`prompt <text>`).
     log: Arc<std::sync::Mutex<Vec<String>>>,
+    /// What a hand-off reports it used (`passes_using`).
+    pass_usage: super::PassUsage,
+    /// Each extra call waits this long first (`passes_taking`).
+    pass_delay: Duration,
 }
 
 impl ScriptedEngine {
@@ -58,6 +64,8 @@ impl ScriptedEngine {
             compaction: None,
             summary: None,
             log: Arc::default(),
+            pass_usage: super::PassUsage::default(),
+            pass_delay: Duration::ZERO,
         }
     }
 
@@ -73,6 +81,29 @@ impl ScriptedEngine {
         self
     }
 
+    /// Makes a hand-off report `usage` (a compaction reports its own, in `compacting`).
+    pub fn passes_using(mut self, usage: super::PassUsage) -> Self {
+        self.pass_usage = usage;
+        self
+    }
+
+    /// Makes each extra call wait `delay` first, or until the run is cancelled.
+    pub fn passes_taking(mut self, delay: Duration) -> Self {
+        self.pass_delay = delay;
+        self
+    }
+
+    /// Waits `pass_delay`; an error when the run is cancelled meanwhile.
+    async fn pass_wait(&self, ctx: &RunContext) -> Result<()> {
+        if self.pass_delay.is_zero() {
+            return Ok(());
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(self.pass_delay) => Ok(()),
+            _ = ctx.cancel.cancelled() => Err(crate::Error::Other("cancelled".into())),
+        }
+    }
+
     /// What the runner asked of this engine so far (`log`).
     pub fn log(&self) -> Vec<String> {
         self.log.lock().expect("log lock").clone()
@@ -86,6 +117,8 @@ impl ScriptedEngine {
             compaction: None,
             summary: None,
             log: Arc::default(),
+            pass_usage: super::PassUsage::default(),
+            pass_delay: Duration::ZERO,
         }
     }
 
@@ -219,6 +252,7 @@ impl Engine for ScriptedEngine {
             "compact {}",
             ctx.session_id.as_deref().unwrap_or("-")
         ));
+        self.pass_wait(ctx).await?;
         match &self.compaction {
             None => Ok(None),
             Some(Ok(c)) => Ok(Some(*c)),
@@ -226,14 +260,18 @@ impl Engine for ScriptedEngine {
         }
     }
 
-    async fn handoff_summary(&self, ctx: &RunContext) -> Result<Option<String>> {
+    async fn handoff_summary(&self, ctx: &RunContext) -> Result<Option<Handoff>> {
         self.log.lock().expect("log lock").push(format!(
             "handoff {}",
             ctx.session_id.as_deref().unwrap_or("-")
         ));
+        self.pass_wait(ctx).await?;
         match &self.summary {
             None => Ok(None),
-            Some(Ok(s)) => Ok(Some(s.clone())),
+            Some(Ok(s)) => Ok(Some(Handoff {
+                summary: s.clone(),
+                usage: self.pass_usage,
+            })),
             Some(Err(e)) => Err(crate::Error::Other(e.clone())),
         }
     }

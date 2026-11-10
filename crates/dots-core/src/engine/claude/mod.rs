@@ -124,8 +124,13 @@ impl ClaudeEngine {
 
     /// One more call of the CLI in the run's session before the run (context rules spec
     /// section 5): the run's own arguments with `--resume ctx.session_id`, `input` on stdin.
-    /// Its output, parsed. Ends on the run's cancel or after `PASS_LIMIT`.
-    async fn pass(&self, ctx: &RunContext, input: &str) -> Result<Vec<EngineEvent>> {
+    /// Its output, parsed, and what the call used. Ends on the run's cancel or after
+    /// `PASS_LIMIT`.
+    async fn pass(
+        &self,
+        ctx: &RunContext,
+        input: &str,
+    ) -> Result<(Vec<EngineEvent>, crate::engine::PassUsage)> {
         if ctx.session_id.is_none() {
             return Err(Error::Invalid("the run has no session".into()));
         }
@@ -162,10 +167,14 @@ impl ClaudeEngine {
         let _ = tokio::fs::remove_file(&mcp_path).await;
         let _ = tokio::fs::remove_file(&settings_path).await;
         let out = out?;
-        let events: Vec<EngineEvent> = String::from_utf8_lossy(&out.stdout)
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let mut parser = parse::LineParser::default();
+        let events: Vec<EngineEvent> = stdout.lines().flat_map(|l| parser.parse(l)).collect();
+        let usage = stdout
             .lines()
-            .flat_map(parse::parse_line)
-            .collect();
+            .rev()
+            .find_map(parse::pass_usage)
+            .unwrap_or_default();
         if !out.status.success() && !events.iter().any(is_end) {
             let tail = crate::vault::redact::global()
                 .scrub(String::from_utf8_lossy(&out.stderr).trim())
@@ -188,7 +197,7 @@ impl ClaudeEngine {
                 }
             )));
         }
-        Ok(events)
+        Ok((events, usage))
     }
 }
 
@@ -204,12 +213,16 @@ impl Engine for ClaudeEngine {
     /// `/compact` in the session (context rules spec section 2: it works headless and writes a
     /// `compact_boundary`).
     async fn compact(&self, ctx: &RunContext) -> Result<Option<crate::engine::Compaction>> {
-        let events = self.pass(ctx, "/compact").await?;
+        let (events, usage) = self.pass(ctx, "/compact").await?;
         if let Some((before, after)) = events.iter().find_map(|e| match e {
             EngineEvent::Compacted { before, after, .. } => Some((*before, *after)),
             _ => None,
         }) {
-            return Ok(Some(crate::engine::Compaction { before, after }));
+            return Ok(Some(crate::engine::Compaction {
+                before,
+                after,
+                usage,
+            }));
         }
         match events.iter().find_map(|e| match e {
             EngineEvent::Failed { error } => Some(error.clone()),
@@ -221,13 +234,18 @@ impl Engine for ClaudeEngine {
     }
 
     /// The session's answer to `ctx.prompt`, in one model turn.
-    async fn handoff_summary(&self, ctx: &RunContext) -> Result<Option<String>> {
+    async fn handoff_summary(&self, ctx: &RunContext) -> Result<Option<crate::engine::Handoff>> {
         let mut one = ctx.clone();
         one.dot.spec.max_turns = 1;
-        let events = self.pass(&one, &ctx.prompt).await?;
+        let (events, usage) = self.pass(&one, &ctx.prompt).await?;
         for e in &events {
             match e {
-                EngineEvent::Finished { summary } => return Ok(Some(summary.clone())),
+                EngineEvent::Finished { summary } => {
+                    return Ok(Some(crate::engine::Handoff {
+                        summary: summary.clone(),
+                        usage,
+                    }))
+                }
                 EngineEvent::Failed { error } => return Err(Error::Other(error.clone())),
                 _ => {}
             }
@@ -282,6 +300,7 @@ impl Engine for ClaudeEngine {
             let run_id = ctx.run_id.clone();
             let mut stdout_task = tokio::spawn(async move {
                 let mut reader = BufReader::new(stdout);
+                let mut parser = parse::LineParser::default();
                 let mut buf: Vec<u8> = Vec::new();
                 loop {
                     buf.clear();
@@ -291,7 +310,7 @@ impl Engine for ClaudeEngine {
                     }
                     let text = String::from_utf8_lossy(&buf);
                     let line = text.trim_end_matches(['\r', '\n']);
-                    for ev in parse::parse_line(line) {
+                    for ev in parser.parse(line) {
                         // A plugin the CLI could not load (`system/init`'s `plugin_errors`).
                         if let EngineEvent::Notice { text } = &ev {
                             tracing::warn!(run = %run_id, "claude: {text}");

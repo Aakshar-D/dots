@@ -12,7 +12,7 @@ use std::time::Duration;
 use common::{spec, temp_store, wait_status};
 use dots_core::context_rules::{ContextRules, EventKind, Request, SEED_HEADING};
 use dots_core::engine::scripted::{ScriptedEngine, Step};
-use dots_core::engine::{Compaction, Engine, EngineEvent};
+use dots_core::engine::{Compaction, Engine, EngineEvent, PassUsage};
 use dots_core::events::new_bus;
 use dots_core::model::{
     Dot, EngineKind, MemorySource, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode,
@@ -207,6 +207,7 @@ async fn a_full_background_session_starts_fresh_with_a_hand_off() {
 #[tokio::test]
 async fn a_fairly_full_session_is_compacted_before_the_turn() {
     let engine = ScriptedEngine::new(turn_steps("S1", 40_000)).compacting(Ok(Compaction {
+        usage: PassUsage::default(),
         before: 125_000,
         after: 30_000,
     }));
@@ -231,6 +232,7 @@ async fn a_fairly_full_session_is_compacted_before_the_turn() {
 async fn a_chat_over_the_clear_threshold_is_compacted_not_started_fresh() {
     let engine = ScriptedEngine::new(turn_steps("S1", 40_000))
         .compacting(Ok(Compaction {
+            usage: PassUsage::default(),
             before: 170_000,
             after: 30_000,
         }))
@@ -266,6 +268,7 @@ async fn a_chat_starts_fresh_when_the_person_asked_and_the_request_is_spent() {
 async fn a_resume_is_left_alone() {
     let engine = ScriptedEngine::new(turn_steps("S1", 40_000))
         .compacting(Ok(Compaction {
+            usage: PassUsage::default(),
             before: 190_000,
             after: 30_000,
         }))
@@ -325,6 +328,109 @@ async fn a_failed_compaction_is_a_notice_and_the_turn_goes_ahead() {
             "Compacting the conversation failed: claude exited with code 1; it goes on as it was."
         ]
     );
+    // Recorded as a compaction that did not help.
+    let rows = e.store.list_context_events(&run.id).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert!(!rows[0].ok);
+    assert_eq!((rows[0].fill_before, rows[0].fill_after), (130_000, None));
+}
+
+#[tokio::test]
+async fn a_failed_hand_off_keeps_the_session_and_compacts_it_instead() {
+    let engine = ScriptedEngine::new(turn_steps("S1", 30_000))
+        .summarizing(Err("timeout".into()))
+        .compacting(Ok(Compaction {
+            usage: PassUsage::default(),
+            before: 180_000,
+            after: 25_000,
+        }));
+    let e = env(engine).await;
+    let dot = e.dot().await;
+    let first = e.earlier(&dot, 180_000).await;
+    let run = e.next(&first, TriggerKind::FollowUp).await;
+    assert_eq!(e.asked(), vec!["handoff S1", "compact S1", "start S1"]);
+    assert!(!e.prompt().contains(SEED_HEADING));
+    assert_eq!(run.session_id.as_deref(), Some("S1"));
+    let rows = e.store.list_context_events(&run.id).await.unwrap();
+    assert_eq!(
+        rows.iter().map(|r| r.kind).collect::<Vec<_>>(),
+        vec![EventKind::Compact]
+    );
+}
+
+#[tokio::test]
+async fn a_fresh_start_the_person_asked_for_goes_ahead_without_a_note() {
+    let engine = ScriptedEngine::new(turn_steps("S2", 20_000)).summarizing(Err("timeout".into()));
+    let e = env(engine).await;
+    let dot = e.dot().await;
+    let first = e.earlier(&dot, 30_000).await;
+    e.store
+        .set_thread_request(&first.id, Some(Request::Fresh))
+        .await
+        .unwrap();
+    e.next(&first, TriggerKind::Chat).await;
+    assert_eq!(e.asked(), vec!["handoff S1", "start -"]);
+    assert!(e.prompt().contains("(No hand-off note could be written.)"));
+}
+
+#[tokio::test]
+async fn what_the_extra_calls_used_counts_to_the_run_and_its_record() {
+    let used = PassUsage {
+        tokens_in: 9_000,
+        tokens_out: 1_000,
+        cache_read: 8_000,
+        cost_usd: Some(0.02),
+    };
+    let engine = ScriptedEngine::new(turn_steps("S2", 20_000))
+        .summarizing(Ok("note".into()))
+        .passes_using(used);
+    let e = env(engine).await;
+    let dot = e.dot().await;
+    let first = e.earlier(&dot, 170_000).await;
+    let run = e.next(&first, TriggerKind::FollowUp).await;
+    assert_eq!((run.tokens_in, run.tokens_out), (9_000, 1_000));
+    assert_eq!(run.tokens_cache_read, 8_000);
+    assert_eq!(run.cost_usd, Some(0.02));
+    let rows = e.store.list_context_events(&run.id).await.unwrap();
+    assert_eq!(rows[0].tokens, Some(10_000));
+}
+
+#[tokio::test]
+async fn no_extra_call_is_made_past_a_spending_cap() {
+    let engine = ScriptedEngine::new(turn_steps("S1", 20_000)).compacting(Ok(Compaction {
+        usage: PassUsage::default(),
+        before: 130_000,
+        after: 20_000,
+    }));
+    let e = env(engine).await;
+    let mut dot = e.dot().await;
+    dot.spec.spend_cap.daily_tokens = Some(1_000);
+    let dot = e.store.update_dot(&dot.id, &dot.spec).await.unwrap();
+    let first = e.earlier(&dot, 130_000).await;
+    e.store
+        .set_run_times(
+            &first.id,
+            &dots_core::util::now(),
+            Some(&dots_core::util::now()),
+        )
+        .await
+        .unwrap();
+    e.store
+        .add_usage(&first.id, 5_000, 0, 0, None)
+        .await
+        .unwrap();
+    // Released past the cap, as Run once anyway does, so the turn itself may start.
+    let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);
+    new.payload = Some(json!({"message": "Go on."}));
+    new.parent_run_id = Some(first.id.clone());
+    new.root_run_id = Some(first.id.clone());
+    new.session_id = Some("S1".into());
+    new.workspace_path = first.workspace_path.clone();
+    let run = e.store.create_run(&new).await.unwrap();
+    e.store.set_cap_released(&run.id).await.unwrap();
+    e.runner.nudge();
+    let run = wait_status(&e.store, &run.id, RunStatus::Succeeded, 10).await;
+    assert_eq!(e.asked(), vec!["start S1"]);
     assert!(e
         .store
         .list_context_events(&run.id)
@@ -334,14 +440,116 @@ async fn a_failed_compaction_is_a_notice_and_the_turn_goes_ahead() {
 }
 
 #[tokio::test]
-async fn a_failed_hand_off_starts_fresh_without_a_note() {
-    let engine = ScriptedEngine::new(turn_steps("S2", 20_000)).summarizing(Err("timeout".into()));
+async fn a_cancel_during_the_compaction_cancels_the_run_and_starts_nothing() {
+    let engine = ScriptedEngine::new(turn_steps("S1", 20_000))
+        .compacting(Ok(Compaction {
+            usage: PassUsage::default(),
+            before: 130_000,
+            after: 20_000,
+        }))
+        .passes_taking(Duration::from_secs(5));
     let e = env(engine).await;
     let dot = e.dot().await;
-    let first = e.earlier(&dot, 180_000).await;
-    e.next(&first, TriggerKind::FollowUp).await;
-    assert_eq!(e.asked(), vec!["handoff S1", "start -"]);
-    assert!(e.prompt().contains("(No hand-off note could be written.)"));
+    let first = e.earlier(&dot, 130_000).await;
+    let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);
+    new.parent_run_id = Some(first.id.clone());
+    new.root_run_id = Some(first.id.clone());
+    new.session_id = Some("S1".into());
+    new.workspace_path = first.workspace_path.clone();
+    let run = e.runner.enqueue(new).await.unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Running, 5).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    e.runner.cancel(&run.id).await.unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Cancelled, 5).await;
+    assert_eq!(e.asked(), vec!["compact S1"]);
+    assert!(!e.kinds(&run.id).await.contains(&"notice".to_string()));
+}
+
+#[tokio::test]
+async fn the_compaction_counts_against_the_runs_time_limit() {
+    let engine = ScriptedEngine::new(turn_steps("S1", 20_000))
+        .compacting(Ok(Compaction {
+            usage: PassUsage::default(),
+            before: 130_000,
+            after: 20_000,
+        }))
+        .passes_taking(Duration::from_secs(30));
+    let e = env(engine).await;
+    let mut dot = e.dot().await;
+    dot.spec.timeout_secs = 1;
+    let dot = e.store.update_dot(&dot.id, &dot.spec).await.unwrap();
+    let first = e.earlier(&dot, 130_000).await;
+    let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);
+    new.parent_run_id = Some(first.id.clone());
+    new.root_run_id = Some(first.id.clone());
+    new.session_id = Some("S1".into());
+    new.workspace_path = first.workspace_path.clone();
+    let started = std::time::Instant::now();
+    let run = e.runner.enqueue(new).await.unwrap();
+    let run = wait_status(&e.store, &run.id, RunStatus::Failed, 10).await;
+    assert!(
+        started.elapsed() < Duration::from_secs(8),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(run.error.unwrap_or_default().contains("timeout"));
+}
+
+#[tokio::test]
+async fn compaction_is_held_back_after_one_that_did_not_help() {
+    // 130k of 200k, compacted to 125k: still over 60%.
+    let engine = ScriptedEngine::new(turn_steps("S1", 130_000)).compacting(Ok(Compaction {
+        usage: PassUsage::default(),
+        before: 130_000,
+        after: 125_000,
+    }));
+    let e = env(engine).await;
+    let dot = e.dot().await;
+    let first = e.earlier(&dot, 130_000).await;
+    let one = e.next(&first, TriggerKind::FollowUp).await;
+    assert!(!e.store.list_context_events(&one.id).await.unwrap()[0].ok);
+    let two = e.next(&one, TriggerKind::FollowUp).await;
+    let three = e.next(&two, TriggerKind::FollowUp).await;
+    let four = e.next(&three, TriggerKind::FollowUp).await;
+    e.next(&four, TriggerKind::FollowUp).await;
+    assert_eq!(
+        e.asked(),
+        vec![
+            "compact S1",
+            "start S1",
+            "start S1",
+            "start S1",
+            "start S1",
+            "compact S1",
+            "start S1"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_request_is_kept_until_its_step_is_done() {
+    let engine = ScriptedEngine::new(turn_steps("S1", 20_000));
+    let e = env(engine).await;
+    let dot = e.dot().await;
+    let first = e.earlier(&dot, 20_000).await;
+    e.store
+        .set_thread_request(&first.id, Some(Request::Compact))
+        .await
+        .unwrap();
+    // A turn whose folder names a branch that is not one of Dots' worktrees fails before its
+    // step.
+    let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
+    new.parent_run_id = Some(first.id.clone());
+    new.root_run_id = Some(first.id.clone());
+    new.session_id = Some("S1".into());
+    new.workspace_path = Some(e.dir.path().to_string_lossy().to_string());
+    new.branch = Some("dots/not-ours".into());
+    let run = e.runner.enqueue(new).await.unwrap();
+    wait_status(&e.store, &run.id, RunStatus::Failed, 10).await;
+    assert_eq!(
+        e.store.thread_state(&first.id).await.unwrap().request,
+        Some(Request::Compact)
+    );
 }
 
 #[tokio::test]

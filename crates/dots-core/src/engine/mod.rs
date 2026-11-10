@@ -145,11 +145,29 @@ pub struct RunContext {
     pub autocompact_pct: Option<u8>,
 }
 
-/// What a compaction did (context rules spec section 5): the fill before and after.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// What one extra call of an engine before a run used (context rules spec section 5).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PassUsage {
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cache_read: u64,
+    pub cost_usd: Option<f64>,
+}
+
+/// What a compaction did (context rules spec section 5): the fill before and after, and what
+/// the call used.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Compaction {
     pub before: u64,
     pub after: u64,
+    pub usage: PassUsage,
+}
+
+/// A session's hand-off note, and what asking for it used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Handoff {
+    pub summary: String,
+    pub usage: PassUsage,
 }
 
 #[async_trait]
@@ -179,7 +197,7 @@ pub trait Engine: Send + Sync {
 
     /// Asks `ctx.session_id` for a hand-off summary with `ctx.prompt` (context rules spec
     /// section 5). `Ok(None)`: this engine cannot.
-    async fn handoff_summary(&self, _ctx: &RunContext) -> Result<Option<String>> {
+    async fn handoff_summary(&self, _ctx: &RunContext) -> Result<Option<Handoff>> {
         Ok(None)
     }
 }
