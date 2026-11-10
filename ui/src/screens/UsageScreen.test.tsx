@@ -1,7 +1,7 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import type { ClaudeUsage, LimitsState, UsageSummary } from "@/api/types";
+import type { ClaudeProject, ClaudeUsage, LimitsState, UsageSummary } from "@/api/types";
 import { localTime } from "@/lib/format";
 import { CLAUDE_REFRESH_MS } from "@/screens/UsageScreen";
 import { backend } from "@/test/backend";
@@ -122,6 +122,51 @@ describe("all Claude use on the Usage page", () => {
     // The folder's full path on hover.
     expect(within(table).getByText("dots")).toHaveAttribute("title", "C:/Users/u/code/dots");
     expect(within(all).getByText(/^Read .* from C:\/Users\/u\/\.claude\/projects$/)).toBeVisible();
+  });
+
+  it("lets the keyboard reach each table's scroll box, named for its table", async () => {
+    const { user } = await openAll();
+    await screen.findByRole("table", { name: "Claude use by project in the last 5 hours" });
+    for (const name of ["Dots' runs in the last 5 hours", "Claude use by project in the last 5 hours"]) {
+      const box = screen.getByRole("region", { name });
+      expect(box).toHaveAttribute("tabindex", "0");
+      expect(within(box).getByRole("table")).toBeVisible();
+    }
+    const box = screen.getByRole("region", { name: "Claude use by project in the last 5 hours" });
+    while (document.activeElement !== box) await user.tab();
+    expect(box).toHaveFocus();
+  });
+
+  it("says one message, one session and one block message in the singular", async () => {
+    const one = { ...week.own, messages: 1, sessions: 1 };
+    await openAll(() => ({
+      ...week,
+      own: one,
+      dots: { ...one, messages: 0, sessions: 0 },
+      block: { ...week.block!, messages: 1 },
+    }));
+    const all = await screen.findByRole("region", { name: "All Claude use" });
+    const totals = await within(all).findAllByRole("definition");
+    expect(totals[0]).toHaveTextContent(/^1 message · 1 session · /);
+    expect(totals[1]).toHaveTextContent(/^0 messages · 0 sessions · /);
+    const top = await screen.findByRole("region", { name: "Claude usage" });
+    await waitFor(() => expect(top).toHaveTextContent("This block: 1 message ·"));
+  });
+
+  it("names two projects in folders of one name by their parents too", async () => {
+    const [first, , last] = week.projects as [ClaudeProject, ClaudeProject, ClaudeProject];
+    await openAll(() => ({
+      ...week,
+      projects: [
+        { ...first, cwd: "C:/Users/u/code/app/src", name: "src" },
+        { ...last, cwd: "C:/Users/u/code/site/src", name: "src" },
+      ],
+    }));
+    const table = await screen.findByRole("table", {
+      name: "Claude use by project in the last 5 hours",
+    });
+    expect(within(table).getByText("app/src")).toHaveAttribute("title", "C:/Users/u/code/app/src");
+    expect(within(table).getByText("site/src")).toBeVisible();
   });
 
   it("follows the period switch", async () => {

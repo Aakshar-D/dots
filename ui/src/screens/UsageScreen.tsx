@@ -12,7 +12,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { localDateTime, localTime, relativeTime } from "@/lib/format";
 import { triggerLabel } from "@/lib/home-topics";
 import { keys } from "@/lib/query";
-import { formatCost, formatDuration, formatTokens, pct } from "@/lib/usage-format";
+import {
+  count,
+  formatCost,
+  formatDuration,
+  formatTokens,
+  pct,
+  projectNames,
+} from "@/lib/usage-format";
 
 const PERIODS: { value: UsagePeriod; tab: string; span: string }[] = [
   { value: "five_hours", tab: "5 hours", span: "5 hours" },
@@ -45,7 +52,7 @@ function BlockLine() {
   if (!block) return null;
   return (
     <span className="text-sm text-muted-foreground">
-      This block: {block.messages} messages · {formatTokens(block.tokens)} tokens since{" "}
+      This block: {count(block.messages, "message")} · {formatTokens(block.tokens)} tokens since{" "}
       {localTime(block.started_at)}
     </span>
   );
@@ -63,7 +70,7 @@ function Limits() {
       <Window label="weekly" reading={limits.weekly} share={limits.shares.weekly} />
       {held > 0 && (
         <Link to="/inbox" className="text-sm underline underline-offset-4">
-          Holding {held} runs
+          Holding {count(held, "run")}
         </Link>
       )}
     </section>
@@ -164,10 +171,17 @@ function UsageTable(props: { period: UsagePeriod; span: string }) {
   if (summary.data.rows.length === 0) {
     return <p className="text-muted-foreground">No runs in the last {props.span}.</p>;
   }
+  const caption = `Dots' runs in the last ${props.span}`;
   return (
-    <div className="max-w-full overflow-x-auto">
+    // A box that may scroll sideways is a named stop for the keyboard (axe scrollable-region).
+    <div
+      className="max-w-full overflow-x-auto"
+      tabIndex={0}
+      role="region"
+      aria-label={caption}
+    >
       <table className="w-full text-left text-sm">
-        <caption className="sr-only">Dots' runs in the last {props.span}</caption>
+        <caption className="sr-only">{caption}</caption>
         <thead className="text-xs text-muted-foreground">
           <tr>
             <th scope="col" className="pb-1 pr-4 font-medium">Dot</th>
@@ -212,7 +226,8 @@ function Total(props: { label: string; totals: ClaudeTotals }) {
     <div className="flex flex-col">
       <dt className="text-xs text-muted-foreground">{props.label}</dt>
       <dd className="tabular-nums">
-        {`${t.messages} messages · ${t.sessions} sessions · ${formatTokens(tokens(t))} tokens · ` +
+        {`${count(t.messages, "message")} · ${count(t.sessions, "session")} · ` +
+          `${formatTokens(tokens(t))} tokens · ` +
           `cache reads ${formatTokens(t.cache_read_tokens)}`}
       </dd>
     </div>
@@ -260,6 +275,7 @@ function AllClaudeBody(props: { period: UsagePeriod; span: string }) {
       </p>
     );
   }
+  const names = projectNames(data.projects);
   return (
     <>
       <dl className="flex flex-col gap-1">
@@ -270,7 +286,12 @@ function AllClaudeBody(props: { period: UsagePeriod; span: string }) {
       {data.projects.length === 0 ? (
         <p className="text-muted-foreground">No Claude Code use in the last {props.span}.</p>
       ) : (
-        <div className="max-w-full overflow-x-auto">
+        <div
+          className="max-w-full overflow-x-auto"
+          tabIndex={0}
+          role="region"
+          aria-label={`Claude use by project in the last ${props.span}`}
+        >
           <table className="w-full text-left text-sm">
             <caption className="sr-only">Claude use by project in the last {props.span}</caption>
             <thead className="text-xs text-muted-foreground">
@@ -283,10 +304,10 @@ function AllClaudeBody(props: { period: UsagePeriod; span: string }) {
               </tr>
             </thead>
             <tbody>
-              {data.projects.map((p) => (
+              {data.projects.map((p, i) => (
                 <tr key={p.cwd ?? ""} className="border-t">
                   <td className="py-1.5 pr-4">
-                    <span title={p.cwd ?? "Every dot's runs"}>{p.name}</span>
+                    <span title={p.cwd ?? "Every dot's runs"}>{names[i]}</span>
                   </td>
                   <td className="py-1.5 pr-4 tabular-nums">{p.totals.messages}</td>
                   <td className="py-1.5 pr-4 tabular-nums">{p.totals.sessions}</td>
