@@ -116,7 +116,9 @@ Dots keeps a code graph of this project. Use the tool `graph` (search, node, cal
 <the map>
 ```
 
-When the map is over 6,000 bytes the section says to call `graph` with `map` instead. When there is no graph yet the section is one line: the graph is being built and the tool reports progress. Follow-up runs of a session get nothing new: the session already has it.
+The map is never over 6,000 bytes: a longer one is cut at a line, and its last line says to call `graph` with `map` for the longer one (12,000 bytes). When there is no graph yet the section is left out (builder's call: a prompt that changes from one run to the next for a build in flight helps nobody); the tool is still offered and answers with the build's progress. Follow-up runs of a session get nothing new: the session already has it.
+
+A policy that denies `Graph` outright leaves the tool and the section out, as for `Workflow` and `Instructions`.
 
 ## 10. The Graph screen
 
