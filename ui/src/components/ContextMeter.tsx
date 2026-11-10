@@ -229,13 +229,26 @@ const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one :
 
 /// A thread's context on the run page (context rules spec sections 3 and 7): the meter of its
 /// newest run with a fill, each compaction and fresh start, and the dot's totals.
-export function RunContextSection(props: { runs: Run[] }) {
-  const reports = useQueries({
-    queries: props.runs.map((run) => ({
+function useRunContextReports(runs: Run[]) {
+  return useQueries({
+    queries: runs.map((run) => ({
       queryKey: keys.runContext(run.id),
       queryFn: () => commands.runContextReport(run.id),
     })),
   });
+}
+
+/// The tokens (in and out) the runs' compactions and hand-off notes used: Dots adds them to
+/// the run's own tokens (context rules spec section 5).
+export function useExtraCallTokens(runs: Run[]): number {
+  return useRunContextReports(runs).reduce(
+    (n, q) => n + (q.data?.events ?? []).reduce((m, e) => m + (e.tokens ?? 0), 0),
+    0,
+  );
+}
+
+export function RunContextSection(props: { runs: Run[] }) {
+  const reports = useRunContextReports(props.runs);
   const report = reports.find((q) => q.data)?.data;
   const last = [...props.runs].reverse().find((r) => r.context_fill !== null);
   const events = reports.flatMap((q) => q.data?.events ?? []);

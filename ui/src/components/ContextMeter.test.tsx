@@ -188,6 +188,8 @@ describe("the run page's context", () => {
     expect(section).toHaveTextContent("Context 36k / 200k (18%)");
     expect(section).toHaveTextContent(/Compacted 124k → 36k · compaction used 3k tokens · /);
     expect(section).toHaveTextContent("This dot: 4 compactions, 1 fresh start");
+    // The compaction's tokens are inside the run's own, and the line says so.
+    expect(screen.getByText(/includes 3k for compactions and hand-off notes/)).toBeVisible();
   });
 
   it("words a fresh start the person asked for", () => {
@@ -287,8 +289,14 @@ describe("a dot's own context rules in its editor", () => {
     ).toBeVisible();
     await user.click(screen.getByRole("switch", { name: "Use its own context rules" }));
     const clear = screen.getByLabelText("Start fresh at (% of context)");
+    // Out of bounds: the rule shows at once and Save is off, as in Settings.
+    await user.clear(clear);
+    await user.type(clear, "50");
+    expect(screen.getByText(CONTEXT_RULE)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     await user.clear(clear);
     await user.type(clear, "90");
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(backend.callsTo("update_dot")).toHaveLength(1));
     const spec = backend.callsTo("update_dot")[0].spec as { context_rules: ContextRules };
