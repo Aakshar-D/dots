@@ -10,7 +10,7 @@
     },
     "ui": {
       "name": "dots-ui",
-      "version": "0.1.0",
+      "version": "0.4.0",
       "dependencies": {
         "@fontsource-variable/geist": "5.3.0",
         "@tailwindcss/vite": "4.3.3",
@@ -19,6 +19,7 @@
         "@tauri-apps/plugin-dialog": "2.8.2",
         "class-variance-authority": "0.7.1",
         "cn": "0.4.0",
+        "cytoscape": "3.34.4",
         "lucide-react": "1.55.0",
         "radix-ui": "1.8.0",
         "react": "19.3.0",
@@ -534,6 +535,8 @@
     "cssesc": ["cssesc@3.0.0", "", { "bin": { "cssesc": "bin/cssesc" } }, "sha512-/Tb/JcjK111nNScGob5MNtsntNM1aCNUDipB/TkwZFhyDrrE47SOx/18wF2bbjgc3ZzCSKW1T5nt5EbFoAz/Vg=="],
 
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
+
+    "cytoscape": ["cytoscape@3.34.4", "", {}, "sha512-msY99tMY8iWTg+sIPGfSqDcPNOt4xcj+v/K/7qUFaCUxxlqnMkUYLBjRUzn9W5CU/R2hrmtJa5+UtovrEM2ctg=="],
 
     "data-urls": ["data-urls@8.0.0", "", { "dependencies": { "whatwg-mimetype": "^5.0.0", "whatwg-url": "^17.1.2" } }, "sha512-JQUCCK+/CAGbGGx618PlFZMXH81Jtj7t73CHv9dd/zVWvxgGT2zLFRjnKb+Ng46GIwcy+f7f88qd4duqllK+WQ=="],
 
