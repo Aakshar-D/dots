@@ -15,6 +15,7 @@ use dots_core::checkpoint::{
     ChangedFile, ChangesPreview, ChangesState, FileAction, PlannedFile, RunChanges, UndoOutcome,
 };
 use dots_core::claude_agents::{AgentImport, AgentSourceKind, ImportFailure, ScannedAgent};
+use dots_core::claude_usage::{ClaudeBlock, ClaudeProject, ClaudeScan, ClaudeTotals, ClaudeUsage};
 use dots_core::context::Document;
 use dots_core::engine::EngineEvent;
 use dots_core::events::RuntimeEvent;
@@ -773,6 +774,66 @@ fn spend_today() -> dots_core::spend::SpendToday {
             },
         ],
     }
+}
+
+/// All Claude use over a week: the person's two projects and the dots' row, with a block;
+/// then a PC with no Claude Code folder.
+fn claude_usage() -> Vec<ClaudeUsage> {
+    let totals = |messages, sessions, input, created, read, output| ClaudeTotals {
+        messages,
+        sessions,
+        input_tokens: input,
+        cache_creation_tokens: created,
+        cache_read_tokens: read,
+        output_tokens: output,
+    };
+    let own = totals(3_900, 58, 120_000, 2_400_000, 48_000_000, 610_000);
+    let dots = totals(310, 5, 9_000, 400_000, 3_100_000, 52_000);
+    vec![
+        ClaudeUsage {
+            period: UsagePeriod::Week,
+            since: TS.into(),
+            folder: Some("C:/Users/u/.claude/projects".into()),
+            available: true,
+            scanned_at: Some(TS.into()),
+            own: own.clone(),
+            dots: dots.clone(),
+            projects: vec![
+                ClaudeProject {
+                    cwd: Some("C:/Users/u/code/dots".into()),
+                    name: "dots".into(),
+                    totals: totals(3_000, 40, 100_000, 2_000_000, 40_000_000, 500_000),
+                },
+                ClaudeProject {
+                    cwd: None,
+                    name: dots_core::claude_usage::DOTS_ROW.into(),
+                    totals: dots,
+                },
+                ClaudeProject {
+                    cwd: Some("C:/Users/u/code/site".into()),
+                    name: "site".into(),
+                    totals: totals(900, 18, 20_000, 400_000, 8_000_000, 110_000),
+                },
+            ],
+            block: Some(ClaudeBlock {
+                started_at: "2026-10-09T10:10:00.000Z".into(),
+                resets_at: "2026-10-09T15:10:00.000Z".into(),
+                messages: 212,
+                tokens: 1_400_000,
+            }),
+        },
+        ClaudeUsage {
+            period: UsagePeriod::Week,
+            since: TS.into(),
+            folder: Some("C:/Users/u/.claude/projects".into()),
+            available: false,
+            scanned_at: None,
+            own: ClaudeTotals::default(),
+            dots: ClaudeTotals::default(),
+            projects: vec![],
+            block: None,
+        },
+    ]
 }
 
 /// The Usage page's week: a Claude dot and a local one.
@@ -1634,6 +1695,14 @@ pub fn samples() -> Value {
     // Usage and limits (spec sections 5 and 6).
     samples["LimitsState"] = to(limits_states());
     samples["UsageSummary"] = to(usage_summary());
+    // All Claude use (usage tab spec section 7): a week, and a PC with no Claude Code folder.
+    samples["ClaudeUsage"] = to(claude_usage());
+    samples["ClaudeScan"] = to(ClaudeScan {
+        scanned_at: Some(TS.into()),
+        files: 12,
+        bytes: 482_113,
+        more: false,
+    });
     // Hourly usage counts (usage counts spec): the state, on and never turned on, and a report.
     samples["UsageCountsState"] = to(vec![
         UsageCountsState {
