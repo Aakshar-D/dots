@@ -223,8 +223,8 @@ pub fn assign(graph: &mut Graph) {
     }
     // Folders are counted twice: of the source files, and of all (tests and docs too). A name
     // comes from the source files when the community has any.
-    let mut dirs: Vec<(BTreeMap<&str, usize>, BTreeMap<&str, usize>)> =
-        vec![(BTreeMap::new(), BTreeMap::new()); list.len()];
+    type Counts<'a> = BTreeMap<&'a str, usize>;
+    let mut dirs: Vec<(Counts, Counts)> = vec![(BTreeMap::new(), BTreeMap::new()); list.len()];
     for (i, f) in files.iter().enumerate() {
         let c = file_comm[i] as usize;
         list[c].files += 1;
