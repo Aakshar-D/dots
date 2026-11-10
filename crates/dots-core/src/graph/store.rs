@@ -46,6 +46,12 @@ pub struct Meta {
     pub commit: Option<String>,
     /// The last build's error; `None` when it succeeded.
     pub error: Option<String>,
+    /// Files whose parse failed (counted in `skipped` too).
+    #[serde(default)]
+    pub parse_errors: u64,
+    /// The walk stopped at the file cap or its time budget.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// A file as the last build saw it.

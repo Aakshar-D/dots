@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, HashSet};
 use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Instant, UNIX_EPOCH};
+use std::sync::Mutex;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use sha2::{Digest, Sha256};
 
@@ -31,12 +32,23 @@ pub const SKIP_DIRS: &[&str] = &[
     ".venv",
     "venv",
 ];
+/// The walk of a folder stops after this long: a huge folder must not keep a build going.
+pub const WALK_BUDGET: Duration = Duration::from_secs(60);
+/// The parse threads' stack: tree-sitter and the walker run deep on odd files.
+const PARSE_STACK: usize = 32 * 1024 * 1024;
+/// A file the test builds make the parser panic on, to check that a panic is counted.
+#[cfg(test)]
+const PANIC_MARKER: &str = "// dots-graph-test: panic";
 /// A file with a NUL byte in this many first bytes is binary.
 const BINARY_PROBE: usize = 8 * 1024;
 
 /// What a build did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Report {
+    /// Files whose parse failed (the parser panicked); counted in `skipped` too.
+    pub parse_errors: usize,
+    /// The walk stopped at the file cap or its time budget: files past it were not read.
+    pub truncated: bool,
     pub files: usize,
     pub parsed: usize,
     pub deleted: usize,
@@ -51,6 +63,8 @@ pub struct Report {
 pub struct Limits {
     pub max_files: usize,
     pub max_file_bytes: u64,
+    /// The walk of the folder stops after this long.
+    pub walk_budget: Duration,
 }
 
 impl Default for Limits {
@@ -58,6 +72,7 @@ impl Default for Limits {
         Limits {
             max_files: MAX_FILES,
             max_file_bytes: MAX_FILE_BYTES,
+            walk_budget: WALK_BUDGET,
         }
     }
 }
@@ -74,6 +89,8 @@ struct Scan {
     files: Vec<Candidate>,
     markers: Markers,
     skipped: usize,
+    /// The walk stopped at the file cap or its time budget.
+    truncated: bool,
 }
 
 fn rel_path(root: &Path, path: &Path) -> Option<String> {
@@ -122,6 +139,8 @@ fn scan(root: &Path, limits: Limits) -> Scan {
         .parents(true)
         .require_git(false)
         .follow_links(false)
+        // The same order each time, so a capped walk reads the same files.
+        .sort_by_file_name(|a, b| a.cmp(b))
         .filter_entry(|e| {
             let is_dir = e.file_type().is_some_and(|t| t.is_dir());
             !(is_dir && SKIP_DIRS.iter().any(|d| e.file_name() == *d))
@@ -130,7 +149,14 @@ fn scan(root: &Path, limits: Limits) -> Scan {
     let mut files = Vec::new();
     let mut markers = Markers::default();
     let mut skipped = 0;
+    let mut truncated = false;
+    let started = Instant::now();
     for entry in walker.flatten() {
+        // The caps hold during the walk, not after it: a folder of millions stops here.
+        if files.len() >= limits.max_files || started.elapsed() >= limits.walk_budget {
+            truncated = true;
+            break;
+        }
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
@@ -175,14 +201,11 @@ fn scan(root: &Path, limits: Limits) -> Scan {
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
-    if files.len() > limits.max_files {
-        skipped += files.len() - limits.max_files;
-        files.truncate(limits.max_files);
-    }
     Scan {
         files,
         markers,
         skipped,
+        truncated,
     }
 }
 
@@ -222,96 +245,115 @@ pub fn build(
     let scan = scan(root, limits);
     let mut skipped = scan.skipped;
 
-    // Which files changed: size and time first, then the hash.
-    struct Todo {
-        cand_index: usize,
-        bytes: Vec<u8>,
-        hash: String,
-    }
+    // Which files may have changed: their size or time differs from the stored row. Workers
+    // then read, hash and (when the hash differs) parse each one; a file's bytes live only in
+    // its worker, so memory holds one file per thread.
     let total_check = scan.files.len();
-    let mut todo: Vec<Todo> = Vec::new();
-    let mut touched: Vec<Changed> = Vec::new();
-    let mut unreadable: HashSet<&str> = HashSet::new();
-    for (i, c) in scan.files.iter().enumerate() {
-        if i % 200 == 0 {
-            progress(i, total_check * 2);
-        }
-        let row = rows.get(&c.path);
-        if row.is_some_and(|r| r.size == c.size && r.mtime == c.mtime) {
-            continue;
-        }
-        let Some(bytes) = read_text(&root.join(&c.path), limits.max_file_bytes) else {
-            skipped += 1;
-            unreadable.insert(c.path.as_str());
-            continue;
-        };
-        let h = hash(&bytes);
-        if row.is_some_and(|r| r.hash == h) {
-            touched.push(Changed {
-                path: c.path.clone(),
-                row: FileRow {
-                    size: c.size,
-                    mtime: c.mtime,
-                    hash: h,
-                },
-                lang: c.lang,
-                facts: None,
-            });
-            continue;
-        }
-        todo.push(Todo {
-            cand_index: i,
-            bytes,
-            hash: h,
-        });
-    }
-
-    // Parse the changed files on a few threads.
-    let done = AtomicUsize::new(0);
-    let to_parse = todo.len();
-    let total = total_check + to_parse;
+    let to_check: Vec<usize> = (0..scan.files.len())
+        .filter(|i| {
+            let c = &scan.files[*i];
+            !rows
+                .get(&c.path)
+                .is_some_and(|r| r.size == c.size && r.mtime == c.mtime)
+        })
+        .collect();
+    let total = total_check + to_check.len();
     progress(total_check, total);
+    enum Outcome {
+        Unreadable(usize),
+        Touched(Changed),
+        Parsed(Changed),
+        Panicked(usize),
+    }
+    let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let outcomes: Mutex<Vec<Outcome>> = Mutex::new(Vec::new());
     let threads = std::thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(2)
-        .clamp(1, 4);
-    let chunk = to_parse.div_ceil(threads).max(1);
-    let parsed: Vec<Changed> = std::thread::scope(|s| {
-        let handles: Vec<_> = todo
-            .chunks(chunk)
-            .map(|part| {
-                let files = &scan.files;
-                let done = &done;
-                s.spawn(move || {
-                    part.iter()
-                        .map(|t| {
-                            let c = &files[t.cand_index];
-                            let text = String::from_utf8_lossy(&t.bytes);
-                            let facts = extract(c.lang, &text).unwrap_or_default();
-                            let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                            if n.is_multiple_of(50) {
-                                progress(total_check + n, total);
-                            }
-                            Changed {
+        .clamp(1, 4)
+        .min(to_check.len().max(1));
+    std::thread::scope(|s| {
+        for _ in 0..threads {
+            let (files, to_check, next, done, outcomes, rows) =
+                (&scan.files, &to_check, &next, &done, &outcomes, &rows);
+            let worker = move || loop {
+                let k = next.fetch_add(1, Ordering::Relaxed);
+                let Some(&i) = to_check.get(k) else {
+                    break;
+                };
+                let c = &files[i];
+                let outcome = match read_text(&root.join(&c.path), limits.max_file_bytes) {
+                    None => Outcome::Unreadable(i),
+                    Some(bytes) => {
+                        let h = hash(&bytes);
+                        let row = FileRow {
+                            size: c.size,
+                            mtime: c.mtime,
+                            hash: h,
+                        };
+                        if rows.get(&c.path).is_some_and(|r| r.hash == row.hash) {
+                            Outcome::Touched(Changed {
                                 path: c.path.clone(),
-                                row: FileRow {
-                                    size: c.size,
-                                    mtime: c.mtime,
-                                    hash: t.hash.clone(),
-                                },
+                                row,
                                 lang: c.lang,
-                                facts: Some(facts),
+                                facts: None,
+                            })
+                        } else {
+                            let lang = c.lang;
+                            let parsed = std::panic::catch_unwind(move || {
+                                let text = String::from_utf8_lossy(&bytes);
+                                #[cfg(test)]
+                                if text.starts_with(PANIC_MARKER) {
+                                    panic!("a test asked the parser to panic");
+                                }
+                                extract(lang, &text).unwrap_or_default()
+                            });
+                            match parsed {
+                                Ok(facts) => Outcome::Parsed(Changed {
+                                    path: c.path.clone(),
+                                    row,
+                                    lang: c.lang,
+                                    facts: Some(facts),
+                                }),
+                                Err(_) => Outcome::Panicked(i),
                             }
-                        })
-                        .collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|h| h.join().unwrap_or_default())
-            .collect()
+                        }
+                    }
+                };
+                outcomes.lock().unwrap().push(outcome);
+                let n = done.fetch_add(1, Ordering::Relaxed) + 1;
+                if n.is_multiple_of(50) {
+                    progress(total_check + n, total);
+                }
+            };
+            std::thread::Builder::new()
+                .name("graph-parse".into())
+                .stack_size(PARSE_STACK)
+                .spawn_scoped(s, worker)
+                .expect("a parse thread starts");
+        }
     });
+    let mut parsed: Vec<Changed> = Vec::new();
+    let mut touched: Vec<Changed> = Vec::new();
+    let mut unreadable: HashSet<&str> = HashSet::new();
+    let mut parse_errors = 0;
+    for outcome in outcomes.into_inner().unwrap() {
+        match outcome {
+            Outcome::Unreadable(i) => {
+                skipped += 1;
+                unreadable.insert(scan.files[i].path.as_str());
+            }
+            Outcome::Panicked(i) => {
+                skipped += 1;
+                parse_errors += 1;
+                unreadable.insert(scan.files[i].path.as_str());
+            }
+            Outcome::Touched(c) => touched.push(c),
+            Outcome::Parsed(c) => parsed.push(c),
+        }
+    }
+    parsed.sort_by(|a, b| a.path.cmp(&b.path));
 
     let present: HashSet<&str> = scan
         .files
@@ -322,15 +364,19 @@ pub fn build(
     // Nothing changed since a good build: the graph stands as it is.
     let unchanged = parsed.is_empty()
         && !rows.keys().any(|p| !present.contains(p.as_str()))
-        && store::read_markers(&conn).as_ref() == Some(&scan.markers);
+        && store::read_markers(&conn).as_ref() == Some(&scan.markers)
+        && parse_errors == 0
+        && !scan.truncated;
     if unchanged {
-        if let Some(meta) =
-            store::read_meta(&conn).filter(|m| m.built_at.is_some() && m.error.is_none())
-        {
+        if let Some(meta) = store::read_meta(&conn).filter(|m| {
+            m.built_at.is_some() && m.error.is_none() && m.parse_errors == 0 && !m.truncated
+        }) {
             store::touch_files(&mut conn, &touched)
                 .map_err(|e| format!("writing the graph failed: {e}"))?;
             progress(total, total);
             return Ok(Report {
+                parse_errors: 0,
+                truncated: false,
                 files: meta.files as usize,
                 parsed: 0,
                 deleted: 0,
@@ -387,6 +433,8 @@ pub fn build(
         langs,
         commit,
         error: None,
+        parse_errors: parse_errors as u64,
+        truncated: scan.truncated,
     };
     let mut changed = parsed;
     changed.extend(touched);
@@ -402,6 +450,8 @@ pub fn build(
     .map_err(|e| format!("writing the graph failed: {e}"))?;
     progress(total, total);
     Ok(Report {
+        parse_errors,
+        truncated: scan.truncated,
         files: all.len(),
         parsed: fresh.len(),
         deleted: deleted.len(),
@@ -456,6 +506,7 @@ mod tests {
         let limits = Limits {
             max_files: 100,
             max_file_bytes: 200,
+            walk_budget: WALK_BUDGET,
         };
 
         let first = build(&root, &db, None, limits, &quiet).unwrap();
@@ -496,7 +547,7 @@ mod tests {
     }
 
     #[test]
-    fn the_file_cap_skips_files_past_it() {
+    fn the_walk_stops_at_the_file_cap_and_says_so() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("proj");
         for i in 0..5 {
@@ -505,9 +556,46 @@ mod tests {
         let limits = Limits {
             max_files: 3,
             max_file_bytes: 1000,
+            walk_budget: WALK_BUDGET,
+        };
+        let db = tmp.path().join("g.sqlite");
+        let r = build(&root, &db, None, limits, &quiet).unwrap();
+        assert_eq!(r.files, 3);
+        assert!(r.truncated);
+        // The same three each time: the walk's order is fixed.
+        let first = ids(&db);
+        build(&root, &db, None, limits, &quiet).unwrap();
+        assert_eq!(ids(&db), first);
+        let conn = store::open(&db).unwrap();
+        assert!(store::read_meta(&conn).unwrap().truncated);
+    }
+
+    #[test]
+    fn the_walk_stops_at_its_time_budget() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        write(&root, "a.py", "def f(): pass\n");
+        let limits = Limits {
+            walk_budget: Duration::ZERO,
+            ..Limits::default()
         };
         let r = build(&root, &tmp.path().join("g.sqlite"), None, limits, &quiet).unwrap();
-        assert_eq!((r.files, r.skipped), (3, 2));
+        assert!(r.truncated);
+        assert_eq!(r.files, 0);
+    }
+
+    #[test]
+    fn a_parse_that_panics_is_skipped_and_counted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        write(&root, "good.py", "def f(): pass\n");
+        write(&root, "bad.py", &format!("{PANIC_MARKER}\ndef g(): pass\n"));
+        let db = tmp.path().join("g.sqlite");
+        let r = build(&root, &db, None, Limits::default(), &quiet).unwrap();
+        assert_eq!((r.files, r.parse_errors, r.skipped), (1, 1, 1));
+        let conn = store::open(&db).unwrap();
+        assert_eq!(store::read_meta(&conn).unwrap().parse_errors, 1);
+        assert!(ids(&db).contains(&"good.py#f".to_string()));
     }
 
     #[test]
