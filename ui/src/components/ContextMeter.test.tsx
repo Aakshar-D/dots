@@ -173,7 +173,9 @@ describe("the run page's context", () => {
           trigger: "auto",
           fill_before: 124_000,
           fill_after: 36_000,
-          from_session: null,
+          from_session: "s1",
+          tokens: 3_200,
+          ok: true,
           at: "2026-10-09T12:00:00.000Z",
         },
       ],
@@ -184,7 +186,7 @@ describe("the run page's context", () => {
     renderApp(`/runs/${run.id}`);
     const section = await screen.findByRole("region", { name: "Context" });
     expect(section).toHaveTextContent("Context 36k / 200k (18%)");
-    expect(section).toHaveTextContent(/Compacted 124k → 36k · /);
+    expect(section).toHaveTextContent(/Compacted 124k → 36k · compaction used 3k tokens · /);
     expect(section).toHaveTextContent("This dot: 4 compactions, 1 fresh start");
   });
 
@@ -199,9 +201,32 @@ describe("the run page's context", () => {
       fill_before: 168_000,
       fill_after: null,
       from_session: "s1",
+      tokens: 2_000,
+      ok: true,
       at: "2026-10-09T12:00:00.000Z",
     });
-    expect(line).toMatch(/^Started fresh at 168k \(you asked\) · /);
+    expect(line).toMatch(/^Started fresh at 168k \(you asked\) · the note used 2k tokens · /);
+  });
+
+  it("words a compaction that failed or did not help", () => {
+    const base = {
+      id: "c3",
+      run_id: "r",
+      dot_id: "d",
+      root_run_id: "r",
+      kind: "compact" as const,
+      trigger: "auto" as const,
+      fill_before: 130_000,
+      from_session: "s1",
+      tokens: null,
+      at: "2026-10-09T12:00:00.000Z",
+    };
+    expect(contextEventLine({ ...base, fill_after: null, ok: false })).toMatch(
+      /^Compaction failed at 130k · /,
+    );
+    expect(contextEventLine({ ...base, fill_after: 125_000, ok: false })).toMatch(
+      /^Compacted 130k → 125k, still over the threshold · /,
+    );
   });
 });
 

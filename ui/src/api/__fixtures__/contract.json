@@ -5569,11 +5569,13 @@
         "dot_id": "01J0DOT",
         "fill_after": 36000,
         "fill_before": 124000,
-        "from_session": null,
+        "from_session": "sess-1",
         "id": "01J0CTX1",
         "kind": "compact",
+        "ok": true,
         "root_run_id": "01J0RUN",
         "run_id": "01J0RUN",
+        "tokens": 3200,
         "trigger": "auto"
       },
       {
@@ -5584,8 +5586,10 @@
         "from_session": "sess-1",
         "id": "01J0CTX2",
         "kind": "clear",
+        "ok": true,
         "root_run_id": "01J0RUN",
         "run_id": "01J0RUN",
+        "tokens": null,
         "trigger": "manual"
       }
     ],

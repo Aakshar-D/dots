@@ -2552,8 +2552,12 @@ export const ContextEvent = z.strictObject({
   fill_before: z.number().int(),
   // Unknown for a fresh start until its first turn.
   fill_after: nullable(z.number().int()),
-  // The session a fresh start left.
+  // The session compacted, or the one a fresh start left.
   from_session: nullable(z.string()),
+  // What Dots' extra CLI call used (in and out); null for the CLI's own compaction.
+  tokens: nullable(z.number().int()),
+  // False for a compaction that failed or left the session over the compact threshold.
+  ok: z.boolean(),
   at: z.string(),
 });
 export type ContextEvent = z.infer<typeof ContextEvent>;

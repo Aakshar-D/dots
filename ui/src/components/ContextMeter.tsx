@@ -210,12 +210,19 @@ export function windowOf(run: Pick<Run, "context_window" | "model">): number {
 /// "Compacted 124k → 36k" or "Started fresh at 168k", with who asked and when.
 export function contextEventLine(e: ContextEvent): string {
   const what =
-    e.kind === "compact"
-      ? `Compacted ${tokensShort(e.fill_before)} → ${tokensShort(e.fill_after ?? 0)}`
-      : `Started fresh at ${tokensShort(e.fill_before)}` +
-        (e.fill_after !== null ? `, new session at ${tokensShort(e.fill_after)}` : "");
+    e.kind === "clear"
+      ? `Started fresh at ${tokensShort(e.fill_before)}` +
+        (e.fill_after !== null ? `, new session at ${tokensShort(e.fill_after)}` : "")
+      : e.fill_after === null
+        ? `Compaction failed at ${tokensShort(e.fill_before)}`
+        : `Compacted ${tokensShort(e.fill_before)} → ${tokensShort(e.fill_after)}` +
+          (e.ok ? "" : ", still over the threshold");
   const who = e.trigger === "manual" ? " (you asked)" : "";
-  return `${what}${who} · ${localDateTime(e.at)}`;
+  const used =
+    e.tokens !== null && e.tokens > 0
+      ? ` · ${e.kind === "clear" ? "the note" : "compaction"} used ${tokensShort(e.tokens)} tokens`
+      : "";
+  return `${what}${who}${used} · ${localDateTime(e.at)}`;
 }
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
