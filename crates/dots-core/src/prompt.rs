@@ -76,6 +76,9 @@ pub struct PromptParts<'a> {
     /// The topic's earlier runs, oldest first, when a move or merge changed the topic and its
     /// session starts afresh (topic tools spec section 4.4); empty otherwise.
     pub so_far: &'a [Run],
+    /// The section a session started fresh by the context rules gets
+    /// (`context_rules::handoff_seed`, context rules spec section 5); `None` otherwise.
+    pub handoff: Option<&'a str>,
 }
 
 /// The most runs a person's chat message names (conversational chat spec section 3.1).
@@ -245,6 +248,7 @@ pub fn build_prompt_full(
         instructions_tool,
         instructions_changed,
         so_far,
+        handoff,
     } = parts;
     let text = run
         .payload
@@ -321,6 +325,10 @@ pub fn build_prompt_full(
             None => NO_INSTRUCTIONS_TOOL.to_string(),
         });
         out.push('\n');
+    }
+    if let Some(seed) = handoff {
+        out.push_str(seed.trim_end());
+        out.push_str("\n\n");
     }
     if !so_far.is_empty() {
         out.push_str("## This conversation so far\n\n");

@@ -5,6 +5,11 @@
         "approval_wait_secs": 240,
         "browser": false,
         "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,
@@ -870,6 +875,106 @@
     "step_run_id": "01J0STP3",
     "summary": "Made the icon dark on a light taskbar."
   },
+  "ClaudeScan": {
+    "bytes": 482113,
+    "files": 12,
+    "more": false,
+    "scanned_at": "2026-10-09T12:00:00.000Z"
+  },
+  "ClaudeUsage": [
+    {
+      "available": true,
+      "block": {
+        "messages": 212,
+        "resets_at": "2026-10-09T15:10:00.000Z",
+        "started_at": "2026-10-09T10:10:00.000Z",
+        "tokens": 1400000
+      },
+      "dots": {
+        "cache_creation_tokens": 400000,
+        "cache_read_tokens": 3100000,
+        "input_tokens": 9000,
+        "messages": 310,
+        "output_tokens": 52000,
+        "sessions": 5
+      },
+      "folder": "C:/Users/u/.claude/projects",
+      "own": {
+        "cache_creation_tokens": 2400000,
+        "cache_read_tokens": 48000000,
+        "input_tokens": 120000,
+        "messages": 3900,
+        "output_tokens": 610000,
+        "sessions": 58
+      },
+      "period": "week",
+      "projects": [
+        {
+          "cwd": "C:/Users/u/code/dots",
+          "name": "dots",
+          "totals": {
+            "cache_creation_tokens": 2000000,
+            "cache_read_tokens": 40000000,
+            "input_tokens": 100000,
+            "messages": 3000,
+            "output_tokens": 500000,
+            "sessions": 40
+          }
+        },
+        {
+          "cwd": null,
+          "name": "Dots (all dots)",
+          "totals": {
+            "cache_creation_tokens": 400000,
+            "cache_read_tokens": 3100000,
+            "input_tokens": 9000,
+            "messages": 310,
+            "output_tokens": 52000,
+            "sessions": 5
+          }
+        },
+        {
+          "cwd": "C:/Users/u/code/site",
+          "name": "site",
+          "totals": {
+            "cache_creation_tokens": 400000,
+            "cache_read_tokens": 8000000,
+            "input_tokens": 20000,
+            "messages": 900,
+            "output_tokens": 110000,
+            "sessions": 18
+          }
+        }
+      ],
+      "scanned_at": "2026-10-09T12:00:00.000Z",
+      "since": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "available": false,
+      "block": null,
+      "dots": {
+        "cache_creation_tokens": 0,
+        "cache_read_tokens": 0,
+        "input_tokens": 0,
+        "messages": 0,
+        "output_tokens": 0,
+        "sessions": 0
+      },
+      "folder": "C:/Users/u/.claude/projects",
+      "own": {
+        "cache_creation_tokens": 0,
+        "cache_read_tokens": 0,
+        "input_tokens": 0,
+        "messages": 0,
+        "output_tokens": 0,
+        "sessions": 0
+      },
+      "period": "week",
+      "projects": [],
+      "scanned_at": null,
+      "since": "2026-10-09T12:00:00.000Z"
+    }
+  ],
   "CmdError": {
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
@@ -1116,9 +1221,14 @@
     "watcher_resume",
     "limits_get",
     "usage_summary",
+    "claude_usage",
+    "claude_usage_scan",
     "run_release_hold",
     "run_release_cap",
     "spend_today",
+    "thread_context",
+    "thread_context_choose",
+    "run_context_report",
     "teams_list",
     "team_get",
     "team_create",
@@ -1962,6 +2072,11 @@
     "approval_wait_secs": 240,
     "browser": false,
     "check_results": true,
+    "context_rules": {
+      "clear_at": 75,
+      "compact_at": 50,
+      "enabled": true
+    },
     "created_at": "2026-10-09T12:00:00.000Z",
     "enabled": true,
     "endpoint_url": null,
@@ -2150,6 +2265,11 @@
       "approval_wait_secs": 240,
       "browser": false,
       "check_results": true,
+      "context_rules": {
+        "clear_at": 75,
+        "compact_at": 50,
+        "enabled": true
+      },
       "created_at": "2026-10-09T12:00:00.000Z",
       "enabled": true,
       "endpoint_url": null,
@@ -2322,6 +2442,8 @@
       "base_commit": "0123abcd",
       "branch": "dots/nightly-tests/01J0RUN",
       "cap_released": false,
+      "context_fill": 92000,
+      "context_window": 200000,
       "cost_usd": 1.32,
       "delivered_at": "2026-10-09T12:00:00.000Z",
       "delivery": "delivered",
@@ -2390,6 +2512,7 @@
     "approval_wait_secs": 240,
     "browser": false,
     "check_results": true,
+    "context_rules": null,
     "enabled": true,
     "endpoint_url": "http://127.0.0.1:1234",
     "engine": "local",
@@ -2631,6 +2754,11 @@
       "error",
       "name_taken",
       "coming_soon"
+    ],
+    "ContextChoice": [
+      "compact",
+      "fresh",
+      "keep_going"
     ],
     "Delivery": [
       "delivered",
@@ -3353,6 +3481,8 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cap_released": false,
+        "context_fill": 92000,
+        "context_window": 200000,
         "cost_usd": 1.32,
         "delivered_at": null,
         "delivery": "not_delivered",
@@ -3406,6 +3536,8 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cap_released": false,
+        "context_fill": 92000,
+        "context_window": 200000,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -4372,6 +4504,8 @@
     }
   ],
   "Limits": {
+    "context_max_pct": 95,
+    "context_min_pct": 10,
     "max_approval_wait_secs": 280,
     "max_cap_tokens": 10000000000,
     "max_cap_usd": 100000.0,
@@ -4811,6 +4945,7 @@
     "approval_wait_secs": 240,
     "browser": false,
     "check_results": true,
+    "context_rules": null,
     "enabled": true,
     "endpoint_url": null,
     "engine": "claude",
@@ -5638,6 +5773,8 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cap_released": false,
+    "context_fill": 92000,
+    "context_window": 200000,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -5690,6 +5827,8 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cap_released": false,
+    "context_fill": 92000,
+    "context_window": 200000,
     "cost_usd": 1.32,
     "delivered_at": null,
     "delivery": "waiting",
@@ -5772,6 +5911,45 @@
     "state": "unavailable",
     "undone_at": null
   },
+  "RunContextReport": {
+    "dot_clears": 1,
+    "dot_compactions": 4,
+    "events": [
+      {
+        "at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "fill_after": 36000,
+        "fill_before": 124000,
+        "from_session": "sess-1",
+        "id": "01J0CTX1",
+        "kind": "compact",
+        "ok": true,
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "tokens": 3200,
+        "trigger": "auto"
+      },
+      {
+        "at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "fill_after": null,
+        "fill_before": 168000,
+        "from_session": "sess-1",
+        "id": "01J0CTX2",
+        "kind": "clear",
+        "ok": true,
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "tokens": null,
+        "trigger": "manual"
+      }
+    ],
+    "rules": {
+      "clear_at": 80,
+      "compact_at": 60,
+      "enabled": true
+    }
+  },
   "RunEventData": [
     {
       "kind": "session_started",
@@ -5841,6 +6019,17 @@
       "text": "skill pdf: folder not found"
     },
     {
+      "fill": 92000,
+      "kind": "context",
+      "window": null
+    },
+    {
+      "after": 36000,
+      "before": 124000,
+      "kind": "compacted",
+      "trigger": "auto"
+    },
+    {
       "cache_read": 0,
       "cost_usd": 0.002,
       "kind": "result_check",
@@ -5873,6 +6062,8 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cap_released": false,
+    "context_fill": 92000,
+    "context_window": 200000,
     "cost_usd": 1.32,
     "delivered_at": null,
     "delivery": "not_delivered",
@@ -5923,6 +6114,8 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cap_released": false,
+    "context_fill": 92000,
+    "context_window": 200000,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -5982,6 +6175,8 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cap_released": false,
+    "context_fill": 92000,
+    "context_window": 200000,
     "cost_usd": 1.32,
     "delivered_at": null,
     "delivery": "waiting",
@@ -6032,6 +6227,8 @@
     "base_commit": "0123abcd",
     "branch": "dots/nightly-tests/01J0RUN",
     "cap_released": false,
+    "context_fill": 92000,
+    "context_window": 200000,
     "cost_usd": 1.32,
     "delivered_at": "2026-10-09T12:00:00.000Z",
     "delivery": "delivered",
@@ -6121,6 +6318,8 @@
         "base_commit": null,
         "branch": null,
         "cap_released": false,
+        "context_fill": 92000,
+        "context_window": 200000,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -6540,6 +6739,8 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cap_released": false,
+        "context_fill": 92000,
+        "context_window": 200000,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -6615,6 +6816,8 @@
         "base_commit": "0123abcd",
         "branch": "dots/nightly-tests/01J0RUN",
         "cap_released": false,
+        "context_fill": 92000,
+        "context_window": 200000,
         "cost_usd": 1.32,
         "delivered_at": "2026-10-09T12:00:00.000Z",
         "delivery": "delivered",
@@ -7218,6 +7421,11 @@
     "check_results": true,
     "checker_model": "haiku",
     "claude_path": null,
+    "context_rules": {
+      "clear_at": 80,
+      "compact_at": 60,
+      "enabled": true
+    },
     "default_model": "sonnet",
     "edge_path": null,
     "global_instructions": "Use British spelling.",
@@ -7254,6 +7462,11 @@
       "check_results": true,
       "checker_model": "haiku",
       "claude_path": null,
+      "context_rules": {
+        "clear_at": 80,
+        "compact_at": 60,
+        "enabled": true
+      },
       "default_model": "sonnet",
       "edge_path": null,
       "global_instructions": "Use British spelling.",
@@ -7325,6 +7538,11 @@
         "approval_wait_secs": 240,
         "browser": false,
         "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,
@@ -7502,6 +7720,11 @@
         "approval_wait_secs": 240,
         "browser": false,
         "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
         "created_at": "2026-10-09T12:00:00.000Z",
         "enabled": true,
         "endpoint_url": null,
@@ -7926,6 +8149,34 @@
     "org_id": null,
     "workspace_id": "default"
   },
+  "ThreadContext": [
+    {
+      "asks_fresh": true,
+      "fill": 164000,
+      "keep_going": false,
+      "request": null,
+      "root_run_id": "01J0RUN",
+      "rules": {
+        "clear_at": 80,
+        "compact_at": 60,
+        "enabled": true
+      },
+      "window": 200000
+    },
+    {
+      "asks_fresh": false,
+      "fill": null,
+      "keep_going": true,
+      "request": "fresh",
+      "root_run_id": "01J0RUN",
+      "rules": {
+        "clear_at": 80,
+        "compact_at": 60,
+        "enabled": true
+      },
+      "window": 1000000
+    }
+  ],
   "ToolsChanged": [
     {
       "dots": [

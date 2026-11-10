@@ -82,6 +82,23 @@ pub enum EngineEvent {
     Notice {
         text: String,
     },
+    /// How full the session's context is (context rules spec section 3): `fill`, the tokens a
+    /// main-thread turn sent, and `window`, the model's context size, each when the line
+    /// gives it. Written to the run, not stored as a run event.
+    Context {
+        #[serde(default)]
+        fill: Option<u64>,
+        #[serde(default)]
+        window: Option<u64>,
+    },
+    /// The session was compacted (context rules spec section 7): `trigger` is the CLI's
+    /// (`manual` for Dots' own `/compact`, `auto` for the CLI's), with the fill before and
+    /// after.
+    Compacted {
+        trigger: String,
+        before: u64,
+        after: u64,
+    },
 }
 
 impl EngineEvent {
@@ -98,6 +115,8 @@ impl EngineEvent {
             Self::Finished { .. } => "finished",
             Self::Failed { .. } => "failed",
             Self::Notice { .. } => "notice",
+            Self::Context { .. } => "context",
+            Self::Compacted { .. } => "compacted",
         }
     }
 }
@@ -120,6 +139,35 @@ pub struct RunContext {
     /// engine starts and closed when the run ends (`RunTools`). The local engine calls the
     /// sessions itself; the Claude CLI reaches them through the gateway.
     pub tools: Arc<RunTools>,
+    /// The share of the context window at which the CLI compacts a session by itself while the
+    /// run runs (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, context rules spec section 4); `None`
+    /// leaves the CLI's own.
+    pub autocompact_pct: Option<u8>,
+}
+
+/// What one extra call of an engine before a run used (context rules spec section 5).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PassUsage {
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    pub cache_read: u64,
+    pub cost_usd: Option<f64>,
+}
+
+/// What a compaction did (context rules spec section 5): the fill before and after, and what
+/// the call used.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Compaction {
+    pub before: u64,
+    pub after: u64,
+    pub usage: PassUsage,
+}
+
+/// A session's hand-off note, and what asking for it used.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Handoff {
+    pub summary: String,
+    pub usage: PassUsage,
 }
 
 #[async_trait]
@@ -139,6 +187,18 @@ pub trait Engine: Send + Sync {
     /// becomes a one-shot grant and the model is asked to issue the call again.
     fn applies_approved_calls(&self) -> bool {
         false
+    }
+
+    /// Compacts `ctx.session_id` before the run (context rules spec section 5). `Ok(None)`:
+    /// this engine cannot. An error is the reason it failed.
+    async fn compact(&self, _ctx: &RunContext) -> Result<Option<Compaction>> {
+        Ok(None)
+    }
+
+    /// Asks `ctx.session_id` for a hand-off summary with `ctx.prompt` (context rules spec
+    /// section 5). `Ok(None)`: this engine cannot.
+    async fn handoff_summary(&self, _ctx: &RunContext) -> Result<Option<Handoff>> {
+        Ok(None)
     }
 }
 

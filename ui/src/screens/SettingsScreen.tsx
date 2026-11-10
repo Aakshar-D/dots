@@ -9,6 +9,7 @@ import { CommandError, commands } from "@/api/commands";
 import { LIMITS, type Settings, type Status } from "@/api/types";
 import { AppearanceSetting } from "@/components/AppearanceSetting";
 import { BrowserSettings } from "@/components/BrowserSettings";
+import { ContextRulesFields } from "@/components/ContextMeter";
 import { ErrorNote } from "@/components/ErrorNote";
 import { ReportProblemDialog } from "@/components/ReportProblemDialog";
 import { Field } from "@/components/Field";
@@ -23,6 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys, takeStatus } from "@/lib/query";
+import { contextRulesError } from "@/lib/dot-rules";
 import { tokenCapError, usdCapError } from "@/lib/spend";
 
 import { ChatGptAccount } from "./ChatGptAccount";
@@ -46,6 +48,7 @@ type Errors = {
   spendDailyTokens?: string;
   spendMonthlyUsd?: string;
   auto?: string;
+  context?: string;
 };
 
 /// The Settings tabs, in the order they are listed; each id is its URL, `/settings/<id>`.
@@ -81,6 +84,7 @@ const ERROR_TAB: Record<keyof Errors, TabId> = {
   spendDailyTokens: "runs",
   spendMonthlyUsd: "runs",
   auto: "claude",
+  context: "runs",
 };
 
 /// The sizes Auto picks from, as Settings name them (auto model spec section 3).
@@ -118,6 +122,7 @@ export function settingsErrors(
         | "spend_daily_tokens"
         | "spend_monthly_usd"
         | "auto_models"
+        | "context_rules"
       >
     >,
 ): Errors {
@@ -170,6 +175,8 @@ export function settingsErrors(
   if (tiers.some((m) => m.trim() === "" || isAuto(m) || /\s/.test(m.trim()))) {
     errors.auto = "Each size needs a model ID such as haiku, sonnet or opus.";
   }
+  const context = draft.context_rules && contextRulesError(draft.context_rules);
+  if (context) errors.context = context;
   return errors;
 }
 
@@ -317,7 +324,7 @@ function Form({
   // The quiet limit, the idle days and the caps show their errors at once; the rest after a
   // Save.
   const atOnce = (key: keyof Errors) =>
-    key === "quiet" || key === "archive" || key.startsWith("spend");
+    key === "quiet" || key === "archive" || key === "context" || key.startsWith("spend");
   const shownErrors = (Object.keys(errors) as (keyof Errors)[]).filter(
     (key) => tried || atOnce(key),
   );
@@ -690,6 +697,21 @@ function Form({
         </Section>
 
         <SpendingSection draft={draft} set={set} errors={errors} />
+
+        <Section title="Context">
+          <p className="text-xs text-muted-foreground">
+            A conversation that goes on sends everything said so far with each message, which
+            uses up your Claude plan. Dots compacts a Claude conversation (a summary takes the
+            place of old messages) when it is fairly full, and starts a fresh session with a
+            summary when it is very full. A dot can have its own rules.
+          </p>
+          <ContextRulesFields
+            id="settings-context"
+            value={draft.context_rules}
+            onChange={(context_rules) => set({ context_rules })}
+            error={errors.context}
+          />
+        </Section>
       </>
     ),
     phone: (

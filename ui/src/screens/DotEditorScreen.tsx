@@ -105,6 +105,9 @@ function Editor(props: {
   const errors = specErrors(draft.spec, isNew);
   if (objection && changed) errors.schedule ??= objection;
 
+  // Context rules out of bounds keep Save off, as Settings does (context rules spec section 4).
+  const contextBad = errors.context_rules !== undefined;
+
   function submit() {
     setTried(true);
     if (Object.keys(errors).length > 0) return;
@@ -137,7 +140,15 @@ function Editor(props: {
         onChange={setDraft}
         // Until the first save attempt only the core's objection to the schedule shows: it
         // comes while the user types, and an empty new form should not start out red.
-        errors={tried ? errors : objection && changed ? { schedule: objection } : {}}
+        // The context rules' bounds show at once, as in Settings.
+        errors={
+          tried
+            ? errors
+            : {
+                ...(objection && changed ? { schedule: objection } : {}),
+                ...(contextBad ? { context_rules: errors.context_rules } : {}),
+              }
+        }
         existing={props.existing}
         endpoints={settings?.local_endpoints ?? []}
         schedule={{
@@ -163,8 +174,10 @@ function Editor(props: {
           {props.actions}
           <Button
             size="sm"
-            disabled={save.isPending || props.blocked !== undefined || refusal !== undefined}
-            title={props.blocked ?? refusal}
+            disabled={
+              save.isPending || props.blocked !== undefined || refusal !== undefined || contextBad
+            }
+            title={props.blocked ?? refusal ?? errors.context_rules}
             onClick={submit}
           >
             {props.saveLabel}

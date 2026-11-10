@@ -108,6 +108,10 @@ pub struct Config {
     /// What posts audit records to each account's endpoint (env vault spec §10). `Config::new`
     /// posts over HTTP, as the app does; an account whose policy has no `audit` sends nothing.
     pub audit_transport: Arc<dyn crate::vault::audit::AuditTransport>,
+    /// Where Claude Code's transcripts are read for the Usage page's All Claude use (usage tab
+    /// spec section 3). `Config::new` has none, so a test never reads the real one; the app's
+    /// configuration has `CLAUDE_CONFIG_DIR` or the home's `.claude`, then `projects`.
+    pub claude_projects: Option<PathBuf>,
 }
 
 impl Config {
@@ -131,6 +135,7 @@ impl Config {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
             usage_sender: Arc::new(crate::usage_counts::HttpSender::default()),
             audit_transport: Arc::new(crate::vault::audit::HttpTransport::default()),
+            claude_projects: None,
         }
     }
 
@@ -146,6 +151,10 @@ impl Config {
             .iter()
             .find_map(|k| std::env::var(k).ok().filter(|v| !v.trim().is_empty()))
             .map(PathBuf::from);
+        cfg.claude_projects = crate::claude_usage::projects_dir(
+            std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+            cfg.claude_home.as_deref(),
+        );
         let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME"));
         if let Some(home) = home.filter(|h| !h.is_empty()) {
             cfg.new_dot_root = PathBuf::from(home).join("Dots");
@@ -278,6 +287,8 @@ pub struct Runtime {
     org_timers: OrgTimers,
     /// Claude's usage limits (usage and limits spec section 4).
     limits: Arc<crate::limits::Limits>,
+    /// What Claude Code's own transcripts say (usage tab spec).
+    claude_usage: Arc<crate::claude_usage::ClaudeUsageService>,
     /// Where Claude Code's agents are looked for (`Config::claude_home`).
     claude_home: Option<PathBuf>,
     /// Makes agent imports run one at a time (`import_claude_agents`).
@@ -536,6 +547,15 @@ impl Runtime {
         }
         runner.set_graphs(graphs);
         let shutdown = CancellationToken::new();
+        // All Claude use: Claude Code's transcripts, read in the background (usage tab spec
+        // section 5).
+        let claude_usage = crate::claude_usage::ClaudeUsageService::new(
+            store.clone(),
+            cfg.claude_projects.clone(),
+            &cfg.data_dir,
+            cfg.clock.clone(),
+        );
+        claude_usage.spawn(shutdown.clone());
         // The result check asks the CLI with no tools; it needs no local server.
         if let Some(program) = &claude_program {
             runner.set_checker(Arc::new(crate::result_check::CliChecker::new(
@@ -703,6 +723,7 @@ impl Runtime {
             orgs,
             org_timers,
             limits,
+            claude_usage,
             claude_home: cfg.claude_home.clone(),
             import_lock: Mutex::new(()),
             send_later_wake: Arc::new(tokio::sync::Notify::new()),
@@ -4040,6 +4061,19 @@ impl Runtime {
         })
     }
 
+    /// The Usage page's All Claude use for the period (usage tab spec section 6).
+    pub async fn claude_usage(
+        &self,
+        period: crate::model::UsagePeriod,
+    ) -> Result<crate::claude_usage::ClaudeUsage> {
+        self.claude_usage.summary(period).await
+    }
+
+    /// Reads what Claude Code wrote since the last scan, unless that was within half a minute.
+    pub async fn claude_usage_scan(&self) -> Result<crate::claude_usage::ClaudeScan> {
+        self.claude_usage.scan(crate::claude_usage::MIN_GAP).await
+    }
+
     /// **Run anyway**: releases one held background Claude run from the hold.
     pub async fn run_release_hold(&self, run_id: &str) -> Result<Run> {
         let run = self.store.get_run(run_id).await?;
@@ -4089,6 +4123,92 @@ impl Runtime {
         let _ = self.bus.send(RuntimeEvent::RunUpdated { run: run.clone() });
         self.runner.nudge();
         Ok(run)
+    }
+
+    /// A topic's context meter and its question (context rules spec sections 3 and 6).
+    pub async fn thread_context(
+        &self,
+        root_run_id: &str,
+    ) -> Result<crate::context_rules::ThreadContext> {
+        use crate::context_rules as cr;
+        let root = self.store.get_run(root_run_id).await?;
+        let dot = self.store.get_dot(&root.dot_id).await?;
+        let rules = dot
+            .spec
+            .context_rules
+            .unwrap_or(self.store.get_settings().await?.context_rules);
+        let last = self.store.thread_fill(&root.root_run_id).await?;
+        let state = self.store.thread_state(&root.root_run_id).await?;
+        let fill = last.as_ref().map(|l| l.fill);
+        let model = last
+            .as_ref()
+            .and_then(|l| l.model.clone())
+            .unwrap_or_else(|| dot.spec.model.clone());
+        let window = cr::window_for(Some(&model), last.as_ref().and_then(|l| l.window));
+        Ok(cr::ThreadContext {
+            root_run_id: root.root_run_id.clone(),
+            fill,
+            window,
+            rules,
+            keep_going: state.keep_going,
+            request: state.request,
+            asks_fresh: dot.spec.engine == crate::model::EngineKind::Claude
+                && cr::asks_fresh(&rules, fill, window, state.keep_going, state.request),
+        })
+    }
+
+    /// The person's answer for a topic (context rules spec section 6): compact or start fresh
+    /// on its next turn, or keep going. Only a Claude dot's topic takes one.
+    pub async fn thread_context_choose(
+        &self,
+        root_run_id: &str,
+        choice: crate::context_rules::Choice,
+    ) -> Result<crate::context_rules::ThreadContext> {
+        use crate::context_rules::{Choice, Request};
+        let root = self.store.get_run(root_run_id).await?;
+        let dot = self.store.get_dot(&root.dot_id).await?;
+        self.require_dot(&dot, Permission::RunDots).await?;
+        if dot.spec.engine != crate::model::EngineKind::Claude {
+            return Err(Error::Invalid(
+                "Only a Claude dot's conversation can be compacted or started fresh.".into(),
+            ));
+        }
+        let root_id = &root.root_run_id;
+        match choice {
+            Choice::Compact => {
+                self.store
+                    .set_thread_request(root_id, Some(Request::Compact))
+                    .await?
+            }
+            Choice::Fresh => {
+                self.store
+                    .set_thread_request(root_id, Some(Request::Fresh))
+                    .await?
+            }
+            Choice::KeepGoing => self.store.set_keep_going(root_id, true).await?,
+        }
+        self.thread_context(root_id).await
+    }
+
+    /// A run's compactions and fresh starts, with its dot's totals (context rules spec
+    /// section 7).
+    pub async fn run_context_report(
+        &self,
+        run_id: &str,
+    ) -> Result<crate::context_rules::RunContextReport> {
+        let run = self.store.get_run(run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        let rules = dot
+            .spec
+            .context_rules
+            .unwrap_or(self.store.get_settings().await?.context_rules);
+        let (dot_compactions, dot_clears) = self.store.context_counts(&dot.id).await?;
+        Ok(crate::context_rules::RunContextReport {
+            events: self.store.list_context_events(run_id).await?,
+            dot_compactions,
+            dot_clears,
+            rules,
+        })
     }
 
     /// Today's spend against the spending caps (spend caps design).

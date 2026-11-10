@@ -289,6 +289,57 @@ async fn a_follow_up_sent_back_to_the_queue_keeps_its_thread() {
     assert_eq!(run.workspace_path.as_deref(), Some(folder.as_str()));
 }
 
+/// A follow-up that started fresh (context rules spec section 5) and that Claude's limit sent
+/// back keeps the session it was queued with, so its retry starts fresh again from it.
+#[tokio::test]
+async fn a_follow_up_that_started_fresh_goes_back_with_its_old_session() {
+    let first = vec![
+        Step::Emit(rejected()),
+        Step::Emit(EngineEvent::Failed {
+            error: "You've hit your limit".into(),
+        }),
+    ];
+    let e = env(Turns::new(vec![first], vec![Step::Emit(finished())]), 2).await;
+    let dot = e.dot("f").await;
+    let folder = dot.spec.workdir.clone();
+    // The session's last turn filled 180k of 200k: the next background turn starts fresh.
+    // The dispatcher is held while the earlier run is made: a pass that picked it up
+    // would run it and give it a session and fill of its own.
+    e.runner.set_held(true).await;
+    let earlier = e
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
+        .await
+        .unwrap();
+    // Ended before the dispatcher is let go.
+    e.store
+        .finish_run(&earlier.id, RunStatus::Succeeded, Some("ok"), None)
+        .await
+        .unwrap();
+    e.store
+        .set_session(&earlier.id, "thread-session")
+        .await
+        .unwrap();
+    e.store
+        .set_run_context(&earlier.id, Some(180_000), Some(200_000))
+        .await
+        .unwrap();
+    e.runner.set_held(false).await;
+    let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);
+    new.parent_run_id = Some(earlier.id.clone());
+    new.root_run_id = Some(earlier.id.clone());
+    new.session_id = Some("thread-session".into());
+    new.workspace_path = Some(folder.clone());
+    let id = e.runner.enqueue(new).await.unwrap().id;
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while e.limits.rejected_until().is_none() || e.status(&id).await != RunStatus::Queued {
+        assert!(std::time::Instant::now() < deadline, "not queued again");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let run = e.store.get_run(&id).await.unwrap();
+    assert_eq!(run.session_id.as_deref(), Some("thread-session"));
+}
+
 /// Final review I2: a `rejected` line Dots cannot read a reset from does not send the run
 /// back to the queue, where it would start again at once; it fails with the note.
 #[tokio::test]

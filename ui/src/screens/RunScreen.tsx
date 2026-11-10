@@ -6,6 +6,11 @@ import { commands } from "@/api/commands";
 import type { Approval, Run, RunEventRecord } from "@/api/types";
 import { AppliedCalls } from "@/components/AppliedCalls";
 import { ApprovalCard } from "@/components/ApprovalCard";
+import {
+  RunContextSection,
+  tokensShort,
+  useExtraCallTokens,
+} from "@/components/ContextMeter";
 import { DiffView } from "@/components/DiffView";
 import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
 import { Markdown } from "@/components/Markdown";
@@ -99,6 +104,8 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
     (latest.status === "failed" || worktreeKept || diff.isError);
   const tokensIn = runs.reduce((n, r) => n + r.tokens_in, 0);
   const tokensOut = runs.reduce((n, r) => n + r.tokens_out, 0);
+  // Compactions and hand-off notes count to the run's tokens; the line says how much.
+  const extraTokens = useExtraCallTokens(runs);
   // What the thread would cost on the API, when the engine said (usage and limits spec §5).
   const costs = runs.flatMap((r) => (r.cost_usd === null ? [] : [r.cost_usd]));
   const costUsd = costs.length > 0 ? costs.reduce((a, b) => a + b, 0) : null;
@@ -190,6 +197,8 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
           <dt>Tokens</dt>
           <dd className="text-foreground">
             {tokensIn} in, {tokensOut} out
+            {extraTokens > 0 &&
+              ` (includes ${tokensShort(extraTokens)} for compactions and hand-off notes)`}
           </dd>
         </div>
         {costUsd !== null && (
@@ -219,6 +228,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
         )}
       </dl>
       <HeldNote run={latest} />
+      <RunContextSection runs={runs} />
       {latest.error && (
         <p role="alert" className="rounded-md border border-destructive/50 p-3 text-destructive">
           {latest.error}

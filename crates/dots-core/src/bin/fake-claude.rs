@@ -158,6 +158,7 @@ async fn main() {
             "prompt": prompt,
             "cwd": std::env::current_dir().unwrap().to_string_lossy(),
             "mcp_tool_timeout": std::env::var("MCP_TOOL_TIMEOUT").ok(),
+            "autocompact": std::env::var("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE").ok(),
             // Every variable the CLI was started with, by name, and the values of those whose
             // name starts with `DOTS_TEST_` or `ANTHROPIC_DOTS_TEST_`.
             "env_names": std::env::vars().map(|(k, _)| k).collect::<Vec<_>>(),
@@ -182,6 +183,18 @@ async fn main() {
 
     let mut stdout = std::io::stdout();
     for (i, step) in script.iter().enumerate() {
+        // A step for one prompt only (`when_prompt`), or for every other (`unless_prompt`).
+        if step
+            .get("when_prompt")
+            .and_then(Value::as_str)
+            .is_some_and(|p| p != prompt)
+            || step
+                .get("unless_prompt")
+                .and_then(Value::as_str)
+                .is_some_and(|p| p == prompt)
+        {
+            continue;
+        }
         if let Some(line) = step.get("emit") {
             let s = line
                 .to_string()

@@ -2,7 +2,13 @@
 // mistakes show next to their field before a save; the core still has the last word.
 import { z } from "zod";
 
-import { LIMITS, type DotSpec, type Schedule, type ScheduleRule } from "@/api/types";
+import {
+  LIMITS,
+  type ContextRules,
+  type DotSpec,
+  type Schedule,
+  type ScheduleRule,
+} from "@/api/types";
 import { tokenCapError, usdCapError } from "@/lib/spend";
 
 export type SpecErrors = Partial<Record<keyof DotSpec, string>>;
@@ -91,7 +97,22 @@ export function specErrors(spec: DotSpec, isNew = false): SpecErrors {
   if (schedule) errors.schedule = schedule;
   const cap = usdCapError(spec.spend_cap.daily_usd) ?? tokenCapError(spec.spend_cap.daily_tokens);
   if (cap) errors.spend_cap = cap;
+  const context = spec.context_rules && contextRulesError(spec.context_rules);
+  if (context) errors.context_rules = context;
   return errors;
+}
+
+/// The core's words when context rules are out of bounds (context rules spec section 4).
+export const CONTEXT_RULE = "Each threshold is 10 to 95%, and start fresh must be above compact.";
+
+/// Why `rules` cannot be saved: a threshold outside 10 to 95%, or start fresh not above compact.
+export function contextRulesError(rules: ContextRules): string | undefined {
+  const ok = (n: number) =>
+    Number.isInteger(n) && n >= LIMITS.context_min_pct && n <= LIMITS.context_max_pct;
+  if (!ok(rules.compact_at) || !ok(rules.clear_at) || rules.clear_at <= rules.compact_at) {
+    return CONTEXT_RULE;
+  }
+  return undefined;
 }
 
 /// The schedule a draft saves and previews: a cron expression without its surrounding spaces.
@@ -232,6 +253,7 @@ export function specOf(dot: DotSpec): DotSpec {
     quiet_limit_secs: dot.quiet_limit_secs,
     spend_cap: dot.spend_cap,
     enabled: dot.enabled,
+    context_rules: dot.context_rules,
   };
 }
 

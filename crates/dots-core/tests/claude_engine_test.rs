@@ -612,3 +612,82 @@ async fn a_shell_grant_cannot_redirect_the_cli_or_load_code_into_it() {
         );
     }
 }
+
+/// A follow-up of a session at 65% is compacted first (context rules spec section 5): the CLI
+/// gets `/compact` on stdin in the same session, then the run's own prompt, and each is told
+/// to compact by itself at the dot's share.
+#[tokio::test]
+async fn a_fairly_full_session_is_compacted_by_the_cli_before_the_turn() {
+    let e = e2e(
+        json!([
+            {"when_prompt": "/compact", "emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
+            {"when_prompt": "/compact", "emit": {"type": "system", "subtype": "compact_boundary",
+                "compact_metadata": {"trigger": "manual", "pre_tokens": 130000, "post_tokens": 20000}}},
+            {"when_prompt": "/compact", "emit": {"type": "result", "subtype": "success",
+                "is_error": false, "result": "", "local_command": "compact",
+                "usage": {"input_tokens": 0, "output_tokens": 0}}},
+            {"when_prompt": "/compact", "exit": 0},
+            init(),
+            {"emit": {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}],
+                "usage": {"input_tokens": 2, "cache_read_input_tokens": 24000}}}},
+            {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "ok",
+                "usage": {"input_tokens": 2, "output_tokens": 2},
+                "modelUsage": {"claude-sonnet-5-5": {"contextWindow": 200000}}}}
+        ]),
+        None,
+    )
+    .await;
+    let dot = folder_dot(&e, 280).await;
+    // The dispatcher is held while the earlier run is made: a pass that picked it up
+    // would run it and give it a session and fill of its own.
+    e.runner.set_held(true).await;
+    let first = e
+        .store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
+        .await
+        .unwrap();
+    // Ended before the dispatcher is let go.
+    e.store
+        .finish_run(&first.id, RunStatus::Succeeded, Some("ok"), None)
+        .await
+        .unwrap();
+    e.store.set_session(&first.id, "S1").await.unwrap();
+    e.store
+        .set_run_context(&first.id, Some(130_000), Some(200_000))
+        .await
+        .unwrap();
+    e.store
+        .set_workspace(&first.id, &e.dir.path().to_string_lossy(), None, None)
+        .await
+        .unwrap();
+    e.runner.set_held(false).await;
+    let mut next = NewRun::new(&dot.id, TriggerKind::FollowUp);
+    next.payload = Some(json!({"message": "Go on."}));
+    next.parent_run_id = Some(first.id.clone());
+    next.root_run_id = Some(first.id.clone());
+    next.session_id = Some("S1".into());
+    next.workspace_path = Some(e.dir.path().to_string_lossy().to_string());
+    let run = e.runner.enqueue(next).await.unwrap();
+    let run = wait_status(&e.store, &run.id, RunStatus::Succeeded, 15).await;
+    // The last call was the turn itself, in the same session.
+    let args = recorded_args(&e);
+    assert_eq!(args["prompt"], "Go on.");
+    assert_eq!(args["autocompact"], "60");
+    let argv: Vec<String> = serde_json::from_value(args["args"].clone()).unwrap();
+    assert!(argv.windows(2).any(|w| w == ["--resume", "S1"]));
+    let rows = e.store.list_context_events(&run.id).await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        (rows[0].fill_before, rows[0].fill_after),
+        (130_000, Some(20_000))
+    );
+    assert_eq!(
+        (run.context_fill, run.context_window),
+        (Some(24_002), Some(200_000))
+    );
+    // No files of the pass are left behind.
+    let left: Vec<_> = std::fs::read_dir(&e.scratch)
+        .map(|d| d.filter_map(|f| f.ok()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "{left:?}");
+}

@@ -1,0 +1,4 @@
+{"type": "system", "subtype": "status", "status": "compacting", "compact_output_chars": 0, "session_id": "cb098d15-8c39-4ff5-83bd-c4b2aca816d3", "uuid": "afaca26d-227d-4679-85ba-aa348bb2b86f"}
+{"type": "system", "subtype": "status", "status": null, "compact_result": "failed", "compact_error": "too_few_groups", "session_id": "cb098d15-8c39-4ff5-83bd-c4b2aca816d3", "uuid": "1e18744e-1310-49d6-8f9d-60adb1e361f3"}
+{"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 50, "estimated_tokens_delta": 50, "session_id": "cb098d15-8c39-4ff5-83bd-c4b2aca816d3", "uuid": "1660eaa0-b183-4e6d-8c12-289850a1c3b8"}
+{"type": "system", "subtype": "status", "status": null, "compact_result": "success", "session_id": "cb098d15-8c39-4ff5-83bd-c4b2aca816d3", "uuid": "555d91e3-d748-4204-bcb8-5d7eb10794f7"}

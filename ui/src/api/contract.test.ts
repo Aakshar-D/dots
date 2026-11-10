@@ -27,6 +27,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   RunWaiting: T.Run,
   RunCapped: T.Run,
   SpendToday: T.SpendToday,
+  ThreadContext: T.ThreadContext.array(),
+  RunContextReport: T.RunContextReport,
   RunNotDelivered: T.Run,
   DeliveryCounts: T.DeliveryCounts,
   UsageCountsState: T.UsageCountsState.array(),
@@ -120,6 +122,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   GrantStatus: T.GrantStatus.array(),
   LimitsState: T.LimitsState.array(),
   UsageSummary: T.UsageSummary,
+  ClaudeUsage: T.ClaudeUsage.array(),
+  ClaudeScan: T.ClaudeScan,
   WorkspaceView: T.WorkspaceView.array(),
   DotAccess: T.DotAccess.array(),
   ApiKeyView: T.ApiKeyView.array(),
@@ -193,6 +197,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   Trust: T.Trust,
   Category: T.Category,
   SearchKind: T.SearchKind,
+  ContextChoice: T.ContextChoice,
 };
 
 describe("Rust/TypeScript contract", () => {

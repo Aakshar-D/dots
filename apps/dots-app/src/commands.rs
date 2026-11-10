@@ -2337,6 +2337,23 @@ pub async fn usage_summary(
     Ok(state.rt()?.usage_summary(period).await?)
 }
 
+/// The Usage page's All Claude use for the period (usage tab spec section 7).
+#[tauri::command]
+pub async fn claude_usage(
+    state: State<'_, AppState>,
+    period: dots_core::model::UsagePeriod,
+) -> Res<dots_core::claude_usage::ClaudeUsage> {
+    Ok(state.rt()?.claude_usage(period).await?)
+}
+
+/// Reads what Claude Code wrote to its transcripts since the last scan.
+#[tauri::command]
+pub async fn claude_usage_scan(
+    state: State<'_, AppState>,
+) -> Res<dots_core::claude_usage::ClaudeScan> {
+    Ok(state.rt()?.claude_usage_scan().await?)
+}
+
 /// **Run anyway**: releases a held background run from the hold.
 #[tauri::command]
 pub async fn run_release_hold(state: State<'_, AppState>, run_id: String) -> Res<Run> {
@@ -2354,6 +2371,37 @@ pub async fn run_release_cap(state: State<'_, AppState>, run_id: String) -> Res<
 #[tauri::command]
 pub async fn spend_today(state: State<'_, AppState>) -> Res<dots_core::spend::SpendToday> {
     Ok(state.rt()?.spend_today().await?)
+}
+
+/// A topic's context meter and its "start fresh?" question (context rules spec).
+#[tauri::command]
+pub async fn thread_context(
+    state: State<'_, AppState>,
+    root_run_id: String,
+) -> Res<dots_core::context_rules::ThreadContext> {
+    Ok(state.rt()?.thread_context(&root_run_id).await?)
+}
+
+/// Compact now, Start fresh or Keep going, for a topic's next turn.
+#[tauri::command]
+pub async fn thread_context_choose(
+    state: State<'_, AppState>,
+    root_run_id: String,
+    choice: dots_core::context_rules::Choice,
+) -> Res<dots_core::context_rules::ThreadContext> {
+    Ok(state
+        .rt()?
+        .thread_context_choose(&root_run_id, choice)
+        .await?)
+}
+
+/// A run's compactions and fresh starts, with its dot's totals.
+#[tauri::command]
+pub async fn run_context_report(
+    state: State<'_, AppState>,
+    run_id: String,
+) -> Res<dots_core::context_rules::RunContextReport> {
+    Ok(state.rt()?.run_context_report(&run_id).await?)
 }
 
 /// Resumes a watcher Dots paused (too many runs, or an error).

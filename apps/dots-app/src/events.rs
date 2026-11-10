@@ -773,6 +773,8 @@ mod tests {
             model_tier: None,
             model_reason: None,
             model_fallback_from: None,
+            context_fill: None,
+            context_window: None,
         }
     }
 

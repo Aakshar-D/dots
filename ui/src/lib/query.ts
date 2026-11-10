@@ -102,6 +102,11 @@ export const keys = {
   /// run_updated refreshes it.
   deliveryToday: (dotId: string) => ["runs", dotId, "delivery-today"] as const,
   thread: (runId: string) => ["thread", runId] as const,
+  /// A topic's context meter and question, under the thread's key so a run_updated refreshes
+  /// it (context rules spec section 6).
+  threadContext: (rootRunId: string) => ["thread", rootRunId, "context"] as const,
+  /// A run's compactions and fresh starts, likewise.
+  runContext: (runId: string) => ["thread", runId, "context-report"] as const,
   /// A dot's pending scheduled messages (Send later).
   scheduledMessages: (dotId: string) => ["scheduled-messages", dotId] as const,
   events: (runId: string) => ["events", runId] as const,
@@ -150,6 +155,9 @@ export const keys = {
   releasesPage: ["releases-page"] as const,
   releaseNotes: (version: string) => ["release-notes", version] as const,
   usage: (period: string) => ["usage", period] as const,
+  /// All Claude use per period, and the scan of the transcripts that feeds it.
+  claudeUsage: (period: string) => ["claude-usage", period] as const,
+  claudeUsageScan: ["claude-usage-scan"] as const,
   /// Every team, and below it each team with its members and projects.
   teams: ["teams"] as const,
   team: (id: string) => ["teams", id] as const,

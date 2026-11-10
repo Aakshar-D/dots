@@ -1,12 +1,34 @@
 import type { Run } from "@/api/types";
 import { localTime } from "@/lib/format";
 
-/// "950", "12k", "182k", "2.1M".
+/// "950", "12k", "182k", "2.1M", "5.7B".
 export function formatTokens(n: number): string {
   if (n < 1000) return String(n);
   if (n < 10_000) return `${(n / 1000).toFixed(1).replace(/\.0$/, "")}k`;
   if (n < 1_000_000) return `${Math.round(n / 1000)}k`;
-  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  return `${(n / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`;
+}
+
+/// "1 message", "0 messages", "12 sessions".
+export function count(n: number, one: string, many = `${one}s`): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/// The parts of a path, either separator, with no empty ones.
+const parts = (path: string) => path.split(/[\\/]/).filter((p) => p !== "");
+
+/// The names the project table shows, in order: each folder's own name, and "parent/name" for
+/// the folders whose name another row shares (two "src" folders read "app/src", "site/src").
+export function projectNames(projects: { cwd: string | null; name: string }[]): string[] {
+  const named = (p: { cwd: string | null }) => p.cwd !== null && p.cwd.trim() !== "";
+  const seen = new Map<string, number>();
+  for (const p of projects.filter(named)) seen.set(p.name, (seen.get(p.name) ?? 0) + 1);
+  return projects.map((p) => {
+    if (!named(p) || (seen.get(p.name) ?? 0) < 2) return p.name;
+    const path = parts(p.cwd!);
+    return path.length < 2 ? p.name : `${path.at(-2)}/${path.at(-1)}`;
+  });
 }
 
 /// "45s", "12m 04s", "3h 12m".

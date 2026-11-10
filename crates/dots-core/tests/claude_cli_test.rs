@@ -31,9 +31,16 @@ fn parses_init_text_and_tool_use() {
     );
     assert_eq!(
         parse_line(TEXT),
-        vec![EngineEvent::AssistantText {
-            text: "pong".into()
-        }]
+        vec![
+            EngineEvent::AssistantText {
+                text: "pong".into()
+            },
+            // The turn's fill (context rules spec section 3).
+            EngineEvent::Context {
+                fill: Some(2),
+                window: None
+            }
+        ]
     );
     assert_eq!(
         parse_line(TOOL_USE),
@@ -181,6 +188,7 @@ fn ctx(session: Option<&str>) -> RunContext {
         cancel: CancellationToken::new(),
         approved_calls: Vec::new(),
         tools: Default::default(),
+        autocompact_pct: None,
     }
 }
 
