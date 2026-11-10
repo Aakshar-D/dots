@@ -59,6 +59,11 @@ async fn settings_round_trip() {
             standard: "sonnet".into(),
             large: "opus".into(),
         },
+        context_rules: dots_core::context_rules::ContextRules {
+            enabled: false,
+            compact_at: 50,
+            clear_at: 90,
+        },
     };
     store.put_settings(&s).await.unwrap();
     assert_eq!(store.get_settings().await.unwrap(), s);

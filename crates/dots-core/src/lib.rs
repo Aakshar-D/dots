@@ -14,6 +14,7 @@ pub mod claude_agents;
 pub mod claude_usage;
 pub mod connectors;
 pub mod context;
+pub mod context_rules;
 pub mod delivery;
 pub mod deploy;
 pub mod engine;

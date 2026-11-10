@@ -4,8 +4,26 @@ use crate::engine::EngineEvent;
 
 const MAX_OUTPUT: usize = 64 * 1024;
 
-/// Maps one line of `claude -p --output-format stream-json --verbose` output to events.
+/// Maps one line of `claude -p --output-format stream-json --verbose` output to events. A
+/// result's window is the largest it names; `LineParser` knows the run's model.
 pub fn parse_line(line: &str) -> Vec<EngineEvent> {
+    parse_with(line, &mut None)
+}
+
+/// Parses a run's lines in order, keeping the model `system/init` names, so that the result's
+/// window is that model's (context rules spec section 3), not a helper's.
+#[derive(Debug, Default)]
+pub struct LineParser {
+    model: Option<String>,
+}
+
+impl LineParser {
+    pub fn parse(&mut self, line: &str) -> Vec<EngineEvent> {
+        parse_with(line, &mut self.model)
+    }
+}
+
+fn parse_with(line: &str, model: &mut Option<String>) -> Vec<EngineEvent> {
     let line = line.trim();
     if line.is_empty() {
         return Vec::new();
@@ -29,6 +47,16 @@ pub fn parse_line(line: &str) -> Vec<EngineEvent> {
                 .into_iter()
                 .collect();
             out.extend(plugin_errors(&v));
+            // A `[1m]` model has a 1M window (context rules spec section 3).
+            if let Some(named) = v.get("model").and_then(Value::as_str) {
+                *model = Some(named.to_string());
+                if crate::context_rules::is_1m(named) {
+                    out.push(EngineEvent::Context {
+                        fill: None,
+                        window: Some(crate::context_rules::WINDOW_1M),
+                    });
+                }
+            }
             if out.is_empty() {
                 return raw();
             }
@@ -40,13 +68,38 @@ pub fn parse_line(line: &str) -> Vec<EngineEvent> {
                 .get("parent_tool_use_id")
                 .and_then(Value::as_str)
                 .filter(|p| !p.is_empty());
-            blocks(&v)
+            let mut out: Vec<EngineEvent> = blocks(&v)
                 .iter()
                 .filter_map(|b| assistant_block(b, parent))
-                .collect()
+                .collect();
+            // A helper's turns fill its own context, not the session's.
+            if parent.is_none() {
+                out.extend(turn_fill(&v));
+            }
+            out
+        }
+        // The CLI's progress lines (CLI 2.1.322): a compaction starting or ending, and its
+        // estimate of thinking tokens. Only a failed compaction is told, as a notice.
+        Some("system") if v.get("subtype").and_then(Value::as_str) == Some("status") => {
+            match v.get("compact_result").and_then(Value::as_str) {
+                Some("failed") => vec![EngineEvent::Notice {
+                    text: crate::context_rules::auto_compact_failed(
+                        v.get("compact_error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown"),
+                    ),
+                }],
+                _ => Vec::new(),
+            }
+        }
+        Some("system") if v.get("subtype").and_then(Value::as_str) == Some("thinking_tokens") => {
+            Vec::new()
+        }
+        Some("system") if v.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {
+            compact_boundary(&v).into_iter().collect()
         }
         Some("user") => blocks(&v).iter().filter_map(tool_result_block).collect(),
-        Some("result") => result_events(&v),
+        Some("result") => result_events(&v, model.as_deref()),
         Some("rate_limit_event") => limit_events(&v),
         _ => raw(),
     }
@@ -201,7 +254,93 @@ fn limit_events(v: &Value) -> Vec<EngineEvent> {
     }]
 }
 
-fn result_events(v: &Value) -> Vec<EngineEvent> {
+/// The context a main-thread turn sent (context rules spec section 3): its input tokens,
+/// cache writes and cache reads. Nothing for a line without usage.
+fn turn_fill(v: &Value) -> Option<EngineEvent> {
+    let usage = v.pointer("/message/usage")?.as_object()?;
+    let n = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let fill = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+    Some(EngineEvent::Context {
+        fill: Some(fill),
+        window: None,
+    })
+}
+
+/// A `system/compact_boundary` line: the CLI compacted the session (context rules spec
+/// section 2).
+fn compact_boundary(v: &Value) -> Option<EngineEvent> {
+    let meta = v.get("compact_metadata")?;
+    Some(EngineEvent::Compacted {
+        trigger: meta
+            .get("trigger")
+            .and_then(Value::as_str)
+            .unwrap_or("auto")
+            .to_string(),
+        before: meta.get("pre_tokens").and_then(Value::as_u64)?,
+        after: meta.get("post_tokens").and_then(Value::as_u64)?,
+    })
+}
+
+/// The `contextWindow` the result's `modelUsage` names for `model` (the run's, from
+/// `system/init`, with or without its `[1m]`), else the largest it names.
+fn result_window(v: &Value, model: Option<&str>) -> Option<u64> {
+    let all = v.get("modelUsage")?.as_object()?;
+    let window = |m: &Value| m.get("contextWindow").and_then(Value::as_u64);
+    if let Some(model) = model {
+        let lower = model.to_ascii_lowercase();
+        let bare = lower.trim_end_matches("[1m]");
+        let own = all.iter().find_map(|(name, m)| {
+            let name = name.to_ascii_lowercase();
+            (name == lower || name == bare || name.trim_end_matches("[1m]") == bare)
+                .then(|| window(m))
+                .flatten()
+        });
+        if own.is_some() {
+            return own;
+        }
+    }
+    all.values().filter_map(window).max()
+}
+
+/// What one CLI call used, from its `result` line (context rules spec section 5): the
+/// models' use since the last result when the CLI gives it (a `/compact` result's own
+/// `usage` is all zero), else the result's `usage` and `total_cost_usd`. `None` for any other
+/// line.
+pub fn pass_usage(line: &str) -> Option<crate::engine::PassUsage> {
+    let v: Value = serde_json::from_str(line.trim()).ok()?;
+    if v.get("type").and_then(Value::as_str) != Some("result") {
+        return None;
+    }
+    let n = |m: &Value, k: &str| m.get(k).and_then(Value::as_u64).unwrap_or(0);
+    if let Some(models) = v
+        .get("model_usage_since_last_result")
+        .and_then(Value::as_object)
+    {
+        let mut u = crate::engine::PassUsage::default();
+        let mut cost = None;
+        for m in models.values() {
+            let read = n(m, "cacheReadInputTokens");
+            u.tokens_in += n(m, "inputTokens") + n(m, "cacheCreationInputTokens") + read;
+            u.tokens_out += n(m, "outputTokens");
+            u.cache_read += read;
+            if let Some(c) = m.get("costUSD").and_then(Value::as_f64) {
+                cost = Some(cost.unwrap_or(0.0) + c);
+            }
+        }
+        u.cost_usd = cost;
+        return Some(u);
+    }
+    let usage = v.get("usage").cloned().unwrap_or(Value::Null);
+    let read = n(&usage, "cache_read_input_tokens");
+    Some(crate::engine::PassUsage {
+        tokens_in: n(&usage, "input_tokens") + n(&usage, "cache_creation_input_tokens") + read,
+        tokens_out: n(&usage, "output_tokens"),
+        cache_read: read,
+        cost_usd: v.get("total_cost_usd").and_then(Value::as_f64),
+    })
+}
+
+fn result_events(v: &Value, model: Option<&str>) -> Vec<EngineEvent> {
     let usage = v.get("usage");
     let n = |k: &str| {
         usage
@@ -217,6 +356,12 @@ fn result_events(v: &Value) -> Vec<EngineEvent> {
         cost_usd: v.get("total_cost_usd").and_then(Value::as_f64),
         cache_read: n("cache_read_input_tokens"),
     }];
+    if let Some(window) = result_window(v, model) {
+        out.push(EngineEvent::Context {
+            fill: None,
+            window: Some(window),
+        });
+    }
     let subtype = v
         .get("subtype")
         .and_then(Value::as_str)

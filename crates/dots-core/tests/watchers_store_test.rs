@@ -608,7 +608,8 @@ async fn held_events_are_counted_listed_oldest_first_taken_dropped_and_cascade()
     let listed = store.list_watchers(&dot.id).await.unwrap();
     let held = |id: &str| listed.iter().find(|l| l.id == id).unwrap().held_count;
     assert_eq!((held(&w.id), held(&w2.id)), (3, 1));
-    assert_eq!(store.all_watchers().await.unwrap()[0].held_count, 3);
+    let all = store.all_watchers().await.unwrap();
+    assert_eq!(all.iter().find(|l| l.id == w.id).unwrap().held_count, 3);
     let held = store.held_events(&w.id).await.unwrap();
     assert_eq!(held, vec![first.clone(), mid.clone(), late.clone()]);
     assert_eq!(held[0].files, Some(files));

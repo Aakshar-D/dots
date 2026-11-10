@@ -89,6 +89,11 @@ fn spec() -> DotSpec {
         daily_usd: Some(2.0),
         daily_tokens: None,
     };
+    s.context_rules = Some(dots_core::context_rules::ContextRules {
+        enabled: true,
+        compact_at: 50,
+        clear_at: 75,
+    });
     s.uses = Uses {
         mcp_servers: vec!["github".into()],
         skills: vec!["pdf".into()],
@@ -656,6 +661,8 @@ fn run() -> Run {
         model_tier: Some(ModelTier::Standard),
         model_reason: Some("code work: refactor".into()),
         model_fallback_from: Some("opus".into()),
+        context_fill: Some(92_000),
+        context_window: Some(200_000),
         result_check: Some(ResultCheck::Done {
             model: "haiku".into(),
             verdict: Verdict::HasConcerns,
@@ -1018,8 +1025,8 @@ fn status() -> Status {
 /// The sample of `e`'s own variant. The match has no wildcard arm and the array's length is
 /// part of its type, so a new `EngineEvent` variant does not compile until it has a name
 /// here and a sample in `engine_events`.
-fn engine_event_sample<'a>(samples: &'a [EngineEvent; 11], e: &EngineEvent) -> &'a EngineEvent {
-    let [started, text, call, result, usage, limits, raw, message, finished, failed, notice] =
+fn engine_event_sample<'a>(samples: &'a [EngineEvent; 13], e: &EngineEvent) -> &'a EngineEvent {
+    let [started, text, call, result, usage, limits, raw, message, finished, failed, notice, context, compacted] =
         samples;
     match e {
         EngineEvent::SessionStarted { .. } => started,
@@ -1033,6 +1040,8 @@ fn engine_event_sample<'a>(samples: &'a [EngineEvent; 11], e: &EngineEvent) -> &
         EngineEvent::Finished { .. } => finished,
         EngineEvent::Failed { .. } => failed,
         EngineEvent::Notice { .. } => notice,
+        EngineEvent::Context { .. } => context,
+        EngineEvent::Compacted { .. } => compacted,
     }
 }
 
@@ -1089,6 +1098,15 @@ fn engine_events() -> Value {
         },
         EngineEvent::Notice {
             text: "skill pdf: folder not found".into(),
+        },
+        EngineEvent::Context {
+            fill: Some(92_000),
+            window: None,
+        },
+        EngineEvent::Compacted {
+            trigger: "auto".into(),
+            before: 124_000,
+            after: 36_000,
         },
     ];
     for sample in &samples {
@@ -2350,6 +2368,7 @@ pub fn samples() -> Value {
     attachments_samples(&mut samples);
     intents_samples(&mut samples);
     search_samples(&mut samples);
+    context_rules_samples(&mut samples);
     samples["ResultCheck"] = result_checks();
     samples
 }
@@ -2561,6 +2580,72 @@ fn intents_samples(samples: &mut Value) {
             org_id: None,
             workspace_id: "default".into(),
         }));
+}
+
+/// The context meter and rules (context rules spec): a topic that asks "start fresh?", one
+/// with a request, and a run's records.
+fn context_rules_samples(samples: &mut Value) {
+    use dots_core::context_rules::{
+        Choice, ContextRules, EventKind, Request, RunContextReport, ThreadContext, MAX_PCT, MIN_PCT,
+    };
+    samples["ThreadContext"] = to([
+        ThreadContext {
+            root_run_id: "01J0RUN".into(),
+            fill: Some(164_000),
+            window: 200_000,
+            rules: ContextRules::default(),
+            keep_going: false,
+            request: None,
+            asks_fresh: true,
+        },
+        ThreadContext {
+            root_run_id: "01J0RUN".into(),
+            fill: None,
+            window: 1_000_000,
+            rules: ContextRules::default(),
+            keep_going: true,
+            request: Some(Request::Fresh),
+            asks_fresh: false,
+        },
+    ]);
+    samples["RunContextReport"] = to(RunContextReport {
+        events: vec![
+            dots_core::store::ContextEvent {
+                id: "01J0CTX1".into(),
+                run_id: "01J0RUN".into(),
+                dot_id: "01J0DOT".into(),
+                root_run_id: "01J0RUN".into(),
+                kind: EventKind::Compact,
+                trigger: "auto".into(),
+                fill_before: 124_000,
+                fill_after: Some(36_000),
+                from_session: Some("sess-1".into()),
+                tokens: Some(3_200),
+                ok: true,
+                at: TS.into(),
+            },
+            dots_core::store::ContextEvent {
+                id: "01J0CTX2".into(),
+                run_id: "01J0RUN".into(),
+                dot_id: "01J0DOT".into(),
+                root_run_id: "01J0RUN".into(),
+                kind: EventKind::Clear,
+                trigger: "manual".into(),
+                fill_before: 168_000,
+                fill_after: None,
+                from_session: Some("sess-1".into()),
+                tokens: None,
+                ok: true,
+                at: TS.into(),
+            },
+        ],
+        dot_compactions: 4,
+        dot_clears: 1,
+        rules: ContextRules::default(),
+    });
+    samples["Enums"]["ContextChoice"] = to(Choice::ALL);
+    samples["Limits"]["context_min_pct"] = json!(MIN_PCT);
+    samples["Limits"]["context_max_pct"] = json!(MAX_PCT);
 }
 
 /// Search (search spec section 3): what the search box asks, and a hit of each place one

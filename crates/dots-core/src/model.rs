@@ -191,6 +191,9 @@ pub struct DotSpec {
     /// (result check spec section 5). A spec written before it existed reads as on.
     #[serde(default = "yes")]
     pub check_results: bool,
+    /// The dot's own context rules (context rules spec section 4); `None` takes Settings'.
+    #[serde(default)]
+    pub context_rules: Option<crate::context_rules::ContextRules>,
     pub use_user_settings: bool,
     pub max_turns: u32,
     pub timeout_secs: u64,
@@ -238,6 +241,7 @@ impl DotSpec {
             spend_cap: crate::spend::DotCaps::default(),
             use_global_instructions: true,
             check_results: true,
+            context_rules: None,
             use_user_settings: false,
             max_turns: 40,
             timeout_secs: 1800,
@@ -304,6 +308,9 @@ impl DotSpec {
             }
         }
         self.spend_cap.validate()?;
+        if let Some(rules) = &self.context_rules {
+            rules.validate()?;
+        }
         self.policy.validate()?;
         // Whether the Library has each item is checked by the store when the dot is saved.
         self.uses.validate()?;
@@ -421,6 +428,13 @@ pub struct Run {
     /// again with `model` (auto model spec section 4).
     #[serde(default)]
     pub model_fallback_from: Option<String>,
+    /// The tokens the run's last main-thread turn sent, its context fill (context rules spec
+    /// section 3); `None` before one, and for a run whose engine reports none.
+    #[serde(default)]
+    pub context_fill: Option<u64>,
+    /// The context window its engine reported; `None` when it gave none.
+    #[serde(default)]
+    pub context_window: Option<u64>,
 }
 
 /// Input for `Store::create_run`. `root_run_id: None` makes the run its own root.

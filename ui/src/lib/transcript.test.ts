@@ -50,6 +50,20 @@ describe("the transcript", () => {
     ]);
   });
 
+  it("shows a compaction as a note and leaves the context fill out", () => {
+    const items = transcriptItems([
+      ev({ kind: "context", fill: 92000, window: null }),
+      ev({ kind: "compacted", trigger: "manual", before: 124000, after: 36000 }),
+    ]);
+    expect(items).toEqual([
+      {
+        type: "note",
+        seq: expect.any(Number),
+        text: "Conversation compacted: 124k → 36k tokens",
+      },
+    ]);
+  });
+
   it("keeps what it cannot read as raw instead of dropping it", () => {
     const items = transcriptItems([
       ev({ kind: "raw", line: '{"type":"future"}' }),

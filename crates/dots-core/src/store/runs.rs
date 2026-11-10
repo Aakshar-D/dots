@@ -17,7 +17,7 @@ pub(super) const RUN_COLUMNS: &str =
     queued_at, started_at, ended_at, reviewed_at, retry_of, workflow_step_run_id, \
     tokens_cache_read, cost_usd, hold_released, quiet_since, quiet_limit_secs, \
     quiet_stopped, delivered_at, undelivered_at, undelivered_reason, dismissed_at, cap_released, \
-    model, model_tier, model_reason, model_fallback_from, result_check";
+    model, model_tier, model_reason, model_fallback_from, result_check, context_fill, \n    context_window";
 
 /// The reason a run ended undelivered: the first non-empty line of its error, or `failed`.
 fn undelivered_reason(error: Option<&str>) -> String {
@@ -80,6 +80,12 @@ pub(super) fn run_from_row(row: &SqliteRow) -> Result<Run> {
             .transpose()?,
         model_reason: row.try_get("model_reason")?,
         model_fallback_from: row.try_get("model_fallback_from")?,
+        context_fill: row
+            .try_get::<Option<i64>, _>("context_fill")?
+            .map(|n| n.max(0) as u64),
+        context_window: row
+            .try_get::<Option<i64>, _>("context_window")?
+            .map(|n| n.max(0) as u64),
     })
 }
 

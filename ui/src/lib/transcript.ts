@@ -149,6 +149,16 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
       case "notice":
         items.push({ type: "note", seq: record.seq, text: event.text });
         break;
+      case "compacted": {
+        const k = (n: number) => `${Math.round(n / 1000)}k`;
+        items.push({
+          type: "note",
+          seq: record.seq,
+          text: `Conversation compacted: ${k(event.before)} → ${k(event.after)} tokens`,
+        });
+        break;
+      }
+      case "context":
       case "session_started":
       case "usage":
       case "message":

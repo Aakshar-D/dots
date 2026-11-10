@@ -5,6 +5,7 @@ import { useState, type ReactNode } from "react";
 import { commands } from "@/api/commands";
 import { EngineKind, WorkspaceMode, type Dot, type DotSpec } from "@/api/types";
 import { Field } from "@/components/Field";
+import { ContextRulesFields } from "@/components/ContextMeter";
 import { ModelPicker, useModels } from "@/components/ModelPicker";
 import { CapInput, SpendLine, useSpendToday } from "@/components/SpendCaps";
 import { Button } from "@/components/ui/button";
@@ -488,6 +489,40 @@ export function DotForm(props: {
           onChange={(spend_cap) => set("spend_cap", spend_cap)}
         />
       </Section>
+
+      {spec.engine === "claude" && (
+        <Section title="Context">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="dot-context-own"
+              checked={spec.context_rules !== null}
+              onCheckedChange={(own) =>
+                set(
+                  "context_rules",
+                  own ? (settings?.context_rules ?? { enabled: true, compact_at: 60, clear_at: 80 }) : null,
+                )
+              }
+            />
+            <Label htmlFor="dot-context-own">Use its own context rules</Label>
+          </div>
+          {spec.context_rules === null ? (
+            <p className="text-xs text-muted-foreground">
+              It follows Settings › Runs &amp; server › Context
+              {settings &&
+                (settings.context_rules.enabled
+                  ? `: compact at ${settings.context_rules.compact_at}%, start fresh at ${settings.context_rules.clear_at}%.`
+                  : ": off.")}
+            </p>
+          ) : (
+            <ContextRulesFields
+              id="dot-context"
+              value={spec.context_rules}
+              onChange={(rules) => set("context_rules", rules)}
+              error={errors.context_rules}
+            />
+          )}
+        </Section>
+      )}
 
       {spec.engine === "claude" && (
         <Section title="Claude Code">
