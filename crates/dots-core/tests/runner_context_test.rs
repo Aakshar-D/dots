@@ -87,8 +87,11 @@ impl Env {
     async fn earlier(&self, dot: &Dot, fill: u64) -> Run {
         let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
         new.payload = Some(json!({"message": "Fix the parser"}));
+        // The dispatcher is held while the earlier run is made: a pass that picked it up
+        // would run it and give it a session and fill of its own.
+        self.runner.set_held(true).await;
         let r = self.store.create_run(&new).await.unwrap();
-        // Ended at once: a dispatcher that wakes meanwhile must not start it.
+        // Ended before the dispatcher is let go.
         self.store
             .finish_run(&r.id, RunStatus::Succeeded, Some("Parser fixed"), None)
             .await
@@ -102,6 +105,7 @@ impl Env {
             .set_workspace(&r.id, &self.dir.path().to_string_lossy(), None, None)
             .await
             .unwrap();
+        self.runner.set_held(false).await;
         self.store.get_run(&r.id).await.unwrap()
     }
 

@@ -638,12 +638,15 @@ async fn a_fairly_full_session_is_compacted_by_the_cli_before_the_turn() {
     )
     .await;
     let dot = folder_dot(&e, 280).await;
+    // The dispatcher is held while the earlier run is made: a pass that picked it up
+    // would run it and give it a session and fill of its own.
+    e.runner.set_held(true).await;
     let first = e
         .store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
         .await
         .unwrap();
-    // Ended at once: a dispatcher that wakes meanwhile must not start it.
+    // Ended before the dispatcher is let go.
     e.store
         .finish_run(&first.id, RunStatus::Succeeded, Some("ok"), None)
         .await
@@ -657,6 +660,7 @@ async fn a_fairly_full_session_is_compacted_by_the_cli_before_the_turn() {
         .set_workspace(&first.id, &e.dir.path().to_string_lossy(), None, None)
         .await
         .unwrap();
+    e.runner.set_held(false).await;
     let mut next = NewRun::new(&dot.id, TriggerKind::FollowUp);
     next.payload = Some(json!({"message": "Go on."}));
     next.parent_run_id = Some(first.id.clone());

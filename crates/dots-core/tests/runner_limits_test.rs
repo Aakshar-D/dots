@@ -303,12 +303,15 @@ async fn a_follow_up_that_started_fresh_goes_back_with_its_old_session() {
     let dot = e.dot("f").await;
     let folder = dot.spec.workdir.clone();
     // The session's last turn filled 180k of 200k: the next background turn starts fresh.
+    // The dispatcher is held while the earlier run is made: a pass that picked it up
+    // would run it and give it a session and fill of its own.
+    e.runner.set_held(true).await;
     let earlier = e
         .store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
         .await
         .unwrap();
-    // Ended at once: a dispatcher that wakes meanwhile must not start it.
+    // Ended before the dispatcher is let go.
     e.store
         .finish_run(&earlier.id, RunStatus::Succeeded, Some("ok"), None)
         .await
@@ -321,6 +324,7 @@ async fn a_follow_up_that_started_fresh_goes_back_with_its_old_session() {
         .set_run_context(&earlier.id, Some(180_000), Some(200_000))
         .await
         .unwrap();
+    e.runner.set_held(false).await;
     let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);
     new.parent_run_id = Some(earlier.id.clone());
     new.root_run_id = Some(earlier.id.clone());
