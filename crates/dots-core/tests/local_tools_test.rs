@@ -240,7 +240,10 @@ fn a_prepared_input_passes_prepare_again_unchanged() {
             "propose_instructions",
             json!({"instructions": "Do it twice.", "reason": "Twice"}),
         ),
-        ("graph", json!({"action": "node", "node": "Runner", "depth": 2})),
+        (
+            "graph",
+            json!({"action": "node", "node": "Runner", "depth": 2}),
+        ),
     ];
     let mut tools_seen = std::collections::BTreeSet::new();
     for (name, args) in &calls {
