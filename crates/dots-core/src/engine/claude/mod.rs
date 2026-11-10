@@ -79,23 +79,12 @@ async fn write_private(path: &std::path::Path, data: &[u8]) -> std::io::Result<(
     f.flush().await
 }
 
-#[async_trait]
-impl Engine for ClaudeEngine {
-    async fn start(&self, ctx: RunContext) -> Result<mpsc::Receiver<EngineEvent>> {
-        tokio::fs::create_dir_all(&self.scratch_dir).await?;
-        let mcp_path = self.scratch_dir.join(format!("mcp-{}.json", ctx.run_id));
-        write_private(
-            &mcp_path,
-            &serde_json::to_vec_pretty(&args::mcp_config(&ctx))?,
-        )
-        .await?;
-        let settings_path = args::settings_path(&mcp_path);
-        write_private(
-            &settings_path,
-            &serde_json::to_vec_pretty(&args::cli_settings())?,
-        )
-        .await?;
+/// The longest a compaction or hand-off pass may take (context rules spec section 5).
+const PASS_LIMIT: Duration = Duration::from_secs(600);
 
+impl ClaudeEngine {
+    /// The CLI's command for `ctx`, with the notices of the grants it refused.
+    fn command(&self, ctx: &RunContext, mcp_path: &Path) -> (Command, Vec<String>) {
         let mut cmd = Command::new(&self.program);
         // Dots' environment stays out; the dot's shell grants go in (env vault spec §8).
         start_clean(&mut cmd, Child::Cli);
@@ -111,7 +100,7 @@ impl Engine for ClaudeEngine {
                 cmd.env(k.as_str(), v.as_str());
             }
         }
-        cmd.args(args::build_args(&ctx, &mcp_path))
+        cmd.args(args::build_args(ctx, mcp_path))
             .current_dir(&ctx.workspace)
             .env(
                 "MCP_TOOL_TIMEOUT",
@@ -121,10 +110,147 @@ impl Engine for ClaudeEngine {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // The CLI compacts a long run by itself at the dot's share (context rules spec
+        // section 4).
+        if let Some(pct) = ctx.autocompact_pct {
+            cmd.env("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", pct.to_string());
+        }
         for (k, v) in &self.env {
             cmd.env(k, v);
         }
         crate::proc::hide_window(&mut cmd);
+        (cmd, notices)
+    }
+
+    /// One more call of the CLI in the run's session before the run (context rules spec
+    /// section 5): the run's own arguments with `--resume ctx.session_id`, `input` on stdin.
+    /// Its output, parsed. Ends on the run's cancel or after `PASS_LIMIT`.
+    async fn pass(&self, ctx: &RunContext, input: &str) -> Result<Vec<EngineEvent>> {
+        if ctx.session_id.is_none() {
+            return Err(Error::Invalid("the run has no session".into()));
+        }
+        tokio::fs::create_dir_all(&self.scratch_dir).await?;
+        let mcp_path = self
+            .scratch_dir
+            .join(format!("mcp-{}-pass.json", ctx.run_id));
+        write_private(
+            &mcp_path,
+            &serde_json::to_vec_pretty(&args::mcp_config(ctx))?,
+        )
+        .await?;
+        let settings_path = args::settings_path(&mcp_path);
+        write_private(
+            &settings_path,
+            &serde_json::to_vec_pretty(&args::cli_settings())?,
+        )
+        .await?;
+        let (mut cmd, _) = self.command(ctx, &mcp_path);
+        let out = async {
+            let mut child = cmd.spawn().map_err(|e| {
+                Error::Other(format!("failed to start {}: {e}", self.program.display()))
+            })?;
+            let mut stdin = child.stdin.take().expect("stdin is piped");
+            let _ = stdin.write_all(input.as_bytes()).await;
+            drop(stdin);
+            tokio::select! {
+                out = child.wait_with_output() => Ok(out?),
+                _ = ctx.cancel.cancelled() => Err(Error::Other("cancelled".into())),
+                _ = tokio::time::sleep(PASS_LIMIT) => Err(Error::Other("it took too long".into())),
+            }
+        }
+        .await;
+        let _ = tokio::fs::remove_file(&mcp_path).await;
+        let _ = tokio::fs::remove_file(&settings_path).await;
+        let out = out?;
+        let events: Vec<EngineEvent> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .flat_map(parse::parse_line)
+            .collect();
+        if !out.status.success() && !events.iter().any(is_end) {
+            let tail = crate::vault::redact::global()
+                .scrub(String::from_utf8_lossy(&out.stderr).trim())
+                .chars()
+                .rev()
+                .take(500)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<String>();
+            return Err(Error::Other(format!(
+                "claude exited with code {}{}",
+                out.status
+                    .code()
+                    .map_or("unknown".into(), |c| c.to_string()),
+                if tail.is_empty() {
+                    String::new()
+                } else {
+                    format!(": {tail}")
+                }
+            )));
+        }
+        Ok(events)
+    }
+}
+
+fn is_end(ev: &EngineEvent) -> bool {
+    matches!(
+        ev,
+        EngineEvent::Finished { .. } | EngineEvent::Failed { .. }
+    )
+}
+
+#[async_trait]
+impl Engine for ClaudeEngine {
+    /// `/compact` in the session (context rules spec section 2: it works headless and writes a
+    /// `compact_boundary`).
+    async fn compact(&self, ctx: &RunContext) -> Result<Option<crate::engine::Compaction>> {
+        let events = self.pass(ctx, "/compact").await?;
+        if let Some((before, after)) = events.iter().find_map(|e| match e {
+            EngineEvent::Compacted { before, after, .. } => Some((*before, *after)),
+            _ => None,
+        }) {
+            return Ok(Some(crate::engine::Compaction { before, after }));
+        }
+        match events.iter().find_map(|e| match e {
+            EngineEvent::Failed { error } => Some(error.clone()),
+            _ => None,
+        }) {
+            Some(error) => Err(Error::Other(error)),
+            None => Err(Error::Other("the CLI did not compact the session".into())),
+        }
+    }
+
+    /// The session's answer to `ctx.prompt`, in one model turn.
+    async fn handoff_summary(&self, ctx: &RunContext) -> Result<Option<String>> {
+        let mut one = ctx.clone();
+        one.dot.spec.max_turns = 1;
+        let events = self.pass(&one, &ctx.prompt).await?;
+        for e in &events {
+            match e {
+                EngineEvent::Finished { summary } => return Ok(Some(summary.clone())),
+                EngineEvent::Failed { error } => return Err(Error::Other(error.clone())),
+                _ => {}
+            }
+        }
+        Err(Error::Other("the CLI gave no answer".into()))
+    }
+
+    async fn start(&self, ctx: RunContext) -> Result<mpsc::Receiver<EngineEvent>> {
+        tokio::fs::create_dir_all(&self.scratch_dir).await?;
+        let mcp_path = self.scratch_dir.join(format!("mcp-{}.json", ctx.run_id));
+        write_private(
+            &mcp_path,
+            &serde_json::to_vec_pretty(&args::mcp_config(&ctx))?,
+        )
+        .await?;
+        let settings_path = args::settings_path(&mcp_path);
+        write_private(
+            &settings_path,
+            &serde_json::to_vec_pretty(&args::cli_settings())?,
+        )
+        .await?;
+
+        let (mut cmd, notices) = self.command(&ctx, &mcp_path);
         let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => {

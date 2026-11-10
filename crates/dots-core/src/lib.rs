@@ -13,6 +13,7 @@ pub mod checkpoint;
 pub mod claude_agents;
 pub mod connectors;
 pub mod context;
+pub mod context_rules;
 pub mod delivery;
 pub mod deploy;
 pub mod engine;

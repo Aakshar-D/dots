@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tokio::sync::mpsc;
 
-use super::{Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext};
+use super::{Compaction, Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext};
 use crate::model::ApplyState;
 use crate::Result;
 
@@ -40,6 +40,13 @@ pub struct ScriptedEngine {
     /// The script of a run that is handed approved calls. `Some` makes this an engine that
     /// performs such calls itself.
     resume_steps: Option<Arc<Vec<Step>>>,
+    /// What `compact` answers: `None` cannot compact, `Some(Err)` fails with the text.
+    compaction: Option<std::result::Result<Compaction, String>>,
+    /// What `handoff_summary` answers, likewise.
+    summary: Option<std::result::Result<String, String>>,
+    /// What the runner asked, in order: `compact <session>`, `handoff <session>`,
+    /// `start <session or ->`, each start followed by its prompt (`prompt <text>`).
+    log: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl ScriptedEngine {
@@ -48,7 +55,27 @@ impl ScriptedEngine {
             steps: Arc::new(steps),
             gate: None,
             resume_steps: None,
+            compaction: None,
+            summary: None,
+            log: Arc::default(),
         }
+    }
+
+    /// Makes `compact` answer `outcome`.
+    pub fn compacting(mut self, outcome: std::result::Result<Compaction, String>) -> Self {
+        self.compaction = Some(outcome);
+        self
+    }
+
+    /// Makes `handoff_summary` answer `outcome`.
+    pub fn summarizing(mut self, outcome: std::result::Result<String, String>) -> Self {
+        self.summary = Some(outcome);
+        self
+    }
+
+    /// What the runner asked of this engine so far (`log`).
+    pub fn log(&self) -> Vec<String> {
+        self.log.lock().expect("log lock").clone()
     }
 
     pub fn with_gate(steps: Vec<Step>, gate: Arc<dyn PermissionGate>) -> Self {
@@ -56,6 +83,9 @@ impl ScriptedEngine {
             steps: Arc::new(steps),
             gate: Some(gate),
             resume_steps: None,
+            compaction: None,
+            summary: None,
+            log: Arc::default(),
         }
     }
 
@@ -71,6 +101,14 @@ impl ScriptedEngine {
 #[async_trait]
 impl Engine for ScriptedEngine {
     async fn start(&self, ctx: RunContext) -> Result<mpsc::Receiver<EngineEvent>> {
+        {
+            let mut log = self.log.lock().expect("log lock");
+            log.push(format!(
+                "start {}",
+                ctx.session_id.as_deref().unwrap_or("-")
+            ));
+            log.push(format!("prompt {}", ctx.prompt));
+        }
         let (tx, rx) = mpsc::channel(64);
         let steps = match &self.resume_steps {
             Some(resume) if !ctx.approved_calls.is_empty() => resume.clone(),
@@ -174,5 +212,29 @@ impl Engine for ScriptedEngine {
 
     fn applies_approved_calls(&self) -> bool {
         self.resume_steps.is_some()
+    }
+
+    async fn compact(&self, ctx: &RunContext) -> Result<Option<Compaction>> {
+        self.log.lock().expect("log lock").push(format!(
+            "compact {}",
+            ctx.session_id.as_deref().unwrap_or("-")
+        ));
+        match &self.compaction {
+            None => Ok(None),
+            Some(Ok(c)) => Ok(Some(*c)),
+            Some(Err(e)) => Err(crate::Error::Other(e.clone())),
+        }
+    }
+
+    async fn handoff_summary(&self, ctx: &RunContext) -> Result<Option<String>> {
+        self.log.lock().expect("log lock").push(format!(
+            "handoff {}",
+            ctx.session_id.as_deref().unwrap_or("-")
+        ));
+        match &self.summary {
+            None => Ok(None),
+            Some(Ok(s)) => Ok(Some(s.clone())),
+            Some(Err(e)) => Err(crate::Error::Other(e.clone())),
+        }
     }
 }

@@ -29,6 +29,15 @@ pub fn parse_line(line: &str) -> Vec<EngineEvent> {
                 .into_iter()
                 .collect();
             out.extend(plugin_errors(&v));
+            // A `[1m]` model has a 1M window (context rules spec section 3).
+            if let Some(model) = v.get("model").and_then(Value::as_str) {
+                if crate::context_rules::is_1m(model) {
+                    out.push(EngineEvent::Context {
+                        fill: None,
+                        window: Some(crate::context_rules::WINDOW_1M),
+                    });
+                }
+            }
             if out.is_empty() {
                 return raw();
             }
@@ -40,10 +49,18 @@ pub fn parse_line(line: &str) -> Vec<EngineEvent> {
                 .get("parent_tool_use_id")
                 .and_then(Value::as_str)
                 .filter(|p| !p.is_empty());
-            blocks(&v)
+            let mut out: Vec<EngineEvent> = blocks(&v)
                 .iter()
                 .filter_map(|b| assistant_block(b, parent))
-                .collect()
+                .collect();
+            // A helper's turns fill its own context, not the session's.
+            if parent.is_none() {
+                out.extend(turn_fill(&v));
+            }
+            out
+        }
+        Some("system") if v.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {
+            compact_boundary(&v).into_iter().collect()
         }
         Some("user") => blocks(&v).iter().filter_map(tool_result_block).collect(),
         Some("result") => result_events(&v),
@@ -201,6 +218,42 @@ fn limit_events(v: &Value) -> Vec<EngineEvent> {
     }]
 }
 
+/// The context a main-thread turn sent (context rules spec section 3): its input tokens,
+/// cache writes and cache reads. Nothing for a line without usage.
+fn turn_fill(v: &Value) -> Option<EngineEvent> {
+    let usage = v.pointer("/message/usage")?.as_object()?;
+    let n = |k: &str| usage.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let fill = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+    Some(EngineEvent::Context {
+        fill: Some(fill),
+        window: None,
+    })
+}
+
+/// A `system/compact_boundary` line: the CLI compacted the session (context rules spec
+/// section 2).
+fn compact_boundary(v: &Value) -> Option<EngineEvent> {
+    let meta = v.get("compact_metadata")?;
+    Some(EngineEvent::Compacted {
+        trigger: meta
+            .get("trigger")
+            .and_then(Value::as_str)
+            .unwrap_or("auto")
+            .to_string(),
+        before: meta.get("pre_tokens").and_then(Value::as_u64)?,
+        after: meta.get("post_tokens").and_then(Value::as_u64)?,
+    })
+}
+
+/// The largest `contextWindow` of the result's `modelUsage`, if it names one.
+fn result_window(v: &Value) -> Option<u64> {
+    v.get("modelUsage")?
+        .as_object()?
+        .values()
+        .filter_map(|m| m.get("contextWindow").and_then(Value::as_u64))
+        .max()
+}
+
 fn result_events(v: &Value) -> Vec<EngineEvent> {
     let usage = v.get("usage");
     let n = |k: &str| {
@@ -217,6 +270,12 @@ fn result_events(v: &Value) -> Vec<EngineEvent> {
         cost_usd: v.get("total_cost_usd").and_then(Value::as_f64),
         cache_read: n("cache_read_input_tokens"),
     }];
+    if let Some(window) = result_window(v) {
+        out.push(EngineEvent::Context {
+            fill: None,
+            window: Some(window),
+        });
+    }
     let subtype = v
         .get("subtype")
         .and_then(Value::as_str)
