@@ -48,8 +48,9 @@ Pinned as fixtures in `crates/dots-core/tests/fixtures/context_turn.jsonl` and
 - The parser emits `EngineEvent::Context { fill, window }`: `fill` from each main-thread
   assistant line, `window` from `system/init` (only for a `[1m]` model) and from the result's
   `modelUsage` (the largest `contextWindow` it names). It is not stored as a run event; the
-  runner writes it to the run (`runs.context_fill`, `runs.context_window`, migration 0044)
-  and announces the run.
+  runner writes it to the run (`runs.context_fill`, `runs.context_window`, migration 0044).
+  It does not announce the run for each turn (too often); the run's next update carries it,
+  at the latest when it ends.
 - The window shown: the run's stored window, else 1,000,000 for a `[1m]` model id, else
   200,000 (`context_rules::window_for`).
 - A session's fill is its newest run's fill. A topic's meter is the newest run of the topic
