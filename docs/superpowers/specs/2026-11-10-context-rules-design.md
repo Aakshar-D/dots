@@ -43,6 +43,12 @@ Pinned as fixtures in `crates/dots-core/tests/fixtures/context_turn.jsonl` and
   normally. An automatic compaction that succeeds writes the same `compact_boundary` with
   `trigger: "auto"`.
 
+- With that variable the CLI also writes `system/status` lines (`status: compacting`, then
+  `compact_result: success` or `failed` with `compact_error`) and `system/thinking_tokens`
+  estimates (fixture `system_status.jsonl`). Dots shows none of them, except a failed
+  compaction, which is a notice on the run: "The CLI could not compact the conversation by
+  itself (too_few_groups); it went on as it was."
+
 ## 3. The meter
 
 - The parser emits `EngineEvent::Context { fill, window }`: `fill` from each main-thread
@@ -195,3 +201,10 @@ Changes after review of PR #81:
 - The hand-off note is quoted as data in the seed.
 - The person's request is taken once the step is done, not when it is decided.
 - The result's window is the run's own model's.
+
+After in-app QA:
+
+- The CLI's `system/status` and `system/thinking_tokens` lines no longer show as raw output.
+- The run page's tokens say how much of them the extra calls used: "1,200 in, 340 out
+  (includes 282k for compactions and hand-off notes)". They were always inside the total.
+- The dot editor keeps Save off while its context rules are out of bounds, as Settings does.
