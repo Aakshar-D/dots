@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { LimitsState, UsageSummary } from "@/api/types";
+import type { ClaudeUsage, LimitsState, UsageSummary } from "@/api/types";
+import { localTime } from "@/lib/format";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -81,5 +82,98 @@ describe("the Usage page", () => {
     await open(() => ({ ...week, rows: [] }));
     expect(await screen.findByText("No runs in the last 5 hours.")).toBeVisible();
     expect(screen.getByText("A deleted dot's runs are deleted with it and not counted.")).toBeVisible();
+  });
+});
+
+describe("all Claude use on the Usage page", () => {
+  const [week, noFolder] = sample.claudeUsage as [ClaudeUsage, ClaudeUsage];
+
+  /// The page with the core answering `usage` for every period.
+  async function openAll(usage: (period: string) => ClaudeUsage = () => week) {
+    backend.on("claude_usage", (args) => ({
+      ...usage(args.period as string),
+      period: args.period as ClaudeUsage["period"],
+    }));
+    return open();
+  }
+
+  it("shows the person's own sessions, Dots' and all of it, then each project", async () => {
+    await openAll();
+    const all = await screen.findByRole("region", { name: "All Claude use" });
+    const totals = await within(all).findAllByRole("definition");
+    expect(totals.map((t) => t.textContent)).toEqual([
+      "3900 messages · 58 sessions · 3.1M tokens · cache reads 48M",
+      "310 messages · 5 sessions · 461k tokens · cache reads 3.1M",
+      "4210 messages · 63 sessions · 3.6M tokens · cache reads 51.1M",
+    ]);
+    const table = within(all).getByRole("table", {
+      name: "Claude use by project in the last 5 hours",
+    });
+    const cells = within(table)
+      .getAllByRole("row")
+      .slice(1)
+      .map((r) => within(r).getAllByRole("cell").map((c) => c.textContent));
+    expect(cells).toEqual([
+      ["dots", "3000", "40", "2.6M", "40M"],
+      ["Dots (all dots)", "310", "5", "461k", "3.1M"],
+      ["site", "900", "18", "530k", "8M"],
+    ]);
+    // The folder's full path on hover.
+    expect(within(table).getByText("dots")).toHaveAttribute("title", "C:/Users/u/code/dots");
+    expect(within(all).getByText(/^Read .* from C:\/Users\/u\/\.claude\/projects$/)).toBeVisible();
+  });
+
+  it("follows the period switch", async () => {
+    const { user } = await openAll();
+    await user.click(await screen.findByRole("tab", { name: "Month" }));
+    expect(
+      await screen.findByRole("table", { name: "Claude use by project in the last 30 days" }),
+    ).toBeVisible();
+    expect(backend.callsTo("claude_usage").map((a) => a.period)).toContain("month");
+  });
+
+  it("reads the transcripts when the page opens, and again while a scan stops at its cap", async () => {
+    let scans = 0;
+    backend.on("claude_usage_scan", () => {
+      scans += 1;
+      return { scanned_at: "2026-10-09T12:00:00.000Z", files: 3, bytes: 100, more: scans < 2 };
+    });
+    await openAll();
+    await waitFor(() => expect(scans).toBe(2));
+    // Each scan refreshes the section.
+    await waitFor(() => expect(backend.callsTo("claude_usage").length).toBeGreaterThanOrEqual(3));
+  });
+
+  it("says so when this PC has no Claude Code folder", async () => {
+    await openAll(() => noFolder);
+    const all = await screen.findByRole("region", { name: "All Claude use" });
+    expect(
+      await within(all).findByText(
+        "No Claude Code transcripts on this PC (looked in C:/Users/u/.claude/projects).",
+      ),
+    ).toBeVisible();
+    expect(within(all).queryByRole("table")).toBeNull();
+  });
+
+  it("says so when the period had no Claude Code use", async () => {
+    await openAll(() => ({ ...week, own: noFolder.own, dots: noFolder.dots, projects: [] }));
+    expect(await screen.findByText("No Claude Code use in the last 5 hours.")).toBeVisible();
+  });
+
+  it("counts the current 5-hour block next to the window", async () => {
+    await openAll();
+    const top = await screen.findByRole("region", { name: "Claude usage" });
+    await waitFor(() =>
+      expect(top).toHaveTextContent(
+        `This block: 212 messages · 1.4M tokens since ${localTime(week.block!.started_at)}`,
+      ),
+    );
+  });
+
+  it("leaves the block out when the 5-hour window has no reading", async () => {
+    await openAll(() => ({ ...week, block: null }));
+    await screen.findByRole("region", { name: "All Claude use" });
+    const top = await screen.findByRole("region", { name: "Claude usage" });
+    expect(top).not.toHaveTextContent("This block");
   });
 });

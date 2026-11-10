@@ -1,15 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
-import type { LimitReading, UsagePeriod, UsageRow } from "@/api/types";
+import type { ClaudeTotals, LimitReading, UsagePeriod, UsageRow } from "@/api/types";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Page } from "@/components/Page";
 import { SpendLine, useSpendToday } from "@/components/SpendCaps";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { localDateTime } from "@/lib/format";
+import { localDateTime, localTime, relativeTime } from "@/lib/format";
 import { triggerLabel } from "@/lib/home-topics";
 import { keys } from "@/lib/query";
 import { formatCost, formatDuration, formatTokens, pct } from "@/lib/usage-format";
@@ -35,6 +35,22 @@ function Window(props: { label: string; reading: LimitReading | null; share: num
   );
 }
 
+/// The current 5-hour block from Claude Code's transcripts (usage tab spec section 6): every
+/// message, Dots' and the person's, since the window the CLI last reported started.
+function BlockLine() {
+  const block = useQuery({
+    queryKey: keys.claudeUsage("five_hours"),
+    queryFn: () => commands.claudeUsage("five_hours"),
+  }).data?.block;
+  if (!block) return null;
+  return (
+    <span className="text-sm text-muted-foreground">
+      This block: {block.messages} messages · {formatTokens(block.tokens)} tokens since{" "}
+      {localTime(block.started_at)}
+    </span>
+  );
+}
+
 /// The account's windows (the whole account, not only Dots' runs) and the held runs.
 function Limits() {
   const limits = useQuery({ queryKey: keys.limits, queryFn: commands.limitsGet }).data;
@@ -43,6 +59,7 @@ function Limits() {
   return (
     <section aria-label="Claude usage" className="flex flex-wrap items-center gap-x-6 gap-y-2">
       <Window label="5-hour" reading={limits.five_hour} share={limits.shares.five_hour} />
+      <BlockLine />
       <Window label="weekly" reading={limits.weekly} share={limits.shares.weekly} />
       {held > 0 && (
         <Link to="/inbox" className="text-sm underline underline-offset-4">
@@ -176,10 +193,141 @@ function UsageTable(props: { period: UsagePeriod; span: string }) {
   );
 }
 
+/// Input, cache creation and output: what "tokens" means in All Claude use. Cache reads are
+/// shown on their own (usage tab spec section 6).
+const tokens = (t: ClaudeTotals) => t.input_tokens + t.cache_creation_tokens + t.output_tokens;
+
+const sum = (a: ClaudeTotals, b: ClaudeTotals): ClaudeTotals => ({
+  messages: a.messages + b.messages,
+  sessions: a.sessions + b.sessions,
+  input_tokens: a.input_tokens + b.input_tokens,
+  cache_creation_tokens: a.cache_creation_tokens + b.cache_creation_tokens,
+  cache_read_tokens: a.cache_read_tokens + b.cache_read_tokens,
+  output_tokens: a.output_tokens + b.output_tokens,
+});
+
+function Total(props: { label: string; totals: ClaudeTotals }) {
+  const t = props.totals;
+  return (
+    <div className="flex flex-col">
+      <dt className="text-xs text-muted-foreground">{props.label}</dt>
+      <dd className="tabular-nums">
+        {`${t.messages} messages · ${t.sessions} sessions · ${formatTokens(tokens(t))} tokens · ` +
+          `cache reads ${formatTokens(t.cache_read_tokens)}`}
+      </dd>
+    </div>
+  );
+}
+
+/// Reads what Claude Code wrote since the last scan when the page opens, again at once while a
+/// scan stops at its cap, and refreshes All Claude use after each. True while scanning.
+function useClaudeScan(): boolean {
+  const client = useQueryClient();
+  const scan = useQuery({
+    queryKey: keys.claudeUsageScan,
+    queryFn: commands.claudeUsageScan,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+    refetchInterval: (q) => (q.state.data?.more ? 250 : false),
+  });
+  const at = scan.dataUpdatedAt;
+  useEffect(() => {
+    if (at) void client.invalidateQueries({ queryKey: ["claude-usage"] });
+  }, [at, client]);
+  return scan.isFetching || scan.data?.more === true;
+}
+
+/// The section's body: the totals and the project table, or why there are none.
+function AllClaudeBody(props: { period: UsagePeriod; span: string }) {
+  const usage = useQuery({
+    queryKey: keys.claudeUsage(props.period),
+    queryFn: () => commands.claudeUsage(props.period),
+  });
+  if (usage.isError) return <ErrorNote error={usage.error} />;
+  const data = usage.data;
+  if (!data) return null;
+  if (!data.available) {
+    return (
+      <p className="text-muted-foreground">
+        No Claude Code transcripts on this PC
+        {data.folder ? ` (looked in ${data.folder})` : ""}.
+      </p>
+    );
+  }
+  return (
+    <>
+      <dl className="flex flex-col gap-1">
+        <Total label="Your own sessions" totals={data.own} />
+        <Total label="Dots" totals={data.dots} />
+        <Total label="All" totals={sum(data.own, data.dots)} />
+      </dl>
+      {data.projects.length === 0 ? (
+        <p className="text-muted-foreground">No Claude Code use in the last {props.span}.</p>
+      ) : (
+        <div className="max-w-full overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <caption className="sr-only">Claude use by project in the last {props.span}</caption>
+            <thead className="text-xs text-muted-foreground">
+              <tr>
+                <th scope="col" className="pb-1 pr-4 font-medium">Project</th>
+                <th scope="col" className="pb-1 pr-4 font-medium">Messages</th>
+                <th scope="col" className="pb-1 pr-4 font-medium">Sessions</th>
+                <th scope="col" className="pb-1 pr-4 font-medium">Tokens</th>
+                <th scope="col" className="pb-1 font-medium">Cache reads</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.projects.map((p) => (
+                <tr key={p.cwd ?? ""} className="border-t">
+                  <td className="py-1.5 pr-4">
+                    <span title={p.cwd ?? "Every dot's runs"}>{p.name}</span>
+                  </td>
+                  <td className="py-1.5 pr-4 tabular-nums">{p.totals.messages}</td>
+                  <td className="py-1.5 pr-4 tabular-nums">{p.totals.sessions}</td>
+                  <td className="py-1.5 pr-4 tabular-nums">{formatTokens(tokens(p.totals))}</td>
+                  <td className="py-1.5 tabular-nums">{formatTokens(p.totals.cache_read_tokens)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </>
+  );
+}
+
+/// All Claude use (usage tab spec section 6): the person's own Claude Code sessions and Dots',
+/// from Claude Code's transcripts on this PC.
+function AllClaude(props: { period: UsagePeriod; span: string; scanning: boolean }) {
+  const data = useQuery({
+    queryKey: keys.claudeUsage(props.period),
+    queryFn: () => commands.claudeUsage(props.period),
+  }).data;
+  const id = `all-claude-${props.period}`;
+  let status: string | null = null;
+  if (props.scanning) status = "Reading Claude Code's transcripts…";
+  else if (data?.available && data.scanned_at) {
+    status = `Read ${relativeTime(data.scanned_at)} from ${data.folder}`;
+  }
+  return (
+    <section aria-labelledby={id} className="flex flex-col gap-3 pt-4">
+      <h2 id={id} className="font-medium">
+        All Claude use
+      </h2>
+      <AllClaudeBody period={props.period} span={props.span} />
+      <p className="text-xs text-muted-foreground" aria-live="polite">
+        {status}
+      </p>
+    </section>
+  );
+}
+
 /// The Usage page (usage and limits spec section 5): the account's Claude windows, then Dots'
-/// own runs per dot over the last 5 hours, week or month.
+/// own runs per dot over the last 5 hours, week or month, then all Claude use on this PC
+/// (usage tab spec section 6).
 export function UsageScreen() {
   const [period, setPeriod] = useState<UsagePeriod>("five_hours");
+  const scanning = useClaudeScan();
   return (
     <Page title="Usage">
       <Limits />
@@ -198,6 +346,7 @@ export function UsageScreen() {
             <p className="text-xs text-muted-foreground">
               A deleted dot's runs are deleted with it and not counted.
             </p>
+            <AllClaude period={p.value} span={p.span} scanning={scanning} />
           </TabsContent>
         ))}
       </Tabs>
