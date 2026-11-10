@@ -25,6 +25,9 @@ function statusLine(s: GraphStatus): string {
     parts.push(`Built ${relativeTime(s.built_at)}`);
     parts.push(`${n(s.files)} files`, `${n(s.nodes)} nodes`, `${n(s.edges)} links`);
     if (s.skipped > 0) parts.push(`${n(s.skipped)} skipped`);
+    if (s.parse_errors === 1) parts.push("1 file could not be parsed");
+    if (s.parse_errors > 1) parts.push(`${n(s.parse_errors)} files could not be parsed`);
+    if (s.truncated) parts.push("stopped at the file cap; part of the project is left out");
   }
   return parts.join(" · ");
 }
@@ -231,8 +234,17 @@ export default function GraphScreen() {
       )}
       {s && !built && !building && s.state !== "failed" && (
         <EmptyState icon={Network}>
-          No graph yet. Build graph reads the project's code once; runs keep it up to date.
+          {s.git
+            ? "No graph yet. Build graph reads the project's code once; runs keep it up to date."
+            : "This folder is not a git repository, so Dots builds its graph only when you ask. " +
+              "Build graph reads it once; after that, runs keep it up to date."}
         </EmptyState>
+      )}
+      {built && (
+        <p className="text-xs text-muted-foreground">
+          Export for graphify writes graphify-out/graph.json in the project. Add graphify-out/ to
+          .gitignore so it is not committed.
+        </p>
       )}
       {s && !built && building && (
         <EmptyState icon={Network}>Building the graph, {s.progress ?? 0}% done.</EmptyState>

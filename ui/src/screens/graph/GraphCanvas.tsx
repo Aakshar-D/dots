@@ -8,6 +8,9 @@ export function communityColor(id: number): string {
   return `hsl(${(id * 47) % 360} 62% 52%)`;
 }
 
+/// Above this many nodes the force layout is too slow: nodes are placed by community.
+export const COSE_LIMIT = 300;
+
 /// Positions for a large view: each community a disc of its nodes (a sunflower spiral), the
 /// discs around a circle, largest first. Linear in the nodes, and the same each time.
 export function clusterPositions(nodes: ViewNode[]): Record<string, { x: number; y: number }> {
@@ -106,7 +109,7 @@ export function GraphCanvas(props: {
       ],
       // A force layout for a small view; a large one is placed by community at once.
       layout:
-        props.nodes.length > 600
+        props.nodes.length > COSE_LIMIT
           ? { name: "preset", positions: clusterPositions(props.nodes) }
           : ({ name: "cose", animate: false, numIter: 600 } as cytoscape.LayoutOptions),
     });

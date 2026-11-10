@@ -2989,12 +2989,15 @@
       "edges": 14877,
       "error": null,
       "files": 412,
+      "git": true,
       "key": "3f2a9c0d1e4b5a6f",
       "nodes": 5210,
+      "parse_errors": 1,
       "progress": null,
       "root": "C:/code/shop",
       "skipped": 3,
-      "state": "ready"
+      "state": "ready",
+      "truncated": false
     },
     {
       "built_at": "2026-10-09T12:00:00.000Z",
@@ -3002,12 +3005,15 @@
       "edges": 14877,
       "error": null,
       "files": 412,
+      "git": true,
       "key": "3f2a9c0d1e4b5a6f",
       "nodes": 5210,
+      "parse_errors": 1,
       "progress": 42,
       "root": "C:/code/shop",
       "skipped": 3,
-      "state": "building"
+      "state": "building",
+      "truncated": false
     },
     {
       "built_at": null,
@@ -3015,12 +3021,15 @@
       "edges": 0,
       "error": null,
       "files": 0,
+      "git": false,
       "key": "3f2a9c0d1e4b5a6f",
       "nodes": 0,
+      "parse_errors": 1,
       "progress": null,
       "root": "C:/code/shop",
       "skipped": 0,
-      "state": "none"
+      "state": "none",
+      "truncated": false
     },
     {
       "built_at": "2026-10-09T12:00:00.000Z",
@@ -3028,12 +3037,15 @@
       "edges": 14877,
       "error": "the graph file cannot be opened: disk full",
       "files": 412,
+      "git": true,
       "key": "3f2a9c0d1e4b5a6f",
       "nodes": 5210,
+      "parse_errors": 1,
       "progress": null,
       "root": "C:/code/shop",
       "skipped": 3,
-      "state": "failed"
+      "state": "failed",
+      "truncated": false
     }
   ],
   "GraphView": [
@@ -3097,12 +3109,15 @@
         "edges": 14877,
         "error": null,
         "files": 412,
+        "git": true,
         "key": "3f2a9c0d1e4b5a6f",
         "nodes": 5210,
+        "parse_errors": 1,
         "progress": null,
         "root": "C:/code/shop",
         "skipped": 3,
-        "state": "ready"
+        "state": "ready",
+        "truncated": false
       }
     },
     {
@@ -3147,12 +3162,15 @@
         "edges": 14877,
         "error": null,
         "files": 412,
+        "git": true,
         "key": "3f2a9c0d1e4b5a6f",
         "nodes": 5210,
+        "parse_errors": 1,
         "progress": 42,
         "root": "C:/code/shop",
         "skipped": 3,
-        "state": "building"
+        "state": "building",
+        "truncated": false
       }
     }
   ],
@@ -6934,12 +6952,15 @@
         "edges": 14877,
         "error": null,
         "files": 412,
+        "git": true,
         "key": "3f2a9c0d1e4b5a6f",
         "nodes": 5210,
+        "parse_errors": 1,
         "progress": null,
         "root": "C:/code/shop",
         "skipped": 3,
-        "state": "ready"
+        "state": "ready",
+        "truncated": false
       },
       "type": "graph_updated"
     }

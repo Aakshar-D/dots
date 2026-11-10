@@ -3316,6 +3316,9 @@ fn graph_samples(samples: &mut Value) {
         duration_ms: 2_840,
         progress: None,
         error: None,
+        parse_errors: 1,
+        truncated: false,
+        git: true,
     };
     let building = GraphStatus {
         state: GraphState::Building,
@@ -3324,6 +3327,7 @@ fn graph_samples(samples: &mut Value) {
     };
     let none = GraphStatus {
         state: GraphState::None,
+        git: false,
         built_at: None,
         files: 0,
         nodes: 0,

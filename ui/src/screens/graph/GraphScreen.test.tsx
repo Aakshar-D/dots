@@ -84,6 +84,7 @@ describe("the Graph screen", () => {
     expect(await screen.findByRole("button", { name: "node Runner.start" })).toBeVisible();
     const status = screen.getByRole("status");
     expect(status).toHaveTextContent("412 files · 5,210 nodes · 14,877 links · 3 skipped");
+    expect(status).toHaveTextContent("1 file could not be parsed");
     expect(screen.getByRole("button", { name: "Rebuild" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Export for graphify" })).toBeEnabled();
   });
@@ -137,7 +138,7 @@ describe("the Graph screen", () => {
   });
 
   it("offers Build graph when there is none, and shows the build's progress", async () => {
-    const held = holding(none);
+    const held = holding({ ...none, git: true });
     const { user } = await open();
     expect(await screen.findByText(/No graph yet/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Build graph" }));
@@ -150,6 +151,28 @@ describe("the Graph screen", () => {
     held.status = ready;
     act(() => backend.emit("runtime", { type: "graph_updated", status: ready }));
     expect(await screen.findByRole("button", { name: "node Runner.start" })).toBeVisible();
+  });
+
+  it("says a folder outside git is built only when asked, and that a cut walk is partial", async () => {
+    holding({ ...none, git: false });
+    await open();
+    expect(await screen.findByText(/This folder is not a git repository/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Build graph" })).toBeEnabled();
+  });
+
+  it("says when the walk stopped at its cap", async () => {
+    holding({ ...ready, truncated: true });
+    await open();
+    expect(await screen.findByRole("status")).toHaveTextContent(
+      "stopped at the file cap; part of the project is left out",
+    );
+  });
+
+  it("notes that graphify-out belongs in .gitignore next to Export", async () => {
+    holding(ready);
+    await open();
+    await screen.findByRole("button", { name: "Export for graphify" });
+    expect(screen.getByText(/Add graphify-out\/ to .gitignore/)).toBeVisible();
   });
 
   it("says when the last build failed, and keeps Rebuild", async () => {

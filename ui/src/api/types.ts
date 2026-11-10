@@ -799,6 +799,12 @@ export const GraphStatus = z.strictObject({
   // While building: 0 to 100.
   progress: nullable(z.number().int()),
   error: nullable(z.string()),
+  // Files the parser failed on (counted in skipped too).
+  parse_errors: z.number().int(),
+  // The last build stopped at the file cap or its time budget.
+  truncated: z.boolean(),
+  // A folder outside git is built only when asked.
+  git: z.boolean(),
 });
 // A node as the Graph screen draws it; `kind` is file, dir, type, function, method, heading,
 // package, or community in a collapsed view.
