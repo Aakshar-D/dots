@@ -81,6 +81,9 @@ impl Env {
 
     /// A finished run of `dot` started `ago` before now that cost `cost`.
     async fn spent(&self, dot: &Dot, ago: TimeDelta, cost: f64) {
+        // The queue is held while the run is made and ended: a dispatch pass in between would
+        // run it.
+        self.runner.set_held(true).await;
         let r = self
             .store
             .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
@@ -99,6 +102,7 @@ impl Env {
             .add_usage(&r.id, 1000, 100, 0, Some(cost))
             .await
             .unwrap();
+        self.runner.set_held(false).await;
     }
 
     async fn queue(&self, dot: &Dot, trigger: TriggerKind) -> String {

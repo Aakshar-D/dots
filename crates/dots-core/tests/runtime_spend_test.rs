@@ -65,6 +65,9 @@ impl T {
     /// A finished run of `dot` a few seconds ago that cost `cost`.
     async fn spent(&self, dot: &Dot, cost: f64) {
         let store = self.rt.store();
+        // The queue is held while the run is made and ended: a dispatch pass in between would
+        // run it with the fake CLI, which reports a cost of its own.
+        self.rt.hold_runs(true).await;
         let r = store
             .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
             .await
@@ -79,6 +82,7 @@ impl T {
             .add_usage(&r.id, 1000, 100, 0, Some(cost))
             .await
             .unwrap();
+        self.rt.hold_runs(false).await;
     }
 
     async fn status(&self, id: &str) -> RunStatus {
