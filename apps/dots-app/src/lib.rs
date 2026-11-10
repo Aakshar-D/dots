@@ -309,6 +309,13 @@ command_list![
     workflow_allow_send_back,
     workflow_retry_step,
     workflow_stop,
+    graph_status,
+    graph_view,
+    graph_node,
+    graph_search,
+    graph_rebuild,
+    graph_export,
+    graph_reveal,
 ];
 
 /// Keeps the log writer flushing until the app exits.

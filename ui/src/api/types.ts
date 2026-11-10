@@ -146,6 +146,8 @@ const dotSpecShape = {
   use_global_instructions: z.boolean(),
   // Each final answer gets a result check while Settings › Check every result is on.
   check_results: z.boolean(),
+  // Runs get the project's code graph: the `graph` tool and the map in the prompt.
+  use_graph: z.boolean(),
   use_user_settings: z.boolean(),
   max_turns: z.number().int(),
   timeout_secs: z.number().int(),
@@ -782,6 +784,73 @@ export const InboxMark = z.strictObject({
   back_at: nullable(z.string()),
 });
 
+// A project's code graph (project graph spec section 10).
+export const GraphState = z.enum(["none", "building", "ready", "failed"]);
+export const GraphStatus = z.strictObject({
+  key: z.string(),
+  root: z.string(),
+  state: GraphState,
+  built_at: nullable(z.string()),
+  files: z.number().int(),
+  nodes: z.number().int(),
+  edges: z.number().int(),
+  skipped: z.number().int(),
+  duration_ms: z.number().int(),
+  // While building: 0 to 100.
+  progress: nullable(z.number().int()),
+  error: nullable(z.string()),
+});
+// A node as the Graph screen draws it; `kind` is file, dir, type, function, method, heading,
+// package, or community in a collapsed view.
+export const ViewNode = z.strictObject({
+  id: z.string(),
+  label: z.string(),
+  kind: z.string(),
+  community: z.number().int(),
+  file: nullable(z.string()),
+  line: z.number().int(),
+  weight: z.number().int(),
+});
+export const ViewEdge = z.strictObject({
+  source: z.string(),
+  target: z.string(),
+  kind: z.string(),
+  weight: z.number().int(),
+});
+export const GraphCommunity = z.strictObject({
+  id: z.number().int(),
+  name: z.string(),
+  nodes: z.number().int(),
+  files: z.number().int(),
+});
+export const GraphView = z.strictObject({
+  status: GraphStatus,
+  // One node per community (over 2,000 nodes).
+  collapsed: z.boolean(),
+  community: nullable(z.number().int()),
+  nodes: z.array(ViewNode),
+  edges: z.array(ViewEdge),
+  communities: z.array(GraphCommunity),
+});
+export const NeighbourGroup = z.strictObject({
+  label: z.string(),
+  nodes: z.array(ViewNode),
+  more: z.number().int(),
+});
+export const NodeDetail = z.strictObject({
+  node: ViewNode,
+  signature: z.string(),
+  community_name: z.string(),
+  groups: z.array(NeighbourGroup),
+});
+export type GraphState = z.infer<typeof GraphState>;
+export type GraphStatus = z.infer<typeof GraphStatus>;
+export type ViewNode = z.infer<typeof ViewNode>;
+export type ViewEdge = z.infer<typeof ViewEdge>;
+export type GraphCommunity = z.infer<typeof GraphCommunity>;
+export type GraphView = z.infer<typeof GraphView>;
+export type NodeDetail = z.infer<typeof NodeDetail>;
+
 export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("run_updated"), run: Run }),
   z.strictObject({ type: z.literal("run_event"), event: RunEventRecord }),
@@ -860,6 +929,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     org_id: nullable(z.string()),
     workspace_id: z.string(),
   }),
+  // A project's graph started building, made progress, or finished or failed.
+  z.strictObject({ type: z.literal("graph_updated"), status: GraphStatus }),
   // A scheduled message was scheduled, edited, cancelled, sent or failed, or its waiting reason
   // changed (the app notifies on a failure).
   z.strictObject({ type: z.literal("scheduled_message_updated"), message: ScheduledMessage }),

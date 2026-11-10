@@ -590,6 +590,22 @@ export const commands = {
   intentSetDone: (id: string, done: boolean) => call(T.Intent, "intent_set_done", { id, done }),
   intentDelete: (id: string) => call(nothing, "intent_delete", { id }),
 
+  /// The state of the dot's project graph (project graph spec section 10).
+  graphStatus: (dotId: string) => call(T.GraphStatus, "graph_status", { dotId }),
+  /// What the Graph screen draws: the whole graph, one community, or (when large) one node
+  /// per community.
+  graphView: (dotId: string, community: number | null) =>
+    call(T.GraphView, "graph_view", { dotId, community }),
+  graphNode: (dotId: string, id: string) => call(T.NodeDetail, "graph_node", { dotId, id }),
+  graphSearch: (dotId: string, query: string) =>
+    call(T.ViewNode.array(), "graph_search", { dotId, query }),
+  /// Builds the graph again in the background; `graph_updated` events follow.
+  graphRebuild: (dotId: string) => call(T.GraphStatus, "graph_rebuild", { dotId }),
+  /// Writes graphify's graph.json into the project; answers its path.
+  graphExport: (dotId: string) => call(z.string(), "graph_export", { dotId }),
+  /// Shows the node's file in its folder.
+  graphReveal: (dotId: string, id: string) => call(nothing, "graph_reveal", { dotId, id }),
+
   /// The installed apps, with the dots that use each and the error that keeps one out of runs.
   appsList: () => call(T.AppRow.array(), "apps_list"),
   /// A call from the app's screen, as the person. Rejects with kind `invalid` and the rule the
