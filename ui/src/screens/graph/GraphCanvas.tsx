@@ -3,9 +3,10 @@ import { useEffect, useRef } from "react";
 
 import type { ViewEdge, ViewNode } from "@/api/types";
 
-/// A community's colour: hues spread around the wheel, the same for the same id.
+/// A community's colour: hues spread around the wheel, the same for the same id. In the comma
+/// form: Cytoscape does not read CSS's space-separated `hsl()`.
 export function communityColor(id: number): string {
-  return `hsl(${(id * 47) % 360} 62% 52%)`;
+  return `hsl(${(id * 47) % 360}, 62%, 52%)`;
 }
 
 /// Above this many nodes the force layout is too slow: nodes are placed by community.
@@ -44,7 +45,7 @@ export function clusterPositions(nodes: ViewNode[]): Record<string, { x: number;
 
 /// The nodes and edges of a view on a Cytoscape canvas, coloured by community and sized by
 /// their links. Clicking a node calls `onSelect` with its id. Cytoscape draws on a canvas, so
-/// the screen keeps a list of the same nodes for the keyboard and screen readers.
+/// the screen keeps a list of the same nodes for the keyboard and screen readers (`NodeList`).
 export function GraphCanvas(props: {
   nodes: ViewNode[];
   edges: ViewEdge[];

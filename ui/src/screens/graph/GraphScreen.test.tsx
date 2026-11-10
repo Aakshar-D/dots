@@ -64,6 +64,12 @@ function holding(status: GraphStatus, view: GraphView = whole, useGraph = true) 
   return held;
 }
 
+/// Clicks the button named `name`.
+async function userEventClick(name: string) {
+  const { default: userEvent } = await import("@testing-library/user-event");
+  await userEvent.click(await screen.findByRole("button", { name }));
+}
+
 async function open() {
   const view = renderApp(`/graph/${dot.id}`);
   expect(await screen.findByRole("heading", { name: `${dot.name} · Graph` })).toBeVisible();
@@ -83,7 +89,7 @@ describe("the Graph screen", () => {
     await open();
     expect(await screen.findByRole("button", { name: "node Runner.start" })).toBeVisible();
     const status = screen.getByRole("status");
-    expect(status).toHaveTextContent("412 files · 5,210 nodes · 14,877 links · 3 skipped");
+    expect(status).toHaveTextContent("412 files · 5,210 nodes · 14,877 edges · 3 skipped");
     expect(status).toHaveTextContent("1 file could not be parsed");
     expect(screen.getByRole("button", { name: "Rebuild" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Export for graphify" })).toBeEnabled();
@@ -127,6 +133,8 @@ describe("the Graph screen", () => {
     const { user } = await open();
     expect(await screen.findByText(/each circle is a cluster/)).toBeVisible();
     const clusters = screen.getByRole("region", { name: "Clusters" });
+    // Right under the page's h1.
+    expect(within(clusters).getByRole("heading", { level: 2, name: "Clusters" })).toBeVisible();
     await user.click(within(clusters).getByRole("button", { name: /src \(240 files\)/ }));
     expect(await screen.findByRole("button", { name: "node Runner.start" })).toBeVisible();
     await waitFor(() =>
@@ -202,11 +210,42 @@ describe("the Graph screen", () => {
       .toBeVisible();
   });
 
+  it("lists the view's nodes for the keyboard, with Show more past the first ones", async () => {
+    const many: ViewNode[] = Array.from({ length: 60 }, (_, i) => ({
+      ...hits[0]!,
+      id: `src/a.rs#f${i}`,
+      label: `f${i}`,
+    }));
+    holding(ready, { ...whole, nodes: many, edges: [] });
+    const { user } = await open();
+    const list = await screen.findByRole("region", { name: "Nodes in view" });
+    expect(within(list).getAllByRole("button", { name: /^f\d+, / })).toHaveLength(50);
+    await user.click(within(list).getByRole("button", { name: "Show 10 more" }));
+    expect(within(list).getAllByRole("button", { name: /^f\d+, / })).toHaveLength(60);
+    await user.click(within(list).getByRole("button", { name: /^f59, / }));
+    await waitFor(() =>
+      expect(backend.callsTo("graph_node").at(-1)).toEqual({ dotId: dot.id, id: "src/a.rs#f59" }),
+    );
+  });
+
+  it("gives long labels their full text as a tooltip, and says 1 file", async () => {
+    holding({ ...ready, files: 1 });
+    await open();
+    expect(await screen.findByRole("status")).toHaveTextContent("1 file ·");
+    const list = await screen.findByRole("region", { name: "Nodes in view" });
+    const label = within(list).getByText("Runner.start");
+    expect(label).toHaveAttribute("title", "Runner.start");
+  });
+
   it("names its controls for assistive technology", async () => {
     holding(ready);
     await open();
     expect(await screen.findByRole("link", { name: "Back to the dot" })).toBeVisible();
     expect(await screen.findByRole("searchbox", { name: "Search the graph" })).toBeVisible();
+    // The signature scrolls sideways, so it can be focused and is named.
+    await userEventClick("node Runner.start");
+    const signature = await screen.findByLabelText("Signature");
+    expect(signature).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("status")).toBeVisible();
   });
 });

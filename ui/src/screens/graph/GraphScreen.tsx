@@ -23,7 +23,11 @@ function statusLine(s: GraphStatus): string {
   if (s.state === "building") parts.push(`Building, ${s.progress ?? 0}%`);
   if (s.built_at !== null) {
     parts.push(`Built ${relativeTime(s.built_at)}`);
-    parts.push(`${n(s.files)} files`, `${n(s.nodes)} nodes`, `${n(s.edges)} links`);
+    parts.push(
+      s.files === 1 ? "1 file" : `${n(s.files)} files`,
+      `${n(s.nodes)} nodes`,
+      `${n(s.edges)} edges`,
+    );
     if (s.skipped > 0) parts.push(`${n(s.skipped)} skipped`);
     if (s.parse_errors === 1) parts.push("1 file could not be parsed");
     if (s.parse_errors > 1) parts.push(`${n(s.parse_errors)} files could not be parsed`);
@@ -40,6 +44,7 @@ function NodeButton(props: { node: ViewNode; onSelect: (id: string) => void }) {
     <button
       type="button"
       className="flex w-full min-w-0 items-center gap-2 rounded px-2 py-1 text-left text-sm hover:bg-muted"
+      aria-label={[node.label, node.kind, where].filter((part) => part !== "").join(", ")}
       onClick={() => props.onSelect(node.id)}
     >
       <span
@@ -47,10 +52,42 @@ function NodeButton(props: { node: ViewNode; onSelect: (id: string) => void }) {
         className="size-2 shrink-0 rounded-full"
         style={{ backgroundColor: communityColor(node.community) }}
       />
-      <span className="truncate font-medium">{node.label}</span>
+      <span className="truncate font-medium" title={node.label}>
+        {node.label}
+      </span>
       <span className="shrink-0 text-xs text-muted-foreground">{node.kind}</span>
-      <span className="truncate text-xs text-muted-foreground">{where}</span>
+      <span className="truncate text-xs text-muted-foreground" title={where}>
+        {where}
+      </span>
     </button>
+  );
+}
+
+/// How many nodes the list shows before Show more, and how many each press adds.
+const LIST_STEP = 50;
+
+/// The nodes on the canvas as a list the keyboard and screen readers can reach.
+function NodeList(props: { nodes: ViewNode[]; onSelect: (id: string) => void }) {
+  const [shown, setShown] = useState(LIST_STEP);
+  const rest = props.nodes.length - shown;
+  return (
+    <section aria-label="Nodes in view">
+      <h2 className="text-xs font-medium text-muted-foreground">
+        Nodes in view ({props.nodes.length})
+      </h2>
+      <ul>
+        {props.nodes.slice(0, shown).map((m) => (
+          <li key={m.id}>
+            <NodeButton node={m} onSelect={props.onSelect} />
+          </li>
+        ))}
+      </ul>
+      {rest > 0 && (
+        <Button size="sm" variant="ghost" onClick={() => setShown(shown + LIST_STEP)}>
+          Show {Math.min(rest, LIST_STEP)} more
+        </Button>
+      )}
+    </section>
   );
 }
 
@@ -81,7 +118,13 @@ function NodePanel(props: {
           </p>
         )}
         {detail.signature !== "" && (
-          <pre className="mt-1 overflow-x-auto rounded bg-muted p-2 text-xs">{detail.signature}</pre>
+          <pre
+            tabIndex={0}
+            aria-label="Signature"
+            className="mt-1 overflow-x-auto rounded bg-muted p-2 text-xs"
+          >
+            {detail.signature}
+          </pre>
         )}
       </div>
       {node.file !== null && (
@@ -312,9 +355,12 @@ export default function GraphScreen() {
             )}
             {detail.isError && <ErrorNote error={detail.error} />}
             {detail.data && <NodePanel dotId={dotId} detail={detail.data} onSelect={select} />}
+            {view.data && !view.data.collapsed && (
+              <NodeList key={community ?? "all"} nodes={view.data.nodes} onSelect={select} />
+            )}
             {view.data?.collapsed && community === null && (
               <section aria-label="Clusters">
-                <h3 className="text-xs font-medium text-muted-foreground">Clusters</h3>
+                <h2 className="text-xs font-medium text-muted-foreground">Clusters</h2>
                 <ul>
                   {view.data.nodes.map((m) => (
                     <li key={m.id}>
