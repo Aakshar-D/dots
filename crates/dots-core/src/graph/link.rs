@@ -519,6 +519,14 @@ const COMMON_METHODS: &[&str] = &[
     "write",
 ];
 
+/// A method name unlikely to be a library's too: two words (`create_run`, `fetchAll`) or a
+/// long one. `x.path()`, `x.sleep()`, `x.focus()` are left unmatched.
+fn distinctive(name: &str) -> bool {
+    name.contains('_')
+        || name.chars().skip(1).any(|c| c.is_ascii_uppercase())
+        || name.chars().count() >= 10
+}
+
 /// The node a call goes to, and whether it is exact.
 fn resolve_call(
     path: &str,
@@ -595,7 +603,7 @@ fn resolve_call(
     // Matched by name across the project: only when one definition has it. A call on a value
     // can only be a method's, and not one of the everyday names.
     let on_value = call.method || call.qualifier.is_some() || call.on_self;
-    if on_value && COMMON_METHODS.contains(&name) {
+    if on_value && (COMMON_METHODS.contains(&name) || !distinctive(name)) {
         return None;
     }
     let v = ix.by_name.get(name)?;
