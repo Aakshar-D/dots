@@ -78,6 +78,23 @@ fn parse_with(line: &str, model: &mut Option<String>) -> Vec<EngineEvent> {
             }
             out
         }
+        // The CLI's progress lines (CLI 2.1.322): a compaction starting or ending, and its
+        // estimate of thinking tokens. Only a failed compaction is told, as a notice.
+        Some("system") if v.get("subtype").and_then(Value::as_str) == Some("status") => {
+            match v.get("compact_result").and_then(Value::as_str) {
+                Some("failed") => vec![EngineEvent::Notice {
+                    text: crate::context_rules::auto_compact_failed(
+                        v.get("compact_error")
+                            .and_then(Value::as_str)
+                            .unwrap_or("unknown"),
+                    ),
+                }],
+                _ => Vec::new(),
+            }
+        }
+        Some("system") if v.get("subtype").and_then(Value::as_str) == Some("thinking_tokens") => {
+            Vec::new()
+        }
         Some("system") if v.get("subtype").and_then(Value::as_str) == Some("compact_boundary") => {
             compact_boundary(&v).into_iter().collect()
         }

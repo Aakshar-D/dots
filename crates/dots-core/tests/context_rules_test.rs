@@ -554,3 +554,22 @@ async fn dots_own_compaction_is_held_back_three_turns_after_one_that_did_not_hel
     // Another session is not held back.
     assert!(!store.compact_backoff("S2").await.unwrap());
 }
+
+const STATUS: &str = include_str!("fixtures/system_status.jsonl");
+
+#[test]
+fn the_clis_status_and_thinking_lines_are_not_raw_output() {
+    // Pinned from CLI 2.1.322 with `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` set: `compacting`, a
+    // failed automatic compaction, a thinking estimate and a successful compaction's status.
+    assert_eq!(
+        events(STATUS),
+        vec![EngineEvent::Notice {
+            text: dots_core::context_rules::auto_compact_failed("too_few_groups"),
+        }]
+    );
+    assert_eq!(
+        dots_core::context_rules::auto_compact_failed("too_few_groups"),
+        "The CLI could not compact the conversation by itself (too_few_groups); it went on as \
+         it was."
+    );
+}
