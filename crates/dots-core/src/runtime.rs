@@ -4082,6 +4082,92 @@ impl Runtime {
         Ok(run)
     }
 
+    /// A topic's context meter and its question (context rules spec sections 3 and 6).
+    pub async fn thread_context(
+        &self,
+        root_run_id: &str,
+    ) -> Result<crate::context_rules::ThreadContext> {
+        use crate::context_rules as cr;
+        let root = self.store.get_run(root_run_id).await?;
+        let dot = self.store.get_dot(&root.dot_id).await?;
+        let rules = dot
+            .spec
+            .context_rules
+            .unwrap_or(self.store.get_settings().await?.context_rules);
+        let last = self.store.thread_fill(&root.root_run_id).await?;
+        let state = self.store.thread_state(&root.root_run_id).await?;
+        let fill = last.as_ref().map(|l| l.fill);
+        let model = last
+            .as_ref()
+            .and_then(|l| l.model.clone())
+            .unwrap_or_else(|| dot.spec.model.clone());
+        let window = cr::window_for(Some(&model), last.as_ref().and_then(|l| l.window));
+        Ok(cr::ThreadContext {
+            root_run_id: root.root_run_id.clone(),
+            fill,
+            window,
+            rules,
+            keep_going: state.keep_going,
+            request: state.request,
+            asks_fresh: dot.spec.engine == crate::model::EngineKind::Claude
+                && cr::asks_fresh(&rules, fill, window, state.keep_going, state.request),
+        })
+    }
+
+    /// The person's answer for a topic (context rules spec section 6): compact or start fresh
+    /// on its next turn, or keep going. Only a Claude dot's topic takes one.
+    pub async fn thread_context_choose(
+        &self,
+        root_run_id: &str,
+        choice: crate::context_rules::Choice,
+    ) -> Result<crate::context_rules::ThreadContext> {
+        use crate::context_rules::{Choice, Request};
+        let root = self.store.get_run(root_run_id).await?;
+        let dot = self.store.get_dot(&root.dot_id).await?;
+        self.require_dot(&dot, Permission::RunDots).await?;
+        if dot.spec.engine != crate::model::EngineKind::Claude {
+            return Err(Error::Invalid(
+                "Only a Claude dot's conversation can be compacted or started fresh.".into(),
+            ));
+        }
+        let root_id = &root.root_run_id;
+        match choice {
+            Choice::Compact => {
+                self.store
+                    .set_thread_request(root_id, Some(Request::Compact))
+                    .await?
+            }
+            Choice::Fresh => {
+                self.store
+                    .set_thread_request(root_id, Some(Request::Fresh))
+                    .await?
+            }
+            Choice::KeepGoing => self.store.set_keep_going(root_id, true).await?,
+        }
+        self.thread_context(root_id).await
+    }
+
+    /// A run's compactions and fresh starts, with its dot's totals (context rules spec
+    /// section 7).
+    pub async fn run_context_report(
+        &self,
+        run_id: &str,
+    ) -> Result<crate::context_rules::RunContextReport> {
+        let run = self.store.get_run(run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        let rules = dot
+            .spec
+            .context_rules
+            .unwrap_or(self.store.get_settings().await?.context_rules);
+        let (dot_compactions, dot_clears) = self.store.context_counts(&dot.id).await?;
+        Ok(crate::context_rules::RunContextReport {
+            events: self.store.list_context_events(run_id).await?,
+            dot_compactions,
+            dot_clears,
+            rules,
+        })
+    }
+
     /// Today's spend against the spending caps (spend caps design).
     pub async fn spend_today(&self) -> Result<crate::spend::SpendToday> {
         crate::spend::today(&self.store, chrono::Utc::now()).await

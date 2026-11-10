@@ -78,6 +78,9 @@ pub struct Settings {
     pub spend_monthly_usd: Option<f64>,
     /// The model of each size Auto picks from (auto model spec section 3).
     pub auto_models: AutoModels,
+    /// When a Claude session is compacted or started fresh, unless its dot has rules of its
+    /// own (context rules spec section 4).
+    pub context_rules: crate::context_rules::ContextRules,
 }
 
 impl Default for Settings {
@@ -109,6 +112,7 @@ impl Default for Settings {
             spend_daily_tokens: None,
             spend_monthly_usd: None,
             auto_models: AutoModels::default(),
+            context_rules: crate::context_rules::ContextRules::default(),
         }
     }
 }
@@ -170,6 +174,7 @@ impl Settings {
         }
         crate::spend::GlobalCaps::from(self).validate()?;
         self.auto_models.validate()?;
+        self.context_rules.validate()?;
         Ok(())
     }
 

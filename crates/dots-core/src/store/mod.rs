@@ -13,6 +13,7 @@ mod apps;
 mod attachments;
 mod audit;
 mod browser;
+mod context_rules;
 mod dots;
 mod env;
 mod follow_ups;
@@ -59,6 +60,7 @@ pub struct Store {
 pub use api_keys::ApiKeyRow;
 pub use attachments::{WrittenFile, WRITING_TOOLS};
 pub use audit::{AuditLimits, HistoryRow, HistoryState, NewAudit};
+pub use context_rules::{ContextEvent, LastFill, NewContextEvent, ThreadState};
 pub use held::HeldEvent;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;

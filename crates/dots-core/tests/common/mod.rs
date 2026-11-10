@@ -123,6 +123,8 @@ pub fn fake_run(trigger: TriggerKind, payload: Option<Value>, session_id: Option
         model_tier: None,
         model_reason: None,
         model_fallback_from: None,
+        context_fill: None,
+        context_window: None,
     }
 }
 

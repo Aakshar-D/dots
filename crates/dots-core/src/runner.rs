@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 use crate::approvals::grant_key;
 use crate::checkins::{CheckIns, Tool as CheckInTool};
 use crate::checkpoint::Checkpoints;
+use crate::context_rules::{self, ContextRules, SeedSection};
 use crate::delivery::{wait_reason, WaitFacts};
 use crate::engine::claude::once::OnceUsage;
 use crate::engine::{Engine, EngineEvent, RunContext};
@@ -28,7 +29,7 @@ use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
 use crate::result_check::{CheckEvent, ResultCheck, ResultChecker};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::spend::STOPPED_BY_CAP;
-use crate::store::Store;
+use crate::store::{NewContextEvent, Store};
 use crate::util::{ct_eq, new_token};
 use crate::vault::{DotScope, Vault};
 use crate::workspace::{default_branch_ref, Prepared, WorkspaceManager};
@@ -1339,6 +1340,43 @@ impl Runner {
 
     async fn record(&self, run_id: &str, ev: &EngineEvent) -> Result<()> {
         match ev {
+            // Written to the run, not stored as an event and not announced: a turn is too
+            // often for that, and the run's next update carries it (context rules spec
+            // section 3).
+            EngineEvent::Context { fill, window } => {
+                if self.store.set_run_context(run_id, *fill, *window).await? {
+                    if let Some(fill) = fill {
+                        self.store.set_clear_after(run_id, *fill).await?;
+                    }
+                }
+                return Ok(());
+            }
+            // Dots' own `/compact` is recorded by `compact_first`; the CLI's own compaction
+            // inside the run is recorded here (context rules spec section 7).
+            EngineEvent::Compacted {
+                trigger,
+                before,
+                after,
+            } => {
+                self.store
+                    .set_run_context(run_id, Some(*after), None)
+                    .await?;
+                if trigger != "manual" {
+                    let run = self.store.get_run(run_id).await?;
+                    self.store
+                        .add_context_event(&NewContextEvent {
+                            run_id,
+                            dot_id: &run.dot_id,
+                            root_run_id: &run.root_run_id,
+                            kind: context_rules::EventKind::Compact,
+                            manual: false,
+                            fill_before: *before,
+                            fill_after: Some(*after),
+                            from_session: None,
+                        })
+                        .await?;
+                }
+            }
             EngineEvent::SessionStarted { session_id } => {
                 self.store.set_session(run_id, session_id).await?
             }
@@ -1379,6 +1417,182 @@ impl Runner {
             .await?;
         let _ = self.bus.send(RuntimeEvent::RunEvent { event: rec });
         Ok(())
+    }
+
+    /// The step before `run`'s turn (context rules spec section 4), from its session's last
+    /// fill and the topic's request, which it takes. Nothing for a run the rules do not look
+    /// at. A failed read is logged and counts as nothing known.
+    async fn context_plan(
+        &self,
+        run: &Run,
+        dot: &Dot,
+        rules: &ContextRules,
+        restarted: bool,
+    ) -> ContextPlan {
+        let mut plan = ContextPlan {
+            step: context_rules::Step::Nothing,
+            manual: false,
+            fill: 0,
+            window: context_rules::WINDOW_DEFAULT,
+            session: run.session_id.clone(),
+        };
+        let Some(session) = run.session_id.as_deref() else {
+            return plan;
+        };
+        if restarted || !context_rules::applies(run, dot.spec.engine) {
+            return plan;
+        }
+        let last = self.store.session_fill(session).await.unwrap_or_else(|e| {
+            tracing::warn!(run = %run.id, "reading the session's context failed: {e}");
+            None
+        });
+        let request = self
+            .store
+            .take_thread_request(&run.root_run_id)
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(run = %run.id, "reading the topic's request failed: {e}");
+                None
+            });
+        let model = last
+            .as_ref()
+            .and_then(|l| l.model.clone())
+            .unwrap_or_else(|| dot.spec.model.clone());
+        plan.window = context_rules::window_for(Some(&model), last.as_ref().and_then(|l| l.window));
+        if let Some(last) = &last {
+            plan.fill = last.fill;
+            // Under the clear threshold: the topic's "keep going" is spent.
+            if !context_rules::at_or_above(last.fill, plan.window, rules.clear_at) {
+                if let Err(e) = self.store.clear_keep_going(&run.root_run_id).await {
+                    tracing::warn!(run = %run.id, "clearing the topic's keep going failed: {e}");
+                }
+            }
+        }
+        plan.manual = request.is_some();
+        plan.step = context_rules::decide(
+            rules,
+            &context_rules::Turn {
+                chat: run.trigger == TriggerKind::Chat,
+                fill: last.map(|l| l.fill),
+                window: plan.window,
+                request,
+            },
+        );
+        plan
+    }
+
+    /// Compacts the run's session before its turn and records it; a failure is a notice and
+    /// the turn goes ahead (context rules spec section 5).
+    async fn compact_first(
+        &self,
+        run: &Run,
+        engine: &Arc<dyn Engine>,
+        ctx: &RunContext,
+        plan: &ContextPlan,
+        rules: &ContextRules,
+    ) -> Result<()> {
+        match engine.compact(ctx).await {
+            Ok(Some(done)) => {
+                self.record(
+                    &run.id,
+                    &EngineEvent::Compacted {
+                        trigger: "manual".into(),
+                        before: done.before,
+                        after: done.after,
+                    },
+                )
+                .await?;
+                self.store
+                    .add_context_event(&NewContextEvent {
+                        run_id: &run.id,
+                        dot_id: &run.dot_id,
+                        root_run_id: &run.root_run_id,
+                        kind: context_rules::EventKind::Compact,
+                        manual: plan.manual,
+                        fill_before: done.before,
+                        fill_after: Some(done.after),
+                        from_session: None,
+                    })
+                    .await?;
+                if !context_rules::at_or_above(done.after, plan.window, rules.clear_at) {
+                    self.store.clear_keep_going(&run.root_run_id).await?;
+                }
+                if let Ok(row) = self.store.get_run(&run.id).await {
+                    self.emit_run(&row);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                let text =
+                    format!("Compacting the conversation failed: {e}; it goes on as it was.");
+                self.record(&run.id, &EngineEvent::Notice { text }).await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The section a fresh session starts with (context rules spec section 5): the old
+    /// session's hand-off note, the topic's last messages and the extra sections. Records the
+    /// fresh start. A note that cannot be written is a notice; the seed goes without it.
+    async fn fresh_seed(
+        &self,
+        run: &Run,
+        engine: &Arc<dyn Engine>,
+        ctx: &RunContext,
+        plan: &ContextPlan,
+        dot: &Dot,
+    ) -> Result<String> {
+        let mut ask = ctx.clone();
+        ask.session_id = plan.session.clone();
+        ask.prompt = context_rules::HANDOFF_ASK.to_string();
+        let summary = match engine.handoff_summary(&ask).await {
+            Ok(summary) => summary,
+            Err(e) => {
+                let text = format!(
+                    "The hand-off note could not be written: {e}; the fresh session starts \
+                     without it."
+                );
+                self.record(&run.id, &EngineEvent::Notice { text }).await?;
+                None
+            }
+        };
+        let thread: Vec<Run> = self
+            .store
+            .list_thread(&run.root_run_id)
+            .await?
+            .into_iter()
+            .take_while(|r| r.id != run.id)
+            .collect();
+        let seed = context_rules::handoff_seed(
+            summary.as_deref(),
+            &thread,
+            &self.extra_seed_sections(dot, run),
+        );
+        self.store
+            .add_context_event(&NewContextEvent {
+                run_id: &run.id,
+                dot_id: &run.dot_id,
+                root_run_id: &run.root_run_id,
+                kind: context_rules::EventKind::Clear,
+                manual: plan.manual,
+                fill_before: plan.fill,
+                fill_after: None,
+                from_session: plan.session.as_deref(),
+            })
+            .await?;
+        self.store.clear_keep_going(&run.root_run_id).await?;
+        let text = format!(
+            "Started a fresh session with a summary: the last one was {}% full.",
+            context_rules::percent(plan.fill, plan.window)
+        );
+        self.record(&run.id, &EngineEvent::Notice { text }).await?;
+        Ok(seed)
+    }
+
+    /// Extra sections of a fresh session's prompt (context rules spec section 5). None yet:
+    /// a later project map of the dot's work goes here.
+    fn extra_seed_sections(&self, _dot: &Dot, _run: &Run) -> Vec<SeedSection> {
+        Vec::new()
     }
 
     /// The spending cap the running `run` has reached, if any: read after each usage report.
@@ -1650,36 +1864,56 @@ impl Runner {
         let global = &settings.global_instructions;
         // The quiet limit is read once, as the engine starts (stuck-run watchdog spec 4.1).
         let quiet_secs = effective_quiet_limit(&dot.spec, &settings);
+        // The step before this turn (context rules spec section 4). A fresh start is the run
+        // without its session from here on, so its prompt is a first prompt.
+        let rules = dot.spec.context_rules.unwrap_or(settings.context_rules);
+        let plan = self
+            .context_plan(run, &dot, &rules, restarted.is_some())
+            .await;
+        let fresh;
+        let run = if plan.step == context_rules::Step::Fresh {
+            let mut r = run.clone();
+            r.session_id = None;
+            fresh = r;
+            &fresh
+        } else {
+            run
+        };
         // The memories as they are now: a run's prompt does not change while it runs.
         let memories = self.store.list_memories(&dot.id).await?;
         let recent = self.recent_runs(run).await;
         let instructions_changed = self.instructions_changed(run, &dot).await;
         let secret = self.register_secret(&run.id);
         self.register_tools(&run.id, tools.clone());
-        let mut prompt = build_prompt_full(
-            &dot,
-            run,
-            &prepared.path,
-            chrono::Local::now(),
-            global,
-            PromptParts {
-                contexts: tools.contexts(),
-                memories: &memories,
-                apps: tools.apps().map(|apps| apps.as_ref()),
-                recent: &recent,
-                instructions_tool: tools
-                    .instructions()
-                    .then(|| crate::instructions::model_name(dot.spec.engine)),
-                instructions_changed,
-                so_far,
-            },
-        );
-        // A chat's first prompt lists the workflows it may start (teams spec section 7).
         let startable = crate::team_tools::prompt_section(tools.startable(), dot.spec.engine);
-        if run.session_id.is_none() && !startable.is_empty() {
-            prompt.push_str("\n## Workflows you can start\n\n");
-            prompt.push_str(&startable);
-        }
+        let build = |handoff: Option<&str>| {
+            let mut prompt = build_prompt_full(
+                &dot,
+                run,
+                &prepared.path,
+                chrono::Local::now(),
+                global,
+                PromptParts {
+                    contexts: tools.contexts(),
+                    memories: &memories,
+                    apps: tools.apps().map(|apps| apps.as_ref()),
+                    recent: &recent,
+                    instructions_tool: tools
+                        .instructions()
+                        .then(|| crate::instructions::model_name(dot.spec.engine)),
+                    instructions_changed,
+                    so_far,
+                    handoff,
+                },
+            );
+            // A chat's first prompt lists the workflows it may start (teams spec section 7).
+            if run.session_id.is_none() && !startable.is_empty() {
+                prompt.push_str("\n## Workflows you can start\n\n");
+                prompt.push_str(&startable);
+            }
+            prompt
+        };
+        let prompt = build(None);
         // The model the engine starts with: the dot's own, or Auto's pick for a Claude dot set
         // to Auto (auto model spec section 2). A thread keeps the tier its last run had, when
         // Auto picked that one.
@@ -1718,7 +1952,7 @@ impl Runner {
         });
         let mut engine_dot = dot.clone();
         engine_dot.spec.model = choice.model.clone();
-        let ctx = RunContext {
+        let mut ctx = RunContext {
             run_id: run.id.clone(),
             dot: engine_dot,
             workspace: prepared.path.clone(),
@@ -1729,7 +1963,20 @@ impl Runner {
             cancel: cancel.clone(),
             approved_calls,
             tools: tools.clone(),
+            autocompact_pct: (rules.enabled && dot.spec.engine == EngineKind::Claude)
+                .then_some(rules.compact_at),
         };
+        match plan.step {
+            context_rules::Step::Nothing => {}
+            context_rules::Step::Compact => {
+                self.compact_first(run, &engine, &ctx, &plan, &rules)
+                    .await?
+            }
+            context_rules::Step::Fresh => {
+                let seed = self.fresh_seed(run, &engine, &ctx, &plan, &dot).await?;
+                ctx.prompt = build(Some(&seed));
+            }
+        }
         self.store.set_run_quiet_limit(&run.id, quiet_secs).await?;
         let retry_ctx = fallback.as_ref().map(|_| ctx.clone());
         // A folder run gets a checkpoint before its engine starts, so what it changes can be
@@ -2411,6 +2658,18 @@ fn already(run: &Run) -> Error {
 }
 
 /// A queued run as the limits see it.
+/// The step before a turn and what it was decided on (context rules spec section 4).
+struct ContextPlan {
+    step: context_rules::Step,
+    /// The person asked for it.
+    manual: bool,
+    /// The session's last fill (0 when none is known) and window.
+    fill: u64,
+    window: u64,
+    /// The session the run continues.
+    session: Option<String>,
+}
+
 fn queued_run(run: &Run, engine: EngineKind) -> QueuedRun {
     QueuedRun {
         id: run.id.clone(),
