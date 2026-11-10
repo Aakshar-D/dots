@@ -368,10 +368,15 @@ pub fn build(
         && parse_errors == 0
         && !scan.truncated;
     if unchanged {
-        if let Some(meta) = store::read_meta(&conn).filter(|m| {
+        if let Some(mut meta) = store::read_meta(&conn).filter(|m| {
             m.built_at.is_some() && m.error.is_none() && m.parse_errors == 0 && !m.truncated
         }) {
             store::touch_files(&mut conn, &touched)
+                .map_err(|e| format!("writing the graph failed: {e}"))?;
+            // Checked and found up to date: the graph says so with the time.
+            meta.built_at = Some(crate::util::now());
+            meta.duration_ms = started.elapsed().as_millis() as u64;
+            store::write_meta(&conn, &meta)
                 .map_err(|e| format!("writing the graph failed: {e}"))?;
             progress(total, total);
             return Ok(Report {
@@ -519,10 +524,17 @@ mod tests {
             .iter()
             .any(|i| i.contains("hidden") || i.contains("z.rs")));
 
-        // Nothing changed: nothing is parsed.
+        // Nothing changed: nothing is parsed, and the graph says when it was last checked.
+        let built_at = |db: &Path| {
+            let conn = store::open(db).unwrap();
+            store::read_meta(&conn).unwrap().built_at.unwrap()
+        };
+        let before = built_at(&db);
+        std::thread::sleep(std::time::Duration::from_millis(20));
         let again = build(&root, &db, None, limits, &quiet).unwrap();
         assert_eq!(again.parsed, 0);
         assert_eq!(again.nodes, first.nodes);
+        assert!(built_at(&db) > before);
 
         // Change one, add one, delete one.
         std::thread::sleep(std::time::Duration::from_millis(20));

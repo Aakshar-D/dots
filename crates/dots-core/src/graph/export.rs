@@ -111,7 +111,7 @@ pub fn to_graphify(graph: &Graph, commit: Option<&str>) -> Value {
 }
 
 /// Writes the export to `<root>/graphify-out/graph.json`. A `graph.json` there that Dots did
-/// not write is first renamed `graph.json.bak-<unix seconds>`. Returns the file written.
+/// not write is first renamed `graph.json.bak-<unix milliseconds>[-n]`. Returns the file written.
 pub fn write(root: &Path, graph: &Graph, commit: Option<&str>) -> Result<PathBuf, String> {
     let dir = root.join("graphify-out");
     std::fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;

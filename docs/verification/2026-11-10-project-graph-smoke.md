@@ -68,6 +68,6 @@ So the CLI lists the tool, Dots' `dots` server checks the call as `Graph` (allow
 
 ## 4. Left for the lead's QA in the app
 
-- The Graph screen on a real dot: the canvas, cluster view on a large repository, Show in folder, Export for graphify (writes `<repo>/graphify-out/graph.json`; an existing one not from Dots is kept as `graph.json.bak-<seconds>`).
+- The Graph screen on a real dot: the canvas, cluster view on a large repository, Show in folder, Export for graphify (writes `<repo>/graphify-out/graph.json`; an existing one not from Dots is kept as `graph.json.bak-<milliseconds>[-n]`).
 - The Use project graph switch in the dot editor.
 - A Claude run's first prompt carrying the map, and a local-model run calling `graph`.

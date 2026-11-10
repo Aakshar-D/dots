@@ -277,29 +277,34 @@ impl Scope {
             }
         }
         graph.count_degrees();
-        // Communities as they were, counted again over what is left; a name outside the
-        // scope is not shown.
-        graph.communities = g
-            .communities
-            .iter()
-            .map(|c| {
-                let nodes = graph.nodes.iter().filter(|n| n.community == c.id);
-                let (count, files) = nodes.fold((0, 0), |(a, b), n| {
-                    (a + 1, b + u32::from(n.kind == NodeKind::File))
-                });
-                let name = if self.allows(&c.name) || c.name == "." {
-                    c.name.clone()
-                } else {
-                    format!("cluster {}", c.id + 1)
-                };
-                Community {
-                    id: c.id,
-                    name,
-                    nodes: count,
-                    files,
-                }
-            })
-            .collect();
+        // Communities as they were, counted again over what is left. Those with no file left
+        // go, and the rest are numbered again from 0; a name outside the scope is not shown.
+        let mut renumber: HashMap<u32, u32> = HashMap::new();
+        for c in &g.communities {
+            let nodes = graph.nodes.iter().filter(|n| n.community == c.id);
+            let (count, files) = nodes.fold((0, 0), |(a, b), n| {
+                (a + 1, b + u32::from(n.kind == NodeKind::File))
+            });
+            if files == 0 {
+                continue;
+            }
+            let id = graph.communities.len() as u32;
+            renumber.insert(c.id, id);
+            let name = if self.allows(&c.name) || c.name == "." {
+                c.name.clone()
+            } else {
+                format!("cluster {}", id + 1)
+            };
+            graph.communities.push(Community {
+                id,
+                name,
+                nodes: count,
+                files,
+            });
+        }
+        for n in &mut graph.nodes {
+            n.community = renumber.get(&n.community).copied().unwrap_or(0);
+        }
         let mut langs: std::collections::BTreeMap<String, usize> = Default::default();
         for n in &graph.nodes {
             if let (NodeKind::File, Some(f)) = (n.kind, n.file.as_deref()) {
@@ -804,7 +809,11 @@ impl Graphs {
         Some(format!(
             "## Project graph\n\nDots keeps a code graph of this project. Use the tool \
              `{tool}` (search, node, callers, callees, file, path, neighbors) before broad \
-             file reads or greps; node ids look like `path#Type.method`.\n\n{}",
+             file reads or greps; node ids look like `path#Type.method`. For example: \
+             `{tool} {{\"action\":\"callers\",\"node\":\"<name>\"}}` or \
+             `{tool} {{\"action\":\"search\",\"query\":\"<words>\"}}`. If the tool's \
+             schema is not loaded yet, load its schema first (for example with ToolSearch), \
+             then call it.\n\n{}",
             fenced_map(&map)
         ))
     }
@@ -1078,6 +1087,13 @@ mod tests {
             "{section}"
         );
         assert!(section.trim_end().ends_with("```"), "{section}");
+        // How to call it, with the exact name and arguments, and what to do when the CLI has
+        // not loaded the tool's schema yet.
+        assert!(
+            section.contains(r#"`graph {"action":"callers","node":"<name>"}`"#),
+            "{section}"
+        );
+        assert!(section.contains("load its schema first"), "{section}");
         assert!(section.len() < 7_000);
         // Events said it was building, then ready.
         let mut states = Vec::new();
@@ -1240,6 +1256,9 @@ mod tests {
         let section = graphs.prompt_section(&project, &scope, "graph").unwrap();
         assert!(!section.contains("other"), "{section}");
         assert!(!section.contains("secret.py"), "{section}");
+        // Only clusters with files in the scope, numbered from 1.
+        assert!(!section.contains("(0 files)"), "{section}");
+        assert!(section.contains("1. app ("), "{section}");
     }
 
     #[tokio::test]

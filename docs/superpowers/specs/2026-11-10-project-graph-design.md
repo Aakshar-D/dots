@@ -134,7 +134,7 @@ The core answers the screen through commands keyed by dot id: `graph_status`, `g
 
 ## 11. Export for graphify
 
-**Export** writes `<root>/graphify-out/graph.json` in networkx's node-link format, as graphify reads it: `directed: false`, `multigraph: false`, `graph: {"generator": "dots"}`, `nodes` with `id`, `label`, `file_type` (`code`, or `document` for Markdown), `source_file`, `source_location` (`L<line>`), `community`; `links` with `source`, `target`, `relation` (`contains`, `imports_from`, `calls`, `implements`, `extends`, `references`), `confidence` (`EXTRACTED` for exact, `INFERRED`), `confidence_score` (1.0 or 0.6), `source_file`, `source_location`, `weight`; `hyperedges: []`; `built_at_commit` when the root is a git repository. A `graph.json` already there that Dots did not write is first renamed `graph.json.bak-<unix seconds>`.
+**Export** writes `<root>/graphify-out/graph.json` in networkx's node-link format, as graphify reads it: `directed: false`, `multigraph: false`, `graph: {"generator": "dots"}`, `nodes` with `id`, `label`, `file_type` (`code`, or `document` for Markdown), `source_file`, `source_location` (`L<line>`), `community`; `links` with `source`, `target`, `relation` (`contains`, `imports_from`, `calls`, `implements`, `extends`, `references`), `confidence` (`EXTRACTED` for exact, `INFERRED`), `confidence_score` (1.0 or 0.6), `source_file`, `source_location`, `weight`; `hyperedges: []`; `built_at_commit` when the root is a git repository. A `graph.json` already there that Dots did not write is first renamed `graph.json.bak-<unix milliseconds>[-n]`.
 
 ## 12. Testing
 

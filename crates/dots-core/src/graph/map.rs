@@ -40,6 +40,15 @@ fn top_dir(path: &str) -> &str {
     path.split_once('/').map_or("", |(d, _)| d)
 }
 
+/// "1 file", "2 files".
+fn files_word(n: usize) -> String {
+    if n == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{n} files")
+    }
+}
+
 /// The entry points: (file, what).
 pub fn entry_points(graph: &Graph) -> Vec<(String, String)> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
@@ -127,9 +136,10 @@ pub fn render(graph: &Graph, langs: &BTreeMap<String, usize>, limits: Limits) ->
     langs.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
     let langs: Vec<String> = langs.iter().map(|(l, n)| format!("{l} {n}")).collect();
     lines.push(format!(
-        "{} files, {} nodes, {} links. Languages: {}.",
-        files.len(),
+        "{}, {} nodes, {} edges ({} besides contains). Languages: {}.",
+        files_word(files.len()),
         graph.nodes.len(),
+        graph.edges.len(),
         links,
         if langs.is_empty() {
             "none".to_string()
@@ -158,7 +168,7 @@ pub fn render(graph: &Graph, langs: &BTreeMap<String, usize>, limits: Limits) ->
     lines.push("## Layout".to_string());
     for (top, (count, subs)) in tops.iter().take(limits.layout) {
         if top.is_empty() {
-            lines.push(format!("- (root): {count} files"));
+            lines.push(format!("- (root): {}", files_word(*count)));
             continue;
         }
         let mut subs: Vec<(&&str, &usize)> = subs.iter().collect();
@@ -169,9 +179,13 @@ pub fn render(graph: &Graph, langs: &BTreeMap<String, usize>, limits: Limits) ->
             .map(|(s, n)| format!("{s} {n}"))
             .collect();
         if subs.is_empty() {
-            lines.push(format!("- {top}/: {count} files"));
+            lines.push(format!("- {top}/: {}", files_word(*count)));
         } else {
-            lines.push(format!("- {top}/: {count} files ({})", subs.join(", ")));
+            lines.push(format!(
+                "- {top}/: {} ({})",
+                files_word(*count),
+                subs.join(", ")
+            ));
         }
     }
     if tops.len() > limits.layout {
@@ -230,10 +244,10 @@ pub fn render(graph: &Graph, langs: &BTreeMap<String, usize>, limits: Limits) ->
             hubs.sort_by(|a, b| b.degree.cmp(&a.degree).then(a.id.cmp(&b.id)));
             let hubs: Vec<&str> = hubs.iter().take(3).map(|n| n.name.as_str()).collect();
             let mut line = format!(
-                "{}. {} ({} files): {}",
+                "{}. {} ({}): {}",
                 c.id + 1,
                 c.name,
-                c.files,
+                files_word(c.files as usize),
                 key.join(", ")
             );
             if !hubs.is_empty() {
@@ -346,6 +360,22 @@ mod tests {
         assert!(full.len() > map.len());
         // The same graph gives the same bytes.
         assert_eq!(map, render(&g, &langs, PROMPT));
+    }
+
+    #[test]
+    fn one_file_is_one_file_and_the_counts_say_edges() {
+        let mut g = Graph::default();
+        g.nodes.push(node("file:a.rs", NodeKind::File, "a.rs", 0));
+        g.nodes
+            .push(node("file:src/b.rs", NodeKind::File, "src/b.rs", 0));
+        crate::graph::community::assign(&mut g);
+        let map = render(&g, &BTreeMap::from([("rust".to_string(), 2)]), PROMPT);
+        assert!(map.contains("- (root): 1 file\n"), "{map}");
+        assert!(map.contains("- src/: 1 file\n"), "{map}");
+        assert!(
+            map.contains("2 files, 2 nodes, 0 edges (0 besides contains)"),
+            "{map}"
+        );
     }
 
     #[test]

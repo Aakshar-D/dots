@@ -135,6 +135,15 @@ pub fn read_meta(conn: &Connection) -> Option<Meta> {
     serde_json::from_str(&text).ok()
 }
 
+/// Replaces the meta of the last build.
+pub fn write_meta(conn: &Connection, meta: &Meta) -> rusqlite::Result<()> {
+    put(
+        conn,
+        "meta",
+        &serde_json::to_string(meta).unwrap_or_default(),
+    )
+}
+
 /// Records `error` as the last build's, keeping what the last good build wrote.
 pub fn set_error(conn: &Connection, root: &str, error: &str) -> rusqlite::Result<()> {
     let mut meta = read_meta(conn).unwrap_or_else(|| Meta {
