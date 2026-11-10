@@ -13,6 +13,7 @@ use crate::policy::{Action, Policy};
 pub mod checkins;
 pub mod context;
 mod fs;
+pub mod graph;
 pub mod instructions;
 pub mod memory;
 mod search;
@@ -60,6 +61,7 @@ pub const TOOLS: &[(&str, &str)] = &[
     ("report_outcome", "Workflow"),
     ("send_back", "Workflow"),
     ("propose_instructions", "Instructions"),
+    ("graph", "Graph"),
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -216,6 +218,18 @@ const ARGS: &[(&str, Params)] = &[
     (
         "propose_instructions",
         &[("instructions", Str, true), ("reason", Str, true)],
+    ),
+    (
+        "graph",
+        &[
+            ("action", Str, true),
+            ("query", Str, false),
+            ("node", Str, false),
+            ("to", Str, false),
+            ("path", Str, false),
+            ("kind", Str, false),
+            ("depth", Count, false),
+        ],
     ),
 ];
 

@@ -42,6 +42,8 @@ use crate::{Error, Result};
 fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<'a, str> {
     if tool == "Context" {
         Cow::Borrowed(context_tool_name(engine))
+    } else if tool == crate::graph::POLICY_NAME {
+        Cow::Borrowed(crate::graph::model_name(engine))
     } else if let Some(check_in) = CheckInTool::from_policy_name(tool) {
         Cow::Borrowed(check_in.model_name(engine))
     } else if tool == crate::memory::POLICY_NAME {
@@ -189,6 +191,9 @@ pub struct Runner {
     /// What gives a succeeded Claude run's answer its result check (result check spec), set
     /// once by the runtime (`set_checker`). Without one no run is checked.
     checker: OnceLock<Arc<dyn ResultChecker>>,
+    /// The projects' code graphs (project graph spec), set once by the runtime
+    /// (`set_graphs`). Without them no run gets the `graph` tool.
+    graphs: OnceLock<crate::graph::Graphs>,
 }
 
 impl Runner {
@@ -220,6 +225,7 @@ impl Runner {
             chat_files: OnceLock::new(),
             limits: OnceLock::new(),
             checker: OnceLock::new(),
+            graphs: OnceLock::new(),
         })
     }
 
@@ -750,6 +756,17 @@ impl Runner {
     /// start; a second call changes nothing.
     pub fn set_checkins(&self, checkins: CheckIns) {
         let _ = self.checkins.set(checkins);
+    }
+
+    /// Gives the runs of dots that use the project graph their graph. The runtime calls it
+    /// once, at start; a second call changes nothing.
+    pub fn set_graphs(&self, graphs: crate::graph::Graphs) {
+        let _ = self.graphs.set(graphs);
+    }
+
+    /// The projects' graphs, once the runtime has set them.
+    pub fn graphs(&self) -> Option<&crate::graph::Graphs> {
+        self.graphs.get()
     }
 
     /// The check-in tools, once the runtime has set them.
@@ -1618,6 +1635,29 @@ impl Runner {
                 }
             };
         let tools = tools.with_instructions(proposes);
+        // The project's code graph (project graph spec section 5): its first build starts now,
+        // in the background; the run never waits for it. A policy that denies `Graph` outright
+        // leaves the tool out.
+        let graph_off = dot
+            .spec
+            .policy
+            .resolve(crate::graph::POLICY_NAME, &Value::Null)
+            == crate::policy::Action::Deny;
+        let graph = match self.graphs.get() {
+            Some(graphs) if dot.spec.use_graph && !graph_off => {
+                crate::graph::Project::resolve(std::path::Path::new(&dot.spec.workdir))
+                    .await
+                    .map(|project| {
+                        graphs.ensure(&project);
+                        crate::run_tools::RunGraph {
+                            graphs: graphs.clone(),
+                            project,
+                        }
+                    })
+            }
+            _ => None,
+        };
+        let tools = tools.with_graph(graph);
         let tools = Arc::new(tools);
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
@@ -1679,6 +1719,23 @@ impl Runner {
         if run.session_id.is_none() && !startable.is_empty() {
             prompt.push_str("\n## Workflows you can start\n\n");
             prompt.push_str(&startable);
+        }
+        // And the project map, once the project has a graph (project graph spec section 9).
+        if let Some(graph) = tools.graph().filter(|_| run.session_id.is_none()) {
+            let (graphs, project) = (graph.graphs.clone(), graph.project.clone());
+            let tool = crate::graph::model_name(dot.spec.engine);
+            let section = tokio::task::spawn_blocking(move || {
+                graphs
+                    .has_graph(&project)
+                    .then(|| graphs.prompt_section(&project, tool))
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(section) = section {
+                prompt.push('\n');
+                prompt.push_str(&section);
+            }
         }
         // The model the engine starts with: the dot's own, or Auto's pick for a Claude dot set
         // to Auto (auto model spec section 2). A thread keeps the tier its last run had, when
@@ -2008,6 +2065,10 @@ impl Runner {
                 quiet_stopped,
             )
             .await?;
+        // The run may have changed the project: its graph catches up in the background.
+        if let Some(graph) = tools.graph() {
+            graph.graphs.rebuild(&graph.project);
+        }
         // A run that restarted its topic's session and got to use it spends the mark.
         if restarted.is_some()
             && matches!(status, RunStatus::Succeeded | RunStatus::AwaitingApproval)

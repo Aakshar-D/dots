@@ -191,6 +191,10 @@ pub struct DotSpec {
     /// (result check spec section 5). A spec written before it existed reads as on.
     #[serde(default = "yes")]
     pub check_results: bool,
+    /// Runs get the project's code graph: the `graph` tool and the project map in the prompt
+    /// (project graph spec sections 8 and 9). A spec written before it existed reads as on.
+    #[serde(default = "yes")]
+    pub use_graph: bool,
     pub use_user_settings: bool,
     pub max_turns: u32,
     pub timeout_secs: u64,
@@ -238,6 +242,7 @@ impl DotSpec {
             spend_cap: crate::spend::DotCaps::default(),
             use_global_instructions: true,
             check_results: true,
+            use_graph: true,
             use_user_settings: false,
             max_turns: 40,
             timeout_secs: 1800,
