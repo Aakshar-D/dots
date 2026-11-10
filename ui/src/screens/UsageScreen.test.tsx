@@ -1,8 +1,9 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ClaudeUsage, LimitsState, UsageSummary } from "@/api/types";
 import { localTime } from "@/lib/format";
+import { CLAUDE_REFRESH_MS } from "@/screens/UsageScreen";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -142,6 +143,25 @@ describe("all Claude use on the Usage page", () => {
     await waitFor(() => expect(scans).toBe(2));
     // Each scan refreshes the section.
     await waitFor(() => expect(backend.callsTo("claude_usage").length).toBeGreaterThanOrEqual(3));
+  });
+
+  it("keeps an open page fresh: it asks again every minute and refreshes the section", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      await openAll();
+      await screen.findByText(/^Read .* from /);
+      // Let the opening asks settle, then count from there.
+      await vi.advanceTimersByTimeAsync(1000);
+      const scans = backend.callsTo("claude_usage_scan").length;
+      const usage = backend.callsTo("claude_usage").length;
+      await vi.advanceTimersByTimeAsync(CLAUDE_REFRESH_MS);
+      await waitFor(() =>
+        expect(backend.callsTo("claude_usage_scan").length).toBeGreaterThan(scans),
+      );
+      await waitFor(() => expect(backend.callsTo("claude_usage").length).toBeGreaterThan(usage));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says so when this PC has no Claude Code folder", async () => {

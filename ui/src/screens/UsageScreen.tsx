@@ -219,8 +219,14 @@ function Total(props: { label: string; totals: ClaudeTotals }) {
   );
 }
 
+/// How often an open Usage page asks for a scan again, so it shows what a background scan (or
+/// the person's own sessions) added meanwhile. The core answers a scan within 30 seconds of the
+/// last one with that one's result, and otherwise reads only the bytes appended since.
+export const CLAUDE_REFRESH_MS = 60_000;
+
 /// Reads what Claude Code wrote since the last scan when the page opens, again at once while a
-/// scan stops at its cap, and refreshes All Claude use after each. True while scanning.
+/// scan stops at its cap and every `CLAUDE_REFRESH_MS` while the page is open, and refreshes
+/// All Claude use after each. True while scanning.
 function useClaudeScan(): boolean {
   const client = useQueryClient();
   const scan = useQuery({
@@ -228,7 +234,7 @@ function useClaudeScan(): boolean {
     queryFn: commands.claudeUsageScan,
     staleTime: 0,
     refetchOnWindowFocus: false,
-    refetchInterval: (q) => (q.state.data?.more ? 250 : false),
+    refetchInterval: (q) => (q.state.data?.more ? 250 : CLAUDE_REFRESH_MS),
   });
   const at = scan.dataUpdatedAt;
   useEffect(() => {
