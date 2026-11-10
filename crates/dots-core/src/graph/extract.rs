@@ -156,6 +156,11 @@ pub struct Facts {
 const MAX_SIGNATURE: usize = 160;
 /// The most calls kept per file: a generated file must not swamp the graph.
 const MAX_CALLS: usize = 5_000;
+/// The walk goes no deeper into a tree: a generated file nested thousands deep must not use
+/// up the thread's stack. Real code is far shallower.
+const MAX_DEPTH: u32 = 200;
+/// A file the parser has not finished in this long is given up.
+const PARSE_TIMEOUT_MICROS: u64 = 5_000_000;
 
 /// The facts of `text`, a file in `lang`. `Err` when the parser cannot be made.
 pub fn extract(lang: Lang, text: &str) -> Result<Facts, String> {
@@ -175,6 +180,8 @@ pub fn extract(lang: Lang, text: &str) -> Result<Facts, String> {
     parser
         .set_language(&language)
         .map_err(|e| format!("the {} parser cannot start: {e}", lang.name()))?;
+    #[allow(deprecated)]
+    parser.set_timeout_micros(PARSE_TIMEOUT_MICROS);
     let tree = parser
         .parse(text, None)
         .ok_or_else(|| format!("the {} parser gave up", lang.name()))?;
@@ -184,6 +191,7 @@ pub fn extract(lang: Lang, text: &str) -> Result<Facts, String> {
         facts: Facts::default(),
         owner: None,
         current: None,
+        depth: 0,
     };
     walker.walk(tree.root_node(), true);
     Ok(walker.facts)
@@ -197,6 +205,8 @@ struct Walker<'a> {
     owner: Option<String>,
     /// The function whose body the walk is in.
     current: Option<u32>,
+    /// How deep the walk is (`MAX_DEPTH`).
+    depth: u32,
 }
 
 fn line_of(node: Node) -> u32 {
@@ -311,6 +321,15 @@ impl<'a> Walker<'a> {
 
     /// Walks `node` itself (`root` for the file's top node).
     fn walk(&mut self, node: Node, root: bool) {
+        if self.depth >= MAX_DEPTH {
+            return;
+        }
+        self.depth += 1;
+        self.walk_node(node, root);
+        self.depth -= 1;
+    }
+
+    fn walk_node(&mut self, node: Node, root: bool) {
         let handled = match self.lang {
             Lang::Rust => self.rust(node),
             Lang::TypeScript | Lang::Tsx | Lang::JavaScript => self.script(node),
@@ -1387,6 +1406,30 @@ func main() { st.Open() }
                 }
             ]
         );
+    }
+
+    #[test]
+    fn a_deeply_nested_file_is_walked_without_running_out_of_stack() {
+        // 50,000 nested arrays and calls: far deeper than any real file.
+        let depth = 50_000;
+        let src = format!(
+            "function f() {{ g({}1{}); }}
+function g() {{}}
+",
+            "[h(".repeat(depth),
+            ")]".repeat(depth)
+        );
+        let facts = std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(move || extract(Lang::JavaScript, &src).unwrap())
+            .unwrap()
+            .join()
+            .expect("the walk must not overflow the stack");
+        let names: Vec<&str> = facts.symbols.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["f", "g"]);
+        // The calls near the top are kept; the walk stops at its depth limit.
+        assert!(facts.calls.iter().any(|c| c.name == "g"));
+        assert!(facts.calls.len() < depth);
     }
 
     #[test]
