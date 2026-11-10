@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "cn";
 import {
+  Gauge,
   House,
   Inbox as InboxIcon,
   LayoutGrid,
@@ -36,6 +37,7 @@ const LINKS = [
   { to: "/library", label: "Library", icon: LibraryIcon },
   { to: "/teams", label: "Teams", icon: UsersRound },
   { to: "/connectors", label: "Connectors", icon: Plug },
+  { to: "/usage", label: "Usage", icon: Gauge },
   { to: "/settings", label: "Settings", icon: SettingsIcon },
 ];
 /// Only a publisher sees it (updates UI spec section 5.1).

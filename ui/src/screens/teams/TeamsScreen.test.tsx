@@ -23,6 +23,7 @@ describe("the Teams screen", () => {
       "Library",
       "Teams",
       "Connectors",
+      "Usage",
       "Settings",
     ]);
     expect(within(nav).getByRole("link", { name: "Teams" })).toHaveAttribute("href", "/teams");

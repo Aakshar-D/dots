@@ -35,6 +35,7 @@ describe("the Connectors screen", () => {
       "Library",
       "Teams",
       "Connectors",
+      "Usage",
       "Settings",
     ]);
     expect(await screen.findByRole("heading", { name: "Connectors" })).toBeVisible();
