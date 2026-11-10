@@ -366,6 +366,45 @@ export const UsageSummary = z.strictObject({
   since: z.string(),
   rows: z.array(UsageRow),
 });
+// All Claude use from Claude Code's own transcripts (usage tab spec section 7). Tokens on the
+// page are input + cache creation + output; cache reads are shown on their own.
+export const ClaudeTotals = z.strictObject({
+  messages: z.number().int(),
+  sessions: z.number().int(),
+  input_tokens: z.number().int(),
+  cache_creation_tokens: z.number().int(),
+  cache_read_tokens: z.number().int(),
+  output_tokens: z.number().int(),
+});
+// cwd is null for the one row that holds all Dots' messages.
+export const ClaudeProject = z.strictObject({
+  cwd: nullable(z.string()),
+  name: z.string(),
+  totals: ClaudeTotals,
+});
+export const ClaudeBlock = z.strictObject({
+  started_at: z.string(),
+  resets_at: z.string(),
+  messages: z.number().int(),
+  tokens: z.number().int(),
+});
+export const ClaudeUsage = z.strictObject({
+  period: UsagePeriod,
+  since: z.string(),
+  folder: nullable(z.string()),
+  available: z.boolean(),
+  scanned_at: nullable(z.string()),
+  own: ClaudeTotals,
+  dots: ClaudeTotals,
+  projects: z.array(ClaudeProject),
+  block: nullable(ClaudeBlock),
+});
+export const ClaudeScan = z.strictObject({
+  scanned_at: nullable(z.string()),
+  files: z.number().int(),
+  bytes: z.number().int(),
+  more: z.boolean(),
+});
 // Why a run is held: Claude usage, or a role that no longer lets this PC run the dot.
 export const HoldReason = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("usage") }),
@@ -2579,6 +2618,11 @@ export type UsagePeriod = z.infer<typeof UsagePeriod>;
 export type UsageSummary = z.infer<typeof UsageSummary>;
 export type UsageRow = z.infer<typeof UsageRow>;
 export type UsageRun = z.infer<typeof UsageRun>;
+export type ClaudeTotals = z.infer<typeof ClaudeTotals>;
+export type ClaudeProject = z.infer<typeof ClaudeProject>;
+export type ClaudeBlock = z.infer<typeof ClaudeBlock>;
+export type ClaudeUsage = z.infer<typeof ClaudeUsage>;
+export type ClaudeScan = z.infer<typeof ClaudeScan>;
 export type HoldReason = z.infer<typeof HoldReason>;
 export type HeldRun = z.infer<typeof HeldRun>;
 export type WorkspaceMode = z.infer<typeof WorkspaceMode>;

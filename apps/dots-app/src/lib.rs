@@ -276,6 +276,8 @@ command_list![
     watcher_resume,
     limits_get,
     usage_summary,
+    claude_usage,
+    claude_usage_scan,
     run_release_hold,
     run_release_cap,
     spend_today,

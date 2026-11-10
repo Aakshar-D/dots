@@ -33,6 +33,8 @@ export const sample = {
   limits: T.LimitsState.array().parse(contract.LimitsState),
   /// A week: nightly-tests (Claude, heaviest) and local-summarizer (local, no cost).
   usage: T.UsageSummary.parse(contract.UsageSummary),
+  /// All Claude use over a week (dots, the dots' row, site; a block), then no Claude Code folder.
+  claudeUsage: T.ClaudeUsage.array().parse(contract.ClaudeUsage),
   /// Today: every dot at $8.50 of a $10.00 daily cap, nightly-tests at its own $2.00 cap.
   spend: T.SpendToday.parse(contract.SpendToday),
   /// A chat waiting for nightly-tests' $2.00 daily cap.
@@ -170,6 +172,9 @@ export function installDefaults(): void {
     held_run_ids: [],
     hold_until: null,
   }));
+  // No Claude Code folder on this PC: All Claude use has nothing to show.
+  backend.on("claude_usage", () => sample.claudeUsage[1]);
+  backend.on("claude_usage_scan", () => ({ scanned_at: null, files: 0, bytes: 0, more: false }));
   backend.on("inbox", () => ({
     approvals: [],
     review_runs: [],

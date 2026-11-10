@@ -148,6 +148,9 @@ export const keys = {
   releasesPage: ["releases-page"] as const,
   releaseNotes: (version: string) => ["release-notes", version] as const,
   usage: (period: string) => ["usage", period] as const,
+  /// All Claude use per period, and the scan of the transcripts that feeds it.
+  claudeUsage: (period: string) => ["claude-usage", period] as const,
+  claudeUsageScan: ["claude-usage-scan"] as const,
   /// Every team, and below it each team with its members and projects.
   teams: ["teams"] as const,
   team: (id: string) => ["teams", id] as const,
