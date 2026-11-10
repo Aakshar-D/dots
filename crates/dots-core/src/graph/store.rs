@@ -382,3 +382,22 @@ pub fn touch_files(conn: &mut Connection, files: &[Changed]) -> rusqlite::Result
     }
     tx.commit()
 }
+
+/// Copies the graph file `conn` reads to `target` (`VACUUM INTO`, consistent under WAL), and
+/// records `root` as the copy's root, for a worktree seeded from its main checkout.
+pub fn copy_to(conn: &Connection, target: &Path, root: &Path) -> rusqlite::Result<()> {
+    if let Some(dir) = target.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    conn.execute("VACUUM INTO ?1", [target.to_string_lossy()])?;
+    let copy = open(target)?;
+    if let Some(mut meta) = read_meta(&copy) {
+        meta.root = root.to_string_lossy().into_owned();
+        put(
+            &copy,
+            "meta",
+            &serde_json::to_string(&meta).unwrap_or_default(),
+        )?;
+    }
+    Ok(())
+}

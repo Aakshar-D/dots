@@ -41,6 +41,8 @@ fn ws(dir: &Path) -> std::path::PathBuf {
 async fn setup() -> Setup {
     let (dir, store) = temp_store().await;
     let root = ws(dir.path());
+    // A git checkout: only those get a graph on their own (a README comes with it).
+    common::init_repo(&root);
     std::fs::create_dir_all(root.join("src")).unwrap();
     std::fs::write(
         root.join("src/lib.rs"),
@@ -191,7 +193,7 @@ async fn the_first_run_starts_the_build_without_waiting_and_a_run_that_ends_rebu
     assert!(tool_names(&reqs[0]).iter().any(|n| n == "graph"));
     t.settled(&project).await;
     assert_eq!(t.graphs.status(&project).state, GraphState::Ready);
-    assert_eq!(t.graphs.status(&project).files, 1);
+    assert_eq!(t.graphs.status(&project).files, 2);
 
     // A file the run might have written; the rebuild after the next run finds it.
     std::fs::write(ws(t.dir.path()).join("src/more.rs"), "pub fn more() {}\n").unwrap();
@@ -203,12 +205,48 @@ async fn the_first_run_starts_the_build_without_waiting_and_a_run_that_ends_rebu
         .unwrap();
     wait_status(&t.store, &r.id, RunStatus::Succeeded, 20).await;
     for _ in 0..500 {
-        if t.graphs.status(&project).files == 2 && !t.graphs.is_building(&project) {
+        if t.graphs.status(&project).files == 3 && !t.graphs.is_building(&project) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!("the run's end did not rebuild the graph");
+}
+
+#[tokio::test]
+async fn a_dot_in_a_subfolder_sees_only_its_folder_and_no_file_its_policy_hides() {
+    let t = setup().await;
+    let root = ws(t.dir.path());
+    std::fs::write(root.join("src/secret.rs"), "pub fn hidden_key() {}\n").unwrap();
+    t.built().await;
+    let llm = Llm::start(vec![
+        call(
+            "g1",
+            "graph",
+            json!({"action": "search", "query": "README"}),
+        ),
+        call(
+            "g2",
+            "graph",
+            json!({"action": "search", "query": "hidden_key"}),
+        ),
+        call("g3", "graph", json!({"action": "search", "query": "start"})),
+        text("Done."),
+    ])
+    .await;
+    let mut s = t.spec(&llm);
+    s.workdir = root.join("src").to_string_lossy().into_owned();
+    s.policy
+        .rules
+        .push(Rule::new("Read(./secret.rs)", Action::Deny));
+    t.run(&s, RunStatus::Succeeded).await;
+    let reqs = llm.requests();
+    let first = prompt(&reqs[0]);
+    assert!(!first.contains("README"), "{first}");
+    assert!(!first.contains("secret.rs"), "{first}");
+    assert!(tool_result(&reqs[1], "g1").starts_with("nothing matches"));
+    assert!(tool_result(&reqs[2], "g2").starts_with("nothing matches"));
+    assert!(tool_result(&reqs[3], "g3").contains("src/lib.rs#start"));
 }
 
 #[tokio::test]

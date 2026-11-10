@@ -527,10 +527,14 @@ impl Runtime {
         runner.set_limits(limits.clone());
         runner.set_apps(apps.clone());
         // The projects' code graphs (project graph spec), each in its own file.
-        runner.set_graphs(crate::graph::Graphs::new(
-            cfg.data_dir.join(crate::graph::DIR),
-            Some(bus.clone()),
-        ));
+        let graphs =
+            crate::graph::Graphs::new(cfg.data_dir.join(crate::graph::DIR), Some(bus.clone()));
+        // The graphs of worktrees removed while Dots was not running go now.
+        {
+            let (graphs, dir) = (graphs.clone(), cfg.data_dir.join("worktrees"));
+            tokio::task::spawn_blocking(move || graphs.sweep_worktrees(&dir));
+        }
+        runner.set_graphs(graphs);
         let shutdown = CancellationToken::new();
         // The result check asks the CLI with no tools; it needs no local server.
         if let Some(program) = &claude_program {

@@ -34,6 +34,49 @@ use crate::vault::{DotScope, Vault};
 use crate::workspace::{default_branch_ref, Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
+/// The project graph a run of `dot` working in `prepared` asks (project graph spec sections
+/// 5 and 8): for a linked worktree its own graph, seeded from the main checkout's; else the
+/// checkout's. A first build starts in the background; the run never waits for one. `None`
+/// when the dot's folder is missing.
+async fn run_graph(
+    graphs: &crate::graph::Graphs,
+    dot: &Dot,
+    prepared: &Prepared,
+) -> Option<crate::run_tools::RunGraph> {
+    use crate::graph::{Project, Scope};
+    let workdir = std::path::Path::new(&dot.spec.workdir);
+    let base = Project::resolve(workdir).await?;
+    let prefix = base.relative(workdir).unwrap_or_default();
+    graphs.ensure(&base);
+    let own = (dot.spec.workspace_mode == WorkspaceMode::Worktree && prepared.branch.is_some())
+        .then(|| Project::worktree(&prepared.path))
+        .flatten();
+    let project = match own {
+        Some(wt) => {
+            let (g, b, w) = (graphs.clone(), base.clone(), wt.clone());
+            let _ = tokio::task::spawn_blocking(move || g.seed_worktree(&b, &w)).await;
+            graphs.refresh(&wt);
+            wt
+        }
+        None => base,
+    };
+    // Only a policy with a `Read` deny rule hides files; without one the stored map serves.
+    let denies_reads = dot.spec.policy.rules.iter().any(|r| {
+        r.action == crate::policy::Action::Deny && r.tool.trim_start().starts_with("Read")
+    });
+    let scope = Scope {
+        prefix,
+        policy: denies_reads.then(|| dot.spec.policy.clone()),
+        root: project.root.clone(),
+        workspace: prepared.path.clone(),
+    };
+    Some(crate::run_tools::RunGraph {
+        graphs: graphs.clone(),
+        project,
+        scope,
+    })
+}
+
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
 /// on the Claude engine, `context` on the local one, and the check-in tools likewise
 /// (`checkins::Tool::model_name`); a `Memory` call is the memory tool its `input` is for
@@ -1645,15 +1688,7 @@ impl Runner {
             == crate::policy::Action::Deny;
         let graph = match self.graphs.get() {
             Some(graphs) if dot.spec.use_graph && !graph_off => {
-                crate::graph::Project::resolve(std::path::Path::new(&dot.spec.workdir))
-                    .await
-                    .map(|project| {
-                        graphs.ensure(&project);
-                        crate::run_tools::RunGraph {
-                            graphs: graphs.clone(),
-                            project,
-                        }
-                    })
+                run_graph(graphs, &dot, &prepared).await
             }
             _ => None,
         };
@@ -1722,12 +1757,12 @@ impl Runner {
         }
         // And the project map, once the project has a graph (project graph spec section 9).
         if let Some(graph) = tools.graph().filter(|_| run.session_id.is_none()) {
-            let (graphs, project) = (graph.graphs.clone(), graph.project.clone());
+            let graph = graph.clone();
             let tool = crate::graph::model_name(dot.spec.engine);
             let section = tokio::task::spawn_blocking(move || {
-                graphs
-                    .has_graph(&project)
-                    .then(|| graphs.prompt_section(&project, tool))
+                graph
+                    .graphs
+                    .prompt_section(&graph.project, &graph.scope, tool)
             })
             .await
             .ok()
@@ -2065,9 +2100,12 @@ impl Runner {
                 quiet_stopped,
             )
             .await?;
-        // The run may have changed the project: its graph catches up in the background.
+        // The run may have changed the project: its graph catches up in the background. The
+        // graphs of worktrees that are gone go.
         if let Some(graph) = tools.graph() {
-            graph.graphs.rebuild(&graph.project);
+            graph.graphs.refresh(&graph.project);
+            let (graphs, dir) = (graph.graphs.clone(), self.cfg.worktrees_dir.clone());
+            tokio::task::spawn_blocking(move || graphs.sweep_worktrees(&dir));
         }
         // A run that restarted its topic's session and got to use it spends the mark.
         if restarted.is_some()

@@ -18,7 +18,7 @@ pub async fn run(graph: Option<&RunGraph>, input: &Value) -> ToolOutput {
     let Some(graph) = graph else {
         return ToolOutput::err("graph is not available in this run");
     };
-    match graph.graphs.call(&graph.project, input).await {
+    match graph.graphs.call(&graph.project, &graph.scope, input).await {
         Ok(text) => ToolOutput::ok(cap_head(text)),
         Err(e) => ToolOutput::err(cap_head(e)),
     }

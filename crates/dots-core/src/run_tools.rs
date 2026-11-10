@@ -198,7 +198,10 @@ pub struct RunTools {
 #[derive(Debug, Clone)]
 pub struct RunGraph {
     pub graphs: crate::graph::Graphs,
+    /// The run's project: its own worktree's graph, or the checkout's.
     pub project: crate::graph::Project,
+    /// What of it the run may see: its dot's folder, less what its policy denies reading.
+    pub scope: crate::graph::Scope,
 }
 
 impl fmt::Debug for RunTools {

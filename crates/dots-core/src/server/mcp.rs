@@ -524,10 +524,16 @@ async fn call_graph(s: &ServerState, run_id: &str, req: &Value) -> Result<Value,
         Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
         Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
     };
-    Ok(match graph.graphs.call(&graph.project, &input).await {
-        Ok(text) => json!({ "content": [{ "type": "text", "text": cap_head(text) }] }),
-        Err(e) => not_performed(&cap_head(e)),
-    })
+    Ok(
+        match graph
+            .graphs
+            .call(&graph.project, &graph.scope, &input)
+            .await
+        {
+            Ok(text) => json!({ "content": [{ "type": "text", "text": cap_head(text) }] }),
+            Err(e) => not_performed(&cap_head(e)),
+        },
+    )
 }
 
 /// Checks a call of a check-in tool against the dot's policy under its policy name (`Notify`,
