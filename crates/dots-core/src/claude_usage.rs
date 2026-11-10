@@ -31,6 +31,8 @@ pub const MIN_GAP: TimeDelta = TimeDelta::seconds(30);
 pub const MAX_PROJECTS: u32 = 50;
 /// The project row that holds all Dots' messages.
 pub const DOTS_ROW: &str = "Dots (all dots)";
+/// The name of the project row whose messages had no cwd.
+pub const UNKNOWN_FOLDER: &str = "(unknown folder)";
 /// The 5-hour limit window's name, as the CLI reports it.
 const FIVE_HOUR: &str = "five_hour";
 
@@ -212,6 +214,22 @@ pub fn read_from(path: &Path, start: u64, budget: u64, since: &str) -> std::io::
     Ok(out)
 }
 
+/// How many of a file's first bytes `head_hash` covers.
+pub const HEAD_BYTES: u64 = 4096;
+
+/// The hash of `path`'s first `min(upto, HEAD_BYTES)` bytes. Bytes already read are complete
+/// lines, which an append never changes; a rewrite almost always does.
+pub fn head_hash(path: &Path, upto: u64) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut head = Vec::new();
+    std::fs::File::open(path)?
+        .take(upto.min(HEAD_BYTES))
+        .read_to_end(&mut head)?;
+    let digest = Sha256::digest(&head);
+    Ok(digest[..8].iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// One transcript file found: its path, size and modification time (Unix ms).
 #[derive(Debug, Clone)]
 struct Found {
@@ -379,19 +397,22 @@ impl ClaudeUsageService {
         for f in files {
             let key = f.path.to_string_lossy().to_string();
             seen.insert(key.clone());
-            // A file smaller than what was read was rewritten: read it again from the start.
-            let start = match known.get(&key) {
-                Some(k) if k.offset <= f.size => k.offset,
-                _ => 0,
-            };
-            if start == f.size && known.contains_key(&key) {
+            let prev = known.get(&key);
+            // Read to its end and not touched since: nothing to do.
+            if prev.is_some_and(|k| k.offset == f.size && k.mtime_ms == f.mtime_ms) {
                 continue;
             }
+            // Where the last read stopped, if the file still reaches it; the hash of its first
+            // bytes read says whether it was appended to or rewritten (checked when read).
+            let resume = prev
+                .filter(|k| k.offset <= f.size)
+                .map(|k| (k.offset, k.head_hash.clone()));
             let mut record = TranscriptFile {
                 path: key,
                 size: f.size,
                 mtime_ms: f.mtime_ms,
                 offset: f.size,
+                head_hash: String::new(),
             };
             // Last written before anything kept: mark it read without opening it.
             if f.mtime_ms < since.timestamp_millis() {
@@ -405,10 +426,19 @@ impl ClaudeUsageService {
                 break;
             }
             let (path, cap, from) = (f.path.clone(), budget, since_ts.clone());
-            let read = tokio::task::spawn_blocking(move || read_from(&path, start, cap, &from))
-                .await
-                .map_err(|e| Error::Other(format!("reading a transcript failed: {e}")))?;
-            let read = match read {
+            let read = tokio::task::spawn_blocking(move || -> std::io::Result<_> {
+                // Smaller than what was read, or other first bytes: rewritten, so from the start.
+                let start = match resume {
+                    Some((offset, hash)) if head_hash(&path, offset)? == hash => offset,
+                    _ => 0,
+                };
+                let read = read_from(&path, start, cap, &from)?;
+                let hash = head_hash(&path, start + read.read)?;
+                Ok((start, read, hash))
+            })
+            .await
+            .map_err(|e| Error::Other(format!("reading a transcript failed: {e}")))?;
+            let (start, read, hash) = match read {
                 Ok(read) => read,
                 Err(e) => {
                     tracing::debug!(path = %f.path.display(), "a transcript could not be read: {e}");
@@ -416,6 +446,7 @@ impl ClaudeUsageService {
                 }
             };
             record.offset = start + read.read;
+            record.head_hash = hash;
             let messages: Vec<(TranscriptMessage, bool)> = read
                 .messages
                 .into_iter()

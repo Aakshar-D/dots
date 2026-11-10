@@ -10,13 +10,15 @@ use crate::claude_usage::{ClaudeProject, ClaudeTotals, TranscriptMessage};
 use crate::Result;
 
 /// How far a transcript file has been read: `offset` is the byte after its last complete line
-/// read; `mtime_ms` is its modification time in Unix milliseconds.
+/// read; `mtime_ms` is its modification time in Unix milliseconds; `head_hash` is the hash of
+/// its first bytes read (at most `claude_usage::HEAD_BYTES`), to tell a rewrite from an append.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranscriptFile {
     pub path: String,
     pub size: u64,
     pub mtime_ms: i64,
     pub offset: u64,
+    pub head_hash: String,
 }
 
 /// Whether a message is Dots': marked so when it was read, or its session is on a run now
@@ -45,9 +47,11 @@ fn totals(row: &sqlx::sqlite::SqliteRow) -> Result<ClaudeTotals> {
 impl Store {
     /// Every transcript file read so far, by path.
     pub async fn transcript_files(&self) -> Result<HashMap<String, TranscriptFile>> {
-        let rows = sqlx::query("SELECT path, size, mtime_ms, offset FROM claude_transcript_files")
-            .fetch_all(&self.pool)
-            .await?;
+        let rows = sqlx::query(
+            "SELECT path, size, mtime_ms, offset, head_hash FROM claude_transcript_files",
+        )
+        .fetch_all(&self.pool)
+        .await?;
         rows.iter()
             .map(|row| {
                 let file = TranscriptFile {
@@ -55,6 +59,7 @@ impl Store {
                     size: row.try_get::<i64, _>("size")? as u64,
                     mtime_ms: row.try_get("mtime_ms")?,
                     offset: row.try_get::<i64, _>("offset")? as u64,
+                    head_hash: row.try_get("head_hash")?,
                 };
                 Ok((file.path.clone(), file))
             })
@@ -105,15 +110,17 @@ impl Store {
             .await?;
         }
         sqlx::query(
-            "INSERT INTO claude_transcript_files (path, size, mtime_ms, offset, scanned_at) \
-             VALUES (?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, \
+            "INSERT INTO claude_transcript_files \
+             (path, size, mtime_ms, offset, head_hash, scanned_at) \
+             VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(path) DO UPDATE SET size = excluded.size, \
              mtime_ms = excluded.mtime_ms, offset = excluded.offset, \
-             scanned_at = excluded.scanned_at",
+             head_hash = excluded.head_hash, scanned_at = excluded.scanned_at",
         )
         .bind(&file.path)
         .bind(file.size as i64)
         .bind(file.mtime_ms)
         .bind(file.offset as i64)
+        .bind(&file.head_hash)
         .bind(scanned_at)
         .execute(&mut *tx)
         .await?;
@@ -178,10 +185,13 @@ impl Store {
             .map(|row| {
                 let cwd: Option<String> = row.try_get("project")?;
                 Ok(ClaudeProject {
-                    name: cwd
-                        .as_deref()
-                        .map(crate::claude_usage::folder_name)
-                        .unwrap_or_else(|| crate::claude_usage::DOTS_ROW.to_string()),
+                    name: match cwd.as_deref() {
+                        None => crate::claude_usage::DOTS_ROW.to_string(),
+                        Some(c) if c.trim().is_empty() => {
+                            crate::claude_usage::UNKNOWN_FOLDER.to_string()
+                        }
+                        Some(c) => crate::claude_usage::folder_name(c),
+                    },
                     cwd,
                     totals: totals(row)?,
                 })

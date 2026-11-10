@@ -1,10 +1,12 @@
 -- All Claude use (usage tab spec section 8): what Claude Code's own transcripts say, read
--- incrementally. Each transcript file read so far, and the byte offset read up to.
+-- incrementally. Each transcript file read so far, the byte offset read up to, and the hash of
+-- its first bytes read (at most 4 KiB), so a rewrite is told from an append.
 CREATE TABLE claude_transcript_files (
     path        TEXT PRIMARY KEY,
     size        INTEGER NOT NULL,
     mtime_ms    INTEGER NOT NULL,
     offset      INTEGER NOT NULL,
+    head_hash   TEXT NOT NULL DEFAULT '',
     scanned_at  TEXT NOT NULL
 );
 

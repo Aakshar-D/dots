@@ -206,6 +206,53 @@ async fn a_rewritten_file_is_read_again_without_counting_twice() {
 }
 
 #[tokio::test]
+async fn a_file_rewritten_with_other_lines_and_no_smaller_is_read_from_the_start() {
+    let s = setup().await;
+    let h = TimeDelta::hours(1);
+    let path = s.append("p", "s1.jsonl", &line("m1", "r1", h, "s1", &work(), 1));
+    s.scan().await;
+    // Other lines, longer than what was read: the old offset falls inside the first one.
+    std::fs::write(
+        &path,
+        [
+            line("m2-longer-id", "r2-longer-id", h, "s1", &work(), 1),
+            line("m3", "r3", h, "s1", &work(), 1),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    s.scan().await;
+    assert_eq!(s.week().await.own.messages, 3);
+}
+
+#[tokio::test]
+async fn messages_with_no_folder_are_one_row_named_so() {
+    let s = setup().await;
+    let h = TimeDelta::hours(1);
+    s.append(
+        "p",
+        "s1.jsonl",
+        &[
+            line("m1", "r1", h, "s1", Path::new(""), 1),
+            line("m2", "r2", h, "s2", Path::new(""), 1),
+        ]
+        .concat(),
+    );
+    s.scan().await;
+    let week = s.week().await;
+    let rows: Vec<_> = week
+        .projects
+        .iter()
+        .map(|p| (p.name.as_str(), p.cwd.as_deref()))
+        .collect();
+    assert_eq!(
+        rows,
+        vec![(dots_core::claude_usage::UNKNOWN_FOLDER, Some(""))]
+    );
+    assert_eq!(week.projects[0].totals.messages, 2);
+}
+
+#[tokio::test]
 async fn a_scan_stops_at_the_cap_and_says_there_is_more() {
     let s = setup().await;
     let h = TimeDelta::hours(1);
