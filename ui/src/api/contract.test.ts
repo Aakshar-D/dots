@@ -116,6 +116,8 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   GrantStatus: T.GrantStatus.array(),
   LimitsState: T.LimitsState.array(),
   UsageSummary: T.UsageSummary,
+  ClaudeUsage: T.ClaudeUsage.array(),
+  ClaudeScan: T.ClaudeScan,
   WorkspaceView: T.WorkspaceView.array(),
   DotAccess: T.DotAccess.array(),
   ApiKeyView: T.ApiKeyView.array(),

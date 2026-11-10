@@ -661,6 +661,9 @@ export const commands = {
   // Claude's usage limits and the Usage page (usage and limits spec section 6).
   limitsGet: () => call(T.LimitsState, "limits_get"),
   usageSummary: (period: T.UsagePeriod) => call(T.UsageSummary, "usage_summary", { period }),
+  /// All Claude use from Claude Code's transcripts, and a scan of what they gained since.
+  claudeUsage: (period: T.UsagePeriod) => call(T.ClaudeUsage, "claude_usage", { period }),
+  claudeUsageScan: () => call(T.ClaudeScan, "claude_usage_scan"),
   runReleaseHold: (runId: string) => call(T.Run, "run_release_hold", { runId }),
   /// Run once anyway: one of the person's own runs starts past the spending cap holding it.
   runReleaseCap: (runId: string) => call(T.Run, "run_release_cap", { runId }),

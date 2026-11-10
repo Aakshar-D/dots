@@ -2337,6 +2337,23 @@ pub async fn usage_summary(
     Ok(state.rt()?.usage_summary(period).await?)
 }
 
+/// The Usage page's All Claude use for the period (usage tab spec section 7).
+#[tauri::command]
+pub async fn claude_usage(
+    state: State<'_, AppState>,
+    period: dots_core::model::UsagePeriod,
+) -> Res<dots_core::claude_usage::ClaudeUsage> {
+    Ok(state.rt()?.claude_usage(period).await?)
+}
+
+/// Reads what Claude Code wrote to its transcripts since the last scan.
+#[tauri::command]
+pub async fn claude_usage_scan(
+    state: State<'_, AppState>,
+) -> Res<dots_core::claude_usage::ClaudeScan> {
+    Ok(state.rt()?.claude_usage_scan().await?)
+}
+
 /// **Run anyway**: releases a held background run from the hold.
 #[tauri::command]
 pub async fn run_release_hold(state: State<'_, AppState>, run_id: String) -> Res<Run> {

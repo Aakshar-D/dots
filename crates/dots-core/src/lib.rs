@@ -11,6 +11,7 @@ pub mod chatgpt;
 pub mod checkins;
 pub mod checkpoint;
 pub mod claude_agents;
+pub mod claude_usage;
 pub mod connectors;
 pub mod context;
 pub mod delivery;

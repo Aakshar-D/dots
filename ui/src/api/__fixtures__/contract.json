@@ -869,6 +869,106 @@
     "step_run_id": "01J0STP3",
     "summary": "Made the icon dark on a light taskbar."
   },
+  "ClaudeScan": {
+    "bytes": 482113,
+    "files": 12,
+    "more": false,
+    "scanned_at": "2026-10-09T12:00:00.000Z"
+  },
+  "ClaudeUsage": [
+    {
+      "available": true,
+      "block": {
+        "messages": 212,
+        "resets_at": "2026-10-09T15:10:00.000Z",
+        "started_at": "2026-10-09T10:10:00.000Z",
+        "tokens": 1400000
+      },
+      "dots": {
+        "cache_creation_tokens": 400000,
+        "cache_read_tokens": 3100000,
+        "input_tokens": 9000,
+        "messages": 310,
+        "output_tokens": 52000,
+        "sessions": 5
+      },
+      "folder": "C:/Users/u/.claude/projects",
+      "own": {
+        "cache_creation_tokens": 2400000,
+        "cache_read_tokens": 48000000,
+        "input_tokens": 120000,
+        "messages": 3900,
+        "output_tokens": 610000,
+        "sessions": 58
+      },
+      "period": "week",
+      "projects": [
+        {
+          "cwd": "C:/Users/u/code/dots",
+          "name": "dots",
+          "totals": {
+            "cache_creation_tokens": 2000000,
+            "cache_read_tokens": 40000000,
+            "input_tokens": 100000,
+            "messages": 3000,
+            "output_tokens": 500000,
+            "sessions": 40
+          }
+        },
+        {
+          "cwd": null,
+          "name": "Dots (all dots)",
+          "totals": {
+            "cache_creation_tokens": 400000,
+            "cache_read_tokens": 3100000,
+            "input_tokens": 9000,
+            "messages": 310,
+            "output_tokens": 52000,
+            "sessions": 5
+          }
+        },
+        {
+          "cwd": "C:/Users/u/code/site",
+          "name": "site",
+          "totals": {
+            "cache_creation_tokens": 400000,
+            "cache_read_tokens": 8000000,
+            "input_tokens": 20000,
+            "messages": 900,
+            "output_tokens": 110000,
+            "sessions": 18
+          }
+        }
+      ],
+      "scanned_at": "2026-10-09T12:00:00.000Z",
+      "since": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "available": false,
+      "block": null,
+      "dots": {
+        "cache_creation_tokens": 0,
+        "cache_read_tokens": 0,
+        "input_tokens": 0,
+        "messages": 0,
+        "output_tokens": 0,
+        "sessions": 0
+      },
+      "folder": "C:/Users/u/.claude/projects",
+      "own": {
+        "cache_creation_tokens": 0,
+        "cache_read_tokens": 0,
+        "input_tokens": 0,
+        "messages": 0,
+        "output_tokens": 0,
+        "sessions": 0
+      },
+      "period": "week",
+      "projects": [],
+      "scanned_at": null,
+      "since": "2026-10-09T12:00:00.000Z"
+    }
+  ],
   "CmdError": {
     "kind": "conflict",
     "message": "run 01J0RUN is already succeeded"
@@ -1115,6 +1215,8 @@
     "watcher_resume",
     "limits_get",
     "usage_summary",
+    "claude_usage",
+    "claude_usage_scan",
     "run_release_hold",
     "run_release_cap",
     "spend_today",

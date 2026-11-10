@@ -41,6 +41,24 @@ describe("the app frame", () => {
     expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
   });
 
+  it("has a Usage link that opens the Usage page from the keyboard", async () => {
+    const { user } = renderApp("/home");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    const usage = within(nav).getByRole("link", { name: "Usage" });
+    expect(usage).toHaveAttribute("href", "/usage");
+    expect(usage).toHaveAttribute("title", "Usage");
+    // Before Settings, and the rail's meter bars stay.
+    const names = within(nav)
+      .getAllByRole("link")
+      .map((l) => l.getAttribute("aria-label"));
+    expect(names.indexOf("Usage")).toBe(names.indexOf("Settings") - 1);
+    expect(await within(nav).findByRole("link", { name: /^Claude usage/i })).toBeVisible();
+    usage.focus();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("heading", { name: "Usage" })).toBeVisible();
+    expect(usage).toHaveAttribute("aria-current", "page");
+  });
+
   it("counts approvals of the dots of an account that is not the current one", async () => {
     backend.on("inbox", () => sample.inbox);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
