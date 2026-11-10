@@ -88,6 +88,11 @@ impl Env {
         let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
         new.payload = Some(json!({"message": "Fix the parser"}));
         let r = self.store.create_run(&new).await.unwrap();
+        // Ended at once: a dispatcher that wakes meanwhile must not start it.
+        self.store
+            .finish_run(&r.id, RunStatus::Succeeded, Some("Parser fixed"), None)
+            .await
+            .unwrap();
         self.store.set_session(&r.id, "S1").await.unwrap();
         self.store
             .set_run_context(&r.id, Some(fill), Some(200_000))
@@ -95,10 +100,6 @@ impl Env {
             .unwrap();
         self.store
             .set_workspace(&r.id, &self.dir.path().to_string_lossy(), None, None)
-            .await
-            .unwrap();
-        self.store
-            .finish_run(&r.id, RunStatus::Succeeded, Some("Parser fixed"), None)
             .await
             .unwrap();
         self.store.get_run(&r.id).await.unwrap()

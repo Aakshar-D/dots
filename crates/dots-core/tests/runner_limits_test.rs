@@ -308,16 +308,17 @@ async fn a_follow_up_that_started_fresh_goes_back_with_its_old_session() {
         .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
         .await
         .unwrap();
+    // Ended at once: a dispatcher that wakes meanwhile must not start it.
+    e.store
+        .finish_run(&earlier.id, RunStatus::Succeeded, Some("ok"), None)
+        .await
+        .unwrap();
     e.store
         .set_session(&earlier.id, "thread-session")
         .await
         .unwrap();
     e.store
         .set_run_context(&earlier.id, Some(180_000), Some(200_000))
-        .await
-        .unwrap();
-    e.store
-        .finish_run(&earlier.id, RunStatus::Succeeded, Some("ok"), None)
         .await
         .unwrap();
     let mut new = NewRun::new(&dot.id, TriggerKind::FollowUp);

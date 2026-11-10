@@ -643,6 +643,11 @@ async fn a_fairly_full_session_is_compacted_by_the_cli_before_the_turn() {
         .create_run(&NewRun::new(&dot.id, TriggerKind::Chat))
         .await
         .unwrap();
+    // Ended at once: a dispatcher that wakes meanwhile must not start it.
+    e.store
+        .finish_run(&first.id, RunStatus::Succeeded, Some("ok"), None)
+        .await
+        .unwrap();
     e.store.set_session(&first.id, "S1").await.unwrap();
     e.store
         .set_run_context(&first.id, Some(130_000), Some(200_000))
@@ -650,10 +655,6 @@ async fn a_fairly_full_session_is_compacted_by_the_cli_before_the_turn() {
         .unwrap();
     e.store
         .set_workspace(&first.id, &e.dir.path().to_string_lossy(), None, None)
-        .await
-        .unwrap();
-    e.store
-        .finish_run(&first.id, RunStatus::Succeeded, Some("ok"), None)
         .await
         .unwrap();
     let mut next = NewRun::new(&dot.id, TriggerKind::FollowUp);
