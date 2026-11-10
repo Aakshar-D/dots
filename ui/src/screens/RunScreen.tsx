@@ -6,6 +6,7 @@ import { commands } from "@/api/commands";
 import type { Approval, Run, RunEventRecord } from "@/api/types";
 import { AppliedCalls } from "@/components/AppliedCalls";
 import { ApprovalCard } from "@/components/ApprovalCard";
+import { RunContextSection } from "@/components/ContextMeter";
 import { DiffView } from "@/components/DiffView";
 import { ErrorNote, LoadErrors } from "@/components/ErrorNote";
 import { Markdown } from "@/components/Markdown";
@@ -219,6 +220,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
         )}
       </dl>
       <HeldNote run={latest} />
+      <RunContextSection runs={runs} />
       {latest.error && (
         <p role="alert" className="rounded-md border border-destructive/50 p-3 text-destructive">
           {latest.error}

@@ -6,6 +6,7 @@ import { useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
 import type { Run } from "@/api/types";
+import { useContextChoice } from "@/components/ContextMeter";
 import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
 import {
@@ -96,16 +97,21 @@ function ActionDialog(props: {
 }
 
 /// The menu of one topic (topic tools spec section 6): Rename…, Merge into… one of `others`
-/// (the dot's other topics that are not archived), Archive or Unarchive.
+/// (the dot's other topics that are not archived), Archive or Unarchive; for a Claude dot
+/// (`claude`), Compact now and Start fresh, which its next message does first (context rules
+/// spec section 6).
 export function TopicMenu({
   dotId,
   topic,
   others,
+  claude = false,
 }: {
   dotId: string;
   topic: Topic;
   others: Topic[];
+  claude?: boolean;
 }) {
+  const choose = useContextChoice(topic.rootId);
   const navigate = useNavigate();
   const refresh = useRefresh(dotId);
   const [open, setOpen] = useState<"rename" | "merge" | null>(null);
@@ -156,6 +162,17 @@ export function TopicMenu({
             <DropdownMenu.Item className={ITEM} onSelect={() => void archive(!topic.archived)}>
               {topic.archived ? "Unarchive" : "Archive"}
             </DropdownMenu.Item>
+            {claude && (
+              <>
+                <DropdownMenu.Separator className="my-1 h-px bg-border" />
+                <DropdownMenu.Item className={ITEM} onSelect={() => choose.mutate("compact")}>
+                  Compact now
+                </DropdownMenu.Item>
+                <DropdownMenu.Item className={ITEM} onSelect={() => choose.mutate("fresh")}>
+                  Start fresh
+                </DropdownMenu.Item>
+              </>
+            )}
           </DropdownMenu.Content>
         </DropdownMenu.Portal>
       </DropdownMenu.Root>

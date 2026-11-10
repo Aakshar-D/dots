@@ -180,6 +180,23 @@ export function installDefaults(): void {
   }));
   // No dot proposed instructions.
   backend.on("instruction_proposals_list", () => []);
+  // No topic has a context fill, and no run was compacted (context rules spec).
+  const rules = { enabled: true, compact_at: 60, clear_at: 80 };
+  backend.on("thread_context", (args) => ({
+    root_run_id: String(args.rootRunId),
+    fill: null,
+    window: 200000,
+    rules,
+    keep_going: false,
+    request: null,
+    asks_fresh: false,
+  }));
+  backend.on("run_context_report", () => ({
+    events: [],
+    dot_compactions: 0,
+    dot_clears: 0,
+    rules,
+  }));
   // No conversation has files (the Files panel).
   backend.on("conversation_files", () => []);
   // An approval card asks for these when it shows; by default the core offers no rule.

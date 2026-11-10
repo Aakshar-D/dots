@@ -128,6 +128,15 @@ export const DotCaps = z.strictObject({
 });
 export type DotCaps = z.infer<typeof DotCaps>;
 
+/// When a Claude session is compacted or started fresh (context rules spec section 4): shares
+/// of the context window, in percent (10 to 95, clear above compact).
+export const ContextRules = z.strictObject({
+  enabled: z.boolean(),
+  compact_at: z.number().int(),
+  clear_at: z.number().int(),
+});
+export type ContextRules = z.infer<typeof ContextRules>;
+
 const dotSpecShape = {
   name: z.string(),
   instructions: z.string(),
@@ -154,6 +163,8 @@ const dotSpecShape = {
   quiet_limit_secs: nullable(z.number().int()),
   spend_cap: DotCaps,
   enabled: z.boolean(),
+  // The dot's own context rules; null follows Settings.
+  context_rules: nullable(ContextRules),
 };
 export const DotSpec = z.strictObject(dotSpecShape);
 export const Dot = z.strictObject({
@@ -248,6 +259,9 @@ const runShape = {
   model_fallback_from: nullable(z.string()),
   // The result check of its final answer; null when none applies.
   result_check: nullable(ResultCheck),
+  // The tokens its last turn sent (its context fill) and the window its engine reported.
+  context_fill: nullable(z.number().int()),
+  context_window: nullable(z.number().int()),
 };
 export const Run = z.strictObject(runShape);
 
@@ -450,6 +464,19 @@ export const RunEventData = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("failed"), error: z.string() }),
   // Something about the run that is not the model's doing: an item left out, a server problem.
   z.strictObject({ kind: z.literal("notice"), text: z.string() }),
+  // The context fill; written to the run, never stored as an event.
+  z.strictObject({
+    kind: z.literal("context"),
+    fill: nullable(z.number().int()).optional(),
+    window: nullable(z.number().int()).optional(),
+  }),
+  // The session was compacted: by the CLI itself ("auto") or by Dots' /compact ("manual").
+  z.strictObject({
+    kind: z.literal("compacted"),
+    trigger: z.string(),
+    before: z.number().int(),
+    after: z.number().int(),
+  }),
   // The result check's record, with what the checker used; not shown in the transcript.
   z.strictObject({
     kind: z.literal("result_check"),
@@ -952,6 +979,8 @@ export const Settings = z.strictObject({
   check_results: z.boolean(),
   // The Claude model the result check uses.
   checker_model: z.string(),
+  // When sessions are compacted or started fresh, unless a dot has its own rules.
+  context_rules: ContextRules,
 });
 export const SettingsSaved = z.strictObject({
   settings: Settings,
@@ -2492,7 +2521,51 @@ export const LIMITS = {
   max_cap_usd: 100000,
   max_cap_tokens: 10000000000,
   spend_warn_at: 0.8,
+  context_min_pct: 10,
+  context_max_pct: 95,
 } as const;
+
+/// The person's answer for a topic's context (context rules spec section 6).
+export const ContextChoice = z.enum(["compact", "fresh", "keep_going"]);
+export type ContextChoice = z.infer<typeof ContextChoice>;
+
+/// A topic's context meter and its "start fresh?" question.
+export const ThreadContext = z.strictObject({
+  root_run_id: z.string(),
+  fill: nullable(z.number().int()),
+  window: z.number().int(),
+  rules: ContextRules,
+  keep_going: z.boolean(),
+  request: nullable(z.enum(["compact", "fresh"])),
+  asks_fresh: z.boolean(),
+});
+export type ThreadContext = z.infer<typeof ThreadContext>;
+
+/// A compaction or fresh start of a run's session.
+export const ContextEvent = z.strictObject({
+  id: z.string(),
+  run_id: z.string(),
+  dot_id: z.string(),
+  root_run_id: z.string(),
+  kind: z.enum(["compact", "clear"]),
+  trigger: z.enum(["auto", "manual"]),
+  fill_before: z.number().int(),
+  // Unknown for a fresh start until its first turn.
+  fill_after: nullable(z.number().int()),
+  // The session a fresh start left.
+  from_session: nullable(z.string()),
+  at: z.string(),
+});
+export type ContextEvent = z.infer<typeof ContextEvent>;
+
+/// A run's compactions and fresh starts, with its dot's totals and rules.
+export const RunContextReport = z.strictObject({
+  events: z.array(ContextEvent),
+  dot_compactions: z.number().int(),
+  dot_clears: z.number().int(),
+  rules: ContextRules,
+});
+export type RunContextReport = z.infer<typeof RunContextReport>;
 
 export type EngineKind = z.infer<typeof EngineKind>;
 export type LimitReading = z.infer<typeof LimitReading>;

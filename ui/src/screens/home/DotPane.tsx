@@ -4,6 +4,7 @@ import { Link, Navigate, useLocation, useNavigate } from "react-router";
 
 import { CommandError, commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
+import { ThreadContextBar } from "@/components/ContextMeter";
 import { LoadErrors } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
 import { dotStatus, skipLine } from "@/lib/dot-status";
@@ -118,6 +119,7 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
             dotId={dot.id}
             topic={viewed}
             others={view.topics.filter((topic) => topic.rootId !== viewed.rootId)}
+            claude={dot.engine === "claude"}
           />
         )}
       </DotHeader>
@@ -152,6 +154,12 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
       )}
       {/* The reply area keeps its place in the tree when the greeting gives way to the
           conversation, so a send on its way is not cut off. */}
+      {!view.pending && viewed && dot.engine === "claude" && (
+        <ThreadContextBar
+          rootRunId={viewed.rootId}
+          className="mx-auto w-full max-w-[720px] px-4 pt-1"
+        />
+      )}
       {!view.pending && (
         <ReplyArea
           dotId={dot.id}
