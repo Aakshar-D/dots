@@ -441,6 +441,9 @@ impl Session {
         if call.name == "context" {
             return tools::context::run(self.ctx.tools.contexts(), &call.input).await;
         }
+        if call.name == crate::graph::TOOL {
+            return tools::graph::run(self.ctx.tools.graph(), &call.input).await;
+        }
         if call.name == crate::apps::propose::TOOL {
             return self.propose(&call.input).await;
         }

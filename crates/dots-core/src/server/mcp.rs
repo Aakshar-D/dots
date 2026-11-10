@@ -84,6 +84,21 @@ fn context_tool() -> Value {
     })
 }
 
+/// The `graph` tool of a run whose dot uses the project graph (project graph spec section 8):
+/// the same arguments as the local engine's.
+fn graph_tool() -> Value {
+    json!({
+        "name": crate::graph::TOOL,
+        "description": crate::graph::query::DESCRIPTION,
+        "inputSchema": {
+            "type": "object",
+            "properties": crate::graph::query::properties(),
+            "required": ["action"]
+        },
+        "annotations": { "readOnlyHint": true }
+    })
+}
+
 pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Bytes) -> Response {
     let Some(run_id) = bearer(&headers).and_then(|t| s.runner.run_for_secret(&t)) else {
         return StatusCode::UNAUTHORIZED.into_response();
@@ -103,6 +118,12 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             let mut tools = vec![approve_tool()];
             if has_contexts(&s, &run_id) {
                 tools.push(context_tool());
+            }
+            if s.runner
+                .run_tools(&run_id)
+                .is_some_and(|tools| tools.graph().is_some())
+            {
+                tools.push(graph_tool());
             }
             // Every run checks in (check-ins spec section 2), once the runtime has given the
             // runner the check-ins.
@@ -138,6 +159,7 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             let name = req.pointer("/params/name").and_then(Value::as_str);
             let answer = match (name, name.and_then(Tool::from_name)) {
                 (Some("context"), _) => call_context(&s, &run_id, &req).await,
+                (Some(crate::graph::TOOL), _) => call_graph(&s, &run_id, &req).await,
                 (Some(crate::apps::propose::TOOL), _) => call_propose(&s, &run_id, &req).await,
                 (Some(crate::apps::propose::COPY_TOOL), _) => call_copy(&s, &run_id, &req).await,
                 (Some(crate::instructions::TOOL), _) => call_instructions(&s, &run_id, &req).await,
@@ -470,6 +492,48 @@ async fn call_context(s: &ServerState, run_id: &str, req: &Value) -> Result<Valu
         Ok(Err(e)) => not_performed(&cap_head(e)),
         Err(e) => not_performed(&format!("reading the collection failed: {e}")),
     })
+}
+
+/// Checks a `graph` call against the dot's policy as the tool `Graph` and answers it from the
+/// project's graph (project graph spec section 8). A call that is not performed is a tool
+/// result with `isError`, as for `context`.
+async fn call_graph(s: &ServerState, run_id: &str, req: &Value) -> Result<Value, (i64, String)> {
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let mut input = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    let Some(graph) = s
+        .runner
+        .run_tools(run_id)
+        .and_then(|tools| tools.graph().cloned())
+    else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    // Only the tool's own arguments.
+    if let Value::Object(args) = &mut input {
+        args.retain(|key, _| {
+            ["action", "query", "node", "to", "path", "kind", "depth"].contains(&key.as_str())
+        });
+    }
+    let input = match s.hub.check(run_id, crate::graph::POLICY_NAME, input).await {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+    };
+    Ok(
+        match graph
+            .graphs
+            .call(&graph.project, &graph.scope, &input)
+            .await
+        {
+            Ok(text) => json!({ "content": [{ "type": "text", "text": cap_head(text) }] }),
+            Err(e) => not_performed(&cap_head(e)),
+        },
+    )
 }
 
 /// Checks a call of a check-in tool against the dot's policy under its policy name (`Notify`,

@@ -303,7 +303,9 @@ impl Policy {
     /// sends or deletes (`guard::classify`) asks where it would be allowed.
     pub fn resolve_in(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Action {
         let ws = workspace_key(workspace);
-        if PLUMBING_TOOLS.contains(&tool.trim()) {
+        // `Graph` reads only the graph Dots built of the project (project graph spec section 8):
+        // like the plumbing tools, every policy allows it unless a deny or ask rule names it.
+        if PLUMBING_TOOLS.contains(&tool.trim()) || tool.trim() == crate::graph::POLICY_NAME {
             return [Action::Deny, Action::Ask]
                 .into_iter()
                 .find(|a| self.rule_matches(*a, tool, input, ws.as_deref()))
@@ -406,6 +408,7 @@ impl Policy {
                 MEMORY_TOOL,
                 WORKFLOW_TOOL,
                 INSTRUCTIONS_TOOL,
+                crate::graph::POLICY_NAME,
             ]
             .iter()
             .chain(CHECK_IN_TOOLS.iter())

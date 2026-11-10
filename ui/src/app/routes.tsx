@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Navigate, type RouteObject } from "react-router";
 
 import { Root } from "@/app/Root";
@@ -18,6 +19,9 @@ import { TeamsScreen } from "@/screens/teams/TeamsScreen";
 import { WorkflowBuilderScreen } from "@/screens/teams/builder/WorkflowBuilderScreen";
 import { WorkflowRunScreen } from "@/screens/teams/run/WorkflowRunScreen";
 import { UsageScreen } from "@/screens/UsageScreen";
+
+// The Graph screen and its graph library load when it is first opened.
+const GraphScreen = lazy(() => import("@/screens/graph/GraphScreen"));
 
 export const routes: RouteObject[] = [
   {
@@ -51,6 +55,14 @@ export const routes: RouteObject[] = [
       { path: "settings/:tab", element: <SettingsScreen /> },
       { path: "usage", element: <UsageScreen /> },
       { path: "releases", element: <ReleasesScreen /> },
+      {
+        path: "graph/:dotId",
+        element: (
+          <Suspense fallback={<p className="p-6 text-sm text-muted-foreground">Loading…</p>}>
+            <GraphScreen />
+          </Suspense>
+        ),
+      },
       { path: "*", element: <Navigate to="/home" replace /> },
     ],
   },

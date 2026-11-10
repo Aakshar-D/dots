@@ -397,6 +397,18 @@ export function DotForm(props: {
             <option value="folder">The folder itself</option>
           </NativeSelect>
         </Field>
+        <div className="flex items-center gap-2">
+          <Switch
+            id="dot-use-graph"
+            checked={spec.use_graph}
+            onCheckedChange={(v) => set("use_graph", v)}
+          />
+          <Label htmlFor="dot-use-graph">Use project graph</Label>
+        </div>
+        <p className="-mt-2 text-xs text-muted-foreground">
+          Dots keeps a code graph of the folder. Runs get a short map of the project and a graph
+          tool, so they read and search less.
+        </p>
       </Section>
 
       <Section title="Schedule">

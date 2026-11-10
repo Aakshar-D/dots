@@ -245,6 +245,7 @@ export function specOf(dot: DotSpec): DotSpec {
     browser: dot.browser,
     use_global_instructions: dot.use_global_instructions,
     check_results: dot.check_results,
+    use_graph: dot.use_graph,
     use_user_settings: dot.use_user_settings,
     max_turns: dot.max_turns,
     timeout_secs: dot.timeout_secs,

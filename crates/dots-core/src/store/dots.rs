@@ -16,7 +16,8 @@ pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, end
     workdir, workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
     quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id, \
-    workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules";
+    workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules, \
+    use_graph";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     Ok(Dot {
@@ -58,6 +59,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
                 .try_get::<Option<String>, _>("context_rules")?
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?,
+            use_graph: row.try_get::<i64, _>("use_graph")? != 0,
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
             max_turns: row.try_get::<i64, _>("max_turns")? as u32,
             timeout_secs: row.try_get::<i64, _>("timeout_secs")? as u64,
@@ -181,8 +183,9 @@ impl Store {
              workspace_mode, schedule, webhook_token, policy, uses, variables, browser, \
              quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
              timeout_secs, approval_wait_secs, enabled, created_at, updated_at, org_id, \
-             workspace_id, spend_daily_usd, spend_daily_tokens, check_results) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules, \
+             use_graph) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -214,6 +217,7 @@ impl Store {
         .bind(spec.spend_cap.daily_tokens.map(|n| n as i64))
         .bind(spec.check_results as i64)
         .bind(rules_json(spec)?)
+        .bind(spec.use_graph as i64)
         .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
@@ -273,7 +277,8 @@ impl Store {
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \
              browser = ?, quiet_limit_secs = ?, spend_daily_usd = ?, spend_daily_tokens = ?, \
              use_global_instructions = ?, use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
-             enabled = ?, check_results = ?, context_rules = ?, updated_at = ? WHERE id = ? \
+             enabled = ?, check_results = ?, context_rules = ?, use_graph = ?, updated_at = ? \
+             WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
              WHERE dot_id = ? AND status IN ('queued','running','awaiting_approval')))",
         )
@@ -300,6 +305,7 @@ impl Store {
         .bind(spec.enabled as i64)
         .bind(spec.check_results as i64)
         .bind(rules_json(spec)?)
+        .bind(spec.use_graph as i64)
         .bind(now())
         .bind(id)
         .bind(&spec.workdir)

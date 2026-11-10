@@ -191,6 +191,10 @@ pub struct DotSpec {
     /// (result check spec section 5). A spec written before it existed reads as on.
     #[serde(default = "yes")]
     pub check_results: bool,
+    /// Runs get the project's code graph: the `graph` tool and the project map in the prompt
+    /// (project graph spec sections 8 and 9). A spec written before it existed reads as on.
+    #[serde(default = "yes")]
+    pub use_graph: bool,
     /// The dot's own context rules (context rules spec section 4); `None` takes Settings'.
     #[serde(default)]
     pub context_rules: Option<crate::context_rules::ContextRules>,
@@ -241,6 +245,7 @@ impl DotSpec {
             spend_cap: crate::spend::DotCaps::default(),
             use_global_instructions: true,
             check_results: true,
+            use_graph: true,
             context_rules: None,
             use_user_settings: false,
             max_turns: 40,

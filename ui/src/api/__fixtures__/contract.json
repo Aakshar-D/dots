@@ -154,6 +154,7 @@
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
+        "use_graph": true,
         "use_user_settings": false,
         "uses": {
           "apps": [
@@ -1257,7 +1258,14 @@
     "workflow_add_budget",
     "workflow_allow_send_back",
     "workflow_retry_step",
-    "workflow_stop"
+    "workflow_stop",
+    "graph_status",
+    "graph_view",
+    "graph_node",
+    "graph_search",
+    "graph_rebuild",
+    "graph_export",
+    "graph_reveal"
   ],
   "ConnectorEntry": [
     {
@@ -2213,6 +2221,7 @@
     "timeout_secs": 1800,
     "updated_at": "2026-10-09T12:00:00.000Z",
     "use_global_instructions": true,
+    "use_graph": true,
     "use_user_settings": false,
     "uses": {
       "apps": [
@@ -2405,6 +2414,7 @@
       "timeout_secs": 1800,
       "updated_at": "2026-10-09T12:00:00.000Z",
       "use_global_instructions": true,
+      "use_graph": true,
       "use_user_settings": false,
       "uses": {
         "apps": [
@@ -2602,6 +2612,7 @@
     },
     "timeout_secs": 1800,
     "use_global_instructions": true,
+    "use_graph": true,
     "use_user_settings": false,
     "uses": {
       "apps": [],
@@ -3097,6 +3108,198 @@
       "source": null,
       "status": "org_removed",
       "text": "dot 'acme-release': its org 'acme-eng' was removed"
+    }
+  ],
+  "GraphStatus": [
+    {
+      "built_at": "2026-10-09T12:00:00.000Z",
+      "duration_ms": 2840,
+      "edges": 14877,
+      "error": null,
+      "files": 412,
+      "git": true,
+      "key": "3f2a9c0d1e4b5a6f",
+      "nodes": 5210,
+      "parse_errors": 1,
+      "progress": null,
+      "root": "C:/code/shop",
+      "skipped": 3,
+      "state": "ready",
+      "truncated": false
+    },
+    {
+      "built_at": "2026-10-09T12:00:00.000Z",
+      "duration_ms": 2840,
+      "edges": 14877,
+      "error": null,
+      "files": 412,
+      "git": true,
+      "key": "3f2a9c0d1e4b5a6f",
+      "nodes": 5210,
+      "parse_errors": 1,
+      "progress": 42,
+      "root": "C:/code/shop",
+      "skipped": 3,
+      "state": "building",
+      "truncated": false
+    },
+    {
+      "built_at": null,
+      "duration_ms": 0,
+      "edges": 0,
+      "error": null,
+      "files": 0,
+      "git": false,
+      "key": "3f2a9c0d1e4b5a6f",
+      "nodes": 0,
+      "parse_errors": 1,
+      "progress": null,
+      "root": "C:/code/shop",
+      "skipped": 0,
+      "state": "none",
+      "truncated": false
+    },
+    {
+      "built_at": "2026-10-09T12:00:00.000Z",
+      "duration_ms": 2840,
+      "edges": 14877,
+      "error": "the graph file cannot be opened: disk full",
+      "files": 412,
+      "git": true,
+      "key": "3f2a9c0d1e4b5a6f",
+      "nodes": 5210,
+      "parse_errors": 1,
+      "progress": null,
+      "root": "C:/code/shop",
+      "skipped": 3,
+      "state": "failed",
+      "truncated": false
+    }
+  ],
+  "GraphView": [
+    {
+      "collapsed": false,
+      "communities": [
+        {
+          "files": 240,
+          "id": 0,
+          "name": "src",
+          "nodes": 3100
+        },
+        {
+          "files": 172,
+          "id": 1,
+          "name": "ui/src",
+          "nodes": 2110
+        }
+      ],
+      "community": 0,
+      "edges": [
+        {
+          "kind": "contains",
+          "source": "file:src/runner.rs",
+          "target": "src/runner.rs#Runner.start",
+          "weight": 1
+        }
+      ],
+      "nodes": [
+        {
+          "community": 0,
+          "file": "src/runner.rs",
+          "id": "file:src/runner.rs",
+          "kind": "file",
+          "label": "runner.rs",
+          "line": 0,
+          "weight": 30
+        },
+        {
+          "community": 0,
+          "file": "src/runner.rs",
+          "id": "src/runner.rs#Runner.start",
+          "kind": "method",
+          "label": "Runner.start",
+          "line": 120,
+          "weight": 14
+        },
+        {
+          "community": 1,
+          "file": null,
+          "id": "pkg:tokio",
+          "kind": "package",
+          "label": "tokio",
+          "line": 0,
+          "weight": 8
+        }
+      ],
+      "status": {
+        "built_at": "2026-10-09T12:00:00.000Z",
+        "duration_ms": 2840,
+        "edges": 14877,
+        "error": null,
+        "files": 412,
+        "git": true,
+        "key": "3f2a9c0d1e4b5a6f",
+        "nodes": 5210,
+        "parse_errors": 1,
+        "progress": null,
+        "root": "C:/code/shop",
+        "skipped": 3,
+        "state": "ready",
+        "truncated": false
+      }
+    },
+    {
+      "collapsed": true,
+      "communities": [
+        {
+          "files": 240,
+          "id": 0,
+          "name": "src",
+          "nodes": 3100
+        },
+        {
+          "files": 172,
+          "id": 1,
+          "name": "ui/src",
+          "nodes": 2110
+        }
+      ],
+      "community": null,
+      "edges": [
+        {
+          "kind": "links",
+          "source": "community:0",
+          "target": "community:1",
+          "weight": 37
+        }
+      ],
+      "nodes": [
+        {
+          "community": 0,
+          "file": null,
+          "id": "community:0",
+          "kind": "community",
+          "label": "src (240 files)",
+          "line": 0,
+          "weight": 3100
+        }
+      ],
+      "status": {
+        "built_at": "2026-10-09T12:00:00.000Z",
+        "duration_ms": 2840,
+        "edges": 14877,
+        "error": null,
+        "files": 412,
+        "git": true,
+        "key": "3f2a9c0d1e4b5a6f",
+        "nodes": 5210,
+        "parse_errors": 1,
+        "progress": 42,
+        "root": "C:/code/shop",
+        "skipped": 3,
+        "state": "building",
+        "truncated": false
+      }
     }
   ],
   "Identity": {
@@ -4874,6 +5077,7 @@
     },
     "timeout_secs": 1800,
     "use_global_instructions": true,
+    "use_graph": true,
     "use_user_settings": false,
     "uses": {
       "apps": [],
@@ -4885,6 +5089,51 @@
     "variables": {},
     "workdir": "",
     "workspace_mode": "worktree"
+  },
+  "NodeDetail": {
+    "community_name": "src",
+    "groups": [
+      {
+        "label": "calls",
+        "more": 0,
+        "nodes": [
+          {
+            "community": 1,
+            "file": null,
+            "id": "pkg:tokio",
+            "kind": "package",
+            "label": "tokio",
+            "line": 0,
+            "weight": 8
+          }
+        ]
+      },
+      {
+        "label": "contained in",
+        "more": 3,
+        "nodes": [
+          {
+            "community": 0,
+            "file": "src/runner.rs",
+            "id": "file:src/runner.rs",
+            "kind": "file",
+            "label": "runner.rs",
+            "line": 0,
+            "weight": 30
+          }
+        ]
+      }
+    ],
+    "node": {
+      "community": 0,
+      "file": "src/runner.rs",
+      "id": "src/runner.rs#Runner.start",
+      "kind": "method",
+      "label": "Runner.start",
+      "line": 120,
+      "weight": 14
+    },
+    "signature": "pub async fn start(&self, run: &Run) -> Result<()>"
   },
   "OrgEntry": [
     {
@@ -6898,6 +7147,25 @@
       "org_id": null,
       "type": "intents_updated",
       "workspace_id": "default"
+    },
+    {
+      "status": {
+        "built_at": "2026-10-09T12:00:00.000Z",
+        "duration_ms": 2840,
+        "edges": 14877,
+        "error": null,
+        "files": 412,
+        "git": true,
+        "key": "3f2a9c0d1e4b5a6f",
+        "nodes": 5210,
+        "parse_errors": 1,
+        "progress": null,
+        "root": "C:/code/shop",
+        "skipped": 3,
+        "state": "ready",
+        "truncated": false
+      },
+      "type": "graph_updated"
     }
   ],
   "ScannedAgent": [
@@ -7419,6 +7687,7 @@
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
+        "use_graph": true,
         "use_user_settings": false,
         "uses": {
           "apps": [
@@ -7600,6 +7869,7 @@
         "timeout_secs": 1800,
         "updated_at": "2026-10-09T12:00:00.000Z",
         "use_global_instructions": true,
+        "use_graph": true,
         "use_user_settings": false,
         "uses": {
           "apps": [
@@ -8161,6 +8431,35 @@
     ],
     "since": "2026-10-09T12:00:00.000Z"
   },
+  "ViewNode": [
+    {
+      "community": 0,
+      "file": "src/runner.rs",
+      "id": "src/runner.rs#Runner.start",
+      "kind": "method",
+      "label": "Runner.start",
+      "line": 120,
+      "weight": 14
+    },
+    {
+      "community": 0,
+      "file": "src/runner.rs",
+      "id": "file:src/runner.rs",
+      "kind": "file",
+      "label": "runner.rs",
+      "line": 0,
+      "weight": 30
+    },
+    {
+      "community": 1,
+      "file": null,
+      "id": "pkg:tokio",
+      "kind": "package",
+      "label": "tokio",
+      "line": 0,
+      "weight": 8
+    }
+  ],
   "WatchHours": {
     "days": [
       "mon",

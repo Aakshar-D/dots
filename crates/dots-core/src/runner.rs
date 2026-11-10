@@ -35,6 +35,49 @@ use crate::vault::{DotScope, Vault};
 use crate::workspace::{default_branch_ref, Prepared, WorkspaceManager};
 use crate::{Error, Result};
 
+/// The project graph a run of `dot` working in `prepared` asks (project graph spec sections
+/// 5 and 8): for a linked worktree its own graph, seeded from the main checkout's; else the
+/// checkout's. A first build starts in the background; the run never waits for one. `None`
+/// when the dot's folder is missing.
+async fn run_graph(
+    graphs: &crate::graph::Graphs,
+    dot: &Dot,
+    prepared: &Prepared,
+) -> Option<crate::run_tools::RunGraph> {
+    use crate::graph::{Project, Scope};
+    let workdir = std::path::Path::new(&dot.spec.workdir);
+    let base = Project::resolve(workdir).await?;
+    let prefix = base.relative(workdir).unwrap_or_default();
+    graphs.ensure(&base);
+    let own = (dot.spec.workspace_mode == WorkspaceMode::Worktree && prepared.branch.is_some())
+        .then(|| Project::worktree(&prepared.path))
+        .flatten();
+    let project = match own {
+        Some(wt) => {
+            let (g, b, w) = (graphs.clone(), base.clone(), wt.clone());
+            let _ = tokio::task::spawn_blocking(move || g.seed_worktree(&b, &w)).await;
+            graphs.refresh(&wt);
+            wt
+        }
+        None => base,
+    };
+    // Only a policy with a `Read` deny rule hides files; without one the stored map serves.
+    let denies_reads = dot.spec.policy.rules.iter().any(|r| {
+        r.action == crate::policy::Action::Deny && r.tool.trim_start().starts_with("Read")
+    });
+    let scope = Scope {
+        prefix,
+        policy: denies_reads.then(|| dot.spec.policy.clone()),
+        root: project.root.clone(),
+        workspace: prepared.path.clone(),
+    };
+    Some(crate::run_tools::RunGraph {
+        graphs: graphs.clone(),
+        project,
+        scope,
+    })
+}
+
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
 /// on the Claude engine, `context` on the local one, and the check-in tools likewise
 /// (`checkins::Tool::model_name`); a `Memory` call is the memory tool its `input` is for
@@ -43,6 +86,8 @@ use crate::{Error, Result};
 fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<'a, str> {
     if tool == "Context" {
         Cow::Borrowed(context_tool_name(engine))
+    } else if tool == crate::graph::POLICY_NAME {
+        Cow::Borrowed(crate::graph::model_name(engine))
     } else if let Some(check_in) = CheckInTool::from_policy_name(tool) {
         Cow::Borrowed(check_in.model_name(engine))
     } else if tool == crate::memory::POLICY_NAME {
@@ -190,6 +235,9 @@ pub struct Runner {
     /// What gives a succeeded Claude run's answer its result check (result check spec), set
     /// once by the runtime (`set_checker`). Without one no run is checked.
     checker: OnceLock<Arc<dyn ResultChecker>>,
+    /// The projects' code graphs (project graph spec), set once by the runtime
+    /// (`set_graphs`). Without them no run gets the `graph` tool.
+    graphs: OnceLock<crate::graph::Graphs>,
 }
 
 impl Runner {
@@ -221,6 +269,7 @@ impl Runner {
             chat_files: OnceLock::new(),
             limits: OnceLock::new(),
             checker: OnceLock::new(),
+            graphs: OnceLock::new(),
         })
     }
 
@@ -751,6 +800,17 @@ impl Runner {
     /// start; a second call changes nothing.
     pub fn set_checkins(&self, checkins: CheckIns) {
         let _ = self.checkins.set(checkins);
+    }
+
+    /// Gives the runs of dots that use the project graph their graph. The runtime calls it
+    /// once, at start; a second call changes nothing.
+    pub fn set_graphs(&self, graphs: crate::graph::Graphs) {
+        let _ = self.graphs.set(graphs);
+    }
+
+    /// The projects' graphs, once the runtime has set them.
+    pub fn graphs(&self) -> Option<&crate::graph::Graphs> {
+        self.graphs.get()
     }
 
     /// The check-in tools, once the runtime has set them.
@@ -1684,7 +1744,7 @@ impl Runner {
         let seed = context_rules::handoff_seed(
             summary.as_deref(),
             &thread,
-            &self.extra_seed_sections(dot, run),
+            &self.extra_seed_sections(dot, run).await,
         );
         self.store
             .add_context_event(&NewContextEvent {
@@ -1709,10 +1769,27 @@ impl Runner {
         Ok(Some(seed))
     }
 
-    /// Extra sections of a fresh session's prompt (context rules spec section 5). None yet:
-    /// a later project map of the dot's work goes here.
-    fn extra_seed_sections(&self, _dot: &Dot, _run: &Run) -> Vec<SeedSection> {
-        Vec::new()
+    /// Extra sections of a fresh session's prompt (context rules spec section 5): the project
+    /// map of the run's graph, as its first prompt has it (project graph spec section 9), for a
+    /// dot that uses the graph and a project that has one.
+    async fn extra_seed_sections(&self, dot: &Dot, run: &Run) -> Vec<SeedSection> {
+        let Some(graph) = self
+            .run_tools(&run.id)
+            .and_then(|tools| tools.graph().cloned())
+        else {
+            return Vec::new();
+        };
+        let tool = crate::graph::model_name(dot.spec.engine);
+        tokio::task::spawn_blocking(move || {
+            graph
+                .graphs
+                .seed_section(&graph.project, &graph.scope, tool)
+        })
+        .await
+        .ok()
+        .flatten()
+        .into_iter()
+        .collect()
     }
 
     /// The spending cap the running `run` has reached, if any: read after each usage report.
@@ -1952,6 +2029,21 @@ impl Runner {
                 }
             };
         let tools = tools.with_instructions(proposes);
+        // The project's code graph (project graph spec section 5): its first build starts now,
+        // in the background; the run never waits for it. A policy that denies `Graph` outright
+        // leaves the tool out.
+        let graph_off = dot
+            .spec
+            .policy
+            .resolve(crate::graph::POLICY_NAME, &Value::Null)
+            == crate::policy::Action::Deny;
+        let graph = match self.graphs.get() {
+            Some(graphs) if dot.spec.use_graph && !graph_off => {
+                run_graph(graphs, &dot, &prepared).await
+            }
+            _ => None,
+        };
+        let tools = tools.with_graph(graph);
         let tools = Arc::new(tools);
         let _closer = CloseOnDrop(tools.clone());
         if cancel.is_cancelled() {
@@ -2120,6 +2212,28 @@ impl Runner {
             }
             prompt
         };
+        // And the project map, once the project has a graph (project graph spec section 9). A
+        // fresh start's seed carries it already (`extra_seed_sections`).
+        let mut prompt = prompt;
+        if let Some(graph) = tools
+            .graph()
+            .filter(|_| run.session_id.is_none() && seed.is_none())
+        {
+            let graph = graph.clone();
+            let tool = crate::graph::model_name(dot.spec.engine);
+            let section = tokio::task::spawn_blocking(move || {
+                graph
+                    .graphs
+                    .prompt_section(&graph.project, &graph.scope, tool)
+            })
+            .await
+            .ok()
+            .flatten();
+            if let Some(section) = section {
+                prompt.push('\n');
+                prompt.push_str(&section);
+            }
+        }
         ctx.prompt = prompt;
         self.store.set_run_quiet_limit(&run.id, quiet_secs).await?;
         let retry_ctx = fallback.as_ref().map(|_| ctx.clone());
@@ -2398,6 +2512,13 @@ impl Runner {
                 quiet_stopped,
             )
             .await?;
+        // The run may have changed the project: its graph catches up in the background. The
+        // graphs of worktrees that are gone go.
+        if let Some(graph) = tools.graph() {
+            graph.graphs.refresh(&graph.project);
+            let (graphs, dir) = (graph.graphs.clone(), self.cfg.worktrees_dir.clone());
+            tokio::task::spawn_blocking(move || graphs.sweep_worktrees(&dir));
+        }
         // A run that restarted its topic's session and got to use it spends the mark.
         if restarted.is_some()
             && matches!(status, RunStatus::Succeeded | RunStatus::AwaitingApproval)

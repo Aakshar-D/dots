@@ -537,6 +537,15 @@ impl Runtime {
         .await?;
         runner.set_limits(limits.clone());
         runner.set_apps(apps.clone());
+        // The projects' code graphs (project graph spec), each in its own file.
+        let graphs =
+            crate::graph::Graphs::new(cfg.data_dir.join(crate::graph::DIR), Some(bus.clone()));
+        // The graphs of worktrees removed while Dots was not running go now.
+        {
+            let (graphs, dir) = (graphs.clone(), cfg.data_dir.join("worktrees"));
+            tokio::task::spawn_blocking(move || graphs.sweep_worktrees(&dir));
+        }
+        runner.set_graphs(graphs);
         let shutdown = CancellationToken::new();
         // All Claude use: Claude Code's transcripts, read in the background (usage tab spec
         // section 5).
@@ -4751,4 +4760,97 @@ fn personal_workspace_name(name: &str) -> Result<String> {
         return Err(Error::Invalid("A workspace needs a name.".into()));
     }
     Ok(name.to_string())
+}
+
+/// The project graph of a dot, for the Graph screen (project graph spec section 10).
+impl Runtime {
+    /// The graphs, and the project of the dot `dot_id`. `NotFound` when the dot's folder is
+    /// missing.
+    async fn graph_project(
+        &self,
+        dot_id: &str,
+    ) -> Result<(crate::graph::Graphs, crate::graph::Project)> {
+        let dot = self.store.get_dot(dot_id).await?;
+        let graphs = self
+            .runner
+            .graphs()
+            .cloned()
+            .ok_or_else(|| Error::Other("the project graphs are not running".into()))?;
+        let project = crate::graph::Project::resolve(Path::new(&dot.spec.workdir))
+            .await
+            .ok_or_else(|| {
+                Error::NotFound(format!("folder {} no longer exists", dot.spec.workdir))
+            })?;
+        Ok((graphs, project))
+    }
+
+    /// The state of the dot's project graph.
+    pub async fn graph_status(&self, dot_id: &str) -> Result<crate::graph::GraphStatus> {
+        let (graphs, project) = self.graph_project(dot_id).await?;
+        blocking(move || graphs.status(&project)).await
+    }
+
+    /// What the Graph screen draws: the whole graph, one community of it, or one node per
+    /// community when it is large.
+    pub async fn graph_view(
+        &self,
+        dot_id: &str,
+        community: Option<u32>,
+    ) -> Result<crate::graph::GraphView> {
+        let (graphs, project) = self.graph_project(dot_id).await?;
+        blocking(move || graphs.view(&project, community)).await
+    }
+
+    /// One node and its neighbours; `NotFound` for a node the graph no longer has.
+    pub async fn graph_node(&self, dot_id: &str, id: &str) -> Result<crate::graph::NodeDetail> {
+        let (graphs, project) = self.graph_project(dot_id).await?;
+        let id = id.to_string();
+        blocking(move || graphs.node(&project, &id))
+            .await?
+            .ok_or_else(|| Error::NotFound("the graph no longer has this node".into()))
+    }
+
+    /// The nodes whose name or path matches `query`, best first.
+    pub async fn graph_search(
+        &self,
+        dot_id: &str,
+        query: &str,
+    ) -> Result<Vec<crate::graph::ViewNode>> {
+        let (graphs, project) = self.graph_project(dot_id).await?;
+        let query = query.to_string();
+        blocking(move || graphs.search(&project, &query)).await
+    }
+
+    /// Starts a build of the dot's project graph in the background.
+    pub async fn graph_rebuild(&self, dot_id: &str) -> Result<crate::graph::GraphStatus> {
+        let (graphs, project) = self.graph_project(dot_id).await?;
+        graphs.rebuild(&project);
+        blocking(move || graphs.status(&project)).await
+    }
+
+    /// Writes graphify's `graph.json` into the project's `graphify-out` folder, and returns
+    /// its path.
+    pub async fn graph_export(&self, dot_id: &str) -> Result<PathBuf> {
+        self.require_for_dot(dot_id, Permission::EditDots).await?;
+        let (graphs, project) = self.graph_project(dot_id).await?;
+        blocking(move || graphs.export(&project))
+            .await?
+            .map_err(Error::Invalid)
+    }
+
+    /// The file of a node, inside the project, for Show in folder.
+    pub async fn graph_file(&self, dot_id: &str, id: &str) -> Result<PathBuf> {
+        let (graphs, project) = self.graph_project(dot_id).await?;
+        let id = id.to_string();
+        blocking(move || graphs.file_path(&project, &id))
+            .await?
+            .ok_or_else(|| Error::NotFound("this node's file no longer exists".into()))
+    }
+}
+
+/// Runs `f` on the blocking pool.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| Error::Other(format!("the graph task stopped: {e}")))
 }

@@ -21,6 +21,7 @@ pub mod engine;
 pub mod error;
 pub mod events;
 pub mod followups;
+pub mod graph;
 pub mod inbox;
 pub mod instructions;
 pub mod intents;

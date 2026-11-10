@@ -168,6 +168,12 @@ pub enum RuntimeEvent {
         org_id: Option<String>,
         workspace_id: String,
     },
+    /// A project's graph started building, made progress (at most every 250 ms), or finished
+    /// or failed (project graph spec section 5). The Graph screen of a dot in that project
+    /// (`status.key`) reads it again.
+    GraphUpdated {
+        status: crate::graph::GraphStatus,
+    },
 }
 
 pub type Bus = broadcast::Sender<RuntimeEvent>;

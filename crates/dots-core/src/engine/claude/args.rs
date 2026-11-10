@@ -75,6 +75,10 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     if !ctx.tools.contexts().is_empty() {
         allow.push("mcp__dots__context".into());
     }
+    // And each `graph` call (project graph spec section 8).
+    if ctx.tools.graph().is_some() {
+        allow.push(crate::graph::model_name(EngineKind::Claude).into());
+    }
     // It checks each call of its check-in tools too (check-ins spec section 2).
     allow.extend(Tool::ALL.map(|t| t.model_name(EngineKind::Claude).to_string()));
     // And of its memory tools (dot memory spec section 3).

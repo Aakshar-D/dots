@@ -2370,6 +2370,7 @@ pub fn samples() -> Value {
     search_samples(&mut samples);
     context_rules_samples(&mut samples);
     samples["ResultCheck"] = result_checks();
+    graph_samples(&mut samples);
     samples
 }
 
@@ -3446,6 +3447,153 @@ fn connector_samples(samples: &mut Value) {
     samples["Enums"]["AuthKind"] = to(AuthKind::ALL);
     samples["Enums"]["Trust"] = to(Trust::ALL);
     samples["Enums"]["Category"] = to(Category::ALL);
+}
+
+/// The project graph (project graph spec section 10): a ready graph, one building and one
+/// whose build failed; a whole view, a collapsed one; a node's side panel; search hits; and the
+/// event that says a graph changed.
+fn graph_samples(samples: &mut Value) {
+    use dots_core::graph::{
+        Community, GraphState, GraphStatus, GraphView, NeighbourGroup, NodeDetail, ViewEdge,
+        ViewNode,
+    };
+
+    let ready = GraphStatus {
+        key: "3f2a9c0d1e4b5a6f".into(),
+        root: "C:/code/shop".into(),
+        state: GraphState::Ready,
+        built_at: Some(TS.into()),
+        files: 412,
+        nodes: 5_210,
+        edges: 14_877,
+        skipped: 3,
+        duration_ms: 2_840,
+        progress: None,
+        error: None,
+        parse_errors: 1,
+        truncated: false,
+        git: true,
+    };
+    let building = GraphStatus {
+        state: GraphState::Building,
+        progress: Some(42),
+        ..ready.clone()
+    };
+    let none = GraphStatus {
+        state: GraphState::None,
+        git: false,
+        built_at: None,
+        files: 0,
+        nodes: 0,
+        edges: 0,
+        skipped: 0,
+        duration_ms: 0,
+        ..ready.clone()
+    };
+    let failed = GraphStatus {
+        state: GraphState::Failed,
+        error: Some("the graph file cannot be opened: disk full".into()),
+        ..ready.clone()
+    };
+    samples["GraphStatus"] = to([ready.clone(), building.clone(), none, failed]);
+    let start = ViewNode {
+        id: "src/runner.rs#Runner.start".into(),
+        label: "Runner.start".into(),
+        kind: "method".into(),
+        community: 0,
+        file: Some("src/runner.rs".into()),
+        line: 120,
+        weight: 14,
+    };
+    let file = ViewNode {
+        id: "file:src/runner.rs".into(),
+        label: "runner.rs".into(),
+        kind: "file".into(),
+        community: 0,
+        file: Some("src/runner.rs".into()),
+        line: 0,
+        weight: 30,
+    };
+    let package = ViewNode {
+        id: "pkg:tokio".into(),
+        label: "tokio".into(),
+        kind: "package".into(),
+        community: 1,
+        file: None,
+        line: 0,
+        weight: 8,
+    };
+    let communities = vec![
+        Community {
+            id: 0,
+            name: "src".into(),
+            nodes: 3_100,
+            files: 240,
+        },
+        Community {
+            id: 1,
+            name: "ui/src".into(),
+            nodes: 2_110,
+            files: 172,
+        },
+    ];
+    let whole = GraphView {
+        status: ready.clone(),
+        collapsed: false,
+        community: Some(0),
+        nodes: vec![file.clone(), start.clone(), package.clone()],
+        edges: vec![ViewEdge {
+            source: file.id.clone(),
+            target: start.id.clone(),
+            kind: "contains".into(),
+            weight: 1,
+        }],
+        communities: communities.clone(),
+    };
+    let collapsed = GraphView {
+        status: building,
+        collapsed: true,
+        community: None,
+        nodes: vec![ViewNode {
+            id: "community:0".into(),
+            label: "src (240 files)".into(),
+            kind: "community".into(),
+            community: 0,
+            file: None,
+            line: 0,
+            weight: 3_100,
+        }],
+        edges: vec![ViewEdge {
+            source: "community:0".into(),
+            target: "community:1".into(),
+            kind: "links".into(),
+            weight: 37,
+        }],
+        communities,
+    };
+    samples["GraphView"] = to([whole, collapsed]);
+    samples["NodeDetail"] = to(NodeDetail {
+        node: start.clone(),
+        signature: "pub async fn start(&self, run: &Run) -> Result<()>".into(),
+        community_name: "src".into(),
+        groups: vec![
+            NeighbourGroup {
+                label: "calls".into(),
+                nodes: vec![package.clone()],
+                more: 0,
+            },
+            NeighbourGroup {
+                label: "contained in".into(),
+                nodes: vec![file.clone()],
+                more: 3,
+            },
+        ],
+    });
+    samples["ViewNode"] = to([start, file, package]);
+    samples["RuntimeEvent"]
+        .as_array_mut()
+        .expect("the RuntimeEvent samples")
+        .push(to(RuntimeEvent::GraphUpdated { status: ready }));
 }
 
 #[cfg(test)]

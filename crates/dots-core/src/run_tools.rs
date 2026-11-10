@@ -190,6 +190,18 @@ pub struct RunTools {
     step: Option<crate::team_tools::StepTools>,
     /// The run may propose new instructions for its dot (conversational chat spec section 4).
     instructions: bool,
+    /// The code graph of the dot's project (project graph spec section 8), when the dot uses it.
+    graph: Option<RunGraph>,
+}
+
+/// The project graph a run asks with the `graph` tool.
+#[derive(Debug, Clone)]
+pub struct RunGraph {
+    pub graphs: crate::graph::Graphs,
+    /// The run's project: its own worktree's graph, or the checkout's.
+    pub project: crate::graph::Project,
+    /// What of it the run may see: its dot's folder, less what its policy denies reading.
+    pub scope: crate::graph::Scope,
 }
 
 impl fmt::Debug for RunTools {
@@ -281,6 +293,17 @@ impl RunTools {
     /// The run may propose new instructions with `propose_instructions`.
     pub fn instructions(&self) -> bool {
         self.instructions
+    }
+
+    /// The project graph the run's `graph` tool asks, for a dot that uses it.
+    pub fn graph(&self) -> Option<&RunGraph> {
+        self.graph.as_ref()
+    }
+
+    /// The run's tools with the project graph.
+    pub fn with_graph(mut self, graph: Option<RunGraph>) -> RunTools {
+        self.graph = graph;
+        self
     }
 
     /// The run's tools, with `propose_instructions` when `offered`.

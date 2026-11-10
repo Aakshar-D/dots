@@ -2692,3 +2692,79 @@ fn creds_of(creds: Option<serde_json::Value>) -> Res<Option<SourceCreds>> {
         })
         .transpose()
 }
+
+/// The state of the dot's project graph (project graph spec section 10).
+#[tauri::command]
+pub async fn graph_status(
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<dots_core::graph::GraphStatus> {
+    Ok(state.rt()?.graph_status(&dot_id).await?)
+}
+
+/// What the Graph screen draws: the whole graph, the community `community`, or one node per
+/// community when the graph is large.
+#[tauri::command]
+pub async fn graph_view(
+    state: State<'_, AppState>,
+    dot_id: String,
+    community: Option<u32>,
+) -> Res<dots_core::graph::GraphView> {
+    Ok(state.rt()?.graph_view(&dot_id, community).await?)
+}
+
+/// One node of the graph and its neighbours, for the side panel.
+#[tauri::command]
+pub async fn graph_node(
+    state: State<'_, AppState>,
+    dot_id: String,
+    id: String,
+) -> Res<dots_core::graph::NodeDetail> {
+    Ok(state.rt()?.graph_node(&dot_id, &id).await?)
+}
+
+/// The graph's nodes whose name or path matches `query`.
+#[tauri::command]
+pub async fn graph_search(
+    state: State<'_, AppState>,
+    dot_id: String,
+    query: String,
+) -> Res<Vec<dots_core::graph::ViewNode>> {
+    Ok(state.rt()?.graph_search(&dot_id, &query).await?)
+}
+
+/// Builds the dot's project graph again, in the background; progress comes as events.
+#[tauri::command]
+pub async fn graph_rebuild(
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<dots_core::graph::GraphStatus> {
+    Ok(state.rt()?.graph_rebuild(&dot_id).await?)
+}
+
+/// Writes graphify's `graph.json` into the project and shows it in its folder.
+#[tauri::command]
+pub async fn graph_export(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<String> {
+    let path = state.rt()?.graph_export(&dot_id).await?;
+    let _ = app.opener().reveal_item_in_dir(&path);
+    Ok(path.to_string_lossy().into_owned())
+}
+
+/// Shows a node's file in its folder. The core answers the path from the graph, inside the
+/// project, so the webview cannot name a path of its own.
+#[tauri::command]
+pub async fn graph_reveal(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dot_id: String,
+    id: String,
+) -> Res<()> {
+    let path = state.rt()?.graph_file(&dot_id, &id).await?;
+    app.opener()
+        .reveal_item_in_dir(&path)
+        .map_err(|e| CmdError::internal(format!("could not show {}: {e}", path.display())))
+}

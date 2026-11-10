@@ -159,6 +159,10 @@ impl Session {
         if !self.ctx.tools.contexts().is_empty() {
             out.push(tools::context::schema());
         }
+        // `graph` (project graph spec section 8), for a dot that uses the project graph.
+        if self.ctx.tools.graph().is_some() {
+            out.push(tools::graph::schema());
+        }
         if self.checkins.is_some() {
             out.extend(tools::checkins::schemas());
             out.extend(tools::memory::schemas());
