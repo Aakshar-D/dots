@@ -125,6 +125,13 @@ export const keys = {
     ["search", scope, workspace, text] as const,
   /// The goals of one workspace of an account (Intents).
   intents: (scope: string, workspace: string) => ["intents", scope, workspace] as const,
+  /// A dot's project graph (project graph spec section 10): its state, what the screen draws,
+  /// a node's side panel and a search. All under `graph`, which `graph_updated` marks stale.
+  graphStatus: (dotId: string) => ["graph", "status", dotId] as const,
+  graphView: (dotId: string, community: number | null) =>
+    ["graph", "view", dotId, community] as const,
+  graphNode: (dotId: string, id: string) => ["graph", "node", dotId, id] as const,
+  graphSearch: (dotId: string, query: string) => ["graph", "search", dotId, query] as const,
   /// The instructions a dot proposed (conversational chat spec section 4).
   instructionProposals: (dotId: string) => ["instruction-proposals", dotId] as const,
   watchers: (dotId: string) => ["watchers", dotId] as const,

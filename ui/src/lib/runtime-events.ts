@@ -178,6 +178,11 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // The Intents screen of that workspace.
       invalidate(qc, keys.intents(event.org_id ?? "personal", event.workspace_id));
       break;
+    case "graph_updated":
+      // A build's progress refreshes the status lines; a build that ended, the graphs drawn.
+      invalidate(qc, ["graph", "status"]);
+      if (event.status.state !== "building") invalidate(qc, ["graph"]);
+      break;
     case "scheduled_message_updated":
       // The dot's scheduled cards and its menu's count. Once sent, its card gives way to the
       // chat run it became: the runs and threads are read again too.

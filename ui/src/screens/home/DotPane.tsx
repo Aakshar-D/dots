@@ -110,6 +110,9 @@ export function DotPane({ row, rootRunId }: { row: DotOverview; rootRunId?: stri
         <DotModelSwitch dot={dot} />
         {hasFiles && <FilesToggle hidden={panelHidden} onToggle={toggleFiles} />}
         <HistoryMenu dotId={dot.id} topics={view.older} archived={view.archived} />
+        <Button asChild size="sm" variant="ghost">
+          <Link to={`/graph/${dot.id}`}>Graph</Link>
+        </Button>
         <Button size="sm" variant="ghost" onClick={() => setPick({ kind: "new" })}>
           New topic
         </Button>

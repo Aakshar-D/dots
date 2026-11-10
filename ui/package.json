@@ -17,6 +17,7 @@
     "@tauri-apps/plugin-dialog": "2.8.2",
     "class-variance-authority": "0.7.1",
     "cn": "0.4.0",
+    "cytoscape": "3.34.4",
     "lucide-react": "1.55.0",
     "radix-ui": "1.8.0",
     "react": "19.3.0",
