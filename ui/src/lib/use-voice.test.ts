@@ -122,7 +122,10 @@ describe("useVoice", () => {
     expect(voiceStore.get().download).toEqual({ done: 5, total: 10 });
     act(() => backend.emit("voice", { kind: "trouble", message: "No microphone." }));
     expect(voiceStore.get().trouble).toBe("No microphone.");
+    act(() => backend.emit("voice", { kind: "ask", question: "Run it?", options: ["Yes", "No"], seq: 4 }));
+    expect(voiceStore.get().ask).toEqual({ question: "Run it?", options: ["Yes", "No"], seq: 4 });
     act(() => backend.emit("voice", { kind: "cleared" }));
+    expect(voiceStore.get().ask).toBeNull();
     expect(voiceStore.get().hearing).toBe("");
     expect(voiceStore.get().saying).toBe("");
   });

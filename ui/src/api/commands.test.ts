@@ -510,7 +510,7 @@ describe("commands", () => {
     await commands.voiceOpen();
     await commands.voiceClose();
     await commands.voiceStop();
-    await commands.voicePick(1);
+    await commands.voicePick(1, 7);
     const view = T.View.parse(fixture.View[1]);
     await commands.voiceView(view);
     await commands.voicePreview(3, 1.2);
@@ -524,7 +524,7 @@ describe("commands", () => {
       ["voice_open", undefined],
       ["voice_close", undefined],
       ["voice_stop", undefined],
-      ["voice_pick", { index: 1 }],
+      ["voice_pick", { index: 1, seq: 7 }],
       ["voice_view", { view }],
       ["voice_preview", { voice: 3, speed: 1.2 }],
       ["voice_devices", undefined],

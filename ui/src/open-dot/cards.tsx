@@ -127,13 +127,14 @@ function ProposalCard({ proposal }: { proposal: SetupProposal }) {
   );
 }
 
-/// The deed as the card's heading: "Approve for triage: Bash", "Run backup now".
+/// The deed as the card's heading: "Approve the request from triage: Bash", "Run backup now".
+/// No possessive, so any dot name reads right ("Approve the request from news: Write").
 function deedTitle(deed: Deed): string {
   switch (deed.kind) {
     case "approve":
-      return `Approve for ${deed.dot_name}: ${deed.tool}`;
+      return `Approve the request from ${deed.dot_name}: ${deed.tool}`;
     case "deny":
-      return `Deny for ${deed.dot_name}: ${deed.tool}`;
+      return `Deny the request from ${deed.dot_name}: ${deed.tool}`;
     case "run":
       return `Run ${deed.dot_name} now`;
     case "send":

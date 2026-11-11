@@ -396,7 +396,7 @@ async fn off_builds_nothing() {
     r.svc.open();
     r.svc.close();
     r.svc.stop();
-    r.svc.pick(0);
+    r.svc.pick(0, 1);
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(r.factory.builds(), 0, "no session");
     assert_eq!(r.server.requests.load(Ordering::SeqCst), 0, "no download");
@@ -1405,7 +1405,7 @@ async fn preview_refuses_a_voice_or_speed_out_of_range() {
         assert_ne!(err.message, NOT_READY, "{voice} {speed}");
     }
     // An option index far out of range is ignored.
-    r.svc.pick(u32::MAX as usize);
+    r.svc.pick(u32::MAX as usize, u64::MAX);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

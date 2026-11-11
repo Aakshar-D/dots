@@ -965,10 +965,11 @@ impl Service {
         }
     }
 
-    /// A click on option `index`: reaches the mind as `pick(index)`.
-    pub fn pick(&self, index: usize) {
+    /// A click on option `index` of question `seq`: reaches the mind as `pick(index)` when
+    /// `seq` is the question showing.
+    pub fn pick(&self, index: usize, seq: u64) {
         if let Some(b) = self.bridge() {
-            b.pick(index);
+            b.pick(index, seq);
         }
     }
 

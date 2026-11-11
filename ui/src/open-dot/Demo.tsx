@@ -17,6 +17,9 @@ const set = (change: Partial<VoiceLive>) => voiceStore.set(change);
 
 /// Reply lines with running numbers, as the store keeps them.
 let lastLine = 0;
+/// Each question shown gets the next number, as the app's `ask` events do.
+let lastSeq = 0;
+const nextSeq = () => ++lastSeq;
 const reply = (...texts: string[]) => texts.map((text) => ({ n: ++lastLine, text }));
 /// One more line of the reply, the oldest dropped past three, as a `saying` event does.
 const say = (text: string) =>
@@ -205,8 +208,8 @@ export default function Demo() {
       said("voice_stop");
       set({ state: "listening", micOpen: true, trouble: null });
     },
-    voicePick: async (index) => {
-      said(`voice_pick(${index})`);
+    voicePick: async (index, seq) => {
+      said(`voice_pick(${index}, seq ${seq})`);
       later(500, () => set({ state: "thinking", micOpen: false, ask: null, card: null }));
       later(1500, () => set({ state: "speaking", said: reply("Done.") }));
       later(2500, () => set({ state: "idle" }));
@@ -240,7 +243,7 @@ export default function Demo() {
       set({
         state: "asking",
         micOpen: true,
-        ask: { question: "Allow triage to push?", options: ["Allow", "Deny", "Not now"] },
+        ask: { question: "Allow triage to push?", options: ["Allow", "Deny", "Not now"], seq: nextSeq() },
         card: CARDS[2]![1],
       });
     });
@@ -328,20 +331,20 @@ export default function Demo() {
             </Group>
             <Group title="Ask">
               {[2, 3, 4, 6].map((n) => (
-                <B key={n} onClick={() => set({ state: "asking", micOpen: true, ask: { question: `Pick one of ${n}`, options: ASKS[n]! } })}>
+                <B key={n} onClick={() => set({ state: "asking", micOpen: true, ask: { question: `Pick one of ${n}`, options: ASKS[n]!, seq: nextSeq() } })}>
                   {n} options
                 </B>
               ))}
-              <B onClick={() => set({ ask: { question: "Long options", options: [LONG, LONG.slice(0, 80)] } })}>Long options</B>
+              <B onClick={() => set({ ask: { question: "Long options", options: [LONG, LONG.slice(0, 80)], seq: nextSeq() } })}>Long options</B>
               <B
                 onClick={() => {
                   say("What should the new dot be called?");
-                  set({ state: "asking", micOpen: true, ask: { question: "What should the new dot be called?", options: [] } });
+                  set({ state: "asking", micOpen: true, ask: { question: "What should the new dot be called?", options: [], seq: nextSeq() } });
                 }}
               >
                 Open question
               </B>
-              <B onClick={() => set({ ask: { question: LONG.repeat(2).trim() + "?", options: ASKS[3]! } })}>Long question</B>
+              <B onClick={() => set({ ask: { question: LONG.repeat(2).trim() + "?", options: ASKS[3]!, seq: nextSeq() } })}>Long question</B>
             </Group>
             <Group title="Card">
               {CARDS.map(([name, card]) => (

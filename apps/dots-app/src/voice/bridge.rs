@@ -110,6 +110,10 @@ struct Inner {
     picks: HashMap<u64, usize>,
     /// The options of the question showing, while they may be clicked.
     options: Vec<String>,
+    /// The `seq` of the last question shown (0 before the first). Never reset, so a number
+    /// is never reused within the process: 1, 2, 3, ... stays far below 2^53, the largest
+    /// integer a JSON number carries exactly to the UI.
+    seq: u64,
     /// A question was asked and has not been cleared.
     asking: bool,
     /// Options or a card are showing.
@@ -286,11 +290,15 @@ impl Bridge {
         self.session.interrupt();
     }
 
-    /// A click (or key) on option `index` of the question showing. Only the first click on a
-    /// question counts: the options are forgotten until the next question.
-    pub fn pick(&self, index: usize) {
+    /// A click (or key) on option `index` of question `seq`. Only a pick on the question
+    /// showing counts (a key pressed as a newer question replaced it is ignored), and only
+    /// the first: the options are forgotten until the next question.
+    pub fn pick(&self, index: usize, seq: u64) {
         // Held across `answered`, so the clicked turn's `Heard` finds its index.
         let mut s = self.lock();
+        if seq != s.seq {
+            return;
+        }
         let Some(text) = s.options.get(index).cloned() else {
             return;
         };
@@ -392,6 +400,8 @@ impl Bridge {
             }
             MindEvent::Ask { question, options } => {
                 s.options = options.clone();
+                s.seq += 1;
+                let seq = s.seq;
                 s.asking = true;
                 s.showing = true;
                 // The mind sends the question only here: it is spoken once, after the words.
@@ -409,7 +419,11 @@ impl Bridge {
                 // is written instead, and clicks still answer it.
                 let silent = matches!(self.session.state(), State::Idle | State::Off);
                 let written = (silent && !spoken.is_empty()).then(|| spoken.to_string());
-                self.send(VoiceEvent::Ask { question, options });
+                self.send(VoiceEvent::Ask {
+                    question,
+                    options,
+                    seq,
+                });
                 if let Some(text) = written {
                     self.send(VoiceEvent::Saying { text });
                 }
@@ -813,11 +827,31 @@ mod tests {
         VoiceEvent::Heard { text: text.into() }
     }
 
-    fn ask_ev(question: &str, options: &[&str]) -> VoiceEvent {
+    fn ask_ev(question: &str, options: &[&str], seq: u64) -> VoiceEvent {
         VoiceEvent::Ask {
             question: question.into(),
             options: options.iter().map(|o| o.to_string()).collect(),
+            seq,
         }
+    }
+
+    /// The `seq` of every question shown so far (and drains the UI events).
+    fn asked_seqs(r: &mut Rig) -> Vec<u64> {
+        r.ui()
+            .into_iter()
+            .filter_map(|e| match e {
+                VoiceEvent::Ask { seq, .. } => Some(seq),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn answered(r: &Rig) -> Vec<Call> {
+        r.session
+            .calls()
+            .into_iter()
+            .filter(|c| matches!(c, Call::Answered(_)))
+            .collect()
     }
 
     /// Turn 1 asks "Approve it?" with Yes and No, and the step waits.
@@ -833,6 +867,62 @@ mod tests {
     }
 
     // ---- tests ---------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn seq_increases_with_each_question() {
+        let mut r = rig();
+        r.mind.script(vec![
+            ask("Approve it?", &["Yes", "No"]),
+            Step::Pending(true),
+            end(Then::Ask),
+        ]);
+        r.mind.script(vec![
+            ask("Which dot?", &["Mail", "News"]),
+            Step::Pending(true),
+            end(Then::Ask),
+        ]);
+        r.mind.script(vec![
+            ask("Anything else?", &[]),
+            Step::Pending(true),
+            end(Then::Ask),
+        ]);
+        r.heard("approve it", 1);
+        settle().await;
+        r.heard("run a dot", 2);
+        settle().await;
+        r.heard("go on", 3);
+        settle().await;
+        assert_eq!(asked_seqs(&mut r), vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn a_pick_with_the_current_seq_is_taken() {
+        let mut r = rig();
+        asked(&mut r).await;
+        r.bridge.pick(1, 1);
+        assert_eq!(answered(&r), vec![Call::Answered("No".into())]);
+    }
+
+    #[tokio::test]
+    async fn a_pick_for_an_older_question_is_ignored() {
+        let mut r = rig();
+        asked(&mut r).await; // seq 1: "Approve it?" Yes / No
+        r.mind.script(vec![
+            ask("Which dot?", &["Mail", "News"]),
+            Step::Pending(true),
+            end(Then::Ask),
+        ]);
+        r.heard("run a dot", 2);
+        settle().await;
+        assert_eq!(asked_seqs(&mut r), vec![2]);
+        // A key pressed for "Approve it?" lands after "Which dot?" replaced it.
+        r.bridge.pick(0, 1);
+        r.bridge.pick(0, 3);
+        assert!(answered(&r).is_empty());
+        // The question showing still takes its own pick.
+        r.bridge.pick(1, 2);
+        assert_eq!(answered(&r), vec![Call::Answered("News".into())]);
+    }
 
     #[tokio::test]
     async fn heard_goes_to_hear_and_reply_is_spoken_in_order() {
@@ -863,7 +953,7 @@ mod tests {
         let mut r = rig();
         asked(&mut r).await;
         r.mind.script(vec![say("Done."), end(Then::FollowUp)]);
-        r.bridge.pick(0);
+        r.bridge.pick(0, 1);
         assert_eq!(
             r.session.calls().last(),
             Some(&Call::Answered("Yes".into()))
@@ -957,7 +1047,7 @@ mod tests {
         assert_eq!(calls.last(), Some(&Call::End(2, After::FollowUp)));
         // The stale question never showed, so a click does nothing.
         assert!(!r.ui().iter().any(|e| matches!(e, VoiceEvent::Ask { .. })));
-        r.bridge.pick(0);
+        r.bridge.pick(0, 1);
         assert!(!r
             .session
             .calls()
@@ -987,7 +1077,10 @@ mod tests {
         );
         assert_eq!(
             r.ui(),
-            vec![heard_ev("approve"), ask_ev("Approve it?", &["Yes", "No"])]
+            vec![
+                heard_ev("approve"),
+                ask_ev("Approve it?", &["Yes", "No"], 1)
+            ]
         );
         // The question alone is spoken without a leading space.
         r.mind
@@ -1034,7 +1127,7 @@ mod tests {
             ]
         );
         // The options are gone: a click does nothing.
-        r.bridge.pick(0);
+        r.bridge.pick(0, 1);
         assert!(!r
             .session
             .calls()
@@ -1103,17 +1196,17 @@ mod tests {
     #[tokio::test]
     async fn pick_out_of_range_is_ignored() {
         let mut r = rig();
-        r.bridge.pick(0); // nothing showing
+        r.bridge.pick(0, 1); // nothing showing
         asked(&mut r).await;
-        r.bridge.pick(2);
+        r.bridge.pick(2, 1);
         assert!(!r
             .session
             .calls()
             .iter()
             .any(|c| matches!(c, Call::Answered(_))));
         // A second click on the same question is no second turn.
-        r.bridge.pick(1);
-        r.bridge.pick(0);
+        r.bridge.pick(1, 1);
+        r.bridge.pick(0, 1);
         let answered: Vec<_> = r
             .session
             .calls()
@@ -1128,12 +1221,12 @@ mod tests {
         let mut r = rig();
         asked(&mut r).await;
         r.session.off.store(true, Ordering::SeqCst);
-        r.bridge.pick(0);
+        r.bridge.pick(0, 1);
         settle().await;
         assert_eq!(r.mind.calls(), vec![MindCall::Hear("approve it".into())]);
         // The dead options go away.
         assert_eq!(r.ui(), vec![VoiceEvent::Cleared]);
-        r.bridge.pick(1);
+        r.bridge.pick(1, 1);
         assert!(r.ui().is_empty());
         // A later spoken turn with any id is heard, not picked.
         r.heard("yes", 101);
@@ -1228,7 +1321,7 @@ mod tests {
         r.heard("no", 2);
         settle().await;
         assert_eq!(r.ui(), vec![heard_ev("no"), VoiceEvent::Cleared]);
-        r.bridge.pick(0);
+        r.bridge.pick(0, 1);
         assert!(!r
             .session
             .calls()
@@ -1397,14 +1490,14 @@ mod tests {
             r.ui(),
             vec![
                 heard_ev("approve"),
-                ask_ev("Approve it?", &["Yes", "No"]),
+                ask_ev("Approve it?", &["Yes", "No"], 1),
                 VoiceEvent::Saying {
                     text: "Approve it?".into()
                 },
             ]
         );
         // Clicks still work.
-        r.bridge.pick(0);
+        r.bridge.pick(0, 1);
         assert_eq!(
             r.session.calls().last(),
             Some(&Call::Answered("Yes".into()))
@@ -1415,7 +1508,7 @@ mod tests {
     async fn off_forgets_the_clicks() {
         let r = rig();
         asked_plain(&r).await;
-        r.bridge.pick(0); // turn 101, whose `Heard` never comes
+        r.bridge.pick(0, 1); // turn 101, whose `Heard` never comes
         r.bridge.on_session(SessionEvent::State {
             state: State::Off,
             mic_open: false,

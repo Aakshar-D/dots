@@ -21,7 +21,7 @@ export type StageCommands = {
   voiceOpen: () => Promise<unknown>;
   voiceClose: () => Promise<unknown>;
   voiceStop: () => Promise<unknown>;
-  voicePick: (index: number) => Promise<unknown>;
+  voicePick: (index: number, seq: number) => Promise<unknown>;
 };
 
 /// Whether a click on the dots interrupts Dot (`voice_stop` acts only while it thinks or

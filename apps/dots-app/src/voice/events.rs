@@ -32,9 +32,13 @@ pub enum VoiceEvent {
         text: String,
     },
     /// A question that waits on the person, with its options (none for an open question).
+    /// `seq` names this question: a pick carries it back, and one for any other question is
+    /// ignored. It starts at 1 per process and grows by one per question, so it stays far
+    /// below 2^53 and crosses to the UI as an exact JSON number.
     Ask {
         question: String,
         options: Vec<String>,
+        seq: u64,
     },
     Card {
         card: Card,

@@ -8564,12 +8564,14 @@
         "Yes",
         "No"
       ],
-      "question": "Approve it?"
+      "question": "Approve it?",
+      "seq": 1
     },
     {
       "kind": "ask",
       "options": [],
-      "question": "What should it be called?"
+      "question": "What should it be called?",
+      "seq": 2
     },
     {
       "card": {

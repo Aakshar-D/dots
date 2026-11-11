@@ -2830,11 +2830,12 @@ pub fn voice_stop(voice: State<'_, VoiceHandle>) -> Res<()> {
     Ok(())
 }
 
-/// A click on an option of the question showing (0-based): it reaches the mind as a pick,
-/// never as words.
+/// A click on an option (0-based) of question `seq` (the `seq` of the `ask` event the
+/// options came from): it reaches the mind as a pick, never as words, and only while that
+/// question is the one showing.
 #[tauri::command]
-pub fn voice_pick(voice: State<'_, VoiceHandle>, index: u32) -> Res<()> {
-    voice.get()?.pick(index as usize);
+pub fn voice_pick(voice: State<'_, VoiceHandle>, index: u32, seq: u64) -> Res<()> {
+    voice.get()?.pick(index as usize, seq);
     Ok(())
 }
 

@@ -3084,7 +3084,13 @@ export const VoiceEvent = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("hearing"), text: z.string() }),
   z.strictObject({ kind: z.literal("heard"), text: z.string() }),
   z.strictObject({ kind: z.literal("saying"), text: z.string() }),
-  z.strictObject({ kind: z.literal("ask"), question: z.string(), options: z.array(z.string()) }),
+  // `seq` names the question (1, 2, 3, ... per app run, far below 2^53): a pick sends it back.
+  z.strictObject({
+    kind: z.literal("ask"),
+    question: z.string(),
+    options: z.array(z.string()),
+    seq: z.number().int(),
+  }),
   z.strictObject({ kind: z.literal("card"), card: OpenDotCard }),
   z.strictObject({ kind: z.literal("open"), target: OpenTarget }),
   z.strictObject({ kind: z.literal("cleared") }),

@@ -219,7 +219,9 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
     if (ask === null || picked !== null || index < 0 || index >= ask.options.length) return;
     const sent = { ask, index };
     setPickedFor(sent);
-    act.voicePick(index).catch((e: unknown) => {
+    // The seq of the question these options were rendered from, not the store's latest: a
+    // pick made as a newer question arrives names the old one, and the app ignores it.
+    act.voicePick(index, ask.seq).catch((e: unknown) => {
       setPickedFor((p) => (p === sent ? null : p));
       notifyError(e);
     });

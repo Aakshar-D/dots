@@ -2480,10 +2480,12 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
         VoiceEvent::Ask {
             question: "Approve it?".into(),
             options: vec!["Yes".into(), "No".into()],
+            seq: 1,
         },
         VoiceEvent::Ask {
             question: "What should it be called?".into(),
             options: vec![],
+            seq: 2,
         },
         VoiceEvent::Card {
             card: Card::Proposal { proposal },

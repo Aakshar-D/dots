@@ -64,7 +64,7 @@ describe("the rail mark", () => {
     ["thinking", { state: "thinking" }, "voice_stop"],
     ["speaking", { state: "speaking" }, "voice_stop"],
     ["listening", { state: "listening", micOpen: true }, "voice_open"],
-    ["idle with a question waiting", { state: "idle", ask: { question: "Run it?", options: ["Yes", "No"] } }, "voice_open"],
+    ["idle with a question waiting", { state: "idle", ask: { question: "Run it?", options: ["Yes", "No"], seq: 1 } }, "voice_open"],
     ["idle with a card showing", { state: "idle", card: { kind: "list", title: "Waiting", lines: [] } }, "voice_open"],
   ])("while Open Dot is %s, a click calls %s", async (_, live, command) => {
     mount(ready);

@@ -30,7 +30,8 @@ export type VoiceLive = {
   /// The lines of the current reply, oldest first: the last `SAID_KEPT` of them. `n` is the
   /// line's running number, never reused, so a line keeps its name as older ones drop off.
   said: SaidLine[];
-  ask: { question: string; options: string[] } | null;
+  /// `seq` names the question: a pick on its options sends it back.
+  ask: { question: string; options: string[]; seq: number } | null;
   card: OpenDotCard | null;
   /// The speech files' download, while one runs.
   download: { done: number; total: number } | null;
@@ -206,7 +207,9 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       return;
     }
     case "ask":
-      voiceStore.set({ ask: { question: event.question, options: event.options } });
+      voiceStore.set({
+        ask: { question: event.question, options: event.options, seq: event.seq },
+      });
       return;
     case "card":
       voiceStore.set({ card: event.card });

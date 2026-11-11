@@ -778,8 +778,9 @@ export const commands = {
   voiceClose: () => call(nothing, "voice_close"),
   /// Stop speaking and listen.
   voiceStop: () => call(nothing, "voice_stop"),
-  /// A click on option `index` (0-based) of the question showing.
-  voicePick: (index: number) => call(nothing, "voice_pick", { index }),
+  /// A click on option `index` (0-based) of question `seq` (the `seq` of the `ask` event the
+  /// options were rendered from). A pick for any other question is ignored.
+  voicePick: (index: number, seq: number) => call(nothing, "voice_pick", { index, seq }),
   /// What the person is looking at, for the next things they say.
   voiceView: (view: T.View) => call(nothing, "voice_view", { view }),
   /// Says "Hi, I'm Dot." in that voice, then goes back to the saved one. Rejects with kind

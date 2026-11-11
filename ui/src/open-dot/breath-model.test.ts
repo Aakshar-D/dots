@@ -489,7 +489,7 @@ describe("breathStateOf", () => {
     expect(breathStateOf(live("thinking"), false)).toBe("thinking");
     expect(breathStateOf(live("speaking"), false)).toBe("speaking");
     expect(breathStateOf(live("asking"), false)).toBe("asking");
-    expect(breathStateOf(live("idle", { ask: { question: "?", options: [] } }), true)).toBe("asking");
+    expect(breathStateOf(live("idle", { ask: { question: "?", options: [], seq: 1 } }), true)).toBe("asking");
     for (const state of ["off", "idle", "listening", "speaking"] as const) {
       expect(breathStateOf(live(state, { trouble: "No microphone" }), true)).toBe("trouble");
     }

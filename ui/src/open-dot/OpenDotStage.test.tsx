@@ -135,20 +135,43 @@ describe("the Open Dot stage", () => {
 
   it("asks with numbered options, and a click picks one once", () => {
     render(<OpenDotStage />);
-    show({ state: "asking", micOpen: true, ask: { question: "Run it now?", options: ["Yes", "Not now"] } });
+    show({ state: "asking", micOpen: true, ask: { question: "Run it now?", options: ["Yes", "Not now"], seq: 1 } });
     const group = screen.getByRole("group", { name: "Run it now?" });
     const options = within(group).getAllByRole("button");
     expect(options.map((o) => o.textContent)).toEqual(["1Yes", "2Not now"]);
     fireEvent.click(within(group).getByRole("button", { name: "Not now" }));
-    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1 }]);
+    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1, seq: 1 }]);
     // A second click while that pick is on its way does nothing.
     fireEvent.click(within(group).getByRole("button", { name: "Yes" }));
     fireEvent.keyDown(document.body, { key: "1" });
     expect(backend.callsTo("voice_pick")).toHaveLength(1);
-    // The next question can be answered again.
-    show({ ask: { question: "Which one?", options: ["A", "B"] } });
+    // The next question can be answered again, and the pick names it.
+    show({ ask: { question: "Which one?", options: ["A", "B"], seq: 2 } });
     fireEvent.click(screen.getByRole("button", { name: "A" }));
-    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1 }, { index: 0 }]);
+    expect(backend.callsTo("voice_pick")).toEqual([
+      { index: 1, seq: 1 },
+      { index: 0, seq: 2 },
+    ]);
+  });
+
+  it("a pick sends the seq of the question its options were rendered from", () => {
+    render(<OpenDotStage />);
+    show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"], seq: 41 } });
+    fireEvent.keyDown(document.body, { key: "2" });
+    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1, seq: 41 }]);
+  });
+
+  it("a pick from a render made before a newer question sends the older seq", () => {
+    render(<OpenDotStage />);
+    show({ state: "asking", micOpen: true, ask: { question: "Approve it?", options: ["Approve", "Deny"], seq: 7 } });
+    // The handler React gave the "Approve" button in this render: a click that lands as the
+    // newer question arrives runs it.
+    const button = screen.getByRole("button", { name: "Approve" });
+    const propsKey = Object.keys(button).find((k) => k.startsWith("__reactProps$"))!;
+    const staleClick = (button as unknown as Record<string, { onClick: () => void }>)[propsKey]!.onClick;
+    show({ ask: { question: "Which dot?", options: ["Mail", "News"], seq: 8 } });
+    act(() => staleClick());
+    expect(backend.callsTo("voice_pick")).toEqual([{ index: 0, seq: 7 }]);
   });
 
   it("number keys pick, unless typing or beyond the options", () => {
@@ -158,7 +181,7 @@ describe("the Open Dot stage", () => {
         <OpenDotStage />
       </>,
     );
-    show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"] } });
+    show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"], seq: 1 } });
     const input = screen.getByRole("textbox", { name: "Notes" });
     input.focus();
     fireEvent.keyDown(input, { key: "2" });
@@ -167,14 +190,14 @@ describe("the Open Dot stage", () => {
     fireEvent.keyDown(document.body, { key: "3" });
     expect(backend.callsTo("voice_pick")).toEqual([]);
     fireEvent.keyDown(document.body, { key: "2" });
-    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1 }]);
+    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1, seq: 1 }]);
   });
 
   it.each(["dialog", "alertdialog", "menu", "listbox"])(
     "number keys do not pick while a %s is open",
     (role) => {
       render(<OpenDotStage />);
-      show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"] } });
+      show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"], seq: 1 } });
       const other = document.createElement("div");
       other.setAttribute("role", role);
       document.body.append(other);
@@ -186,13 +209,13 @@ describe("the Open Dot stage", () => {
 
   it("number keys ignore modifiers, composition and repeats, and take the number pad", () => {
     render(<OpenDotStage />);
-    show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"] } });
+    show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"], seq: 1 } });
     for (const held of [{ ctrlKey: true }, { altKey: true }, { metaKey: true }, { isComposing: true }, { repeat: true }]) {
       fireEvent.keyDown(document.body, { key: "1", ...held });
     }
     expect(backend.callsTo("voice_pick")).toEqual([]);
     fireEvent.keyDown(document.body, { key: "2", code: "Numpad2" });
-    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1 }]);
+    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1, seq: 1 }]);
   });
 
   it("Esc that closes a menu leaves the stage open, though the menu is gone by then", () => {
@@ -220,7 +243,7 @@ describe("the Open Dot stage", () => {
   it("shows key hints for the first four of more options, and wraps the rest", () => {
     render(<OpenDotStage />);
     const options = ["One", "Two", "Three", "Four", "Five", "Six"];
-    show({ state: "asking", micOpen: true, ask: { question: "Pick", options } });
+    show({ state: "asking", micOpen: true, ask: { question: "Pick", options, seq: 1 } });
     const group = screen.getByRole("group", { name: "Pick" });
     expect(group).toHaveClass("flex-wrap");
     expect(within(group).getAllByRole("button")).toHaveLength(6);
@@ -267,7 +290,7 @@ describe("the Open Dot stage", () => {
     ["listening", { state: "listening", micOpen: true }, "Listen", "voice_open"],
     [
       "idle with a question waiting",
-      { state: "idle", ask: { question: "Run it?", options: ["Yes", "No"] } },
+      { state: "idle", ask: { question: "Run it?", options: ["Yes", "No"], seq: 1 } },
       "Listen",
       "voice_open",
     ],
@@ -282,7 +305,7 @@ describe("the Open Dot stage", () => {
 
   it("prints the question above the options, once", () => {
     render(<OpenDotStage />);
-    show({ state: "asking", micOpen: true, said: lines("Triage wants to push."), ask: { question: "Allow it?", options: ["Allow", "Deny"] } });
+    show({ state: "asking", micOpen: true, said: lines("Triage wants to push."), ask: { question: "Allow it?", options: ["Allow", "Deny"], seq: 1 } });
     expect(question()).toHaveTextContent("Allow it?");
     expect(question()).toHaveClass("text-foreground", "font-medium", "line-clamp-2");
     // Above the options.
@@ -296,7 +319,7 @@ describe("the Open Dot stage", () => {
 
   it("asks an open question with no options", () => {
     render(<OpenDotStage />);
-    show({ state: "idle", micOpen: false, ask: { question: "What should it be called?", options: [] } });
+    show({ state: "idle", micOpen: false, ask: { question: "What should it be called?", options: [], seq: 1 } });
     expect(question()).toHaveTextContent("What should it be called?");
     expect(within(stage()!).getByText("Say your answer.")).toBeVisible();
     expect(screen.queryByRole("group", { name: "What should it be called?" })).toBeNull();
@@ -320,7 +343,7 @@ describe("the Open Dot stage", () => {
       voicePick: () => Promise.reject(new Error("Dot is not asking anything now.")),
     };
     render(<OpenDotStage act={act_} />);
-    show({ state: "asking", micOpen: true, ask: { question: "Q", options: ["A", "B"] } });
+    show({ state: "asking", micOpen: true, ask: { question: "Q", options: ["A", "B"], seq: 1 } });
     await act(async () => void fireEvent.click(screen.getByRole("button", { name: "A" })));
     expect(failed).toHaveBeenCalledWith("Dot is not asking anything now.");
     expect(screen.getByRole("button", { name: "A" })).not.toHaveAttribute("aria-disabled");
@@ -393,11 +416,16 @@ describe("the Open Dot stage", () => {
   it.each<[OpenDotCard, string[]]>([
     [
       { kind: "confirm", deed: { kind: "approve", approval_id: "a", dot_name: "triage", tool: "Bash", target: "rm -rf ./build" } },
-      ["Approve for triage: Bash", "rm -rf ./build"],
+      ["Approve the request from triage: Bash", "rm -rf ./build"],
     ],
     [
       { kind: "confirm", deed: { kind: "deny", approval_id: "a", dot_name: "triage", tool: "Write", target: "notes.md" } },
-      ["Deny for triage: Write", "notes.md"],
+      ["Deny the request from triage: Write", "notes.md"],
+    ],
+    // No possessive: a name ending in "s" reads the same way.
+    [
+      { kind: "confirm", deed: { kind: "approve", approval_id: "a", dot_name: "news", tool: "Write", target: "today.md" } },
+      ["Approve the request from news: Write", "today.md"],
     ],
     [{ kind: "confirm", deed: { kind: "run", dot_id: "d", dot_name: "backup" } }, ["Run backup now"]],
     [
@@ -428,7 +456,7 @@ describe("the Open Dot stage", () => {
       card: { kind: "confirm", deed: { kind: "approve", approval_id: "a", dot_name: "triage", tool: "WebSearch", target: "" } },
     });
     const area = stage()!.querySelector<HTMLElement>("[data-card]")!;
-    expect(within(area).getByText("Approve for triage: WebSearch")).toBeVisible();
+    expect(within(area).getByText("Approve the request from triage: WebSearch")).toBeVisible();
     expect(area.querySelector("code")).toBeNull();
   });
 
@@ -461,7 +489,7 @@ describe("the Open Dot stage", () => {
     expect(footer()).toHaveTextContent("Thinking…");
     show({ state: "speaking", micOpen: false });
     expect(footer()).toHaveTextContent("Speaking. Click the dots or press the shortcut to interrupt.");
-    show({ state: "idle", micOpen: false, ask: { question: "Run it?", options: ["Yes", "No"] } });
+    show({ state: "idle", micOpen: false, ask: { question: "Run it?", options: ["Yes", "No"], seq: 1 } });
     expect(footer()).toHaveTextContent(
       "Not listening. Click the dots to answer by voice, or pick an option.",
     );
@@ -476,7 +504,7 @@ describe("the Open Dot stage", () => {
         <OpenDotStage />
       </Profiler>,
     );
-    show({ state: "speaking", said: lines("Hello."), ask: { question: "Q", options: ["A", "B"] } });
+    show({ state: "speaking", said: lines("Hello."), ask: { question: "Q", options: ["A", "B"], seq: 1 } });
     const before = renders;
     act(() => {
       for (let i = 0; i < 30; i++) voiceStore.set({ level: { mic: i / 30, voice: (30 - i) / 30 } });
@@ -490,7 +518,7 @@ describe("the Open Dot stage", () => {
     show({
       state: "asking",
       said: lines(long),
-      ask: { question: "Q", options: [long, "B"] },
+      ask: { question: "Q", options: [long, "B"], seq: 1 },
       card: { kind: "list", title: long, lines: Array.from({ length: 40 }, (_, i) => `${long} ${i}`) },
     });
     const panel = stage()!;
@@ -510,7 +538,7 @@ describe("the Open Dot stage", () => {
     render(<OpenDotStage />);
     show({
       state: "asking",
-      ask: { question: "Q", options: ["A", "B"] },
+      ask: { question: "Q", options: ["A", "B"], seq: 1 },
       card: { kind: "list", title: "Waiting", lines: ["One"] },
     });
     expect(screen.getByRole("group", { name: "Q" })).toBeVisible();
@@ -543,7 +571,7 @@ describe("the Open Dot stage", () => {
         <OpenDotStage />
       </>,
     );
-    show({ state: "asking", micOpen: true, ask: { question: "Q", options: ["A", "B"] } });
+    show({ state: "asking", micOpen: true, ask: { question: "Q", options: ["A", "B"], seq: 1 } });
     screen.getByRole("button", { name: "Before" }).focus();
     const expected = [
       screen.getByRole("button", { name: "Listen" }),
