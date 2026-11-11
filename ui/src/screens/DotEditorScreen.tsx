@@ -102,6 +102,27 @@ function Editor(props: {
   const changed = hashKey([schedule]) !== hashKey([scheduleOf(stored)]);
   const objection = sendable && preview.isError ? errorMessage(preview.error) : undefined;
 
+  // The workspace's policy ceiling for the policy as typed (guardrails spec section 4.3): which
+  // presets a Member's dot may pick, and why this policy can't be saved. A stored dot also gets
+  // the text its runs are held with while it is past the ceiling.
+  const ceilingOrg = props.existing ? props.existing.org_id : draft.org;
+  const ceilingWorkspace = props.existing
+    ? props.existing.workspace_id
+    : (draft.workspace ?? "default");
+  const typedPolicy = useDebounced(draft.spec.policy, 300);
+  const ceiling = useQuery({
+    queryKey: keys.policyCeiling(ceilingOrg, ceilingWorkspace, typedPolicy),
+    queryFn: () => commands.policyCeiling(ceilingOrg, ceilingWorkspace, typedPolicy),
+    // The last answer stays while the next policy is asked about.
+    placeholderData: (previous) => previous,
+  }).data;
+  const held = useQuery({
+    queryKey: keys.dotCeiling(props.existing?.id ?? ""),
+    queryFn: () => commands.dotCeiling(props.existing?.id ?? ""),
+    enabled: props.existing !== null,
+  }).data?.held;
+  const policyRefusal = ceiling?.policy_refusal ?? undefined;
+
   const errors = specErrors(draft.spec, isNew);
   if (objection && changed) errors.schedule ??= objection;
 
@@ -157,6 +178,8 @@ function Editor(props: {
           note: changed ? undefined : objection,
         }}
         onEnabled={onEnabled}
+        ceiling={ceiling}
+        held={held ?? undefined}
       />
     </div>
   );
@@ -175,9 +198,13 @@ function Editor(props: {
           <Button
             size="sm"
             disabled={
-              save.isPending || props.blocked !== undefined || refusal !== undefined || contextBad
+              save.isPending ||
+              props.blocked !== undefined ||
+              refusal !== undefined ||
+              policyRefusal !== undefined ||
+              contextBad
             }
-            title={props.blocked ?? refusal ?? errors.context_rules}
+            title={props.blocked ?? refusal ?? policyRefusal ?? errors.context_rules}
             onClick={submit}
           >
             {props.saveLabel}
