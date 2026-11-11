@@ -556,9 +556,19 @@ impl Mind {
 
     /// Starts a turn: forgets after the idle period, ends the turn before, and returns this
     /// turn's number, what cancels its requests (a child of the runtime's shutdown), whether
-    /// forgetting dropped a step that waited, and what the turn before read aloud.
-    fn begin(&self, rt: &Runtime) -> (u64, CancellationToken, bool, Vec<String>) {
+    /// forgetting dropped a step that waited, and what the turn before read aloud. `None` when
+    /// `lapse` or `reset` dropped what was in flight since the turn arrived (`drops` is the
+    /// count it saw then): checked under the same lock that begins it, so a dropped turn never
+    /// begins.
+    fn begin(
+        &self,
+        rt: &Runtime,
+        drops: u64,
+    ) -> Option<(u64, CancellationToken, bool, Vec<String>)> {
         let mut s = lock(&self.state);
+        if s.drops != drops {
+            return None;
+        }
         let now = Instant::now();
         let forgot = s
             .last_heard
@@ -572,7 +582,7 @@ impl Mind {
         let cancel = rt.shutdown_token().child_token();
         s.cancel = Some(cancel.clone());
         let read_before = std::mem::take(&mut s.read_aloud);
-        (s.turn, cancel, forgot, read_before)
+        Some((s.turn, cancel, forgot, read_before))
     }
 
     /// Whether the input is no turn at all: a click on an option that is not offered (it ends
@@ -613,12 +623,13 @@ impl Mind {
         }
         // A deed in flight finishes and says its outcome before this turn begins.
         let gate = self.deeds.lock().await;
-        // Dropped (the stage closed or rested) while it waited: it never begins.
-        let dropped = lock(&self.state).drops != drops;
-        if dropped || self.no_turn(&input, arrived, false) {
+        if self.no_turn(&input, arrived, false) {
             return;
         }
-        let (turn, cancel, forgot, read_before) = self.begin(rt);
+        // Dropped (the stage closed or rested) while it waited: it never begins.
+        let Some((turn, cancel, forgot, read_before)) = self.begin(rt, drops) else {
+            return;
+        };
         let o = Out {
             mind: self,
             tx,

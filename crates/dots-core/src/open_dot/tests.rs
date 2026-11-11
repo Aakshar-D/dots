@@ -2040,3 +2040,22 @@ async fn a_turn_waiting_behind_a_deed_does_not_begin_after_a_lapse_or_reset() {
         t.rt.shutdown();
     }
 }
+
+#[tokio::test]
+async fn a_drop_after_the_checks_still_stops_the_turn_from_beginning() {
+    // The drop lands between the turn's last look and its start: begin itself refuses it.
+    let t = T::start().await;
+    let seen = lock(&t.mind.state).drops;
+    let turn = lock(&t.mind.state).turn;
+    t.mind.reset();
+    assert!(t.mind.begin(&t.rt, seen).is_none(), "a dropped turn began");
+    assert_eq!(
+        lock(&t.mind.state).turn,
+        turn + 1,
+        "only the reset moved the turn"
+    );
+    // With the count it saw after the drop, a turn begins.
+    let now = lock(&t.mind.state).drops;
+    assert!(t.mind.begin(&t.rt, now).is_some());
+    t.rt.shutdown();
+}
