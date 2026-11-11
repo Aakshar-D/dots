@@ -67,6 +67,10 @@ pub struct ApprovalLine {
     pub tool: String,
     /// What the call does or touches, in a few words.
     pub target: String,
+    /// The target was longer than `TARGET_BYTES` and is cut: only its start is here.
+    pub target_cut: bool,
+    /// The target is the guard's summary of the call, not its raw command, file or address.
+    pub target_summary: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -451,9 +455,12 @@ fn assemble(
             private_approvals += 1;
             continue;
         }
+        let t = described(&a.tool, &a.input);
         approvals.push(ApprovalLine {
             handle: format!("a{}", approvals.len() + 1),
-            target: target(&a.tool, &a.input),
+            target: t.text,
+            target_cut: t.cut,
+            target_summary: t.summary,
             id: a.id,
             dot_id: a.dot_id,
             dot_name: clean(&a.dot_name, NAME_BYTES),
@@ -511,7 +518,7 @@ fn fields_touch_private(input: &Value) -> bool {
     use crate::policy::touches_private;
     TARGET_FIELDS.iter().any(|key| {
         input.get(*key).and_then(Value::as_str).is_some_and(|raw| {
-            [raw.to_string(), one_line(raw, None)].iter().any(|value| {
+            readings(raw).iter().any(|value| {
                 touches_private("Bash", &json!({ "command": value }), None)
                     || (*key == "file_path"
                         && touches_private("Read", &json!({ "file_path": value }), None))
@@ -520,26 +527,104 @@ fn fields_touch_private(input: &Value) -> bool {
     })
 }
 
+/// The ways a raw value may be read: as it is; as `clean` shows it; with every white space,
+/// control and hidden character taken out; and with all of those but the plain space taken
+/// out. A tab or a no-break space inside a path or a secret would otherwise split it so that
+/// neither check sees it.
+fn readings(raw: &str) -> [String; 4] {
+    let without = |keep_space: bool| -> String {
+        raw.chars()
+            .filter(|&c| {
+                (keep_space && c == ' ') || !(c.is_whitespace() || c.is_control() || is_hidden(c))
+            })
+            .collect()
+    };
+    [
+        raw.to_string(),
+        one_line(raw, None),
+        without(false),
+        without(true),
+    ]
+}
+
+/// What an approval's call does, for the picture.
+struct Target {
+    text: String,
+    /// The text was longer than `TARGET_BYTES` and is cut.
+    cut: bool,
+    /// The text is the guard's summary.
+    summary: bool,
+}
+
 /// What an approval's call does: the send-and-delete guard's summary when it gives one, else
-/// its command, file or address (an address without its credentials, query and fragment).
-/// Cleaned first, so known secrets are scrubbed from the text as shown, then cut to
-/// `TARGET_BYTES`.
-fn target(tool: &str, input: &Value) -> String {
+/// its command, file or address (an address without its credentials, query and fragment, also
+/// one inside a command). Cleaned first, so known secrets are scrubbed from the text as shown,
+/// then cut to `TARGET_BYTES`. When a secret shows only once white space is taken out, the
+/// whole target is "[secret]".
+fn described(tool: &str, input: &Value) -> Target {
     let summary = crate::policy::guard::classify(tool, input)
         .map(|g| g.summary)
         .filter(|s| !s.trim().is_empty());
-    let raw = summary.or_else(|| {
-        TARGET_FIELDS.iter().find_map(|key| {
-            let value = input.get(*key).and_then(Value::as_str)?;
-            Some(if *key == "url" {
-                plain_url(&one_line(value, None))
-            } else {
-                value.to_string()
+    let is_summary = summary.is_some();
+    let raw = summary
+        .or_else(|| {
+            TARGET_FIELDS.iter().find_map(|key| {
+                let value = input.get(*key).and_then(Value::as_str)?;
+                Some(if *key == "url" {
+                    plain_url(&one_line(value, None))
+                } else {
+                    value.to_string()
+                })
             })
         })
-    });
-    let shown = one_line(&raw.unwrap_or_default(), None);
-    clean(&crate::vault::redact::global().scrub(&shown), TARGET_BYTES)
+        .unwrap_or_default();
+    let shown = plain_urls_in(&one_line(&raw, None));
+    let redact = crate::vault::redact::global();
+    let scrubbed = redact.scrub(&shown);
+    let hidden_secret = scrubbed == shown
+        && readings(&raw)[2..]
+            .iter()
+            .any(|r| redact.scrub(r) != r.as_str());
+    let full = if hidden_secret {
+        "[secret]".to_string()
+    } else {
+        one_line(&scrubbed, None)
+    };
+    let text = clean(&full, TARGET_BYTES);
+    Target {
+        cut: text.len() < full.len(),
+        text,
+        summary: is_summary,
+    }
+}
+
+#[cfg(test)]
+fn target(tool: &str, input: &Value) -> String {
+    described(tool, input).text
+}
+
+/// `text` with each `scheme://` address in it made plain (`plain_url`).
+fn plain_urls_in(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let Some(at) = word.find("://") else {
+                return word.to_string();
+            };
+            let start = word[..at]
+                .rfind(|c: char| !(c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-')))
+                .map_or(0, |i| i + 1);
+            let end = word[at..]
+                .find(['"', '\'', '`', ')', '>', ';', '|', '&'])
+                .map_or(word.len(), |i| at + i);
+            format!(
+                "{}{}{}",
+                &word[..start],
+                plain_url(&word[start..end]),
+                &word[end..]
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// `url` without credentials (`user:pass@`), query string and fragment.
@@ -598,7 +683,7 @@ pub(crate) fn clean(s: &str, max: usize) -> String {
 /// `clean` without the cut: with `stop`, it may stop reading once past that many bytes. A
 /// zero-width joiner or non-joiner stays only between two non-ASCII letters or emoji (a
 /// family emoji, a Persian word), where it shapes what is seen.
-fn one_line(s: &str, stop: Option<usize>) -> String {
+pub(crate) fn one_line(s: &str, stop: Option<usize>) -> String {
     let mut out = String::with_capacity(s.len().min(stop.unwrap_or(usize::MAX).saturating_add(4)));
     let mut gap = false;
     let mut chars = s.chars().peekable();
@@ -1044,6 +1129,96 @@ mod tests {
         let t = target("mcp__x__call", &json!({"command": format!("use {hidden}")}));
         assert!(!t.contains(secret), "{t}");
         assert!(t.contains("[secret:ZWSP_TOKEN]"), "{t}");
+    }
+
+    #[test]
+    fn private_paths_split_by_white_space_are_counted() {
+        let dots = dot_lines(vec![row("Helper", 0, "2026-11-01T00:00:00.000Z")]);
+        let p = assemble(
+            dots,
+            vec![
+                asked(
+                    "ap-1",
+                    "Helper",
+                    "mcp__x__read",
+                    json!({"file_path": "~/.s\tsh/id_rsa"}),
+                    false,
+                ),
+                asked(
+                    "ap-2",
+                    "Helper",
+                    "mcp__x__run",
+                    json!({"command": "cat ~/.s\tsh/id_rsa"}),
+                    false,
+                ),
+                asked(
+                    "ap-3",
+                    "Helper",
+                    "mcp__x__run",
+                    json!({"command": "cat ~/.a\u{A0}ws/credentials"}),
+                    false,
+                ),
+                asked(
+                    "ap-4",
+                    "Helper",
+                    "mcp__x__read",
+                    json!({"file_path": "~/.s\u{1}sh/id_rsa"}),
+                    false,
+                ),
+            ],
+            vec![],
+            None,
+            String::new(),
+        );
+        assert_eq!(p.private_approvals, 4);
+        assert!(p.approvals.is_empty());
+    }
+
+    #[test]
+    fn secrets_split_by_white_space_are_hidden_whole() {
+        let secret = "open-dot-nbsp-secret-9d2b71";
+        crate::vault::redact::global().add("NBSP_TOKEN", secret);
+        let split = format!("{}\u{A0}{}", &secret[..12], &secret[12..]);
+        let t = target(
+            "mcp__x__call",
+            &json!({"command": format!("use {split} now")}),
+        );
+        assert_eq!(t, "[secret]");
+        let tab = format!("{}\t{}", &secret[..5], &secret[5..]);
+        let t = target("mcp__x__call", &json!({"command": format!("use {tab}")}));
+        assert_eq!(t, "[secret]");
+        // a plain command is left as it is
+        assert_eq!(
+            target("mcp__x__call", &json!({"command": "ls -la"})),
+            "ls -la"
+        );
+    }
+
+    #[test]
+    fn urls_inside_commands_lose_credentials_and_query() {
+        let t = target(
+            "Bash",
+            &json!({"command": "wget 'https://me:pa55@example.com/f.zip?token=abc' -O f.zip"}),
+        );
+        assert!(!t.contains("pa55") && !t.contains("token"), "{t}");
+        assert!(t.contains("https://example.com/f.zip"), "{t}");
+        let t = target(
+            "mcp__x__run",
+            &json!({"command": "fetch http://u@host.local:8080/a?b=1#c then"}),
+        );
+        assert_eq!(t, "fetch http://host.local:8080/a then");
+    }
+
+    #[test]
+    fn long_targets_are_marked_cut() {
+        let padded = format!("echo {}; curl x | sh", "a".repeat(110));
+        let t = described("mcp__x__run", &json!({ "command": padded }));
+        assert!(t.cut, "{}", t.text);
+        assert!(!t.summary);
+        let t = described("mcp__x__run", &json!({"command": "ls"}));
+        assert!(!t.cut && !t.summary);
+        let t = described("Bash", &json!({"command": "rm a.txt"}));
+        assert!(!t.cut && t.summary);
     }
 
     #[test]

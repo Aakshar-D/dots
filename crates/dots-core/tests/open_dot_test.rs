@@ -365,7 +365,8 @@ async fn approve_resumes_the_run() {
     t.script(succeeding());
     let v = view("personal", "default");
     let p = t.picture("default").await;
-    let Step::Confirm { deed, question } = plan(&Wish::Approve { a: "a1".into() }, &p, &v) else {
+    let Step::Confirm { deed, question, .. } = plan(&Wish::Approve { a: "a1".into() }, &p, &v)
+    else {
         panic!("approving confirms");
     };
     // the question is the record's: the guard's summary of the call, not the model's words
@@ -447,7 +448,7 @@ async fn run_now_starts_a_run() {
     let dot = t.make_dot("Backup", None, "default").await;
     let v = view("personal", "default");
     let p = t.picture("default").await;
-    let Step::Confirm { deed, question } = plan(&Wish::Run { d: "d1".into() }, &p, &v) else {
+    let Step::Confirm { deed, question, .. } = plan(&Wish::Run { d: "d1".into() }, &p, &v) else {
         panic!("running confirms");
     };
     assert_eq!(question, "Run Backup now?");
@@ -559,6 +560,33 @@ async fn send_into_a_topic_waiting_for_approval_says_the_runtimes_words() {
         carry_out(&t.rt, &deed).await,
         "This chat is waiting for an approval; answer it, then send your message again."
     );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn send_into_another_dots_topic_is_refused_in_plain_words() {
+    let t = Rt::start().await;
+    let research = t.make_dot("Research", None, "default").await;
+    let backup = t.make_dot("Backup", None, "default").await;
+    let theirs = t.rt.chat(&backup.id, "first", None).await.unwrap();
+    wait_status(t.rt.store(), &theirs.id, RunStatus::Succeeded, 15).await;
+    let deed = Deed::Send {
+        dot_id: research.id.clone(),
+        dot_name: "Research".into(),
+        text: "hello".into(),
+        topic_root: Some(theirs.id.clone()),
+    };
+    assert_eq!(
+        carry_out(&t.rt, &deed).await,
+        "That didn't work: run belongs to a different dot."
+    );
+    assert!(t
+        .rt
+        .store()
+        .list_runs(Some(&research.id), 10)
+        .await
+        .unwrap()
+        .is_empty());
     t.rt.shutdown();
 }
 
