@@ -131,7 +131,10 @@ describe("the app frame", () => {
     renderApp("/dots");
     expect(await screen.findByText(/The local server is not running: could not listen/)).toBeVisible();
     expect(screen.getByText(/The claude CLI was not found/)).toBeVisible();
-    expect(screen.getByText(/Claude CLI 2\.1\.300 has not been tested.*2\.1\.295/)).toBeVisible();
+    // Shown once the dots have loaded too.
+    expect(
+      await screen.findByText(/Claude CLI 2\.1\.300 has not been tested.*2\.1\.295/),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "Restart Dots" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Resume schedules" })).toBeVisible();
     expect(screen.getAllByRole("link", { name: "Open Settings" })).toHaveLength(2);

@@ -66,6 +66,10 @@ export const keys = {
   phoneStatus: ["phone", "status"] as const,
   phoneDevices: ["phone", "devices"] as const,
   phoneActions: ["phone", "actions"] as const,
+  /// Open Dot's voice status (Settings > Voice; `voice` events keep it), and below it the
+  /// microphones and speakers it can use.
+  voice: ["voice"] as const,
+  voiceDevices: ["voice", "devices"] as const,
   /// The orgs joined on this PC (Settings → Accounts, and the org names other screens
   /// show). What is read per org belongs under this prefix, so an org event reaches it too.
   orgs: ["orgs"] as const,

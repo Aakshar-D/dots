@@ -33,6 +33,7 @@ import { PhoneSection } from "./PhoneSection";
 import { ProfileSection } from "./ProfileSection";
 import { UpdatesSection } from "@/screens/UpdatesSection";
 import { UsageCountsSection } from "@/screens/UsageCountsSection";
+import { VoiceSection } from "@/screens/VoiceSection";
 
 type Errors = {
   port?: string;
@@ -59,6 +60,7 @@ export const TABS = [
   { id: "claude", label: "Claude" },
   { id: "runs", label: "Runs & server" },
   { id: "phone", label: "Phone" },
+  { id: "voice", label: "Voice" },
   { id: "models", label: "Local models" },
   { id: "browser", label: "Browser" },
   { id: "updates", label: "Updates" },
@@ -330,8 +332,11 @@ function Form({
   );
   const tabsWithErrors = new Set(shownErrors.map((key) => ERROR_TAB[key]));
   // What Save would send, against what is stored: edits on other tabs are easy to forget.
+  // Open Dot's switch is not part of the form: `voice_enable` saves it at once, so Save sends
+  // the stored value and never turns voice back off or on.
   const toSave = {
     ...draft,
+    voice_enabled: stored.voice_enabled,
     claude_path: claudePath.trim() || null,
     edge_path: draft.edge_path?.trim() || null,
   };
@@ -759,6 +764,7 @@ function Form({
         <PhoneSection stored={stored.phone_enabled} />
       </>
     ),
+    voice: <VoiceSection draft={draft} set={set} />,
     models: (
       <>
         <Section title="Local endpoints">

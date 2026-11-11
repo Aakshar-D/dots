@@ -152,6 +152,8 @@ export function installDefaults(): void {
   // Open Dot's voice: off, nothing downloaded, no devices.
   backend.on("voice_status", () => sample.voiceOff);
   backend.on("voice_devices", () => ({ microphones: [], speakers: [] }));
+  // The frame tells Open Dot what is on screen.
+  backend.on("voice_view", () => null);
   backend.on("update_status", () => ({
     version: "0.3.0",
     checks_on: true,

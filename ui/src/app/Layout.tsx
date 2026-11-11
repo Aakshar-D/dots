@@ -28,6 +28,7 @@ import { isOpenQuestion } from "@/lib/messages";
 import { keys } from "@/lib/query";
 import { useRuntimeEvents } from "@/lib/runtime-events";
 import { useActivity } from "@/lib/use-activity";
+import { useVoice } from "@/lib/use-voice";
 
 const LINKS = [
   { to: "/home", label: "Home", icon: House },
@@ -46,6 +47,7 @@ const RELEASES = { to: "/releases", label: "Releases", icon: Rocket };
 /// The frame around every screen: the icon rail, the banners, the screen, the toasts.
 export function Layout() {
   useRuntimeEvents();
+  useVoice();
   useActivity();
   const publisher = useQuery({ queryKey: keys.publisher, queryFn: commands.publisherStatus }).data;
   const isPublisher = publisher?.state.state === "publisher";
