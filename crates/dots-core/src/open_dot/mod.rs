@@ -29,7 +29,7 @@ use tokio_util::sync::CancellationToken;
 use crate::engine::claude::once::OnceFailure;
 use crate::schedule::{Rule, Schedule};
 use crate::setup::{SetupAnswer, SetupProposal, SetupRequest, SetupRound};
-use crate::{Error, Result, Runtime};
+use crate::{Error, Runtime};
 use act::{
     needs_confirmation, outcome, plain_error, plan, AskFor, Deed, OpenTarget, Outcome, Step,
     DOT_GONE, HANDLED,
@@ -41,6 +41,25 @@ use reply::{read_reply, SpeechGate, Wish};
 use think::{cap_hit, Thinker};
 
 /// What the mind tells the stage, in order.
+///
+/// One turn (one `hear` or `pick`) sends, in this order, each only when it applies:
+///
+/// 1. `Cleared` (a step that waited was dropped: the idle period passed, it went stale, the
+///    view moved to another account or workspace, or this turn answers or drops it);
+/// 2. `Thinking` (a model request or a setup round starts);
+/// 3. `Filler` (at most once, before any `Say`, when nothing was said by `FILLER_AFTER`);
+/// 4. `Say` deltas, interleaved with `Card` and `Open` as the step needs them (a confirmation
+///    sends its `Card` and, when the target is on screen, its `Open` before its `Ask`; a dot
+///    created sends `Open` after its words);
+/// 5. `Ask` (at most one: the question that now waits);
+/// 6. `SayEnd`, exactly once, last. It is sent also when the turn fails or its thinker panics
+///    (`Rest`). Nothing of the turn is sent after it.
+///
+/// A turn ended by a newer turn, `lapse` or `reset` before its end sends nothing more, so it
+/// has no `SayEnd`; the newer turn's events follow. A deed already carried out is the one
+/// exception: its outcome and `SayEnd` are always sent, and a newer turn begins only after
+/// them. A click on an option that is not offered, or a second yes or click for a step a yes
+/// already took, is no turn and sends nothing.
 // Sent once each, by value: not boxed, so the stage matches on it plainly.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -123,8 +142,6 @@ const DIDNT_CATCH: &str = "I didn't catch what to do with that. Say it another w
 const SETTING_UP: &str = "Let me set that up.";
 const SETUP_FAILED: &str = "Setup could not finish.";
 const NEEDS_TITLE: &str = "What needs you";
-/// Longest first message said in the "Create it?" question.
-const FIRST_MESSAGE_BYTES: usize = 160;
 
 fn yes_no() -> Vec<String> {
     vec!["Yes".into(), "No".into()]
@@ -189,6 +206,9 @@ struct Pending {
     asked_at: Instant,
     /// An unclear yes ("okay", "sure") was heard once and the person was asked for a clear one.
     retried: bool,
+    /// The words said in the turn that asked it, before its question: "say that again" says
+    /// these and the question, never an older reply.
+    words: String,
 }
 
 /// How the person answered a step Dots asked a yes on.
@@ -294,10 +314,19 @@ struct Out<'a> {
     read_before: Vec<String>,
     /// A deed was carried out: its outcome is said even if the turn was ended meanwhile.
     done: AtomicBool,
+    /// `SayEnd` was sent (or the turn was ended without one): nothing more goes out.
+    ended: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Every turn ends with one `SayEnd`, also when it returns early or its thinker panics.
+impl Drop for Out<'_> {
+    fn drop(&mut self) {
+        self.end(Then::Rest);
+    }
 }
 
 impl<'a> Out<'a> {
@@ -319,17 +348,26 @@ impl<'a> Out<'a> {
     /// Sends while the turn is the current one (or its deed is done). The check and the send
     /// are made under the state lock, so a newer turn's first event cannot come before this.
     fn send(&self, event: MindEvent) {
+        if self.ended.load(Ordering::SeqCst) {
+            return;
+        }
         let s = lock(&self.mind.state);
         if s.turn == self.turn || self.done.load(Ordering::SeqCst) {
             let _ = self.tx.send(event);
         }
     }
 
-    /// Streamed words, as they come.
+    /// Streamed words, as they come, without markdown marks (`*`, backticks, `#`): they are
+    /// never said.
     fn stream(&self, delta: &str) {
+        let delta: String = delta
+            .chars()
+            .filter(|c| !matches!(c, '*' | '`' | '#'))
+            .collect();
         if delta.is_empty() {
             return;
         }
+        let delta = delta.as_str();
         lock(&self.said).push_str(delta);
         lock(&self.words).push_str(delta);
         self.spoke.store(true, Ordering::SeqCst);
@@ -369,8 +407,10 @@ impl<'a> Out<'a> {
         });
     }
 
+    /// Ends the turn: `SayEnd` once, and nothing after it.
     fn end(&self, then: Then) {
         self.send(MindEvent::SayEnd { then });
+        self.ended.store(true, Ordering::SeqCst);
     }
 
     fn spoke(&self) -> bool {
@@ -390,26 +430,28 @@ impl Mind {
         }
     }
 
-    /// One spoken turn. Events go to `out` in order; returns when the turn is over. A newer
-    /// `hear` or `pick` ends this one: its remaining events are not sent.
+    /// One spoken turn. Events go to `out` in the order `MindEvent` describes; returns when the
+    /// turn is over. A newer `hear` or `pick` ends this one: its remaining events are not sent.
+    /// Nothing fails here: a failure is said as a sentence.
     pub async fn hear(
         &self,
         rt: &Runtime,
         heard: &str,
         view: &View,
         out: &mpsc::UnboundedSender<MindEvent>,
-    ) -> Result<()> {
+    ) {
         self.turn(rt, Input::Heard(heard), view, out).await
     }
 
-    /// Click or key on an option (0-based). Same effect as saying it.
+    /// Click or key on an option (0-based). Same effect as saying it, except on a step Dots
+    /// asked a yes on: there only a click on Yes (index 0) is a yes, and on No (index 1) a no.
     pub async fn pick(
         &self,
         rt: &Runtime,
         index: usize,
         view: &View,
         out: &mpsc::UnboundedSender<MindEvent>,
-    ) -> Result<()> {
+    ) {
         self.turn(rt, Input::Pick(index), view, out).await
     }
 
@@ -430,7 +472,9 @@ impl Mind {
         }
     }
 
-    /// Stops a request in flight; keeps turns and what waits.
+    /// Stops a request in flight and any deed it has not begun; keeps turns and what waits.
+    /// A setup round being asked is ended: its answers so far are lost, and the turn is
+    /// recorded.
     pub fn cancel(&self) {
         if let Some(c) = &lock(&self.state).cancel {
             c.cancel();
@@ -498,19 +542,19 @@ impl Mind {
         input: Input<'_>,
         view: &View,
         tx: &mpsc::UnboundedSender<MindEvent>,
-    ) -> Result<()> {
+    ) {
         let started = std::time::Instant::now();
         let (arrived, busy) = {
             let s = lock(&self.state);
             (s.decided, s.deciding)
         };
         if busy && self.no_turn(&input, arrived, busy) {
-            return Ok(());
+            return;
         }
         // A deed in flight finishes and says its outcome before this turn begins.
         let gate = self.deeds.lock().await;
         if self.no_turn(&input, arrived, false) {
-            return Ok(());
+            return;
         }
         let (turn, cancel, forgot, read_before) = self.begin(rt);
         let o = Out {
@@ -523,6 +567,7 @@ impl Mind {
             read_aloud: Mutex::new(Vec::new()),
             read_before,
             done: AtomicBool::new(false),
+            ended: AtomicBool::new(false),
         };
         if forgot {
             o.send(MindEvent::Cleared);
@@ -533,7 +578,6 @@ impl Mind {
             step = kind,
             "open dot turn"
         );
-        Ok(())
     }
 
     /// The pending step, dropped first when it is older than the pending limit, or when the
@@ -576,6 +620,7 @@ impl Mind {
                 workspace: view.workspace.clone(),
                 asked_at: Instant::now(),
                 retried: false,
+                words: lock(&o.words).trim().to_string(),
             });
         }
     }
@@ -744,11 +789,6 @@ impl Mind {
                 return "stop";
             }
             Some(Quick::Repeat) => {
-                let (said, then) = {
-                    let s = lock(&self.state);
-                    (s.last_said.clone(), s.last_then)
-                };
-                o.say(if said.is_empty() { NOTHING_SAID } else { &said });
                 // What was read aloud is read again: it still counts for the next turn.
                 {
                     let mut s = lock(&self.state);
@@ -757,16 +797,32 @@ impl Mind {
                     }
                 }
                 match &waiting {
+                    // The words of the turn that asked (never an older reply), then the
+                    // question.
                     Some(w) => {
+                        o.say(&w.words);
                         let (question, options) = w.kind.asked();
                         o.ask(&question, options);
                         o.end(Then::Ask);
                     }
-                    None => o.end(then),
+                    None => {
+                        let (said, then) = {
+                            let s = lock(&self.state);
+                            (s.last_said.clone(), s.last_then)
+                        };
+                        o.say(if said.is_empty() { NOTHING_SAID } else { &said });
+                        o.end(then);
+                    }
                 }
                 return "repeat";
             }
             _ => {}
+        }
+        // Nothing was heard: what waited is dropped, and nothing is asked.
+        if !clicked && words_of(&heard).is_empty() {
+            self.drop_pending(o);
+            o.end(Then::Rest);
+            return "nothing heard";
         }
 
         // A step Dots asked a yes on passes only on a click on Yes or a firm spoken yes. A
@@ -918,7 +974,7 @@ impl Mind {
         cancel: &CancellationToken,
     ) -> &'static str {
         let settings = rt.settings().await;
-        if let Ok(Some(said)) = cap_hit(rt.store(), &settings, chrono::Utc::now()).await {
+        if let Some(said) = capped(rt, &settings).await {
             self.finish(o, heard, &said, Then::Rest);
             return "cap";
         }
@@ -982,7 +1038,8 @@ impl Mind {
         o.stream(&gate.finish());
         let (reply, bad) = read_reply(&answer.text);
         let Some(wish) = reply.wish else {
-            if bad && reply.words.is_empty() {
+            // A wish that could not be read is said not to be done, after any words.
+            if bad {
                 self.finish(o, heard, DIDNT_CATCH, Then::Rest);
                 return "unreadable";
             }
@@ -1237,14 +1294,56 @@ impl Mind {
         o: &Out<'_>,
         cancel: &CancellationToken,
     ) -> &'static str {
-        let asked = tokio::select! {
-            asked = rt.setup_ask(&id, req.clone()) => asked,
-            _ = cancel.cancelled() => {
-                rt.setup_cancel(&id);
-                o.end(Then::Rest);
-                return "setup cancelled";
+        // A setup round is a model request too: the caps hold it, and its use is counted.
+        if let Some(said) = capped(rt, &rt.settings().await).await {
+            self.finish(o, heard, &said, Then::Rest);
+            return "cap";
+        }
+        let (asked, usage) = {
+            let request = rt.setup_ask_with_usage(&id, req.clone());
+            tokio::pin!(request);
+            let filler = tokio::time::sleep(self.filler_after);
+            tokio::pin!(filler);
+            let mut waited = false;
+            loop {
+                tokio::select! {
+                    asked = &mut request => break asked,
+                    _ = &mut filler, if !waited => {
+                        waited = true;
+                        if !o.spoke() {
+                            o.send(MindEvent::Filler { text: FILLER.into() });
+                        }
+                    }
+                    _ = cancel.cancelled() => {
+                        rt.setup_cancel(&id);
+                        o.end(Then::Rest);
+                        self.record(o, heard, Then::Rest);
+                        return "setup cancelled";
+                    }
+                }
             }
         };
+        if let Some(usage) = &usage {
+            if rt
+                .store()
+                .add_open_dot_usage(crate::setup::SETUP_MODEL, usage)
+                .await
+                .is_err()
+            {
+                tracing::warn!("open dot usage could not be recorded");
+            }
+        }
+        // Written by the setup agent: cleaned and capped before they are said or shown.
+        let asked = asked.map(|answer| match answer {
+            SetupAnswer::Questions { questions } => SetupAnswer::Questions {
+                questions: questions
+                    .iter()
+                    .map(|q| act::asked_text(q, act::ASK_BYTES))
+                    .filter(|q| !q.is_empty())
+                    .collect(),
+            },
+            other => other,
+        });
         match asked {
             Ok(SetupAnswer::Questions { questions }) if !questions.is_empty() => {
                 let first = questions[0].clone();
@@ -1285,6 +1384,18 @@ impl Mind {
                 self.finish(o, heard, &error_said(e), Then::Rest);
                 "setup failed"
             }
+        }
+    }
+}
+
+/// The sentence to say instead of asking a model, when a cap for every dot together is reached.
+/// When the caps cannot be read, nothing is asked either.
+async fn capped(rt: &Runtime, settings: &crate::settings::Settings) -> Option<String> {
+    match cap_hit(rt.store(), settings, chrono::Utc::now()).await {
+        Ok(hit) => hit,
+        Err(_) => {
+            tracing::warn!("open dot could not read the spending caps");
+            Some(WENT_WRONG.into())
         }
     }
 }
@@ -1440,15 +1551,22 @@ fn check_question(deed: &Deed) -> String {
     }
 }
 
-/// "<name>: <when it runs, and its first message>. Create it?"
+/// "<name>. <When it runs>. The rest is on screen. Create it?" Only the name (cleaned, at most
+/// 80 bytes) and the schedule are said: the first message, instructions, folder and access are
+/// on the proposal card, never partly spoken.
 fn create_question(p: &SetupProposal) -> String {
-    let mut line = format!("{}: it {}", spoken_name(&p.name), runs(p.schedule.as_ref()));
-    let first = clean(&p.first_message, FIRST_MESSAGE_BYTES);
-    let first = first.trim_end_matches(['.', '!', '?']);
-    if !first.is_empty() {
-        line.push_str(&format!(", and starts with: {first}"));
-    }
-    format!("{line}. Create it?")
+    let name = act::asked_text(&p.name, NAME_BYTES);
+    let name = name
+        .trim_end_matches(['.', '!', '?', ':', ';', ','])
+        .trim_end();
+    let name = if name.is_empty() { "The new dot" } else { name };
+    let runs = runs(p.schedule.as_ref());
+    let mut chars = runs.chars();
+    let runs = match chars.next() {
+        Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+        None => runs,
+    };
+    format!("{name}. {runs}. The rest is on screen. Create it?")
 }
 
 /// When a schedule runs, in a few words.

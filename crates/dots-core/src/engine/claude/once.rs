@@ -87,6 +87,19 @@ impl OnceRunner {
         model: &str,
         prompt: &str,
     ) -> Result<String, OnceFailure> {
+        self.run_with_usage(id, system_prompt, model, prompt)
+            .await
+            .map(|a| a.text)
+    }
+
+    /// `run`, with the usage the CLI reported for the request.
+    pub async fn run_with_usage(
+        &self,
+        id: &str,
+        system_prompt: &str,
+        model: &str,
+        prompt: &str,
+    ) -> Result<OnceAnswer, OnceFailure> {
         let Some(program) = self.program.as_deref() else {
             self.cancel(id);
             return Err(OnceFailure::NoCli);
@@ -117,7 +130,7 @@ impl OnceRunner {
                     prompt,
                     limit: self.limit,
                 };
-                let asked = ask_once(&once, &token).await;
+                let asked = ask_once_with_usage(&once, &token).await;
                 let _ = std::fs::remove_dir_all(&cwd);
                 asked
             }

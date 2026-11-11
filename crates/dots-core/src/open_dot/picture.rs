@@ -559,8 +559,8 @@ struct Target {
 /// What an approval's call does: the send-and-delete guard's summary when it gives one, else
 /// its command, file or address (an address without its credentials, query and fragment, also
 /// one inside a command). Cleaned first, so known secrets are scrubbed from the text as shown,
-/// then cut to `TARGET_BYTES`. When a secret shows only once white space is taken out, the
-/// whole target is "[secret]".
+/// then cut to `TARGET_BYTES`. When a secret shows only once white space is taken out (also
+/// beside one already scrubbed), the whole target is "[secret]".
 fn described(tool: &str, input: &Value) -> Target {
     let summary = crate::policy::guard::classify(tool, input)
         .map(|g| g.summary)
@@ -581,10 +581,10 @@ fn described(tool: &str, input: &Value) -> Target {
     let shown = plain_urls_in(&one_line(&raw, None));
     let redact = crate::vault::redact::global();
     let scrubbed = redact.scrub(&shown);
-    let hidden_secret = scrubbed == shown
-        && readings(&raw)[2..]
-            .iter()
-            .any(|r| redact.scrub(r) != r.as_str());
+    // A secret that shows only with white space taken out, also beside one already scrubbed.
+    let hidden_secret = readings(&scrubbed)[2..]
+        .iter()
+        .any(|r| redact.scrub(r) != r.as_str());
     let full = if hidden_secret {
         "[secret]".to_string()
     } else {
@@ -1192,6 +1192,21 @@ mod tests {
             target("mcp__x__call", &json!({"command": "ls -la"})),
             "ls -la"
         );
+    }
+
+    #[test]
+    fn a_split_secret_is_hidden_beside_a_shown_one() {
+        let shown = "open-dot-shown-secret-1a2b3c";
+        let split = "open-dot-split-secret-4d5e6f";
+        crate::vault::redact::global().add("SHOWN_TOKEN", shown);
+        crate::vault::redact::global().add("SPLIT_TOKEN", split);
+        let apart = format!("{}\u{A0}{}", &split[..9], &split[9..]);
+        let t = target(
+            "mcp__x__call",
+            &json!({"command": format!("use {shown} and {apart}")}),
+        );
+        assert_eq!(t, "[secret]");
+        assert!(!t.contains(&split[9..]), "{t}");
     }
 
     #[test]

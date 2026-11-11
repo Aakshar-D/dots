@@ -1075,8 +1075,7 @@ async fn hear(t: &Rt, words: &str) -> Vec<MindEvent> {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     t.rt.open_dot()
         .hear(&t.rt, words, &view("personal", "default"), &tx)
-        .await
-        .unwrap();
+        .await;
     let mut got = Vec::new();
     while let Ok(e) = rx.try_recv() {
         got.push(e);
@@ -1215,9 +1214,7 @@ async fn set_up_a_dot_by_voice_end_to_end() {
     assert_eq!(
         asked(&got),
         Some((
-            "Downloads digest: it runs every day at 09:00, and starts with: Tell me what is in \
-             Downloads. Create it?"
-                .into(),
+            "Downloads digest. Runs every day at 09:00. The rest is on screen. Create it?".into(),
             yes_no()
         ))
     );
@@ -1263,6 +1260,9 @@ async fn set_up_declined_creates_nothing() {
     assert_eq!(said(&got), "Okay, not created.");
     assert!(t.rt.store().list_dots().await.unwrap().is_empty());
     assert!(!t.rt.open_dot().pending());
+    // the mind's request and the setup agent's request it made are both counted
+    let used = t.rt.store().open_dot_usage_since(None).await.unwrap();
+    assert_eq!(used.map(|u| u.requests), Some(2));
     t.rt.shutdown();
 }
 

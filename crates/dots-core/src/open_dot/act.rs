@@ -105,6 +105,9 @@ const NO_DOT: &str = "I can't find that dot.";
 /// Said when the runtime no longer finds a dot that was in the picture.
 pub const DOT_GONE: &str = "I can't find that dot anymore.";
 const CANT_OPEN: &str = "I can't open that.";
+const DIDNT_CATCH: &str = "I didn't catch what to do with that. Say it another way?";
+/// Longest question of the model or the setup agent that is said, in bytes.
+pub const ASK_BYTES: usize = 300;
 /// Longest spoken approval target, question in the needs report, and error message, in bytes.
 const SPOKEN_TARGET_BYTES: usize = 120;
 const REPORT_QUESTION_BYTES: usize = 160;
@@ -138,7 +141,7 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
                 let choices: Vec<String> = line
                     .choices
                     .iter()
-                    .map(|c| clean(c, CHOICE_BYTES))
+                    .map(|c| unmarked(&clean(c, CHOICE_BYTES)))
                     .filter(|c| !c.is_empty())
                     .collect();
                 if !choices.is_empty() {
@@ -176,8 +179,10 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
             Some(line) => {
                 let dot = name(&line.dot_name);
                 let tool = tool_name(&line.tool);
-                let on_screen = too_long_to_say(line);
-                let question = if on_screen {
+                let on_screen = too_long_to_say(line) || no_target(line);
+                let question = if no_target(line) {
+                    format!("{dot} wants to use {tool}. It's on screen. Approve it?")
+                } else if on_screen {
                     format!("{dot} wants to run a long command with {tool}. It's on screen. Approve it?")
                 } else {
                     format!("{dot} wants to use {tool}{}. Approve it?", on(&line.target))
@@ -199,8 +204,10 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
             Some(line) => {
                 let dot = name(&line.dot_name);
                 let tool = tool_name(&line.tool);
-                let on_screen = too_long_to_say(line);
-                let question = if on_screen {
+                let on_screen = too_long_to_say(line) || no_target(line);
+                let question = if no_target(line) {
+                    format!("Deny {dot}'s {tool} request? It's on screen.")
+                } else if on_screen {
                     format!("Deny {dot}'s long {tool} request? It's on screen.")
                 } else {
                     format!("Deny {dot}'s request to use {tool}{}?", on(&line.target))
@@ -254,12 +261,36 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
         Wish::Create { description } => Step::Create {
             description: description.clone(),
         },
-        Wish::Ask { question, options } => Step::Ask {
-            question: question.clone(),
-            options: options.iter().take(MAX_OPTIONS).cloned().collect(),
-            then: AskFor::Model,
-        },
+        Wish::Ask { question, options } => {
+            // Written by the model: cleaned, without markdown marks, and capped before it is
+            // said or shown.
+            let question = asked_text(question, ASK_BYTES);
+            if question.is_empty() {
+                return Step::Say(DIDNT_CATCH.into());
+            }
+            Step::Ask {
+                question,
+                options: options
+                    .iter()
+                    .map(|o| asked_text(o, CHOICE_BYTES))
+                    .filter(|o| !o.is_empty())
+                    .take(MAX_OPTIONS)
+                    .collect(),
+                then: AskFor::Model,
+            }
+        }
     }
+}
+
+/// A question or option written by the model or the setup agent, as it is said and shown:
+/// hidden and control characters out, on one line, no markdown marks, at most `max` bytes.
+pub(crate) fn asked_text(s: &str, max: usize) -> String {
+    unmarked(&clean(s, max))
+}
+
+/// Whether an approval has no target to say: only its tool would be heard.
+fn no_target(line: &ApprovalLine) -> bool {
+    clean(&line.target, SPOKEN_TARGET_BYTES).is_empty()
 }
 
 /// "Which dot did you mean?" with the dots whose names are close to what the model wrote,
@@ -365,7 +396,7 @@ fn end_mark(s: &str) -> &'static str {
 }
 
 /// `s` without markdown marks for speech: `*`, backticks and `#` out, and `_` around a word.
-fn unmarked(s: &str) -> String {
+pub(crate) fn unmarked(s: &str) -> String {
     s.replace(['*', '`', '#'], "")
         .split(' ')
         .map(|w| w.trim_matches('_'))
@@ -842,15 +873,30 @@ mod tests {
             question,
             "Deny Research's request to use Bash on git push origin main?"
         );
-        // no target: only the tool
-        let Step::Confirm { question, .. } = plan(&Wish::Approve { a: "a2".into() }, &p, &v) else {
+        // no target to say: the approval is opened, and the question says so
+        let Step::Confirm {
+            question,
+            on_screen,
+            ..
+        } = plan(&Wish::Approve { a: "a2".into() }, &p, &v)
+        else {
             panic!("approve must confirm");
         };
-        assert_eq!(question, "Backup wants to use Glob. Approve it?");
-        let Step::Confirm { question, .. } = plan(&Wish::Deny { a: "a2".into() }, &p, &v) else {
+        assert_eq!(
+            question,
+            "Backup wants to use Glob. It's on screen. Approve it?"
+        );
+        assert!(on_screen);
+        let Step::Confirm {
+            question,
+            on_screen,
+            ..
+        } = plan(&Wish::Deny { a: "a2".into() }, &p, &v)
+        else {
             panic!("deny must confirm");
         };
-        assert_eq!(question, "Deny Backup's request to use Glob?");
+        assert_eq!(question, "Deny Backup's Glob request? It's on screen.");
+        assert!(on_screen);
         let Step::Confirm {
             question,
             deed,
@@ -976,7 +1022,7 @@ mod tests {
         };
         assert_eq!(
             question,
-            "Research wants to use github create issue. Approve it?"
+            "Research wants to use github create issue. It's on screen. Approve it?"
         );
         assert_eq!(
             needs_report(&p),
@@ -1000,6 +1046,13 @@ mod tests {
         assert_eq!(
             needs_report(&p),
             "One thing needs you. Research asks: Ship now or later? See 12 and this snake_case."
+        );
+        // nor in the choices read out
+        p.questions[0].text = "Which?".into();
+        p.questions[0].choices = vec!["**main**".into(), "`dev`".into()];
+        assert_eq!(
+            plan(&Wish::ReadQuestion { q: "q1".into() }, &p, &home()),
+            Step::Say("Research asks: Which? The choices are: main or dev.".into())
         );
     }
 
@@ -1284,6 +1337,35 @@ mod tests {
         assert_eq!(question, "Which one?");
         assert_eq!(got.len(), 6);
         assert_eq!(then, AskFor::Model);
+        // the model's question and options are cleaned and capped before they are said
+        let Step::Ask {
+            question, options, ..
+        } = plan(
+            &Wish::Ask {
+                question: format!("# **Pick**\u{202E} one\n{}", "y".repeat(400)),
+                options: vec!["`a`".into(), "\u{200B}".into(), "_b_ c".into()],
+            },
+            &p,
+            &v,
+        )
+        else {
+            panic!("an ask passes through");
+        };
+        assert!(question.starts_with("Pick one yyy"), "{question}");
+        assert!(question.len() <= 300);
+        assert_eq!(options, vec!["a", "b c"]);
+        // nothing left of the question: nothing is asked
+        assert!(matches!(
+            plan(
+                &Wish::Ask {
+                    question: "**\u{200B}**".into(),
+                    options: vec![]
+                },
+                &p,
+                &v
+            ),
+            Step::Say(_)
+        ));
         assert_eq!(
             plan(
                 &Wish::Create {

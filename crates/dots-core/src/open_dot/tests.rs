@@ -23,6 +23,10 @@ struct Scripted {
     fail: Option<OnceFailure>,
     /// Answers after its delay even when cancelled: a reply that lands late.
     stubborn: bool,
+    /// Waits for this before it answers (after its delay).
+    hold: Option<Arc<tokio::sync::Notify>>,
+    /// Panics instead of answering.
+    panics: bool,
 }
 
 /// A reply of `text`, streamed in pieces of 4 bytes or so, with usage.
@@ -50,6 +54,8 @@ fn says(text: &str) -> Scripted {
         delay: Duration::ZERO,
         fail: None,
         stubborn: false,
+        hold: None,
+        panics: false,
     }
 }
 
@@ -119,6 +125,12 @@ impl Thinker for Fake {
                 _ = tokio::time::sleep(s.delay) => {}
                 _ = cancel.cancelled() => return Err(OnceFailure::Cancelled),
             }
+        }
+        if let Some(hold) = &s.hold {
+            hold.notified().await;
+        }
+        if s.panics {
+            panic!("the thinker broke");
         }
         if cancel.is_cancelled() && !s.stubborn {
             return Err(OnceFailure::Cancelled);
@@ -206,7 +218,7 @@ impl T {
 
     async fn hear_in(&self, words: &str, view: &View) -> Vec<MindEvent> {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        self.mind.hear(&self.rt, words, view, &tx).await.unwrap();
+        self.mind.hear(&self.rt, words, view, &tx).await;
         drain(&mut rx)
     }
 
@@ -216,7 +228,7 @@ impl T {
 
     async fn pick(&self, index: usize) -> Vec<MindEvent> {
         let (tx, mut rx) = mpsc::unbounded_channel();
-        self.mind.pick(&self.rt, index, &home(), &tx).await.unwrap();
+        self.mind.pick(&self.rt, index, &home(), &tx).await;
         drain(&mut rx)
     }
 
@@ -787,9 +799,28 @@ async fn which_dot_then_still_confirms_a_run() {
 async fn filler_once_when_slow() {
     let mut t = T::start().await;
     t.mind.filler_after = Duration::from_millis(50);
-    t.fake
-        .push(slow(says("Here it is."), Duration::from_millis(400)));
-    let got = t.hear("how are things").await;
+    // the reply waits until the filler was sent: no race between the two timers
+    let hold = Arc::new(tokio::sync::Notify::new());
+    t.fake.push(Scripted {
+        hold: Some(hold.clone()),
+        ..says("Here it is.")
+    });
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let view = home();
+    let heard = t.mind.hear(&t.rt, "how are things", &view, &tx);
+    let mut got = Vec::new();
+    let release = async {
+        while let Some(e) = rx.recv().await {
+            let filler = matches!(e, MindEvent::Filler { .. });
+            got.push(e);
+            if filler {
+                hold.notify_one();
+                break;
+            }
+        }
+    };
+    tokio::join!(heard, release);
+    got.extend(drain(&mut rx));
     let fillers: Vec<usize> = got
         .iter()
         .enumerate()
@@ -927,9 +958,7 @@ async fn second_hear_cancels_the_first() {
         t.mind.hear(&t.rt, "second", &view, &tx2).await
     };
     let started = std::time::Instant::now();
-    let (a, b) = tokio::join!(first, second);
-    a.unwrap();
-    b.unwrap();
+    tokio::join!(first, second);
     assert!(started.elapsed() < Duration::from_secs(10));
     let one = drain(&mut rx1);
     let two = drain(&mut rx2);
@@ -1009,8 +1038,7 @@ async fn requests_end_with_the_runtime_and_with_cancel() {
         }
         t.mind.cancel();
     };
-    let (a, _) = tokio::join!(heard, cancel);
-    a.unwrap();
+    tokio::join!(heard, cancel);
     let got = drain(&mut rx);
     assert_eq!(said(&got), "");
     assert_eq!(ended(&got), Some(Then::Rest));
@@ -1023,8 +1051,7 @@ async fn requests_end_with_the_runtime_and_with_cancel() {
         t.rt.shutdown();
     };
     let started = std::time::Instant::now();
-    let (a, _) = tokio::join!(heard, stop);
-    a.unwrap();
+    tokio::join!(heard, stop);
     assert!(started.elapsed() < Duration::from_secs(10));
     assert!(lock(&t.fake.cancels)[1].is_cancelled());
 }
@@ -1376,35 +1403,205 @@ async fn a_bad_block_with_no_words_asks_again() {
     t.rt.shutdown();
 }
 
+#[tokio::test]
+async fn a_bad_block_after_words_says_it_was_not_done() {
+    let t = T::start().await;
+    t.fake.push(says("Running it.\nDO {\"act\":\"fly\"}"));
+    let got = t.hear("do the thing").await;
+    assert_eq!(
+        said(&got),
+        "Running it. I didn't catch what to do with that. Say it another way?"
+    );
+    assert_eq!(ended(&got), Some(Then::Rest));
+    t.rt.shutdown();
+}
+
 #[test]
-fn create_question_says_when_and_first_message() {
+fn create_question_says_only_the_name_and_when() {
     use crate::library::Uses;
     use crate::policy::Preset;
     let p = SetupProposal {
-        name: "Downloads digest".into(),
+        name: "Downloads **digest**\n".into(),
         instructions: "1. List.".into(),
         folder: None,
         schedule: Some(
             serde_json::from_value(json!({"rule": {"kind": "daily", "time": "09:00"}})).unwrap(),
         ),
-        preset: Preset::ReadOnly,
+        preset: Preset::Trusted,
         extras: vec![],
         uses: Uses::default(),
-        first_message: "Tell me what is in Downloads.".into(),
+        first_message: format!("Tell me what is in Downloads. {}", "And more. ".repeat(40)),
         notes: String::new(),
     };
+    // the first message, instructions and access are on the card, never partly spoken
     assert_eq!(
         create_question(&p),
-        "Downloads digest: it runs every day at 09:00, and starts with: Tell me what is in \
-         Downloads. Create it?"
+        "Downloads digest. Runs every day at 09:00. The rest is on screen. Create it?"
     );
     let none = SetupProposal {
+        name: "N".repeat(200),
         schedule: None,
         first_message: String::new(),
         ..p
     };
     assert_eq!(
         create_question(&none),
-        "Downloads digest: it runs when you ask. Create it?"
+        format!(
+            "{}. Runs when you ask. The rest is on screen. Create it?",
+            "N".repeat(80)
+        )
     );
+}
+
+#[tokio::test]
+async fn a_panicking_thinker_still_ends_the_turn() {
+    use futures_util::FutureExt;
+    let t = T::start().await;
+    t.fake.push(Scripted {
+        panics: true,
+        ..says("Never.")
+    });
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let view = home();
+    let turn = std::panic::AssertUnwindSafe(t.mind.hear(&t.rt, "hello", &view, &tx));
+    assert!(turn.catch_unwind().await.is_err());
+    let got = drain(&mut rx);
+    assert_eq!(
+        got,
+        vec![MindEvent::Thinking, MindEvent::SayEnd { then: Then::Rest }]
+    );
+    // the mind goes on
+    t.fake.push(says("Hello."));
+    assert_eq!(said(&t.hear("hello").await), "Hello.");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn every_turn_ends_once() {
+    let t = T::start().await;
+    let dot = t.dot("Research").await;
+    t.approval(&dot, "ls -la").await;
+    let turns: Vec<(&str, Option<Scripted>)> = vec![
+        ("how are things", Some(says("Fine."))),
+        ("approve the research one", Some(approve_a1())),
+        ("okay", None),
+        ("yes", None),
+        ("what", None),
+        ("stop", None),
+        ("never mind", None),
+        ("hello", Some(fails(OnceFailure::TimedOut))),
+        ("do the thing", Some(says("Hm.\nDO {\"act\":\"fly\"}"))),
+        ("", None),
+        ("yes", None),
+    ];
+    for (words, reply) in turns {
+        if let Some(r) = reply {
+            t.fake.push(r);
+        }
+        let got = t.hear(words).await;
+        let ends = got
+            .iter()
+            .filter(|e| matches!(e, MindEvent::SayEnd { .. }))
+            .count();
+        assert_eq!(ends, 1, "{words}: {got:?}");
+        assert!(
+            matches!(got.last(), Some(MindEvent::SayEnd { .. })),
+            "{words}: {got:?}"
+        );
+    }
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn nothing_heard_asks_nothing() {
+    let t = T::start().await;
+    asking_to_approve(&t).await;
+    let calls = t.fake.calls();
+    let got = t.hear("  ").await;
+    assert_eq!(
+        got,
+        vec![MindEvent::Cleared, MindEvent::SayEnd { then: Then::Rest }]
+    );
+    assert_eq!(t.fake.calls(), calls);
+    assert!(!t.mind.pending());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn repeat_says_only_the_question_when_it_came_alone() {
+    let t = T::start().await;
+    t.dot("Research").await;
+    t.fake.push(says("Two dots are idle."));
+    t.hear("how are things").await;
+    let dot = t.dot("Backup").await;
+    t.approval(&dot, "ls -la").await;
+    // asked with no words of the model
+    t.fake.push(says("DO {\"act\":\"approve\",\"a\":\"a1\"}"));
+    t.hear("approve the backup one").await;
+    let got = t.hear("say that again").await;
+    assert_eq!(said(&got), "");
+    assert_eq!(
+        asks(&got).map(|a| a.0),
+        Some("Backup wants to use Bash on ls -la. Approve it?".into())
+    );
+    assert!(t.mind.pending());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn model_and_setup_questions_are_cleaned() {
+    let t = T::start().await;
+    let long = "x".repeat(400);
+    t.fake.push(says(&format!(
+        "DO {{\"act\":\"ask\",\"question\":\"**Which** `one`?\\u200b {long}\",\"options\":[\"*A*\",\"B\\u202e\",\"`#`\"]}}"
+    )));
+    let got = t.hear("pick something").await;
+    let (question, options) = asks(&got).unwrap();
+    assert!(question.starts_with("Which one? xxx"), "{question}");
+    assert!(question.len() <= 300, "{}", question.len());
+    assert_eq!(options, vec!["A".to_string(), "B".to_string()]);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn markdown_is_never_said() {
+    let t = T::start().await;
+    t.fake
+        .push(says("**Two** things `need` you. ## Done\n- the *backup*"));
+    let got = t.hear("how are things").await;
+    let words = said(&got);
+    for mark in ["*", "`", "#"] {
+        assert!(!words.contains(mark), "{mark} in {words:?}");
+    }
+    assert!(words.starts_with("Two things need you."), "{words}");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn setup_rounds_stop_at_a_cap() {
+    let t = T::start().await;
+    let settings = Settings {
+        spend_daily_usd: Some(0.01),
+        ..t.rt.settings().await
+    };
+    t.rt.update_settings(settings).await.unwrap();
+    // the model's own request reaches the cap; the setup agent is then not asked
+    t.fake.push(Scripted {
+        usage: Some(OnceUsage {
+            tokens_in: 1,
+            tokens_out: 1,
+            cache_read: 0,
+            cost_usd: Some(1.0),
+        }),
+        ..says("Let's make it.\nDO {\"act\":\"create\",\"description\":\"digest my downloads\"}")
+    });
+    let got = t.hear("make a dot that digests my downloads").await;
+    assert_eq!(
+        said(&got),
+        "Let's make it. Let me set that up. You've reached today's spending limit, so I can't \
+         think right now."
+    );
+    assert_eq!(ended(&got), Some(Then::Rest));
+    assert!(!t.mind.pending());
+    t.rt.shutdown();
 }

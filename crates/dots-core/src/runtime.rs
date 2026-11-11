@@ -1843,6 +1843,22 @@ impl Runtime {
         self.setup_drafts.ask(id, &ctx, &req).await
     }
 
+    /// `setup_ask`, with the usage the CLI reported for the request (`None` when no request
+    /// was made or none was reported). Open Dot asks through this, so its setup rounds count.
+    pub async fn setup_ask_with_usage(
+        &self,
+        id: &str,
+        req: SetupRequest,
+    ) -> (
+        Result<SetupAnswer>,
+        Option<crate::engine::claude::once::OnceUsage>,
+    ) {
+        match self.setup_context().await {
+            Ok(ctx) => self.setup_drafts.ask_with_usage(id, &ctx, &req).await,
+            Err(e) => (Err(e), None),
+        }
+    }
+
     /// Cancels the setup's request, if one is being answered (`setup_cancel`).
     pub fn setup_cancel(&self, id: &str) {
         self.setup_drafts.cancel(id);
