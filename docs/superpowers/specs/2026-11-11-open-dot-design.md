@@ -1,7 +1,7 @@
 # Open Dot, the voice assistant: design
 
 - Date: 2026-11-11
-- Status: step 1 (ears and voice) is built; steps 2 to 6 are not
+- Status: steps 1 (ears and voice) and 2 (the mind) are built; steps 3 to 6 are not
 - Builds on: `2026-10-08-dots-design.md` (dots, runs), `2026-11-03-setup-agent-design.md` (describe a task, get a dot), `2026-10-22-needs-you-design.md` (approvals and questions), `2026-10-27-conversational-chat-design.md` (chat topics), `2026-11-04-topic-tools-design.md` (topics), `2026-10-22-deep-teal-design.md` (colours).
 
 ## 1. Intent
@@ -323,3 +323,114 @@ The crate has 163 unit tests, all passing, and 7 tests that use the real models 
 - Locally built installers link an unverified download of the speech library (its own build script fetches it with no hash check); CI and release builds verify it through `tools/voice`. Build installers in CI, or set `SHERPA_ONNX_ARCHIVE_DIR` to the tool's verified archive before building one locally.
 - A first CI run on Windows x64 and on Mac, where the crate has never been built.
 - Steps 2 to 6 of section 8. None is started, and nothing of this is wired into the app yet.
+
+### Step 2: the mind (2026-11-12)
+
+**What exists now.** The module `crates/dots-core/src/open_dot/` is part of `dots-core`. It makes no run and no dot; it takes the person's words, one turn at a time, and gives back events for the stage to say and show. Nothing is wired to the app, the voice crate or the UI yet (step 3). Its files:
+
+- `quick`: the no-model matcher for stop, cancel, repeat, yes, no, and picking an option by number, position or name. It also has `firm_yes` (the strict yes a confirmation needs) and the list of common words that can never name a dot.
+- `reply`: reads a model reply into the words to say and at most one wish (ten kinds: needs, read a question, answer, approve, deny, create, send, run, open, ask). It also has `SpeechGate`, which lets words stream out while holding back the `DO {...}` line, so the block is never spoken. Spoken words are cut at 600 bytes on a sentence end.
+- `picture`: the picture of now. It lists the workspace's dots (at most 40), the approvals (10) and the questions (10), with the screen and topic being viewed, and gives each a handle (`d1`, `a1`, `q1`). Private approvals are counted, not listed. Targets are cleaned, scrubbed of vault values and cut at 120 bytes.
+- `prompt`: the instructions (with three example replies) and the prompt: the picture between a header and "End of picture.", the last 6 turns, and the person's words.
+- `think`: the `Thinker` trait and `CliThinker`, which asks the Claude CLI for one streamed answer in a fresh folder that it removes afterwards (default model `haiku`, 45 s limit), and `cap_hit`, which checks the global spending caps. It logs only how long a request took and how it ended.
+- `act`: turns a wish into a checked step (say, do, ask, confirm, create), builds every confirmation question from the real record, and carries out deeds through the runtime (`decide_approval`, `run_now`, `reply`, `chat`). Its spoken sentences are mostly fixed.
+- `mod`: `Mind`, which holds what waits between turns (a confirmation, a question with options, a setup in progress, a proposal), the turn in flight, and the events (`Thinking, Filler, Say, SayEnd, Ask, Card, Open, Cleared`). Calls: `hear`, `pick` (a click), `lapse`, `cancel`, `reset`, `pending`.
+- `tests`: a scripted thinker and the mind's tests, run against a real runtime built from a temporary config (the integration tests are in `crates/dots-core/tests/open_dot_test.rs`).
+
+Also changed outside the module: a store table `open_dot_usage` (migration `0046_open_dot_usage.sql`: id, at, model, tokens in, tokens out, cache read, cost) with `store/open_dot.rs`; a setting `open_dot_model` (default `haiku`, must not be empty); `UsageSummary` gains `open_dot` (the app's contract fixture was regenerated); `Runtime` owns the `Mind` (`Runtime::open_dot()`); the CLI one-shot path in `once.rs` can stream partial text and report usage (its command line and limits are as before); `setup_ask_with_usage` and `SETUP_MODEL` let the mind count a setup round; and the fake CLI test binary can answer by what a prompt holds.
+
+**Tests (the closing gate on 2026-11-12, branch `feat/open-dot`, ARM64 Windows, debug build).** `cargo fmt --all --check` and `cargo clippy --workspace --all-targets --locked -- -D warnings` are clean. `dots-core` has 260 unit tests, all passing (113 of them in `open_dot`; the rest were there before). `tests/open_dot_test.rs` has 36 tests; they passed in 8 runs in a row on a quiet machine (12 to 18 s each, 36 of 36 every time), so the 15 s `wait_status` timeouts seen twice in 15 runs while the machine was loaded did not come back. The whole core suite (`cargo test -p dots-core --locked --no-fail-fast -- --skip preview_schedule`) ran 3100 tests passing and 1 failing: `context_rules_test::the_store_keeps_fills_requests_and_records` (left 36000, right 30000 at line 429), a test from an earlier project that this branch did not touch; run alone it passed 3 of 3, so it is a flake whose cause was not found. A first whole-suite run failed `claude_engine_test::a_finished_run_leaves_no_process_behind` while the gate's own voice and app tests were running beside it; the rerun alone passed. `dots-voice` has 163 tests passing (7 more ignored without the models), `dots-app` 202, `node --test tools/release/release.test.mjs` 11 and `node --test tools/voice/sherpa-lib.test.mjs` 10, and the UI has a clean type check and 1708 tests passing. The `ui/dist` build was already present. Not run: `preview_schedule` tests (skipped as the gate says).
+
+**How a turn goes.**
+
+1. The words arrive (`hear`) or an option is clicked (`pick`). A newer turn cancels the one in flight. After 10 minutes idle, the turns and what waits are forgotten. A waiting step older than 60 s, or made in another account or workspace, is dropped first.
+2. Stop, cancel, repeat, yes, no and picks are answered without a model.
+3. Otherwise the global spending caps are checked. At a cap it says so and asks no model.
+4. Dots takes the picture, builds the prompt and asks the model through the CLI with no tools. The first sentences stream out through the gate. If nothing has been said after 1.5 s it says "One moment." once. The request is recorded in `open_dot_usage` when the CLI reports usage.
+5. The reply is read into words and at most one wish. Dots code checks the wish against the picture: a handle must be one the model was given, and anything else becomes a spoken question.
+6. The step is said, shown, asked or done. Every turn ends with exactly one `SayEnd`, even when it fails.
+
+**The confirmation rules as built.**
+
+- Always asked first: approving, denying, creating a dot and running a dot now. The question is built from the record (dot, tool, target), never from the model's words. A long or cut command is not spoken at all: it says "a long command", opens the approval on screen, and asks. A private approval cannot be decided by voice; it is opened on screen.
+- A firm yes is one of: yes, yeah, yep, yup, yes please, yes do it, do it, go ahead, go for it, please do, approve, approve it, confirm, absolutely. "Okay", "ok", "sure", "right" and "correct" are not firm. A weak one is answered "I need a clear yes for that. Say yes, or no." and the step stays; a second weak one drops it ("Okay, I won't.").
+- A click on Yes is a yes, a click on No is a no. A spoken position word ("one", "the first") never counts as yes or no on a confirmation. A spoken no ends the step. Anything else drops the step and the words go to the model as a new turn.
+- A step waits 60 s (`PENDING_LIMIT`), then is dropped. Going quiet, a newer turn, `lapse` and `reset` all drop it.
+- At the moment of yes, Dots takes a fresh picture and checks that the record is still there (approval still pending and not private, dot still in view, question still waiting). If not, it says "That one is already handled." or "I can't find that dot anymore." and does nothing. A second yes or click for a step a yes already took does nothing. A cancelled or replaced turn never carries out a deed.
+- Send and answer go straight through (said after) only when the person named the dot in their own words (a word of its name, three letters or more, not a common word, and in no other dot's name), or chose it from Dots' own "Which dot?" options, or it is the dot on screen, or (answering) the question was read aloud in the turn before. Otherwise Dots asks "Send to X: ...?" or "Answer X with: ...?" first. A click on an option the model wrote names nothing. If the person was unsure of the words, it reads them back ("I heard: ... Send that?") whatever the target. Text over 400 bytes is refused as too long to send by voice.
+- A question the model asks (with options) is answered back to the model; it can never pass a confirmation.
+
+**What the model is and is not given.**
+
+- It gets handles, never ids. It can only name a handle; Dots maps it back and refuses one it was not shown.
+- Private approvals are only counted ("one private approval needs you"); their tool and target are not in the picture, are not said, and open on screen.
+- Targets are cleaned (hidden characters out, one line, 120 bytes), vault secrets are replaced (`[secret:NAME]`, or `[secret]` when split), URL credentials, queries and fragments are removed, and private paths and secrets are looked for in the raw, cleaned and squeezed forms of a command and in any field of any tool (`command`, `file_path`, `url`).
+- Long commands are not spoken (see above). Questions from dots are given as the Inbox shows them (cut at 400 bytes). Snoozed and done questions are neither listed nor counted.
+- Errors said aloud lose paths, ids and vault values and are cut at 160 bytes. Markdown marks are never said.
+- No tools, no MCP servers, no settings files: the request runs as the one-shot path does, in a folder of its own. Nothing heard, said or pictured is logged.
+
+**Differences from sections 3.5 and 5.2, and why.**
+
+- Usage is a new table `open_dot_usage`, not runs: Open Dot makes no run and usage lived only on runs. A dot's own caps never hold Open Dot; the caps for every dot together do.
+- The model gets handles (`d1`, `a1`, `q1`), not ids, so it cannot name a record it was not shown or invent one.
+- Reply format: plain words, then at most one final line `DO {json}`. Everything before it is speech. A malformed block is not run; it says "I didn't catch what to do with that. Say it another way?".
+- Send and answer are sometimes confirmed, against "do, then say" in 3.5: a prompt-injected question or dot name could otherwise make Dots send messages in the person's name. They go straight only when the person's words name the target, it was chosen, or it is on screen (see above). Overturnable.
+- "Okay", "sure", "right" and "correct" are not a yes for a confirmation (they are for a question the model asked), so that an acknowledgement, or noise heard as a word, cannot approve, run or create. The cost is that the person has to say "yes" or "do it".
+- Spoken position words never choose Yes or No on a confirmation; only a click does.
+- Section 5.2 says a confirmation is a yes "caught by the quick matcher". It is the strict matcher `firm_yes`, plus a click.
+- The creation question says only the name and when it runs; the first message, instructions, folder and access are on the card.
+- Spend totals now include Open Dot: the day, month and cap totals add `open_dot_usage`, so the per-dot rows in the Usage tab no longer add up to the total.
+- Every deed a yes passes is re-checked against a fresh picture at the moment of yes (not in the spec).
+- Pending steps expire after 60 s, and a lapse cancels the turn in flight (not in the spec).
+- Setup-agent requests made for Open Dot are cap-checked and their usage is recorded.
+- The model's own question text is sent as the Inbox shows it, written by the dot's own model: parity with the app. A question that quotes private data would reach the Open Dot request.
+- The picture cuts to 40 dots, 10 approvals and 10 questions inside `take`, so a handle the model never saw cannot resolve.
+- A refused send says why: "still working" only when the thread is active (the runtime's own constant); any other conflict is said as the runtime's own sentence; a missing dot says "I can't find that dot anymore."
+- The kept process was not built (below), so each turn starts a fresh CLI process and sends the last turns again.
+
+**The kept process: measured, not built.** Measured on 2026-11-12 with `claude` 2.1.322 and `haiku` (`scratchpad\kept-process\results.md`; ten fresh runs, ten kept turns):
+
+- First text, fresh process: 1594 ms median (the system line alone takes about 480 ms). Result line: 1828 ms.
+- First text, kept process, turns 2 to 10: 1114 ms median. The gap is 480 ms, under the plan's 0.7 s bar. (Paired by prompt it was 683 ms, but the fresh answers were longer; the median result gap was 710 ms.)
+- Every kept turn ended with its own result line (10 of 10, also two sent back to back and one after idle), with per-turn usage and memory of earlier turns.
+- A kill was noticed within about 25 ms of the kill returning (about 275 to 307 ms including `taskkill`). It survived 10 minutes idle and answered in 1034 ms. A crash with no kill was not tested.
+- About 250 MB resident (claude plus conhost), growing about 0.5 MB a turn.
+- Ruling: not built, because the gap is under the bar and fresh is already 1.6 s to the first words. About half a second a turn is the cost if that is wrong. To be looked at again in step 6 (timing polish), with real prompts.
+
+**Rulings made while building (the ledger, in order).**
+
+- Ruling: the plan was not shown to the user before execution (standing preference to build with stated defaults; plan committed 3e0dd788). Cost if wrong: rework of step 2.
+- Ruling: tasks 1 and 2 went to one builder in one dispatch (two commits), reviewed together, both pure with no shared state with the runtime. Cost if wrong: one larger review.
+- Ruling: `Picture` must cap in `take()`, so a handle the model never saw cannot resolve (ids must be ones from the picture it was given). Cost if wrong: none, stricter.
+- Ruling: question text is sent to the model as the Inbox shows it (written by the dot's own model), for parity with the app. Cost if wrong: a question quoting private data reaches the Open Dot model request.
+- Ruling: a send conflict says "still working" only when the thread is active; other conflicts speak the runtime's own sentence; not found on run or send says "I can't find that dot anymore." The brief's blanket mapping misled.
+- Ruling: send and answer run without a yes only when the person's words name the target dot, or it is on screen, or (answer) the question was just read or is the only one; otherwise Dots asks "Send to X: ...?". The spec says "do, then say", but a prompt-injected question could otherwise send messages in the person's name. Cost if wrong: one extra yes on some sends. Overturnable. (Tightened below.)
+- Ruling: every pending deed is re-checked against a fresh picture at the moment of yes; a view change drops it.
+- Ruling: spoken position words never count as yes or no on a confirmation; only a click maps an index to yes or no.
+- Ruling: the confirm-tier yes is a firm set (no "okay", "right", "sure"), so a forgotten confirmation is not passed by an acknowledgement. Cost: the person must say "yes", "do it" or "approve".
+- Ruling: pending steps expire in core 60 s after being asked; a lapse cancels the turn in flight.
+- Ruling: the send and answer rule was tightened: the "only question waiting" exception is removed; a name match needs a word unique to that dot and not a stop word; a click on a model-written option is not the person's words. The on-screen dot exception stays.
+- Ruling: setup-agent requests made for Open Dot are cap-checked; their usage is recorded (done through `setup_ask_with_usage`; it was to be deferred and written here only if a small change to setup did not allow it).
+- Ruling: the kept process is not built (see above).
+
+**Known issues and deferred.**
+
+- Important, found in the last re-review and not fixed: on a Deny confirmation, "approve" and "approve it" pass as a firm yes (they would deny), and "deny" counts as a no. The fix round to dispatch: per-kind firm words (on Deny, "approve" is anything else and "deny" and "deny it" are firm; on Approve, "deny" is a no).
+- Also from that re-review, not fixed: renew the wait on a repeat (at most twice); an expired click should say the nothing-waiting line and `pending()` should check the limit; per-kind firm phrases ("create it", "send it", "run it", "yes yes", "yes go ahead"); a doc line; and tests that wait on a notify, not on sleeps (the "late 300 ms" pattern and the idle test).
+- Minor (deferred): `SpeechGate` text grows after the cap; there is no `debug_assert` on the released boundary.
+- Minor (deferred): label the "today" spend total in the UI as including Open Dot (the per-dot rows no longer sum to it).
+- Minor (deferred): the usage of cancelled and timed-out requests is not counted (M-16): `OnceFailure` carries no usage, and counting it changes the CLI runner's contract.
+- Minor (deferred): underscores are not stripped from speech (a word may be cut between deltas).
+- Minor (deferred): three fixes have no test: a cancelled setup round ends and loses its answers (M-11), a cap read error fails closed with "Something went wrong. Try again." (M-13), and a setup round says "One moment." once when slow (M-17). By reading only.
+- A secret spoken from an error as `[secret:NAME]` is said as written; setup-agent errors other than the CLI failure form are only cleaned by `plain_error`; the yes-check uses the capped picture, so a record that moved past a cap reads as handled or gone; a run conflict still says "still working on that" for any run conflict.
+- The picture calls `Runtime::inbox()` each turn (it builds the whole Inbox) and reads the store twice per in-view approval; fine at voice-turn rates. A dot whose only waiting item is a question shows "idle, needs you 1". There is no test with an org dot.
+- A stray fence line before an unclosed `DO {` line would be spoken as "backtick backtick backtick" (rare).
+- `open_dot_test` timed out under load in the builder's runs (2 of 15, `wait_status` 15 s at `tests/common/mod.rs:142`); on a quiet machine it passed 8 of 8 (see the Tests paragraph above).
+
+**Still owed before this can ship.**
+
+- The hand check by voice, once the app is wired (step 3): confirmations by voice and by click, a weak "okay", a send that asks and one that goes straight, a cap, and the filler line.
+- A CI run on Windows x64 and on Mac (`cargo test -p dots-core` and the rest; nothing of step 2 has run there).
+- Label the spend total in the UI as including Open Dot (step 3 or 4).
+- The fix round for the Deny wording above.
+- Steps 3 to 6 of section 8. Nothing of this is wired into the app yet.
