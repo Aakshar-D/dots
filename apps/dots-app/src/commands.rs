@@ -610,6 +610,31 @@ pub async fn dot_access(state: State<'_, AppState>, dot_id: String) -> Res<DotAc
     Ok(state.rt()?.dot_access(&dot_id).await?)
 }
 
+/// The policy ceiling of the dot: the highest preset this PC's dots may use in its workspace,
+/// why each preset or its own policy may not be used, and the text its runs are held with.
+#[tauri::command]
+pub async fn dot_ceiling(
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<dots_core::accounts::PolicyCeiling> {
+    Ok(state.rt()?.dot_ceiling(&dot_id).await?)
+}
+
+/// The policy ceiling of a workspace (`orgId` null: Personal) for a dot not yet made, with
+/// `policy` judged when given.
+#[tauri::command]
+pub async fn policy_ceiling(
+    state: State<'_, AppState>,
+    org_id: Option<String>,
+    workspace_id: String,
+    policy: Option<dots_core::policy::Policy>,
+) -> Res<dots_core::accounts::PolicyCeiling> {
+    Ok(state
+        .rt()?
+        .policy_ceiling(org_id.as_deref(), &workspace_id, policy.as_ref())
+        .await?)
+}
+
 /// The workspaces of `scope` (`personal`, or an org's id) this PC may see.
 #[tauri::command]
 pub async fn workspace_list(state: State<'_, AppState>, scope: String) -> Res<Vec<WorkspaceView>> {
@@ -1219,6 +1244,16 @@ pub async fn approval_guard(
     Ok(state.rt()?.approval_guard(&id).await?)
 }
 
+/// What the guardrails of the dot's workspace find in the call of this approval: what it hits,
+/// and whether this PC needs an Admin to approve it. Null when it hits none.
+#[tauri::command]
+pub async fn approval_guardrail(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<Option<dots_core::accounts::ApprovalGuardrail>> {
+    Ok(state.rt()?.approval_guardrail(&id).await?)
+}
+
 #[tauri::command]
 pub async fn decide_run_approvals(
     state: State<'_, AppState>,
@@ -1819,6 +1854,42 @@ pub async fn member_edit(
     edit: RosterEdit,
 ) -> Res<EditOutcome> {
     Ok(state.rt()?.member_edit(&org_id, base_seq, edit).await?)
+}
+
+/// The guardrails of a workspace of the org for the Guardrails tab, with what this PC may do
+/// to them (guardrails spec §7).
+#[tauri::command]
+pub async fn workspace_guardrails(
+    state: State<'_, AppState>,
+    org_id: String,
+    workspace_id: String,
+) -> Res<dots_core::vault::org::GuardrailsView> {
+    Ok(state
+        .rt()?
+        .workspace_guardrails(&org_id, &workspace_id)
+        .await?)
+}
+
+/// Sets a workspace's guardrails, or removes them with `null`: signed and published like any
+/// member-list edit, or kept as a draft.
+#[tauri::command]
+pub async fn workspace_guardrails_set(
+    state: State<'_, AppState>,
+    org_id: String,
+    base_seq: u64,
+    workspace_id: String,
+    guardrails: Option<dots_core::accounts::Guardrails>,
+) -> Res<EditOutcome> {
+    Ok(state
+        .rt()?
+        .workspace_guardrails_set(&org_id, base_seq, &workspace_id, guardrails)
+        .await?)
+}
+
+/// What each role can do: the permission table as the core checks it.
+#[tauri::command]
+pub async fn role_matrix() -> Res<Vec<dots_core::accounts::RoleRow>> {
+    Ok(dots_core::accounts::role_matrix())
 }
 
 /// Publishes the org's waiting signed member list again.

@@ -669,6 +669,20 @@
     "kind": "send",
     "summary": "push commits with git (git push origin main)"
   },
+  "ApprovalGuardrail": [
+    {
+      "needs_admin": true,
+      "text": "This needs an Admin: pushing to main or master is protected in the Platform workspace.",
+      "what": "pushing to main or master",
+      "workspace_name": "Platform"
+    },
+    {
+      "needs_admin": false,
+      "text": "The file migrations/0001.sql is protected in the Platform workspace, so it always asks.",
+      "what": "the file migrations/0001.sql",
+      "workspace_name": "Platform"
+    }
+  ],
   "AuditView": [
     {
       "endpoint": "https://audit.acme.example/dots",
@@ -1035,6 +1049,8 @@
     "setup_apply",
     "dot_move",
     "dot_access",
+    "dot_ceiling",
+    "policy_ceiling",
     "workspace_list",
     "personal_workspace_add",
     "personal_workspace_rename",
@@ -1097,6 +1113,7 @@
     "approval_rule_candidates",
     "approval_touches_private",
     "approval_guard",
+    "approval_guardrail",
     "decide_run_approvals",
     "inbox",
     "inbox_count",
@@ -1161,6 +1178,9 @@
     "invite_revoke",
     "request_inspect",
     "member_edit",
+    "workspace_guardrails",
+    "workspace_guardrails_set",
+    "role_matrix",
     "roster_draft_retry",
     "roster_draft_discard",
     "org_request_access",
@@ -2794,6 +2814,14 @@
       "cancelled",
       "skipped"
     ],
+    "GitAction": [
+      "push_main",
+      "force_push",
+      "delete_branch",
+      "tags",
+      "merge_pr",
+      "release"
+    ],
     "GithubEvent": [
       "issue",
       "pull_request",
@@ -2813,6 +2841,10 @@
       "policy_invalid",
       "org_removed",
       "not_member"
+    ],
+    "GuardRole": [
+      "member",
+      "admin"
     ],
     "HistoryState": [
       "local",
@@ -2880,6 +2912,20 @@
       "added",
       "changes_asked",
       "discarded"
+    ],
+    "RolePermission": [
+      "view",
+      "edit_dots",
+      "run_dots",
+      "answer_approvals",
+      "grant_entries",
+      "add_mcp",
+      "create_api_keys",
+      "edit_goals",
+      "manage_members",
+      "manage_workspaces",
+      "manage_guardrails",
+      "sign_roster"
     ],
     "RunStatus": [
       "queued",
@@ -3300,6 +3346,213 @@
         "state": "building",
         "truncated": false
       }
+    }
+  ],
+  "Guardrails": {
+    "member_max_preset": "read-only",
+    "protected_commands": [
+      "make deploy"
+    ],
+    "protected_git": [
+      "force_push"
+    ],
+    "protected_paths": [
+      "db/**"
+    ]
+  },
+  "GuardrailsView": [
+    {
+      "applies_as": "admin",
+      "compat_note": "Dots 0.4.0 and older can't read a member list with guardrails: they keep the last list they accepted, or show the account as Waiting. Update every Dots in the account first.",
+      "defaults": {
+        "member_max_preset": "sandboxed",
+        "protected_commands": [
+          "rm -rf",
+          "terraform apply",
+          "terraform destroy",
+          "kubectl apply",
+          "kubectl delete",
+          "helm install",
+          "helm upgrade",
+          "helm uninstall",
+          "docker push",
+          "npm publish",
+          "cargo publish",
+          "vercel --prod",
+          "netlify deploy",
+          "fly deploy",
+          "wrangler deploy",
+          "firebase deploy"
+        ],
+        "protected_git": [
+          "push_main",
+          "force_push",
+          "delete_branch",
+          "tags",
+          "merge_pr",
+          "release"
+        ],
+        "protected_paths": [
+          ".github/**",
+          "**/migrations/**",
+          "infra/**",
+          "**/*.env*",
+          "**/Cargo.lock",
+          "**/package-lock.json",
+          "**/bun.lock",
+          "**/yarn.lock",
+          "**/pnpm-lock.yaml"
+        ]
+      },
+      "edit_refusal": null,
+      "git_actions": [
+        {
+          "action": "push_main",
+          "label": "pushing to main or master"
+        },
+        {
+          "action": "force_push",
+          "label": "force pushing"
+        },
+        {
+          "action": "delete_branch",
+          "label": "deleting a branch"
+        },
+        {
+          "action": "tags",
+          "label": "making or pushing tags"
+        },
+        {
+          "action": "merge_pr",
+          "label": "merging a pull request"
+        },
+        {
+          "action": "release",
+          "label": "publishing a GitHub release"
+        }
+      ],
+      "guardrails": {
+        "member_max_preset": "sandboxed",
+        "protected_commands": [
+          "rm -rf",
+          "terraform apply",
+          "terraform destroy",
+          "kubectl apply",
+          "kubectl delete",
+          "helm install",
+          "helm upgrade",
+          "helm uninstall",
+          "docker push",
+          "npm publish",
+          "cargo publish",
+          "vercel --prod",
+          "netlify deploy",
+          "fly deploy",
+          "wrangler deploy",
+          "firebase deploy"
+        ],
+        "protected_git": [
+          "push_main",
+          "force_push",
+          "delete_branch",
+          "tags",
+          "merge_pr",
+          "release"
+        ],
+        "protected_paths": [
+          ".github/**",
+          "**/migrations/**",
+          "infra/**",
+          "**/*.env*",
+          "**/Cargo.lock",
+          "**/package-lock.json",
+          "**/bun.lock",
+          "**/yarn.lock",
+          "**/pnpm-lock.yaml"
+        ]
+      },
+      "org_id": "acme-eng",
+      "seq": 7,
+      "sign_blocker": null,
+      "workspace_id": "platform",
+      "workspace_name": "Platform"
+    },
+    {
+      "applies_as": null,
+      "compat_note": "Dots 0.4.0 and older can't read a member list with guardrails: they keep the last list they accepted, or show the account as Waiting. Update every Dots in the account first.",
+      "defaults": {
+        "member_max_preset": "sandboxed",
+        "protected_commands": [
+          "rm -rf",
+          "terraform apply",
+          "terraform destroy",
+          "kubectl apply",
+          "kubectl delete",
+          "helm install",
+          "helm upgrade",
+          "helm uninstall",
+          "docker push",
+          "npm publish",
+          "cargo publish",
+          "vercel --prod",
+          "netlify deploy",
+          "fly deploy",
+          "wrangler deploy",
+          "firebase deploy"
+        ],
+        "protected_git": [
+          "push_main",
+          "force_push",
+          "delete_branch",
+          "tags",
+          "merge_pr",
+          "release"
+        ],
+        "protected_paths": [
+          ".github/**",
+          "**/migrations/**",
+          "infra/**",
+          "**/*.env*",
+          "**/Cargo.lock",
+          "**/package-lock.json",
+          "**/bun.lock",
+          "**/yarn.lock",
+          "**/pnpm-lock.yaml"
+        ]
+      },
+      "edit_refusal": "Acme Engineering: a Member can't change guardrails. Ask an Admin or Owner.",
+      "git_actions": [
+        {
+          "action": "push_main",
+          "label": "pushing to main or master"
+        },
+        {
+          "action": "force_push",
+          "label": "force pushing"
+        },
+        {
+          "action": "delete_branch",
+          "label": "deleting a branch"
+        },
+        {
+          "action": "tags",
+          "label": "making or pushing tags"
+        },
+        {
+          "action": "merge_pr",
+          "label": "merging a pull request"
+        },
+        {
+          "action": "release",
+          "label": "publishing a GitHub release"
+        }
+      ],
+      "guardrails": null,
+      "org_id": "acme-eng",
+      "seq": 7,
+      "sign_blocker": "Acme Engineering: a Member can't change guardrails. Ask an Admin or Owner.",
+      "workspace_id": "default",
+      "workspace_name": "Default"
     }
   ],
   "Identity": {
@@ -5588,6 +5841,99 @@
       "running": false
     }
   ],
+  "PolicyCeiling": [
+    {
+      "applies_as": "member",
+      "held": "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin.",
+      "max_preset": "sandboxed",
+      "policy_refusal": "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner.",
+      "presets": [
+        {
+          "preset": "read-only",
+          "refusal": null
+        },
+        {
+          "preset": "sandboxed",
+          "refusal": null
+        },
+        {
+          "preset": "trusted",
+          "refusal": "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner."
+        },
+        {
+          "preset": "custom",
+          "refusal": null
+        }
+      ],
+      "protected": {
+        "member_max_preset": "sandboxed",
+        "protected_commands": [
+          "rm -rf",
+          "terraform apply",
+          "terraform destroy",
+          "kubectl apply",
+          "kubectl delete",
+          "helm install",
+          "helm upgrade",
+          "helm uninstall",
+          "docker push",
+          "npm publish",
+          "cargo publish",
+          "vercel --prod",
+          "netlify deploy",
+          "fly deploy",
+          "wrangler deploy",
+          "firebase deploy"
+        ],
+        "protected_git": [
+          "push_main",
+          "force_push",
+          "delete_branch",
+          "tags",
+          "merge_pr",
+          "release"
+        ],
+        "protected_paths": [
+          ".github/**",
+          "**/migrations/**",
+          "infra/**",
+          "**/*.env*",
+          "**/Cargo.lock",
+          "**/package-lock.json",
+          "**/bun.lock",
+          "**/yarn.lock",
+          "**/pnpm-lock.yaml"
+        ]
+      },
+      "workspace_name": "Platform"
+    },
+    {
+      "applies_as": null,
+      "held": null,
+      "max_preset": null,
+      "policy_refusal": null,
+      "presets": [
+        {
+          "preset": "read-only",
+          "refusal": null
+        },
+        {
+          "preset": "sandboxed",
+          "refusal": null
+        },
+        {
+          "preset": "trusted",
+          "refusal": null
+        },
+        {
+          "preset": "custom",
+          "refusal": null
+        }
+      ],
+      "protected": null,
+      "workspace_name": null
+    }
+  ],
   "Project": {
     "created_at": "2026-10-09T12:00:00.000Z",
     "default_branch": "main",
@@ -5713,6 +6059,125 @@
       "state": "skipped"
     }
   ],
+  "RoleRow": [
+    {
+      "action": "see this account's dots",
+      "note": null,
+      "permission": "view",
+      "roles": [
+        "owner",
+        "admin",
+        "member",
+        "viewer"
+      ]
+    },
+    {
+      "action": "create or change dots",
+      "note": "A Member's dot stays within the workspace's guardrails: its tool policy goes no higher than the workspace allows, and protected paths, git actions and commands are refused.",
+      "permission": "edit_dots",
+      "roles": [
+        "owner",
+        "admin",
+        "member"
+      ]
+    },
+    {
+      "action": "run dots",
+      "note": null,
+      "permission": "run_dots",
+      "roles": [
+        "owner",
+        "admin",
+        "member"
+      ]
+    },
+    {
+      "action": "answer approvals",
+      "note": "A Member can't approve a call the workspace's guardrails protect; an Admin's protected calls always ask.",
+      "permission": "answer_approvals",
+      "roles": [
+        "owner",
+        "admin",
+        "member"
+      ]
+    },
+    {
+      "action": "give secrets to dots",
+      "note": null,
+      "permission": "grant_entries",
+      "roles": [
+        "owner",
+        "admin",
+        "member"
+      ]
+    },
+    {
+      "action": "add MCP servers",
+      "note": null,
+      "permission": "add_mcp",
+      "roles": [
+        "owner",
+        "admin",
+        "member"
+      ]
+    },
+    {
+      "action": "create API keys",
+      "note": null,
+      "permission": "create_api_keys",
+      "roles": [
+        "owner",
+        "admin",
+        "member"
+      ]
+    },
+    {
+      "action": "change goals",
+      "note": null,
+      "permission": "edit_goals",
+      "roles": [
+        "owner",
+        "admin",
+        "member"
+      ]
+    },
+    {
+      "action": "manage members",
+      "note": null,
+      "permission": "manage_members",
+      "roles": [
+        "owner",
+        "admin"
+      ]
+    },
+    {
+      "action": "manage workspaces",
+      "note": null,
+      "permission": "manage_workspaces",
+      "roles": [
+        "owner",
+        "admin"
+      ]
+    },
+    {
+      "action": "change guardrails",
+      "note": null,
+      "permission": "manage_guardrails",
+      "roles": [
+        "owner",
+        "admin"
+      ]
+    },
+    {
+      "action": "sign the member list",
+      "note": "An Admin signs once the owner has added their Dots ID to the policy's admins.",
+      "permission": "sign_roster",
+      "roles": [
+        "owner",
+        "admin"
+      ]
+    }
+  ],
   "RosterEdit": [
     {
       "confirm_no_invite": false,
@@ -5753,6 +6218,55 @@
       "workspaces": {
         "platform": "admin"
       }
+    },
+    {
+      "guardrails": {
+        "member_max_preset": "sandboxed",
+        "protected_commands": [
+          "rm -rf",
+          "terraform apply",
+          "terraform destroy",
+          "kubectl apply",
+          "kubectl delete",
+          "helm install",
+          "helm upgrade",
+          "helm uninstall",
+          "docker push",
+          "npm publish",
+          "cargo publish",
+          "vercel --prod",
+          "netlify deploy",
+          "fly deploy",
+          "wrangler deploy",
+          "firebase deploy"
+        ],
+        "protected_git": [
+          "push_main",
+          "force_push",
+          "delete_branch",
+          "tags",
+          "merge_pr",
+          "release"
+        ],
+        "protected_paths": [
+          ".github/**",
+          "**/migrations/**",
+          "infra/**",
+          "**/*.env*",
+          "**/Cargo.lock",
+          "**/package-lock.json",
+          "**/bun.lock",
+          "**/yarn.lock",
+          "**/pnpm-lock.yaml"
+        ]
+      },
+      "kind": "set_guardrails",
+      "workspace_id": "platform"
+    },
+    {
+      "guardrails": null,
+      "kind": "set_guardrails",
+      "workspace_id": "platform"
     }
   ],
   "RuleCandidate": [

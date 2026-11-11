@@ -18,10 +18,11 @@ use super::service::{not_joined, parse_time, stamp, MemberState, OrgSummary, Org
 use super::sources::{PublishError, SourceCreds};
 use super::SourceSettings;
 use crate::accounts::edit::{apply, default_workspace_role, Change, RosterEdit, OWNER_LOCKED};
+use crate::accounts::guardrails::{guard_role, COMPAT_NOTE};
 use crate::accounts::{
     access, identity, make_request, open_accepted_roster, parse_request, require, roster_envelope,
-    roster_hash, sign_with_identity, AccessRequest, Membership, Permission, Role, Roster,
-    WorkspaceRole, ROSTER_VERSION,
+    roster_hash, sign_with_identity, AccessRequest, GitAction, GuardRole, Guardrails, Membership,
+    Permission, Role, Roster, WorkspaceRole, ROSTER_VERSION,
 };
 use crate::store::{DraftRow, InviteRow};
 use crate::{Error, Result};
@@ -169,6 +170,37 @@ pub enum EditOutcome {
     Draft { draft: DraftView },
 }
 
+/// A workspace's guardrails as the Guardrails tab shows them (guardrails spec §7), with what
+/// this PC may do to them.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GuardrailsView {
+    pub org_id: String,
+    pub workspace_id: String,
+    pub workspace_name: String,
+    /// The `seq` of the list accepted last: a change is made against it.
+    pub seq: u64,
+    /// `None`: the workspace has none.
+    pub guardrails: Option<Guardrails>,
+    /// What "Use defaults" fills in.
+    pub defaults: Guardrails,
+    pub git_actions: Vec<GitActionView>,
+    /// Why this PC's role may not change them; `None` when it may.
+    pub edit_refusal: Option<String>,
+    /// Why this PC can't sign the list; `None` when it can.
+    pub sign_blocker: Option<String>,
+    /// How they treat this PC's dots in the workspace; `None` when they don't apply.
+    pub applies_as: Option<GuardRole>,
+    /// What an older Dots does with a list that has guardrails.
+    pub compat_note: String,
+}
+
+/// A protected git action and its words.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct GitActionView {
+    pub action: GitAction,
+    pub label: String,
+}
+
 impl Orgs {
     /// The account's member list for the Members tab. `NotFound` when no list was accepted.
     pub async fn members(&self, org_id: &str) -> Result<MembersView> {
@@ -223,6 +255,63 @@ impl Orgs {
             publishes: !matches!(state.row.source, SourceSettings::Sops(_)),
             invites: invites.iter().map(|i| invite_view(i, now)).collect(),
             draft: self.store().draft(org_id).await?.map(draft_view),
+        })
+    }
+
+    /// The guardrails of the workspace `workspace_id` for the Guardrails tab (guardrails spec
+    /// §7). `NotFound` when no list was accepted, or the list has no such workspace.
+    pub async fn guardrails_view(
+        &self,
+        org_id: &str,
+        workspace_id: &str,
+    ) -> Result<GuardrailsView> {
+        let state = self.member_state(org_id)?;
+        let (roster, _) = accepted(&state)?;
+        let workspace = roster
+            .workspaces
+            .iter()
+            .find(|w| w.id == workspace_id)
+            .ok_or_else(|| {
+                Error::NotFound(format!(
+                    "{}: no workspace '{workspace_id}' on the member list.",
+                    state.row.name
+                ))
+            })?;
+        let edit_refusal = require(Some(self), Some(org_id), Permission::ManageGuardrails)
+            .await
+            .err()
+            .map(|e| e.to_string());
+        let my_key = identity(self.store()).await.ok().map(|me| me.public_key);
+        let in_admins = my_key
+            .as_deref()
+            .is_some_and(|key| admins(&state).iter().any(|a| same_policy_key(a, key)));
+        let sign_blocker = match (&edit_refusal, in_admins) {
+            (Some(refusal), _) => Some(refusal.clone()),
+            (None, false) => Some(not_a_signer(&state.row.name)),
+            (None, true) => None,
+        };
+        let applies_as = workspace
+            .guardrails
+            .as_ref()
+            .and_then(|_| guard_role(Some(self), Some(org_id), workspace_id));
+        Ok(GuardrailsView {
+            org_id: org_id.to_string(),
+            workspace_id: workspace.id.clone(),
+            workspace_name: workspace.name.clone(),
+            seq: roster.seq,
+            guardrails: workspace.guardrails.clone(),
+            defaults: Guardrails::defaults(),
+            git_actions: GitAction::ALL
+                .iter()
+                .map(|a| GitActionView {
+                    action: *a,
+                    label: a.label().to_string(),
+                })
+                .collect(),
+            edit_refusal,
+            sign_blocker,
+            applies_as,
+            compat_note: COMPAT_NOTE.to_string(),
         })
     }
 
@@ -420,6 +509,16 @@ impl Orgs {
                 Change::SetWorkspaces {
                     member_id,
                     workspaces,
+                },
+                None,
+            ),
+            RosterEdit::SetGuardrails {
+                workspace_id,
+                guardrails,
+            } => (
+                Change::SetGuardrails {
+                    workspace_id,
+                    guardrails,
                 },
                 None,
             ),
@@ -703,12 +802,14 @@ pub(super) fn draft_stand(
 }
 
 /// What the role must hold to make `edit`: managing workspaces for changes to the workspace
-/// list, managing members for everything else (a member's workspace roles included).
+/// list, managing guardrails for a workspace's guardrails, managing members for everything else
+/// (a member's workspace roles included).
 fn edit_permission(edit: &RosterEdit) -> Permission {
     match edit {
         RosterEdit::AddWorkspace { .. }
         | RosterEdit::RenameWorkspace { .. }
         | RosterEdit::DeleteWorkspace { .. } => Permission::ManageWorkspaces,
+        RosterEdit::SetGuardrails { .. } => Permission::ManageGuardrails,
         _ => Permission::ManageMembers,
     }
 }

@@ -2219,6 +2219,28 @@ export const RequestPreview = z.strictObject({
   age_recipient: nullable(z.string()),
   problem: nullable(z.string()),
 });
+// A git or GitHub action a workspace's guardrails can protect (guardrails spec §3.1).
+export const GitAction = z.enum([
+  "push_main",
+  "force_push",
+  "delete_branch",
+  "tags",
+  "merge_pr",
+  "release",
+]);
+// How a workspace's guardrails treat this PC's dots: a Member's protected calls are refused and
+// its policy has a ceiling; an Admin's protected calls always ask.
+export const GuardRole = z.enum(["member", "admin"]);
+// A workspace's guardrails, on the signed member list. Every field is required.
+export const Guardrails = z.strictObject({
+  // Globs relative to the dot's folder: `*` within a folder, `**` across folders.
+  protected_paths: z.array(z.string()),
+  protected_git: z.array(GitAction),
+  // Command patterns, like `terraform apply`; `rm -rf` covers every spelling of it.
+  protected_commands: z.array(z.string()),
+  // The highest preset a Member's dot may use: read-only, sandboxed or trusted.
+  member_max_preset: Preset,
+});
 // One change to the member list, sent to `member_edit`.
 export const RosterEdit = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -2237,6 +2259,12 @@ export const RosterEdit = z.discriminatedUnion("kind", [
     kind: z.literal("set_workspaces"),
     member_id: z.string(),
     workspaces: z.record(z.string(), WorkspaceRole),
+  }),
+  // A workspace's guardrails; null removes them.
+  z.strictObject({
+    kind: z.literal("set_guardrails"),
+    workspace_id: z.string(),
+    guardrails: nullable(Guardrails),
   }),
 ]);
 // What this PC may not do in a workspace, or with a dot, each in the core's own refusal; null is
@@ -2319,6 +2347,75 @@ export const WorkspaceView = z.strictObject({
   can_manage: z.boolean(),
   // What this PC may not do with the workspace's dots.
   refusals: Refusals,
+});
+// The Guardrails tab of one workspace (`workspace_guardrails`).
+export const GuardrailsView = z.strictObject({
+  org_id: z.string(),
+  workspace_id: z.string(),
+  workspace_name: z.string(),
+  // The member list's seq: the `baseSeq` of `workspace_guardrails_set`.
+  seq: z.number(),
+  // null: the workspace has none.
+  guardrails: nullable(Guardrails),
+  // What "Use defaults" fills in.
+  defaults: Guardrails,
+  git_actions: z.array(z.strictObject({ action: GitAction, label: z.string() })),
+  // Why this PC's role may not change them; null when it may.
+  edit_refusal: nullable(z.string()),
+  // Why this PC can't sign the member list; null when it can.
+  sign_blocker: nullable(z.string()),
+  // How they treat this PC's dots in the workspace; null when they don't apply.
+  applies_as: nullable(GuardRole),
+  // What an older Dots does with a list that has guardrails: shown before signing.
+  compat_note: z.string(),
+});
+// A role's permission as the core names it, for the "What each role can do" table (Rust
+// `accounts::Permission`; not an app's `Permission`).
+export const RolePermission = z.enum([
+  "view",
+  "edit_dots",
+  "run_dots",
+  "answer_approvals",
+  "grant_entries",
+  "add_mcp",
+  "create_api_keys",
+  "edit_goals",
+  "manage_members",
+  "manage_workspaces",
+  "manage_guardrails",
+  "sign_roster",
+]);
+// One row of the table (`role_matrix`): the roles that have the permission, and a condition.
+export const RoleRow = z.strictObject({
+  permission: RolePermission,
+  action: z.string(),
+  roles: z.array(Role),
+  note: nullable(z.string()),
+});
+// The policy ceiling of a dot (`dot_ceiling`) or of a workspace for a new dot
+// (`policy_ceiling`). Every refusal is the core's own words, to show as they are.
+export const PolicyCeiling = z.strictObject({
+  applies_as: nullable(GuardRole),
+  workspace_name: nullable(z.string()),
+  // The highest preset this PC's dots may use there; null: no ceiling.
+  max_preset: nullable(Preset),
+  // Read-only, Sandboxed, Trusted and Custom, each with why it may not be picked. Custom's
+  // refusal is always null: a custom policy is judged by `policy_refusal`.
+  presets: z.array(z.strictObject({ preset: Preset, refusal: nullable(z.string()) })),
+  // Why the given (or the dot's own) policy can't be saved.
+  policy_refusal: nullable(z.string()),
+  // `dot_ceiling` only: the text the dot's runs are held with.
+  held: nullable(z.string()),
+  // What the workspace protects.
+  protected: nullable(Guardrails),
+});
+// What the guardrails find in an approval's call (`approval_guardrail`). With `needs_admin`,
+// this PC is a Member there and can't approve it; otherwise it always asks.
+export const ApprovalGuardrail = z.strictObject({
+  what: z.string(),
+  workspace_name: z.string(),
+  needs_admin: z.boolean(),
+  text: z.string(),
 });
 // How a member-list edit ended: published (the org's new row), or kept as a draft.
 export const EditOutcome = z.discriminatedUnion("outcome", [
@@ -2853,6 +2950,14 @@ export type PhoneAction = z.infer<typeof PhoneAction>;
 export type DotAccess = z.infer<typeof DotAccess>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;
+export type GitAction = z.infer<typeof GitAction>;
+export type GuardRole = z.infer<typeof GuardRole>;
+export type Guardrails = z.infer<typeof Guardrails>;
+export type GuardrailsView = z.infer<typeof GuardrailsView>;
+export type RolePermission = z.infer<typeof RolePermission>;
+export type RoleRow = z.infer<typeof RoleRow>;
+export type PolicyCeiling = z.infer<typeof PolicyCeiling>;
+export type ApprovalGuardrail = z.infer<typeof ApprovalGuardrail>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
 export type AuditEvent = z.infer<typeof AuditEvent>;
 export type HistoryRow = z.infer<typeof HistoryRow>;

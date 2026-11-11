@@ -369,7 +369,7 @@ fn summarize(hits: Vec<Hit>) -> Option<Guarded> {
 }
 
 /// How deep `bash -c "powershell -c '...'"` is followed before the guard gives up and asks.
-const MAX_DEPTH: usize = 6;
+pub(super) const MAX_DEPTH: usize = 6;
 
 /// What the shell command line `command` does that the guard asks about.
 fn shell_hits(command: &str) -> Vec<Hit> {
@@ -405,7 +405,7 @@ fn line_hits(line: &str, depth: usize, hits: &mut Vec<Hit>) {
 /// own. Separators: `;`, `&`, `|`, new lines, `(`, `)`, `{`, `}`. A redirection's target is
 /// dropped. Quotes: `'...'` is literal; `"..."` is literal but for its substitutions; a
 /// backslash keeps the next character unless it starts a Windows path.
-fn split_line(line: &str) -> (Vec<Vec<String>>, Vec<String>) {
+pub(super) fn split_line(line: &str) -> (Vec<Vec<String>>, Vec<String>) {
     let chars: Vec<char> = line.chars().collect();
     let mut commands: Vec<Vec<String>> = Vec::new();
     let mut subs: Vec<String> = Vec::new();
@@ -579,7 +579,7 @@ fn balanced(chars: &[char], open: usize) -> (String, usize) {
 
 /// A command word as a name: lower case, without its folder, leading backslashes, PowerShell's
 /// call operator and `.exe`/`.cmd`/`.bat`/`.com`.
-fn command_name(word: &str) -> String {
+pub(super) fn command_name(word: &str) -> String {
     let w = word.trim_start_matches(['\\', '&', '.']).trim();
     let base = w.rsplit(['/', '\\']).next().unwrap_or(w).to_lowercase();
     for ext in [".exe", ".cmd", ".bat", ".com"] {
@@ -590,12 +590,12 @@ fn command_name(word: &str) -> String {
     base
 }
 
-fn is_flag(word: &str) -> bool {
+pub(super) fn is_flag(word: &str) -> bool {
     word.starts_with('-') || (word.starts_with('/') && word.len() <= 3 && !word[1..].contains('/'))
 }
 
 /// The non-flag words after the command name.
-fn operands(words: &[String]) -> Vec<&str> {
+pub(super) fn operands(words: &[String]) -> Vec<&str> {
     words
         .iter()
         .skip(1)
@@ -624,7 +624,7 @@ fn listed(targets: &[&str], noun: &str, none: &str) -> String {
 
 /// Commands that run the command that follows them (after their own options): every later
 /// word is tried as the start of a command.
-const WRAPPERS: &[&str] = &[
+pub(super) const WRAPPERS: &[&str] = &[
     "sudo",
     "doas",
     "env",
@@ -675,7 +675,7 @@ const WRAPPERS: &[&str] = &[
 ];
 
 /// Shells whose `-c` string is a command line.
-const SHELLS: &[&str] = &[
+pub(super) const SHELLS: &[&str] = &[
     "sh", "bash", "zsh", "dash", "ksh", "fish", "ash", "csh", "tcsh",
 ];
 
@@ -1118,7 +1118,7 @@ fn command_hits(words: &[String], depth: usize, hits: &mut Vec<Hit>) {
     }
 }
 
-fn is_variable(word: &str) -> bool {
+pub(super) fn is_variable(word: &str) -> bool {
     let mut c = word.chars();
     c.next() == Some('$')
         && c.next()
@@ -1193,7 +1193,7 @@ fn powershell_hits(words: &[String], depth: usize, hits: &mut Vec<Hit>) {
 }
 
 /// PowerShell's `-EncodedCommand`: base64 of UTF-16LE text.
-fn decode_encoded(b64: &str) -> Option<String> {
+pub(super) fn decode_encoded(b64: &str) -> Option<String> {
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(b64.trim())
         .ok()?;

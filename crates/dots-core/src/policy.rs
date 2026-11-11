@@ -16,6 +16,7 @@ use crate::{Error, Result};
 
 pub mod guard;
 mod private;
+pub mod rails;
 
 pub use guard::{ApprovalGuard, GuardKind, Guarded};
 
@@ -430,6 +431,68 @@ impl Policy {
         (pick(Action::Allow), pick(Action::Deny))
     }
 
+    /// Why this policy reaches past `max`, the highest preset a Member's dot may use (guardrails
+    /// spec §4.3); `None` when it stays within it. The first reason found, in the order the spec
+    /// gives: a named preset above `max`, a default or MCP default that allows more, the
+    /// send-and-delete guard off, a deny rule of `max` missing, an allow rule past it.
+    pub fn past_ceiling(&self, max: Preset) -> Option<String> {
+        if max == Preset::Trusted {
+            return None;
+        }
+        let rank = |p: Preset| match p {
+            Preset::ReadOnly => 0,
+            Preset::Sandboxed | Preset::Custom => 1,
+            Preset::Trusted => 2,
+        };
+        if self.preset != Preset::Custom && rank(self.preset) > rank(max) {
+            return Some(format!(
+                "this policy is {}",
+                crate::accounts::guardrails::preset_label(self.preset)
+            ));
+        }
+        let ceiling = Policy::preset(max);
+        let loose = |a: Action| match a {
+            Action::Deny => 0,
+            Action::Ask => 1,
+            Action::Allow => 2,
+        };
+        if loose(self.default) > loose(ceiling.default) {
+            return Some(format!(
+                "its default {}s every other tool",
+                self.default.as_str()
+            ));
+        }
+        if loose(self.mcp_default) > loose(ceiling.mcp_default) {
+            return Some(format!(
+                "its MCP default {}s every MCP tool",
+                self.mcp_default.as_str()
+            ));
+        }
+        if !self.ask_send_delete {
+            return Some("it turns off \"Always ask before sending or deleting\"".into());
+        }
+        let denies = |pattern: &str| {
+            let tool = pattern.split('(').next().unwrap_or(pattern).trim();
+            self.rules.iter().any(|r| {
+                r.action == Action::Deny
+                    && (r.tool.trim() == pattern || r.tool.trim() == tool || r.tool.trim() == "*")
+            })
+        };
+        if let Some(missing) = ceiling
+            .rules
+            .iter()
+            .filter(|r| r.action == Action::Deny)
+            .find(|r| !denies(r.tool.trim()))
+        {
+            return Some(format!("it drops the rule that denies {}", missing.tool));
+        }
+        self.rules
+            .iter()
+            .filter(|r| r.action == Action::Allow)
+            .find(|r| !allow_within(r.tool.trim(), max, &ceiling))
+            .map(|r| format!("it allows {} without asking", r.tool.trim()))
+    }
+
     pub fn validate(&self) -> Result<()> {
         for r in &self.rules {
             let invalid = |e: &str| Error::Invalid(format!("policy rule {:?}: {e}", r.tool));
@@ -482,6 +545,103 @@ impl Policy {
             }
         }
         Ok(())
+    }
+}
+
+/// Interpreters and shells, whose allow rule would let a dot run any code (guardrails spec §4.3):
+/// `make`, `npm run` and `npm test` are not among them, nor `bun test`.
+fn runs_code(command: &str, next: &str) -> bool {
+    const INTERPRETERS: &[&str] = &[
+        "python",
+        "python3",
+        "py",
+        "node",
+        "deno",
+        "ruby",
+        "perl",
+        "php",
+        "bash",
+        "sh",
+        "zsh",
+        "pwsh",
+        "powershell",
+        "cmd",
+        "npx",
+    ];
+    match command {
+        "bun" => !(next == "test" || next == "run"),
+        c => INTERPRETERS.contains(&c),
+    }
+}
+
+/// Whether the allow rule `pattern` stays within the ceiling preset `max` (Read-only or
+/// Sandboxed), whose own policy is `ceiling` (guardrails spec §4.3).
+fn allow_within(pattern: &str, max: Preset, ceiling: &Policy) -> bool {
+    const BROAD: &[&str] = &[
+        "Bash",
+        "PowerShell",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "WebFetch",
+    ];
+    const WRITES: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit"];
+    if ceiling
+        .rules
+        .iter()
+        .any(|r| r.action == Action::Allow && r.tool.trim() == pattern)
+    {
+        return true;
+    }
+    let read_only = max == Preset::ReadOnly;
+    match parse_pattern(pattern) {
+        Err(_) | Ok(Pattern::Any) | Ok(Pattern::Prefix(_)) => false,
+        Ok(Pattern::Exact(name)) => {
+            if BROAD.contains(&name) {
+                return false;
+            }
+            if read_only {
+                return !(name == "WebSearch" || name.starts_with("mcp__"));
+            }
+            true
+        }
+        Ok(Pattern::WithSpec { tool, spec }) => {
+            if READ_TOOLS.contains(&tool) {
+                return true;
+            }
+            if read_only {
+                return !(BROAD.contains(&tool)
+                    || tool == "WebSearch"
+                    || tool.starts_with("mcp__"));
+            }
+            if WRITES.contains(&tool) {
+                let (abs, p) = normalize_pattern(spec);
+                return !abs && !p.split('/').any(|c| c == "..") && !p.starts_with('~');
+            }
+            if COMMAND_TOOLS.contains(&tool) {
+                let first = spec
+                    .strip_suffix(":*")
+                    .unwrap_or(spec)
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                let first = first.rsplit(['/', '\\']).next().unwrap_or(&first);
+                let first = first.strip_suffix(".exe").unwrap_or(first);
+                let second = spec
+                    .strip_suffix(":*")
+                    .unwrap_or(spec)
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .to_lowercase();
+                return !first.is_empty()
+                    && !WRAPPER_COMMANDS.contains(&first)
+                    && !runs_code(first, &second);
+            }
+            true
+        }
     }
 }
 

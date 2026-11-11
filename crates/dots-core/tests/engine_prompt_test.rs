@@ -34,6 +34,7 @@ fn ctx(cancel: CancellationToken) -> RunContext {
         approved_calls: Vec::new(),
         tools: Default::default(),
         autocompact_pct: None,
+        guardrails: None,
     }
 }
 

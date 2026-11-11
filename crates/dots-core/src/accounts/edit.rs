@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::guardrails::Guardrails;
 use super::roster::{parse_roster, Member, Role, Roster, Workspace, WorkspaceRole, ROSTER_VERSION};
 use super::scope::DEFAULT_WORKSPACE;
 use super::workspaces::workspace_id_for;
@@ -55,6 +56,11 @@ pub enum RosterEdit {
         member_id: String,
         workspaces: BTreeMap<String, WorkspaceRole>,
     },
+    /// A workspace's guardrails (guardrails spec §6); `None` removes them.
+    SetGuardrails {
+        workspace_id: String,
+        guardrails: Option<Guardrails>,
+    },
 }
 
 /// One change to the list.
@@ -97,6 +103,11 @@ pub enum Change {
     SetWorkspaces {
         member_id: String,
         workspaces: BTreeMap<String, WorkspaceRole>,
+    },
+    /// A workspace's guardrails, checked first (guardrails spec §3.1); `None` removes them.
+    SetGuardrails {
+        workspace_id: String,
+        guardrails: Option<Guardrails>,
     },
 }
 
@@ -231,6 +242,7 @@ pub fn edit_members(
                 id: workspace_id_for(&name, &taken),
                 name: name.clone(),
                 use_rules: None,
+                guardrails: None,
             });
             format!("Add the {name} workspace")
         }
@@ -272,6 +284,21 @@ pub fn edit_members(
             locked(member.role == Role::Owner)?;
             member.workspaces = workspaces.clone();
             format!("Change {}'s workspaces", member.name)
+        }
+        Change::SetGuardrails {
+            workspace_id,
+            guardrails,
+        } => {
+            let guardrails = guardrails.as_ref().map(Guardrails::normalized);
+            if let Some(g) = &guardrails {
+                g.check().map_err(Error::Invalid)?;
+            }
+            let workspace = find_workspace(&mut next, workspace_id)?;
+            workspace.guardrails = guardrails.clone();
+            match guardrails {
+                Some(_) => format!("Set the guardrails of the {} workspace", workspace.name),
+                None => format!("Remove the guardrails of the {} workspace", workspace.name),
+            }
         }
     };
     Ok((next, summary))
