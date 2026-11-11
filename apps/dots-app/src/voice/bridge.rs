@@ -9,13 +9,15 @@
 //! Nothing heard or said is logged.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use dots_core::open_dot::picture::View;
 use dots_core::open_dot::{MindEvent, Then};
 use dots_voice::{After, Session, SessionEvent, State};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 
 use super::events::VoiceEvent;
 
@@ -109,6 +111,8 @@ struct Inner {
     showing: bool,
     /// What was spoken this turn ends in a word: a question spoken next needs a space.
     gap: bool,
+    /// Closed (Esc) and not opened since: a `Heard` already queued starts nothing.
+    closed: bool,
 }
 
 impl Inner {
@@ -119,12 +123,26 @@ impl Inner {
     }
 }
 
+/// One turn for the mind, in the order it was heard.
+struct Job {
+    turn: u64,
+    input: Input,
+    view: View,
+}
+
 pub struct Bridge {
     session: Arc<dyn SessionPort>,
     mind: Arc<dyn MindPort>,
     ui: UnboundedSender<VoiceEvent>,
     inner: Mutex<Inner>,
+    /// Turns go to one driver task, which begins them at the mind in order.
+    jobs: UnboundedSender<Job>,
+    /// The driver's end, until the first turn starts it.
+    waiting_jobs: Mutex<Option<UnboundedReceiver<Job>>>,
 }
+
+/// Said when a mind call breaks.
+const WENT_WRONG: &str = "Something went wrong. Try again.";
 
 impl Bridge {
     pub fn new(
@@ -132,11 +150,14 @@ impl Bridge {
         mind: Arc<dyn MindPort>,
         ui: UnboundedSender<VoiceEvent>,
     ) -> Arc<Bridge> {
+        let (jobs, rx) = unbounded_channel();
         Arc::new(Bridge {
             session,
             mind,
             ui,
             inner: Mutex::new(Inner::default()),
+            jobs,
+            waiting_jobs: Mutex::new(Some(rx)),
         })
     }
 
@@ -156,15 +177,18 @@ impl Bridge {
             SessionEvent::Heard { text, turn } => self.heard(text, turn),
             SessionEvent::State { state, mic_open } => {
                 self.send(VoiceEvent::State { state, mic_open });
-                if state == State::Idle {
-                    self.idle();
+                if matches!(state, State::Idle | State::Off) {
+                    self.rested(state == State::Off);
                 }
             }
             SessionEvent::Level { mic, voice } => self.send(VoiceEvent::Level { mic, voice }),
             SessionEvent::Hearing { text } => self.send(VoiceEvent::Hearing { text }),
             SessionEvent::Saying { text } => self.send(VoiceEvent::Saying { text }),
             // The session is listening already.
-            SessionEvent::Woke => self.send(VoiceEvent::Woke),
+            SessionEvent::Woke => {
+                self.lock().closed = false;
+                self.send(VoiceEvent::Woke);
+            }
             SessionEvent::Trouble { message } => self.send(VoiceEvent::Trouble { message }),
         }
     }
@@ -176,12 +200,15 @@ impl Bridge {
 
     /// Hotkey, rail, tray: listen.
     pub fn open(&self) {
+        self.lock().closed = false;
         self.session.open();
     }
 
-    /// Esc: stop everything, drop what waits, forget the conversation.
+    /// Esc: stop everything, drop what waits, forget the conversation. A sentence the session
+    /// had already sent starts nothing until the next `open` (or "Hey Dot").
     pub fn close(&self) {
         let mut s = self.lock();
+        s.closed = true;
         self.session.close();
         self.mind.cancel();
         let lapsed = self.lapse();
@@ -195,9 +222,14 @@ impl Bridge {
         }
     }
 
-    /// Stop speaking (or thinking) and listen.
+    /// Stop speaking (or thinking) and listen. A turn in flight is dropped with what it
+    /// showed: the session has ended it.
     pub fn stop(&self) {
+        let mut s = self.lock();
         self.mind.cancel();
+        if s.live.is_some() {
+            self.drop_live(&mut s);
+        }
         self.session.interrupt();
     }
 
@@ -209,16 +241,27 @@ impl Bridge {
         let Some(text) = s.options.get(index).cloned() else {
             return;
         };
-        if let Some(turn) = self.session.answered(&text) {
-            s.options.clear();
-            s.picks.insert(turn, index);
+        match self.session.answered(&text) {
+            Some(turn) => {
+                s.options.clear();
+                s.picks.insert(turn, index);
+            }
+            // The session is off: the options are dead.
+            None => {
+                s.forget();
+                self.send(VoiceEvent::Cleared);
+            }
         }
     }
 
     /// A finished sentence (or a click) is the live turn from now on.
     fn heard(self: &Arc<Self>, text: String, turn: u64) {
-        let (input, view) = {
+        let job = {
             let mut s = self.lock();
+            if s.closed {
+                s.picks.remove(&turn);
+                return;
+            }
             s.live = Some(turn);
             s.gap = false;
             self.session.thinking();
@@ -227,22 +270,39 @@ impl Bridge {
                 Some(index) => Input::Pick(index),
                 None => Input::Hear(text),
             };
-            (input, s.view.clone())
+            Job {
+                turn,
+                input,
+                view: s.view.clone(),
+            }
         };
-        self.start(turn, input, view);
+        self.drive();
+        let _ = self.jobs.send(job);
     }
 
-    /// The session rested: a step still waiting has lapsed (its asking time ran out, or the
-    /// session was closed).
-    fn idle(&self) {
+    /// The session rested (Idle) or stopped (Off). A turn in flight was given up by the
+    /// session (its think limit, a failure, a close), and a step still waiting has lapsed
+    /// (its asking time ran out): both are dropped, with what they showed.
+    fn rested(&self, off: bool) {
         let mut s = self.lock();
-        if !self.mind.pending() {
-            return;
+        if off {
+            s.picks.clear();
         }
-        self.lapse();
+        if s.live.is_some() || self.mind.pending() {
+            self.drop_live(&mut s);
+        }
+    }
+
+    /// `mind.lapse` (it ends the turn in flight and drops a step that waits); the live turn
+    /// and what showed go, and the UI is told when something showed.
+    fn drop_live(&self, s: &mut Inner) {
+        let lapsed = self.lapse();
+        let showing = s.showing || s.asking;
         s.live = None;
         s.forget();
-        self.send(VoiceEvent::Cleared);
+        if showing || lapsed {
+            self.send(VoiceEvent::Cleared);
+        }
     }
 
     /// `mind.lapse`; whether it dropped a step that waited.
@@ -292,7 +352,14 @@ impl Bridge {
                     s.gap = true;
                     self.session.say_delta(turn, &spoken);
                 }
+                // Resting, the session speaks nothing more (its speech failed): the question
+                // is written instead, and clicks still answer it.
+                let silent = matches!(self.session.state(), State::Idle | State::Off);
+                let written = (silent && !spoken.is_empty()).then(|| spoken.to_string());
                 self.send(VoiceEvent::Ask { question, options });
+                if let Some(text) = written {
+                    self.send(VoiceEvent::Saying { text });
+                }
             }
             MindEvent::SayEnd { then } => self.end(&mut s, turn, after(then)),
             MindEvent::Card { card } => {
@@ -343,25 +410,82 @@ impl Bridge {
         }
     }
 
-    fn start(self: &Arc<Self>, turn: u64, input: Input, view: View) {
+    /// The mind call for `turn` panicked: the turn ends, and the person is told.
+    fn broke(&self, turn: u64) {
+        let mut s = self.lock();
+        if s.live == Some(turn) {
+            self.end(&mut s, turn, After::Rest);
+            self.send(VoiceEvent::Trouble {
+                message: WENT_WRONG.into(),
+            });
+        }
+    }
+
+    /// Starts the driver once: it begins each turn at the mind in the order heard. A turn is
+    /// begun only after the one before it has begun at the mind (a newer call is what ends an
+    /// older one there), but without waiting for it to finish.
+    fn drive(self: &Arc<Self>) {
+        let Some(mut jobs) = self
+            .waiting_jobs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        else {
+            return;
+        };
+        // Weak: the driver ends with the bridge.
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            while let Some(job) = jobs.recv().await {
+                let Some(bridge) = weak.upgrade() else { break };
+                let (begun_tx, begun) = oneshot::channel();
+                bridge.run(job, begun_tx);
+                drop(bridge);
+                // Dropped unsent when the call panicked before it began: go on all the same.
+                let _ = begun.await;
+            }
+        });
+    }
+
+    /// One turn: the mind call (on its own task, so a panic is caught) and the loop that
+    /// applies its events.
+    fn run(self: &Arc<Self>, job: Job, begun: oneshot::Sender<()>) {
         let bridge = Arc::clone(self);
+        let Job { turn, input, view } = job;
         tokio::spawn(async move {
             let (tx, mut rx) = unbounded_channel();
             let mind = bridge.mind.clone();
-            // Owns `tx`: once the call returns, the channel closes and the loop below ends.
-            let call = async move {
-                match input {
-                    Input::Hear(text) => mind.hear(&text, &view, &tx).await,
-                    Input::Pick(index) => mind.pick(index, &view, &tx).await,
-                }
-            };
+            // Owns `tx`: once the call returns (or panics), the channel closes.
+            let call = tokio::spawn(async move {
+                let call = async {
+                    match input {
+                        Input::Hear(text) => mind.hear(&text, &view, &tx).await,
+                        Input::Pick(index) => mind.pick(index, &view, &tx).await,
+                    }
+                };
+                let mut call = std::pin::pin!(call);
+                let mut begun = Some(begun);
+                // `begun` is sent once the call has been polled once: it has begun at the
+                // mind, which takes the turn before its first await.
+                std::future::poll_fn(|cx| {
+                    let polled = call.as_mut().poll(cx);
+                    if let Some(b) = begun.take() {
+                        let _ = b.send(());
+                    }
+                    polled
+                })
+                .await
+            });
             let apply = async {
                 while let Some(ev) = rx.recv().await {
                     bridge.apply(turn, ev);
                 }
             };
-            tokio::join!(call, apply);
-            bridge.finished(turn);
+            let (called, ()) = tokio::join!(call, apply);
+            match called {
+                Err(e) if e.is_panic() => bridge.broke(turn),
+                _ => bridge.finished(turn),
+            }
         });
     }
 }
@@ -407,6 +531,7 @@ mod tests {
         /// The last turn id handed out by `answered`.
         last: AtomicU64,
         off: AtomicBool,
+        state: Mutex<State>,
     }
 
     impl FakeSession {
@@ -415,6 +540,7 @@ mod tests {
                 calls: Mutex::default(),
                 last: AtomicU64::new(100),
                 off: AtomicBool::new(false),
+                state: Mutex::new(State::Thinking),
             })
         }
         fn calls(&self) -> Vec<Call> {
@@ -458,7 +584,7 @@ mod tests {
             Some(self.last.fetch_add(1, Ordering::SeqCst) + 1)
         }
         fn state(&self) -> State {
-            State::Idle
+            *self.state.lock().unwrap()
         }
     }
 
@@ -470,6 +596,8 @@ mod tests {
         Wait(Arc<Notify>),
         /// Sets what `pending` answers.
         Pending(bool),
+        /// The mind call panics.
+        Panic,
     }
 
     #[derive(Debug, Clone, PartialEq)]
@@ -509,6 +637,7 @@ mod tests {
                     }
                     Step::Wait(n) => n.notified().await,
                     Step::Pending(p) => self.pending.store(p, Ordering::SeqCst),
+                    Step::Panic => panic!("the mind broke (a test)"),
                 }
             }
         }
@@ -927,6 +1056,9 @@ mod tests {
         r.bridge.pick(0);
         settle().await;
         assert_eq!(r.mind.calls(), vec![MindCall::Hear("approve it".into())]);
+        // The dead options go away.
+        assert_eq!(r.ui(), vec![VoiceEvent::Cleared]);
+        r.bridge.pick(1);
         assert!(r.ui().is_empty());
         // A later spoken turn with any id is heard, not picked.
         r.heard("yes", 101);
@@ -1054,6 +1186,260 @@ mod tests {
         new.notify_one();
         settle().await;
         assert_eq!(r.ui(), vec![VoiceEvent::Cleared]);
+    }
+
+    #[tokio::test]
+    async fn a_heard_queued_before_close_starts_nothing() {
+        let mut r = rig();
+        r.bridge.close();
+        r.heard("queued", 1);
+        settle().await;
+        assert!(r
+            .mind
+            .calls()
+            .iter()
+            .all(|c| !matches!(c, MindCall::Hear(_))));
+        assert!(!r.session.calls().contains(&Call::Thinking));
+        assert!(r.ui().is_empty());
+        // Opened again, a sentence goes to the mind.
+        r.bridge.open();
+        r.mind.script(vec![say("Hi."), end(Then::Rest)]);
+        r.heard("hello", 2);
+        settle().await;
+        assert_eq!(r.mind.calls().last(), Some(&MindCall::Hear("hello".into())));
+        assert_eq!(r.session.calls().last(), Some(&Call::End(2, After::Rest)));
+        // So does one after "Hey Dot".
+        r.bridge.close();
+        r.bridge.on_session(SessionEvent::Woke);
+        r.heard("again", 3);
+        settle().await;
+        assert_eq!(r.mind.calls().last(), Some(&MindCall::Hear("again".into())));
+    }
+
+    #[tokio::test]
+    async fn stop_drops_the_live_turn() {
+        let mut r = rig();
+        let gate = Arc::new(Notify::new());
+        r.mind.script(vec![
+            Step::Send(MindEvent::Card {
+                card: Card::List {
+                    title: "t".into(),
+                    lines: vec![],
+                },
+            }),
+            Step::Wait(gate.clone()),
+            say("late"),
+            end(Then::Rest),
+        ]);
+        r.heard("hello", 1);
+        settle().await;
+        r.ui();
+        r.bridge.stop();
+        assert_eq!(&r.mind.calls()[1..], &[MindCall::Cancel, MindCall::Lapse]);
+        assert_eq!(r.session.calls().last(), Some(&Call::Interrupt));
+        assert_eq!(r.ui(), vec![VoiceEvent::Cleared]);
+        gate.notify_one();
+        settle().await;
+        assert_eq!(r.session.calls().last(), Some(&Call::Interrupt));
+    }
+
+    #[tokio::test]
+    async fn idle_with_a_live_turn_lapses_and_clears() {
+        let mut r = rig();
+        let gate = Arc::new(Notify::new());
+        r.mind.script(vec![
+            Step::Send(MindEvent::Card {
+                card: Card::List {
+                    title: "t".into(),
+                    lines: vec![],
+                },
+            }),
+            Step::Wait(gate.clone()),
+            say("late"),
+            end(Then::Rest),
+        ]);
+        r.heard("hello", 1);
+        settle().await;
+        r.ui();
+        // The session gave up on the turn (its think limit, or a failure).
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Idle,
+            mic_open: false,
+        });
+        assert_eq!(r.mind.calls().last(), Some(&MindCall::Lapse));
+        assert_eq!(
+            r.ui(),
+            vec![
+                VoiceEvent::State {
+                    state: State::Idle,
+                    mic_open: false
+                },
+                VoiceEvent::Cleared,
+            ]
+        );
+        gate.notify_one();
+        settle().await;
+        assert_eq!(r.session.calls(), vec![Call::Thinking]);
+    }
+
+    #[tokio::test]
+    async fn a_panicking_mind_still_ends_the_turn() {
+        let mut r = rig();
+        r.mind.script(vec![say("Hm"), Step::Panic]);
+        r.heard("break", 1);
+        settle().await;
+        assert_eq!(
+            r.session.calls(),
+            vec![
+                Call::Thinking,
+                Call::Delta(1, "Hm".into()),
+                Call::End(1, After::Rest)
+            ]
+        );
+        assert_eq!(
+            r.ui(),
+            vec![
+                heard_ev("break"),
+                VoiceEvent::Trouble {
+                    message: "Something went wrong. Try again.".into()
+                },
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_question_asked_while_the_session_rests_is_shown_and_written() {
+        let mut r = rig();
+        *r.session.state.lock().unwrap() = State::Idle;
+        r.mind.script(vec![
+            ask("Approve it?", &["Yes", "No"]),
+            Step::Pending(true),
+            end(Then::Ask),
+        ]);
+        r.heard("approve", 1);
+        settle().await;
+        assert_eq!(
+            r.ui(),
+            vec![
+                heard_ev("approve"),
+                ask_ev("Approve it?", &["Yes", "No"]),
+                VoiceEvent::Saying {
+                    text: "Approve it?".into()
+                },
+            ]
+        );
+        // Clicks still work.
+        r.bridge.pick(0);
+        assert_eq!(
+            r.session.calls().last(),
+            Some(&Call::Answered("Yes".into()))
+        );
+    }
+
+    #[tokio::test]
+    async fn off_forgets_the_clicks() {
+        let r = rig();
+        asked_plain(&r).await;
+        r.bridge.pick(0); // turn 101, whose `Heard` never comes
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Off,
+            mic_open: false,
+        });
+        r.bridge.open();
+        r.heard("Yes", 101);
+        settle().await;
+        assert_eq!(r.mind.calls().last(), Some(&MindCall::Hear("Yes".into())));
+    }
+
+    /// Turn 1 asks "Approve it?" (as `asked`, for a rig not borrowed mutably).
+    async fn asked_plain(r: &Rig) {
+        r.mind.script(vec![
+            ask("Approve it?", &["Yes", "No"]),
+            Step::Pending(true),
+            end(Then::Ask),
+        ]);
+        r.heard("approve it", 1);
+        settle().await;
+    }
+
+    /// A mind in which a newer turn's beginning ends the older one, as the real mind does.
+    #[derive(Default)]
+    struct OrderMind {
+        begun: Mutex<Vec<String>>,
+        current: Mutex<Option<String>>,
+        pending: Mutex<Option<String>>,
+    }
+
+    #[async_trait]
+    impl MindPort for OrderMind {
+        async fn hear(&self, heard: &str, _view: &View, out: &UnboundedSender<MindEvent>) {
+            // Begun at the first poll, with no await before it.
+            self.begun.lock().unwrap().push(heard.into());
+            *self.current.lock().unwrap() = Some(heard.into());
+            *self.pending.lock().unwrap() = None;
+            for _ in 0..3 {
+                tokio::task::yield_now().await;
+            }
+            let cur = self.current.lock().unwrap();
+            if cur.as_deref() == Some(heard) {
+                *self.pending.lock().unwrap() = Some(heard.into());
+                let _ = out.send(MindEvent::Ask {
+                    question: heard.into(),
+                    options: vec!["Yes".into(), "No".into()],
+                });
+                let _ = out.send(MindEvent::SayEnd { then: Then::Ask });
+            }
+        }
+        async fn pick(&self, _index: usize, _view: &View, _out: &UnboundedSender<MindEvent>) {}
+        fn lapse(&self, _out: &UnboundedSender<MindEvent>) {
+            *self.pending.lock().unwrap() = None;
+        }
+        fn cancel(&self) {}
+        fn reset(&self) -> bool {
+            self.pending.lock().unwrap().take().is_some()
+        }
+        fn pending(&self) -> bool {
+            self.pending.lock().unwrap().is_some()
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn mind_turns_begin_in_the_order_they_were_heard() {
+        let session = FakeSession::new();
+        let mind = Arc::new(OrderMind::default());
+        let (tx, mut ui) = unbounded_channel();
+        let bridge = Bridge::new(session.clone(), mind.clone(), tx);
+        let mut heard = Vec::new();
+        for pair in 0..50u64 {
+            let (a, b) = (format!("a{pair}"), format!("b{pair}"));
+            for (text, turn) in [(&a, pair * 2 + 1), (&b, pair * 2 + 2)] {
+                bridge.on_session(SessionEvent::Heard {
+                    text: text.clone(),
+                    turn,
+                });
+                heard.push(text.clone());
+            }
+            // The newer turn's question shows, and only its step waits.
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut asked = None;
+            while asked.as_ref() != Some(&b) {
+                assert!(
+                    std::time::Instant::now() < until,
+                    "pair {pair}: no question"
+                );
+                match ui.try_recv() {
+                    Ok(VoiceEvent::Ask { question, .. }) => asked = Some(question),
+                    Ok(_) => {}
+                    Err(_) => tokio::time::sleep(std::time::Duration::from_millis(1)).await,
+                }
+            }
+            assert_eq!(*mind.begun.lock().unwrap(), heard, "pair {pair}");
+            assert_eq!(
+                *mind.pending.lock().unwrap(),
+                Some(b.clone()),
+                "pair {pair}"
+            );
+        }
     }
 
     #[tokio::test]
