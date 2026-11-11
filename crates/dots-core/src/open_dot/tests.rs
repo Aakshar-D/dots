@@ -1645,6 +1645,35 @@ async fn deny_said_to_a_deny_question_denies() {
 }
 
 #[tokio::test]
+async fn go_ahead_said_to_a_deny_question_asks_for_a_clear_yes() {
+    for words in ["go ahead", "go for it", "Yes, go ahead."] {
+        let t = T::start().await;
+        let approval = asking_to_deny(&t).await;
+        let calls = t.fake.calls();
+        let got = t.hear(words).await;
+        assert_eq!(
+            said(&got),
+            "I need a clear yes for that. Say yes, or no.",
+            "{words}: {got:?}"
+        );
+        assert_eq!(t.fake.calls(), calls, "{words}");
+        assert!(t.mind.pending(), "{words}");
+        assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+        // a second one gives up; nothing is denied
+        let got = t.hear(words).await;
+        assert_eq!(said(&got), "Okay, I won't.", "{words}: {got:?}");
+        assert!(!t.mind.pending(), "{words}");
+        assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+        // and a clear yes after one still denies
+        ask_to_deny_again(&t).await;
+        t.hear(words).await;
+        assert_eq!(said(&t.hear("yes").await), "Denied.", "{words}");
+        assert_eq!(t.status(&approval).await, ApprovalStatus::Denied);
+        t.rt.shutdown();
+    }
+}
+
+#[tokio::test]
 async fn deny_said_to_an_approve_question_is_no() {
     for words in ["deny", "deny it", "deny that"] {
         let t = T::start().await;
@@ -1705,6 +1734,7 @@ fn waiting_on(t: &T, kind: Waiting) {
         account: view.account,
         workspace: view.workspace,
         asked_at: Instant::now(),
+        first_asked: Instant::now(),
         retried: false,
         repeats: 0,
         words: String::new(),
@@ -1785,6 +1815,67 @@ async fn repeat_renews_the_asking_time_twice() {
     assert_eq!(renewed, Some(false));
     asked_ago(&t, PENDING_LIMIT + Duration::from_secs(1));
     assert!(!t.mind.pending());
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    t.rt.shutdown();
+}
+
+/// Time passes for the step that waits and for the person: every clock moves `ago` back.
+fn time_passes(t: &T, ago: Duration) {
+    let mut s = lock(&t.mind.state);
+    if let Some(at) = s.last_heard.as_mut() {
+        *at -= ago;
+    }
+    if let Some(p) = s.pending.as_mut() {
+        p.asked_at -= ago;
+        p.first_asked -= ago;
+    }
+}
+
+#[tokio::test]
+async fn a_step_never_outlives_three_waits() {
+    let t = T::start().await;
+    let approval = asking_to_approve(&t).await;
+    let wait = PENDING_LIMIT - Duration::from_secs(1);
+    // the worst case: say that again at 59 s and 118 s, an unclear yes at 177 s
+    for words in ["say that again", "say that again"] {
+        time_passes(&t, wait);
+        assert!(asks(&t.hear(words).await).is_some(), "{words}");
+        assert!(t.mind.pending());
+    }
+    time_passes(&t, wait);
+    assert_eq!(
+        said(&t.hear("okay").await),
+        "I need a clear yes for that. Say yes, or no."
+    );
+    assert!(t.mind.pending(), "177 s: still asking");
+    // three waits after it was first asked, it is gone, renewed or not
+    time_passes(&t, Duration::from_secs(3) + Duration::from_millis(10));
+    assert!(!t.mind.pending(), "180 s: gone");
+    let got = t.hear("yes").await;
+    assert_eq!(got.first(), Some(&MindEvent::Cleared), "{got:?}");
+    assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_click_after_the_idle_forget_says_nothing_waits() {
+    let mut t = T::start().await;
+    // short, so moving a time this far back needs no long uptime
+    t.mind.idle_forget = Duration::from_secs(5);
+    let approval = asking_to_approve(&t).await;
+    heard_ago(&t, Duration::from_secs(6));
+    let got = t.pick(0).await;
+    assert_eq!(
+        got,
+        vec![
+            MindEvent::Cleared,
+            MindEvent::Say {
+                delta: "There's nothing waiting on a yes or no.".into()
+            },
+            MindEvent::SayEnd { then: Then::Rest }
+        ]
+    );
     assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
     t.rt.shutdown();
 }

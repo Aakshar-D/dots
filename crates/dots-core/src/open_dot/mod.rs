@@ -36,7 +36,9 @@ use act::{
 };
 use picture::{clean, Picture, View, NAME_BYTES};
 use prompt::{prompt, Turn, INSTRUCTIONS};
-use quick::{common_word, firm_for_another, firm_yes, quick, words_of, ConfirmKind, Quick};
+use quick::{
+    common_word, firm_for_another, firm_yes, quick, unclear_yes, words_of, ConfirmKind, Quick,
+};
 use reply::{read_reply, SpeechGate, Wish};
 use think::{cap_hit, Thinker};
 
@@ -121,6 +123,8 @@ pub const IDLE_FORGET: Duration = Duration::from_secs(600);
 pub const PENDING_LIMIT: Duration = Duration::from_secs(60);
 /// How many times "say that again" starts a step's asking time again.
 const MAX_RENEWS: u8 = 2;
+/// The longest a step waits in all, in pending limits, however often its time was renewed.
+const MAX_WAITS: u32 = 3;
 /// "One moment." is said when nothing was said this long after the request started.
 pub const FILLER_AFTER: Duration = Duration::from_millis(1500);
 /// Most turns kept, and the longest record of what was said in one.
@@ -208,6 +212,10 @@ struct Pending {
     workspace: String,
     /// When it was asked; it is dropped after `PENDING_LIMIT`.
     asked_at: Instant,
+    /// When it was first asked. Renewals ("say that again", the one unclear-yes retry) move
+    /// `asked_at`, never this: the step is dropped `MAX_WAITS` limits after it, whatever was
+    /// renewed.
+    first_asked: Instant,
     /// An unclear yes ("okay", "sure") was heard once and the person was asked for a clear one.
     retried: bool,
     /// How many times "say that again" renewed `asked_at` (at most `MAX_RENEWS`).
@@ -328,6 +336,8 @@ struct Out<'a> {
     done: AtomicBool,
     /// `SayEnd` was sent (or the turn was ended without one): nothing more goes out.
     ended: AtomicBool,
+    /// The idle forget dropped a step that waited as this turn began.
+    forgot: bool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -515,7 +525,13 @@ impl Mind {
         lock(&self.state)
             .pending
             .as_ref()
-            .is_some_and(|p| p.asked_at.elapsed() <= self.pending_limit)
+            .is_some_and(|p| !self.timed_out(p))
+    }
+
+    /// Not answered within the pending limit, or asked first `MAX_WAITS` limits ago.
+    fn timed_out(&self, p: &Pending) -> bool {
+        p.asked_at.elapsed() > self.pending_limit
+            || p.first_asked.elapsed() > self.pending_limit * MAX_WAITS
     }
 
     /// Starts a turn: forgets after the idle period, ends the turn before, and returns this
@@ -592,6 +608,7 @@ impl Mind {
             read_before,
             done: AtomicBool::new(false),
             ended: AtomicBool::new(false),
+            forgot,
         };
         if forgot {
             o.send(MindEvent::Cleared);
@@ -610,9 +627,7 @@ impl Mind {
         let (kind, dropped) = {
             let mut s = lock(&self.state);
             let gone = s.pending.as_ref().is_some_and(|p| {
-                p.account != view.account
-                    || p.workspace != view.workspace
-                    || p.asked_at.elapsed() > self.pending_limit
+                p.account != view.account || p.workspace != view.workspace || self.timed_out(p)
             });
             if gone {
                 s.pending = None;
@@ -643,6 +658,7 @@ impl Mind {
                 account: view.account.clone(),
                 workspace: view.workspace.clone(),
                 asked_at: Instant::now(),
+                first_asked: Instant::now(),
                 retried: false,
                 repeats: 0,
                 words: lock(&o.words).trim().to_string(),
@@ -800,8 +816,9 @@ impl Mind {
             Input::Pick(i) => match options.get(i) {
                 Some(option) => (option.clone(), Some(Quick::Pick(i))),
                 // A click on a step that ran out (or was asked in another account or
-                // workspace): it is gone, and the person is told so.
-                None if expired => {
+                // workspace, or forgotten after the idle period): it is gone, and the person
+                // is told so.
+                None if expired || o.forgot => {
                     o.say(NOTHING_WAITING);
                     o.end(Then::Rest);
                     return "nothing waiting";
@@ -887,8 +904,13 @@ impl Mind {
                 (false, _) if firm_yes(&heard, kind) => Answer::Yes,
                 (false, Some(Quick::No)) => Answer::No,
                 (false, _) if firm_for_another(&heard, kind) => Answer::Other,
-                (false, Some(Quick::Yes)) if !w.retried => Answer::Unclear,
-                (false, Some(Quick::Yes)) => Answer::GiveUp,
+                (false, q) if q == Some(Quick::Yes) || unclear_yes(&heard, kind) => {
+                    if w.retried {
+                        Answer::GiveUp
+                    } else {
+                        Answer::Unclear
+                    }
+                }
                 _ => Answer::Other,
             };
             match answer {

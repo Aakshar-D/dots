@@ -243,7 +243,23 @@ fn joined(heard: &str) -> String {
 /// confirmation; a spoken position word never does.
 pub fn firm_yes(heard: &str, kind: ConfirmKind) -> bool {
     let j = joined(heard);
-    !j.is_empty() && (FIRM_YES.contains(&j.as_str()) || kind.own_words().contains(&j.as_str()))
+    !j.is_empty()
+        && ((FIRM_YES.contains(&j.as_str()) && !soft_for(kind, &j))
+            || kind.own_words().contains(&j.as_str()))
+}
+
+/// Words of `FIRM_YES` that are no firm yes to "Deny ...?": "go ahead" may mean "let it go
+/// ahead".
+const NOT_FIRM_FOR_DENY: &[&str] = &["go ahead", "go for it", "yes go ahead"];
+
+fn soft_for(kind: ConfirmKind, joined: &str) -> bool {
+    kind == ConfirmKind::Deny && NOT_FIRM_FOR_DENY.contains(&joined)
+}
+
+/// Whether the whole utterance is a yes that is firm elsewhere but not for `kind` ("go ahead"
+/// said to "Deny ...?"): the person is asked once more for a clear yes, as after "okay".
+pub fn unclear_yes(heard: &str, kind: ConfirmKind) -> bool {
+    soft_for(kind, &joined(heard))
 }
 
 /// Whether the whole utterance is another kind's own verb and no answer to `kind`: "approve"
@@ -447,8 +463,25 @@ mod tests {
             .flat_map(|k| own(*k))
             .copied()
             .collect();
+        // "go ahead" to "Deny ...?" may mean "let it go ahead": no firm yes there, a weak one.
+        let not_for_deny = ["go ahead", "go for it", "yes go ahead"];
+        for p in not_for_deny {
+            assert!(!firm_yes(p, ConfirmKind::Deny), "{p}");
+            assert!(!firm_for_another(p, ConfirmKind::Deny), "{p}");
+            assert!(unclear_yes(p, ConfirmKind::Deny), "{p}");
+            assert!(unclear_yes(
+                &format!("Okay, {p}, please."),
+                ConfirmKind::Deny
+            ));
+            assert!(!unclear_yes(p, ConfirmKind::Approve), "{p}");
+        }
+        assert!(!unclear_yes("yes", ConfirmKind::Deny));
+        assert!(!unclear_yes("deny it", ConfirmKind::Deny));
         for kind in ConfirmKind::ALL {
             for p in EVERY_KIND.iter().chain(own(kind)) {
+                if kind == ConfirmKind::Deny && not_for_deny.contains(p) {
+                    continue;
+                }
                 assert!(firm_yes(p, kind), "{kind:?}: {p}");
                 assert!(
                     firm_yes(&format!("Hey Dot, {p}, please."), kind),
