@@ -36,7 +36,7 @@ use act::{
 };
 use picture::{clean, Picture, View, NAME_BYTES};
 use prompt::{prompt, Turn, INSTRUCTIONS};
-use quick::{common_word, firm_yes, quick, words_of, Quick};
+use quick::{common_word, firm_for_another, firm_yes, quick, words_of, ConfirmKind, Quick};
 use reply::{read_reply, SpeechGate, Wish};
 use think::{cap_hit, Thinker};
 
@@ -119,6 +119,8 @@ pub const IDLE_FORGET: Duration = Duration::from_secs(600);
 /// A step that waits on the person is dropped this long after it was asked: silence is no,
 /// whether or not the app calls `lapse`.
 pub const PENDING_LIMIT: Duration = Duration::from_secs(60);
+/// How many times "say that again" starts a step's asking time again.
+const MAX_RENEWS: u8 = 2;
 /// "One moment." is said when nothing was said this long after the request started.
 pub const FILLER_AFTER: Duration = Duration::from_millis(1500);
 /// Most turns kept, and the longest record of what was said in one.
@@ -183,6 +185,8 @@ struct State {
     /// a second yes for the same step is that same answer, and does nothing.
     decided: u64,
     deciding: bool,
+    /// The kind of the step last taken by a yes: the words that are "that same answer".
+    decided_kind: Option<ConfirmKind>,
 }
 
 impl State {
@@ -206,6 +210,8 @@ struct Pending {
     asked_at: Instant,
     /// An unclear yes ("okay", "sure") was heard once and the person was asked for a clear one.
     retried: bool,
+    /// How many times "say that again" renewed `asked_at` (at most `MAX_RENEWS`).
+    repeats: u8,
     /// The words said in the turn that asked it, before its question: "say that again" says
     /// these and the question, never an older reply.
     words: String,
@@ -270,18 +276,24 @@ impl Waiting {
         }
     }
 
-    /// Whether a deed waits on this step's yes: a confirmation, a proposed dot, or an answer
-    /// read back.
-    fn needs_yes(&self) -> bool {
-        matches!(
-            self,
-            Waiting::Confirm { .. }
-                | Waiting::Create { .. }
-                | Waiting::Ask {
-                    then: AskFor::AnswerCheck { .. },
-                    ..
-                }
-        )
+    /// What a yes to this step would do, when a deed waits on it: a confirmation, a proposed
+    /// dot, or an answer read back. The kind picks the words that pass it (`firm_yes`).
+    fn confirm_kind(&self) -> Option<ConfirmKind> {
+        match self {
+            Waiting::Confirm { deed, .. } => Some(match deed {
+                Deed::Approve { .. } => ConfirmKind::Approve,
+                Deed::Deny { .. } => ConfirmKind::Deny,
+                Deed::Run { .. } => ConfirmKind::Run,
+                Deed::Send { .. } => ConfirmKind::Send,
+                Deed::Answer { .. } => ConfirmKind::Answer,
+            }),
+            Waiting::Create { .. } => Some(ConfirmKind::Create),
+            Waiting::Ask {
+                then: AskFor::AnswerCheck { .. },
+                ..
+            } => Some(ConfirmKind::Answer),
+            Waiting::Ask { .. } | Waiting::SetupQuestion { .. } => None,
+        }
     }
 
     fn setup_id(&self) -> Option<&str> {
@@ -475,6 +487,10 @@ impl Mind {
     /// Stops a request in flight and any deed it has not begun; keeps turns and what waits.
     /// A setup round being asked is ended: its answers so far are lost, and the turn is
     /// recorded.
+    ///
+    /// If it lands during a yes, after the step was taken but before its deed starts, the step
+    /// is gone (its `Cleared` was sent) and the deed is not done: the turn ends with nothing
+    /// said. A deed already started finishes and says its outcome.
     pub fn cancel(&self) {
         if let Some(c) = &lock(&self.state).cancel {
             c.cancel();
@@ -493,9 +509,13 @@ impl Mind {
         dropped
     }
 
-    /// Whether a step waits on the person.
+    /// Whether a step waits on the person: one asked within the pending limit. An expired one
+    /// is dropped by the next turn.
     pub fn pending(&self) -> bool {
-        lock(&self.state).pending.is_some()
+        lock(&self.state)
+            .pending
+            .as_ref()
+            .is_some_and(|p| p.asked_at.elapsed() <= self.pending_limit)
     }
 
     /// Starts a turn: forgets after the idle period, ends the turn before, and returns this
@@ -532,7 +552,11 @@ impl Mind {
         let repeated = (busy || s.decided != arrived) && s.pending.is_none();
         match input {
             Input::Pick(i) => *i >= options.len(),
-            Input::Heard(h) => repeated && (firm_yes(h) || quick(h, &[]) == Some(Quick::Yes)),
+            Input::Heard(h) => {
+                repeated
+                    && (s.decided_kind.is_some_and(|k| firm_yes(h, k))
+                        || quick(h, &[]) == Some(Quick::Yes))
+            }
         }
     }
 
@@ -581,8 +605,8 @@ impl Mind {
     }
 
     /// The pending step, dropped first when it is older than the pending limit, or when the
-    /// view moved to another account or workspace.
-    fn waiting(&self, view: &View, o: &Out<'_>) -> Option<Pending> {
+    /// view moved to another account or workspace; and whether it was dropped so.
+    fn waiting(&self, view: &View, o: &Out<'_>) -> (Option<Pending>, bool) {
         let (kind, dropped) = {
             let mut s = lock(&self.state);
             let gone = s.pending.as_ref().is_some_and(|p| {
@@ -598,7 +622,7 @@ impl Mind {
         if dropped {
             o.send(MindEvent::Cleared);
         }
-        kind
+        (kind, dropped)
     }
 
     /// Takes the pending step away (this turn answers it), with `Cleared`.
@@ -620,8 +644,23 @@ impl Mind {
                 workspace: view.workspace.clone(),
                 asked_at: Instant::now(),
                 retried: false,
+                repeats: 0,
                 words: lock(&o.words).trim().to_string(),
             });
+        }
+    }
+
+    /// "Say that again" asked the step that waits once more: its asking time starts again, at
+    /// most `MAX_RENEWS` times per step.
+    fn renew(&self, o: &Out<'_>) {
+        let mut s = lock(&self.state);
+        if s.turn == o.turn {
+            if let Some(p) = s.pending.as_mut() {
+                if p.repeats < MAX_RENEWS {
+                    p.repeats += 1;
+                    p.asked_at = Instant::now();
+                }
+            }
         }
     }
 
@@ -638,7 +677,7 @@ impl Mind {
 
     /// Takes the step that waits for a yes: it is gone, and until `Deciding` is dropped a second
     /// yes is that same answer. `None` when it is gone already (lapsed or reset meanwhile).
-    fn take_for_yes(&self, o: &Out<'_>) -> Option<Deciding<'_>> {
+    fn take_for_yes(&self, o: &Out<'_>, kind: ConfirmKind) -> Option<Deciding<'_>> {
         let taken = {
             let mut s = lock(&self.state);
             if s.turn != o.turn || s.pending.take().is_none() {
@@ -646,6 +685,7 @@ impl Mind {
             }
             s.decided += 1;
             s.deciding = true;
+            s.decided_kind = Some(kind);
             Deciding(self)
         };
         o.send(MindEvent::Cleared);
@@ -701,7 +741,7 @@ impl Mind {
                 self.record(o, heard, then);
                 "created"
             }
-            // `needs_yes` holds only the kinds above
+            // `confirm_kind` is `Some` only for the kinds above
             Waiting::Ask { .. } | Waiting::SetupQuestion { .. } => {
                 o.end(Then::Rest);
                 "nothing to do"
@@ -749,7 +789,7 @@ impl Mind {
         cancel: &CancellationToken,
         gate: Gate<'_>,
     ) -> &'static str {
-        let waiting = self.waiting(view, o);
+        let (waiting, expired) = self.waiting(view, o);
         let options = waiting
             .as_ref()
             .map(|w| w.kind.asked().1)
@@ -759,6 +799,13 @@ impl Mind {
             Input::Heard(h) => (h.trim().to_string(), quick(h, &options)),
             Input::Pick(i) => match options.get(i) {
                 Some(option) => (option.clone(), Some(Quick::Pick(i))),
+                // A click on a step that ran out (or was asked in another account or
+                // workspace): it is gone, and the person is told so.
+                None if expired => {
+                    o.say(NOTHING_WAITING);
+                    o.end(Then::Rest);
+                    return "nothing waiting";
+                }
                 None => {
                     o.end(Then::Rest);
                     return "no such option";
@@ -800,6 +847,7 @@ impl Mind {
                     // The words of the turn that asked (never an older reply), then the
                     // question.
                     Some(w) => {
+                        self.renew(o);
                         o.say(&w.words);
                         let (question, options) = w.kind.asked();
                         o.ask(&question, options);
@@ -825,21 +873,27 @@ impl Mind {
             return "nothing heard";
         }
 
-        // A step Dots asked a yes on passes only on a click on Yes or a firm spoken yes. A
-        // spoken position word ("one", "first", "last") is neither yes nor no there.
-        if let Some(w) = waiting.as_ref().filter(|w| w.kind.needs_yes()) {
+        // A step Dots asked a yes on passes only on a click on Yes or a firm spoken yes for its
+        // kind ("deny" passes "Deny ...?" and is a no to "Approve it?"; "approve" said to
+        // "Deny ...?" is neither). A spoken position word ("one", "first", "last") is neither
+        // yes nor no there.
+        let confirming = waiting
+            .as_ref()
+            .and_then(|w| w.kind.confirm_kind().map(|k| (w, k)));
+        if let Some((w, kind)) = confirming {
             let answer = match (clicked, quick.clone()) {
                 (true, Some(Quick::Pick(0))) => Answer::Yes,
                 (true, Some(Quick::Pick(_))) => Answer::No,
-                (false, _) if firm_yes(&heard) => Answer::Yes,
+                (false, _) if firm_yes(&heard, kind) => Answer::Yes,
                 (false, Some(Quick::No)) => Answer::No,
+                (false, _) if firm_for_another(&heard, kind) => Answer::Other,
                 (false, Some(Quick::Yes)) if !w.retried => Answer::Unclear,
                 (false, Some(Quick::Yes)) => Answer::GiveUp,
                 _ => Answer::Other,
             };
             match answer {
                 Answer::Yes => {
-                    let Some(deciding) = self.take_for_yes(o) else {
+                    let Some(deciding) = self.take_for_yes(o, kind) else {
                         o.end(Then::Rest);
                         return "gone before the yes";
                     };

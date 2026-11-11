@@ -65,9 +65,50 @@ const YES: &[&str] = &[
     "okay",
     "ok",
 ];
-/// The yes that passes a confirmation: approving, denying, running, creating, and a send or
-/// answer Dots read back. "Okay", "sure", "right" and "correct" are not in it: they are what
-/// speech-to-text makes of noise, and what a person says while still thinking.
+/// What a confirmation asks: the kind of step a firm yes passes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmKind {
+    /// "<Dot> wants to use <tool> ... Approve it?"
+    Approve,
+    /// "Deny <Dot>'s <tool> request?"
+    Deny,
+    /// "Run <Dot> now?"
+    Run,
+    /// "<Name>. <When>. ... Create it?"
+    Create,
+    /// "Send to <Dot>: ...?"
+    Send,
+    /// An answer to a dot's question, read back.
+    Answer,
+}
+
+impl ConfirmKind {
+    const ALL: [ConfirmKind; 6] = [
+        ConfirmKind::Approve,
+        ConfirmKind::Deny,
+        ConfirmKind::Run,
+        ConfirmKind::Create,
+        ConfirmKind::Send,
+        ConfirmKind::Answer,
+    ];
+
+    /// The words that pass this kind of step, beyond `FIRM_YES`.
+    fn own_words(self) -> &'static [&'static str] {
+        match self {
+            ConfirmKind::Approve => &["approve", "approve it"],
+            ConfirmKind::Deny => &["deny", "deny it", "deny that"],
+            ConfirmKind::Run => &["run it"],
+            ConfirmKind::Create => &["create it", "make it"],
+            ConfirmKind::Send => &["send it", "send"],
+            ConfirmKind::Answer => &["send it", "send that"],
+        }
+    }
+}
+
+/// The yes that passes any confirmation. "Okay", "sure", "right" and "correct" are not in it:
+/// they are what speech-to-text makes of noise, and what a person says while still thinking.
+/// Each kind of step adds its own verb (`ConfirmKind::own_words`): "approve" passes only an
+/// approval, "deny" only a deny.
 const FIRM_YES: &[&str] = &[
     "yes",
     "yeah",
@@ -75,12 +116,12 @@ const FIRM_YES: &[&str] = &[
     "yup",
     "yes please",
     "yes do it",
+    "yes yes",
+    "yes go ahead",
     "do it",
     "go ahead",
     "go for it",
     "please do",
-    "approve",
-    "approve it",
     "confirm",
     "absolutely",
 ];
@@ -192,12 +233,30 @@ fn is_run(option: &[String], heard: &[String]) -> bool {
         && option.windows(heard.len()).any(|win| win == heard)
 }
 
-/// Whether the whole utterance is a firm yes (`FIRM_YES`, with the same filler trimmed as
-/// `quick`). Only this, or a click on Yes, passes a confirmation; a spoken position word never
-/// does.
-pub fn firm_yes(heard: &str) -> bool {
-    let w = trimmed(words_of(heard));
-    !w.is_empty() && FIRM_YES.contains(&w.join(" ").as_str())
+/// The whole utterance, trimmed as `quick` trims it, joined by single spaces.
+fn joined(heard: &str) -> String {
+    trimmed(words_of(heard)).join(" ")
+}
+
+/// Whether the whole utterance is a firm yes to a step of `kind` (`FIRM_YES` or the kind's own
+/// verb, with the same filler trimmed as `quick`). Only this, or a click on Yes, passes a
+/// confirmation; a spoken position word never does.
+pub fn firm_yes(heard: &str, kind: ConfirmKind) -> bool {
+    let j = joined(heard);
+    !j.is_empty() && (FIRM_YES.contains(&j.as_str()) || kind.own_words().contains(&j.as_str()))
+}
+
+/// Whether the whole utterance is another kind's own verb and no answer to `kind`: "approve"
+/// said to "Deny ...?", "send it" said to "Run ...?". Such words are neither yes nor no there:
+/// the step is dropped and they go on as a new turn. ("deny" said to "Approve it?" is a `No`
+/// before this is asked.)
+pub fn firm_for_another(heard: &str, kind: ConfirmKind) -> bool {
+    let j = joined(heard);
+    !j.is_empty()
+        && !firm_yes(heard, kind)
+        && ConfirmKind::ALL
+            .iter()
+            .any(|k| k.own_words().contains(&j.as_str()))
 }
 
 /// Words too common to name a dot: articles, pronouns, common verbs and the words of asking a
@@ -227,6 +286,7 @@ pub(crate) fn common_word(word: &str) -> bool {
         || [STOP, CANCEL, REPEAT, YES, FIRM_YES, NO]
             .iter()
             .flat_map(|table| table.iter())
+            .chain(ConfirmKind::ALL.iter().flat_map(|k| k.own_words().iter()))
             .any(|phrase| phrase.split(' ').any(|p| p == word))
 }
 
@@ -351,15 +411,82 @@ mod tests {
         assert_eq!(phrases.len(), 7 + 7 + 9 + 20 + 12 + 4);
     }
 
+    const EVERY_KIND: &[&str] = &[
+        "yes",
+        "yeah",
+        "yep",
+        "yup",
+        "yes please",
+        "yes do it",
+        "yes yes",
+        "yes go ahead",
+        "do it",
+        "go ahead",
+        "go for it",
+        "please do",
+        "confirm",
+        "absolutely",
+    ];
+
+    /// Per kind: the words that pass it beyond `EVERY_KIND`.
+    fn own(kind: ConfirmKind) -> &'static [&'static str] {
+        match kind {
+            ConfirmKind::Approve => &["approve", "approve it"],
+            ConfirmKind::Deny => &["deny", "deny it", "deny that"],
+            ConfirmKind::Run => &["run it"],
+            ConfirmKind::Create => &["create it", "make it"],
+            ConfirmKind::Send => &["send it", "send"],
+            ConfirmKind::Answer => &["send it", "send that"],
+        }
+    }
+
+    #[test]
+    fn firm_yes_by_kind() {
+        let others: Vec<&str> = ConfirmKind::ALL
+            .iter()
+            .flat_map(|k| own(*k))
+            .copied()
+            .collect();
+        for kind in ConfirmKind::ALL {
+            for p in EVERY_KIND.iter().chain(own(kind)) {
+                assert!(firm_yes(p, kind), "{kind:?}: {p}");
+                assert!(
+                    firm_yes(&format!("Hey Dot, {p}, please."), kind),
+                    "{kind:?}: {p}"
+                );
+                assert!(
+                    firm_yes(&format!("okay, {p} thanks"), kind),
+                    "{kind:?}: {p}"
+                );
+                assert!(!firm_for_another(p, kind), "{kind:?}: {p}");
+            }
+            // another kind's verb is no yes here, and is told apart from other words
+            for p in others.iter().filter(|p| !own(kind).contains(p)) {
+                assert!(!firm_yes(p, kind), "{kind:?}: {p}");
+                assert!(firm_for_another(p, kind), "{kind:?}: {p}");
+            }
+            assert!(!firm_for_another("what about the backup", kind));
+            assert!(!firm_for_another("no", kind));
+        }
+        // the per-kind table, spelled out
+        assert!(firm_yes("approve it", ConfirmKind::Approve));
+        assert!(!firm_yes("approve", ConfirmKind::Deny));
+        assert!(firm_yes("deny that", ConfirmKind::Deny));
+        assert!(!firm_yes("deny", ConfirmKind::Approve));
+        assert_eq!(quick("deny", &[]), Some(Quick::No));
+        assert!(firm_yes("run it", ConfirmKind::Run));
+        assert!(!firm_yes("run it", ConfirmKind::Send));
+        assert!(firm_yes("make it", ConfirmKind::Create));
+        assert!(firm_yes("send", ConfirmKind::Send));
+        assert!(!firm_yes("send", ConfirmKind::Answer));
+        assert!(firm_yes("send that", ConfirmKind::Answer));
+        assert!(firm_yes("send it", ConfirmKind::Answer));
+    }
+
     #[test]
     fn firm_yes_is_strict() {
-        for p in FIRM_YES {
-            assert!(firm_yes(p), "{p}");
-            assert!(firm_yes(&format!("Hey Dot, {p}, please.")), "{p}");
-            assert!(firm_yes(&format!("okay, {p} thanks")), "{p}");
-        }
-        assert!(firm_yes("Yes!"));
-        assert!(firm_yes("  YES, please "));
+        assert!(firm_yes("Yes!", ConfirmKind::Run));
+        assert!(firm_yes("  YES, please ", ConfirmKind::Run));
         for weak in [
             "okay",
             "ok",
@@ -375,8 +502,11 @@ mod tests {
             "yes but wait",
             "",
             "no",
+            "deny it please no",
         ] {
-            assert!(!firm_yes(weak), "{weak}");
+            for kind in ConfirmKind::ALL {
+                assert!(!firm_yes(weak, kind), "{kind:?}: {weak}");
+            }
             // the weak ones are still a yes where no confirmation waits
         }
         assert_eq!(quick("okay", &[]), Some(Quick::Yes));
