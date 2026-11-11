@@ -584,6 +584,246 @@ async fn preview_speaks_then_restores_the_saved_voice() {
     assert_eq!(calls[spoke + 1], format!("notice {GREETING}"));
 }
 
+// ---- the hotkey and the listener ------------------------------------------------------------
+
+/// Records what was registered; refuses the shortcuts in `taken`.
+#[derive(Default)]
+struct FakeHotkey {
+    calls: Mutex<Vec<String>>,
+    taken: Mutex<Vec<String>>,
+}
+
+impl FakeHotkey {
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl HotkeyPort for FakeHotkey {
+    fn register(&self, shortcut: &str) -> Result<(), String> {
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("register {shortcut}"));
+        if self.taken.lock().unwrap().iter().any(|t| t == shortcut) {
+            return Err(super::super::hotkey::TAKEN.to_string());
+        }
+        Ok(())
+    }
+    fn unregister(&self) {
+        self.calls.lock().unwrap().push("unregister".into());
+    }
+}
+
+#[derive(Default)]
+struct FakeListener {
+    mic: Mutex<Vec<bool>>,
+    ready: Mutex<Vec<bool>>,
+}
+
+impl Listener for FakeListener {
+    fn mic_open(&self, open: bool) {
+        self.mic.lock().unwrap().push(open);
+    }
+    fn ready(&self, ready: bool) {
+        self.ready.lock().unwrap().push(ready);
+    }
+}
+
+fn hotkey(r: &Rig) -> Arc<FakeHotkey> {
+    let fake = Arc::new(FakeHotkey::default());
+    r.svc.set_hotkey_port(fake.clone());
+    fake
+}
+
+/// Saves `settings` the way `update_settings` does, then applies them.
+async fn save(r: &Rig, settings: Settings) {
+    r.host.save(settings.clone()).await.unwrap();
+    r.svc.apply(&settings).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn hotkey_registered_only_when_enabled() {
+    let r = rig(Mode::Normal).await;
+    let keys = hotkey(&r);
+    // Off at start: nothing registered.
+    r.svc.apply(&Settings::default()).await;
+    assert!(keys.calls().is_empty(), "{:?}", keys.calls());
+    // On, with no shortcut: still nothing.
+    save(
+        &r,
+        Settings {
+            voice_hotkey: String::new(),
+            ..on()
+        },
+    )
+    .await;
+    assert!(keys.calls().is_empty(), "{:?}", keys.calls());
+    // Turned on (downloads, builds): the default shortcut is registered once.
+    *r.host.settings.lock().unwrap() = Settings::default();
+    r.svc.enable(true).await.unwrap();
+    assert_eq!(keys.calls(), ["register CmdOrCtrl+Shift+Space"]);
+    // Applying the same settings again changes nothing.
+    r.svc.apply(&r.stored()).await;
+    assert_eq!(keys.calls(), ["register CmdOrCtrl+Shift+Space"]);
+    assert_eq!(r.svc.status().await.hotkey_error, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn turning_voice_off_unregisters() {
+    let r = rig(Mode::Normal).await;
+    let keys = hotkey(&r);
+    r.svc.enable(true).await.unwrap();
+    r.svc.enable(false).await.unwrap();
+    assert_eq!(
+        keys.calls(),
+        ["register CmdOrCtrl+Shift+Space", "unregister"]
+    );
+    // Removing the files after turning on again unregisters too.
+    r.svc.enable(true).await.unwrap();
+    r.svc.remove().await.unwrap();
+    assert_eq!(
+        keys.calls(),
+        [
+            "register CmdOrCtrl+Shift+Space",
+            "unregister",
+            "register CmdOrCtrl+Shift+Space",
+            "unregister"
+        ]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn changing_the_hotkey_reregisters() {
+    let r = rig(Mode::Normal).await;
+    let keys = hotkey(&r);
+    r.svc.enable(true).await.unwrap();
+    save(
+        &r,
+        Settings {
+            voice_hotkey: "Alt+F9".into(),
+            ..on()
+        },
+    )
+    .await;
+    assert_eq!(
+        keys.calls(),
+        [
+            "register CmdOrCtrl+Shift+Space",
+            "unregister",
+            "register Alt+F9"
+        ]
+    );
+    // Cleared: unregistered, nothing in its place.
+    save(
+        &r,
+        Settings {
+            voice_hotkey: String::new(),
+            ..on()
+        },
+    )
+    .await;
+    assert_eq!(keys.calls().last().map(String::as_str), Some("unregister"));
+    assert_eq!(keys.calls().len(), 4);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_taken_hotkey_sets_the_error_and_saves_anyway() {
+    let mut r = rig(Mode::Normal).await;
+    let keys = hotkey(&r);
+    keys.taken.lock().unwrap().push("Alt+F9".into());
+    r.svc.enable(true).await.unwrap();
+    save(
+        &r,
+        Settings {
+            voice_hotkey: "Alt+F9".into(),
+            ..on()
+        },
+    )
+    .await;
+    assert_eq!(r.stored().voice_hotkey, "Alt+F9", "the setting is saved");
+    let status = r.svc.status().await;
+    assert_eq!(
+        status.hotkey_error.as_deref(),
+        Some(super::super::hotkey::TAKEN)
+    );
+    // Nothing else changed: voice is still on and ready.
+    assert!(status.enabled && status.ready, "{status:?}");
+    assert!(r.ui().iter().any(|e| matches!(
+        e,
+        VoiceEvent::Status { status } if status.hotkey_error.is_some()
+    )));
+    // A free one clears the error.
+    save(
+        &r,
+        Settings {
+            voice_hotkey: "Alt+F10".into(),
+            ..on()
+        },
+    )
+    .await;
+    assert_eq!(r.svc.status().await.hotkey_error, None);
+    assert_eq!(
+        keys.calls().last().map(String::as_str),
+        Some("register Alt+F10")
+    );
+    // Turning off clears it too.
+    keys.taken.lock().unwrap().push("Alt+F11".into());
+    save(
+        &r,
+        Settings {
+            voice_hotkey: "Alt+F11".into(),
+            ..on()
+        },
+    )
+    .await;
+    assert!(r.svc.status().await.hotkey_error.is_some());
+    r.svc.enable(false).await.unwrap();
+    assert_eq!(r.svc.status().await.hotkey_error, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mic_open_changes_reach_the_listener_once_each() {
+    let r = rig(Mode::Normal).await;
+    let heard = Arc::new(FakeListener::default());
+    r.svc.set_listener(heard.clone());
+    r.svc.enable(true).await.unwrap();
+    assert_eq!(*heard.ready.lock().unwrap(), [true]);
+    assert!(
+        heard.mic.lock().unwrap().is_empty(),
+        "the mic starts closed"
+    );
+    let session = r.factory.session(0);
+    let steps = [
+        (State::Listening, true),
+        (State::Thinking, false),
+        (State::Speaking, false),
+        (State::Listening, true),
+        (State::Asking, true),
+        (State::Idle, false),
+    ];
+    for (state, mic_open) in steps {
+        session.emit(SessionEvent::State { state, mic_open });
+    }
+    let h = heard.clone();
+    until("four changes", || h.mic.lock().unwrap().len() >= 4).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(*heard.mic.lock().unwrap(), [true, false, true, false]);
+    // Opened, then turned off: closed and not ready.
+    session.emit(SessionEvent::State {
+        state: State::Listening,
+        mic_open: true,
+    });
+    let h = heard.clone();
+    until("open again", || h.mic.lock().unwrap().len() == 5).await;
+    r.svc.enable(false).await.unwrap();
+    assert_eq!(
+        *heard.mic.lock().unwrap(),
+        [true, false, true, false, true, false]
+    );
+    assert_eq!(*heard.ready.lock().unwrap(), [true, false]);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn devices_are_listed() {
     let r = rig(Mode::Normal).await;

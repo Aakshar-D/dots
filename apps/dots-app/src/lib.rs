@@ -499,6 +499,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Open Dot's hotkey: registered from Rust by the voice service, only while voice is on.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // The pages of the apps' screens (app library spec section 5).
         .register_asynchronous_uri_scheme_protocol(app_frame::SCHEME, |ctx, request, responder| {
             let app = ctx.app_handle().clone();

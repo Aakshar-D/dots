@@ -104,6 +104,22 @@ pub trait Host: Send + Sync + 'static {
     fn mind(&self) -> Arc<dyn MindPort>;
 }
 
+/// The global hotkey: the plugin in the app (`hotkey::PluginHotkey`), a fake in tests.
+pub trait HotkeyPort: Send + Sync + 'static {
+    /// Registers `shortcut`; a failure is a sentence for people.
+    fn register(&self, shortcut: &str) -> Result<(), String>;
+    /// Lets go of the shortcut registered last, if any.
+    fn unregister(&self);
+}
+
+/// Told when the microphone opens or closes and when voice becomes ready or stops being
+/// ready, once per change (the tray in the app). Must not block: it is called from the
+/// service's own calls.
+pub trait Listener: Send + Sync + 'static {
+    fn mic_open(&self, open: bool);
+    fn ready(&self, ready: bool);
+}
+
 /// The session's wake phrase and interruption settings, from Dots' settings.
 pub fn session_settings(s: &Settings) -> SessionSettings {
     SessionSettings {
@@ -193,6 +209,12 @@ pub struct Service {
     inner: Mutex<Inner>,
     /// How many states the session went through, and the last.
     state_tx: watch::Sender<(u64, State)>,
+    hotkey_port: Mutex<Option<Arc<dyn HotkeyPort>>>,
+    /// The shortcut registered now. Held while (un)registering, so changes go in order.
+    registered: Mutex<Option<String>>,
+    listener: Mutex<Option<Arc<dyn Listener>>>,
+    /// What the listener was told last: (mic open, ready). Held while telling it.
+    told: Mutex<(bool, bool)>,
 }
 
 impl Service {
@@ -225,7 +247,87 @@ impl Service {
                 last_sent: None,
             }),
             state_tx: watch::channel((0, State::Off)).0,
+            hotkey_port: Mutex::new(None),
+            registered: Mutex::new(None),
+            listener: Mutex::new(None),
+            told: Mutex::new((false, false)),
         })
+    }
+
+    /// Where the hotkey is registered; set before the stored settings are applied.
+    pub fn set_hotkey_port(&self, port: Arc<dyn HotkeyPort>) {
+        *self.hotkey_port.lock().unwrap_or_else(|e| e.into_inner()) = Some(port);
+    }
+
+    /// Who hears of the microphone and readiness changing (the tray).
+    pub fn set_listener(&self, listener: Arc<dyn Listener>) {
+        *self.listener.lock().unwrap_or_else(|e| e.into_inner()) = Some(listener);
+    }
+
+    /// Registers the hotkey while voice is on and a shortcut is set, re-registers it when the
+    /// shortcut changed, and lets it go otherwise. A failure only sets `hotkey_error`.
+    fn sync_hotkey(&self) {
+        let Some(port) = self
+            .hotkey_port
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        let mut registered = self.registered.lock().unwrap_or_else(|e| e.into_inner());
+        let wanted = {
+            let s = self.lock();
+            let key = s.settings.voice_hotkey.trim();
+            (s.settings.voice_enabled && !key.is_empty()).then(|| key.to_string())
+        };
+        // A shortcut that failed is not registered: it is tried again on the next sync.
+        if *registered == wanted {
+            drop(registered);
+            if wanted.is_none() {
+                self.set_hotkey_error(None);
+            }
+            return;
+        }
+        if registered.take().is_some() {
+            port.unregister();
+        }
+        let error = match &wanted {
+            Some(key) => match port.register(key) {
+                Ok(()) => {
+                    *registered = Some(key.clone());
+                    None
+                }
+                Err(sentence) => Some(sentence),
+            },
+            None => None,
+        };
+        drop(registered);
+        self.set_hotkey_error(error);
+    }
+
+    /// Tells the listener what changed since it was told last.
+    fn tell(&self) {
+        let Some(listener) = self
+            .listener
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+        else {
+            return;
+        };
+        let mut told = self.told.lock().unwrap_or_else(|e| e.into_inner());
+        let now = {
+            let s = self.lock();
+            (s.mic_open, s.live.is_some())
+        };
+        if now.0 != told.0 {
+            listener.mic_open(now.0);
+        }
+        if now.1 != told.1 {
+            listener.ready(now.1);
+        }
+        *told = now;
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
@@ -259,7 +361,7 @@ impl Service {
         self.status_of(&s)
     }
 
-    /// Sends `Status` when the status differs from the last one sent.
+    /// Sends `Status` when the status differs from the last one sent, and tells the listener.
     fn changed(&self) {
         let mut s = self.lock();
         let status = self.status_of(&s);
@@ -267,7 +369,10 @@ impl Service {
             s.last_sent = Some(status.clone());
             drop(s);
             self.send(VoiceEvent::Status { status });
+        } else {
+            drop(s);
         }
+        self.tell();
     }
 
     pub async fn status(&self) -> VoiceStatus {
@@ -309,6 +414,7 @@ impl Service {
             }
             None => self.build(false).await,
         }
+        self.sync_hotkey();
         self.changed();
         Ok(self.status_now())
     }
@@ -374,6 +480,8 @@ impl Service {
                 s.settings = settings;
                 s.trouble =
                     (e.kind != crate::error::CmdErrorKind::Cancelled).then(|| e.message.clone());
+                drop(s);
+                self.sync_hotkey();
             }
         }
         self.changed();
@@ -550,6 +658,7 @@ impl Service {
         let root = self.root.clone();
         let removed = tauri::async_runtime::spawn_blocking(move || dots_voice::remove(&root)).await;
         self.lock().trouble = None;
+        self.sync_hotkey();
         self.changed();
         match removed {
             Ok(Ok(())) => Ok(self.status_now()),
@@ -686,9 +795,10 @@ impl Service {
         }
     }
 
-    /// Saved settings apply at once: off stops the session and lets go of the microphone; a
-    /// new microphone or speaker rebuilds it; voice, speed, wake phrase and interruption are
-    /// set on the running session.
+    /// Saved settings apply at once: off stops the session, lets go of the microphone and the
+    /// hotkey; a new microphone or speaker rebuilds it; voice, speed, wake phrase and
+    /// interruption are set on the running session; a new hotkey is registered in place of
+    /// the old (a failure only sets `hotkey_error`).
     pub async fn apply(&self, settings: &Settings) {
         let live = {
             let mut s = self.lock();
@@ -699,6 +809,7 @@ impl Service {
             s.live.as_ref().map(|l| (l.spec.clone(), l.session.clone()))
         };
         if !settings.voice_enabled {
+            self.sync_hotkey();
             self.cancel_download();
             if let Some(live) = self.take_live() {
                 Self::stop_live(live).ended(SHUTDOWN_WAIT).await;
@@ -707,6 +818,8 @@ impl Service {
             self.changed();
             return;
         }
+        // The hotkey before the session: a slow build does not hold it back.
+        self.sync_hotkey();
         let wanted = self.spec_of(settings);
         match live {
             Some((had, _)) if had.mic != wanted.mic || had.speaker != wanted.speaker => {

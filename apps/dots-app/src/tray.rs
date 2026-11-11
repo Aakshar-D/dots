@@ -1,6 +1,7 @@
-//! The tray icon: Open, Needs you, Inbox (n), Pause schedules and watchers, Quit (spec §7; needs-you
-//! spec section 4.3).
+//! The tray icon: Open, Talk to Dot, Needs you, Inbox (n), Pause schedules and watchers, Quit
+//! (spec §7; needs-you spec section 4.3; Open Dot step 3).
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use dots_core::model::DotOverview;
@@ -15,9 +16,18 @@ use dots_core::limits::{local_time, percent, LimitReading, LimitsState};
 use crate::events::{NAVIGATE_EVENT, STATUS_EVENT};
 use crate::state::{runtime_of, AppState};
 
+/// The tooltip's last line while Open Dot's microphone is open.
+pub const LISTENING: &str = "Dot is listening";
+
 /// The tray's tooltip: the Inbox count, then Claude's 5-hour and weekly usage and, while
-/// background runs are held, how many until when (usage and limits spec section 5).
-pub fn tooltip(count: usize, limits: Option<&LimitsState>, now: DateTime<Utc>) -> String {
+/// background runs are held, how many until when (usage and limits spec section 5), and
+/// "Dot is listening" while the microphone is open (Open Dot, step 3).
+pub fn tooltip(
+    count: usize,
+    limits: Option<&LimitsState>,
+    now: DateTime<Utc>,
+    listening: bool,
+) -> String {
     let mut text = match count {
         0 => "Dots".to_string(),
         n => format!("Dots: {n} to review"),
@@ -44,6 +54,10 @@ pub fn tooltip(count: usize, limits: Option<&LimitsState>, now: DateTime<Utc>) -
                 local_time(until.with_timezone(&Utc), now)
             ));
         }
+    }
+    if listening {
+        text.push('\n');
+        text.push_str(LISTENING);
     }
     text
 }
@@ -96,13 +110,21 @@ pub struct Tray {
     inbox: MenuItem<Wry>,
     pause: CheckMenuItem<Wry>,
     needs: Submenu<Wry>,
+    /// "Talk to Dot": enabled only while Open Dot is ready.
+    talk: MenuItem<Wry>,
     /// The items Needs you shows now; empty while it shows "Nothing waiting".
     shown: Mutex<Vec<(String, String)>>,
+    /// Whether Open Dot's microphone is open.
+    listening: AtomicBool,
+    /// The last Inbox count and limits, so the tooltip can be rebuilt when listening changes.
+    /// Held while the tooltip is set, so two updates cannot cross.
+    last: Mutex<(usize, Option<LimitsState>)>,
 }
 
 impl Tray {
     pub fn build(app: &AppHandle, paused: bool) -> tauri::Result<Tray> {
         let open = MenuItem::with_id(app, "open", "Open Dots", true, None::<&str>)?;
+        let talk = MenuItem::with_id(app, "talk", "Talk to Dot", false, None::<&str>)?;
         let inbox = MenuItem::with_id(app, "inbox", inbox_label(0), true, None::<&str>)?;
         let pause = CheckMenuItem::with_id(
             app,
@@ -116,9 +138,12 @@ impl Tray {
         let separator = PredefinedMenuItem::separator(app)?;
         let nothing = MenuItem::with_id(app, NOTHING_ID, NOTHING_WAITING, false, None::<&str>)?;
         let needs = Submenu::with_id_and_items(app, "needs", "Needs you", true, &[&nothing])?;
-        let menu = Menu::with_items(app, &[&open, &needs, &inbox, &pause, &separator, &quit])?;
+        let menu = Menu::with_items(
+            app,
+            &[&open, &talk, &needs, &inbox, &pause, &separator, &quit],
+        )?;
         let mut builder = TrayIconBuilder::with_id("main")
-            .tooltip(tooltip(0, None, Utc::now()))
+            .tooltip(tooltip(0, None, Utc::now(), false))
             .menu(&menu)
             .show_menu_on_left_click(false)
             .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
@@ -141,15 +166,42 @@ impl Tray {
             inbox,
             pause,
             needs,
+            talk,
             shown: Mutex::new(Vec::new()),
+            listening: AtomicBool::new(false),
+            last: Mutex::new((0, None)),
         })
     }
 
     pub fn set_count(&self, count: usize, limits: Option<&LimitsState>) {
+        let mut last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        *last = (count, limits.cloned());
+        let listening = self.listening.load(Ordering::SeqCst);
         let _ = self
             .icon
-            .set_tooltip(Some(tooltip(count, limits, Utc::now())));
+            .set_tooltip(Some(tooltip(count, limits, Utc::now(), listening)));
+        drop(last);
         let _ = self.inbox.set_text(inbox_label(count));
+    }
+
+    /// Open Dot's microphone opened or closed: the tooltip is rebuilt at once.
+    pub fn set_listening(&self, listening: bool) {
+        let last = self.last.lock().unwrap_or_else(PoisonError::into_inner);
+        if self.listening.swap(listening, Ordering::SeqCst) == listening {
+            return;
+        }
+        let (count, limits) = &*last;
+        let _ = self.icon.set_tooltip(Some(tooltip(
+            *count,
+            limits.as_ref(),
+            Utc::now(),
+            listening,
+        )));
+    }
+
+    /// "Talk to Dot" is enabled only while Open Dot is ready.
+    pub fn set_talk_enabled(&self, ready: bool) {
+        let _ = self.talk.set_enabled(ready);
     }
 
     pub fn set_paused(&self, paused: bool) {
@@ -210,6 +262,15 @@ fn on_menu(app: &AppHandle, id: &str) {
     let rt: Option<Arc<Runtime>> = runtime_of(app.try_state::<AppState>().as_deref());
     match id {
         "open" => crate::show_main(app),
+        "talk" => {
+            crate::show_main(app);
+            // `try_state`: the tray can exist before the voice service is managed.
+            if let Some(voice) = app.try_state::<crate::voice::VoiceHandle>() {
+                if let Ok(service) = voice.get() {
+                    service.open();
+                }
+            }
+        }
         "inbox" => {
             crate::show_main(app);
             let _ = app.emit(NAVIGATE_EVENT, "/inbox");
@@ -297,34 +358,52 @@ mod tests {
             hold_until: None,
         };
         assert_eq!(
-            tooltip(2, Some(&state), now),
+            tooltip(2, Some(&state), now, false),
             "Dots: 2 to review\nClaude 5h 42% · week 55%"
         );
         state.holding = true;
         state.held_run_ids = vec!["a".into(), "b".into(), "c".into()];
         state.hold_until = Some(dots_core::util::timestamp(today(15, 10)));
         assert_eq!(
-            tooltip(0, Some(&state), now),
+            tooltip(0, Some(&state), now, false),
             "Dots\nClaude 5h 42% · week 55%\nHolding 3 runs until 15:10"
+        );
+        // The listening line comes last.
+        assert_eq!(
+            tooltip(0, Some(&state), now, true),
+            "Dots\nClaude 5h 42% · week 55%\nHolding 3 runs until 15:10\nDot is listening"
         );
         state.held_run_ids = vec!["a".into()];
         assert_eq!(
-            tooltip(0, Some(&state), now),
+            tooltip(0, Some(&state), now, false),
             "Dots\nClaude 5h 42% · week 55%\nHolding 1 run until 15:10"
         );
         state.weekly = None;
         state.holding = false;
         assert_eq!(
-            tooltip(0, Some(&state), now),
+            tooltip(0, Some(&state), now, false),
             "Dots\nClaude 5h 42% · week –"
         );
+    }
+
+    /// Open Dot step 3: while the microphone is open the tooltip says so, after the rest.
+    #[test]
+    fn tooltip_says_dot_is_listening() {
+        let now = chrono::Utc::now();
+        assert_eq!(tooltip(0, None, now, true), "Dots\nDot is listening");
+        assert_eq!(
+            tooltip(2, None, now, true),
+            "Dots: 2 to review\nDot is listening"
+        );
+        assert_eq!(tooltip(2, None, now, false), "Dots: 2 to review");
+        assert_eq!(LISTENING, "Dot is listening");
     }
 
     #[test]
     fn tray_texts_show_the_inbox_count() {
         let now = chrono::Utc::now();
-        assert_eq!(tooltip(0, None, now), "Dots");
-        assert_eq!(tooltip(3, None, now), "Dots: 3 to review");
+        assert_eq!(tooltip(0, None, now, false), "Dots");
+        assert_eq!(tooltip(3, None, now, false), "Dots: 3 to review");
         assert_eq!(inbox_label(0), "Inbox");
         assert_eq!(inbox_label(12), "Inbox (12)");
     }
