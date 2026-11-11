@@ -21,7 +21,8 @@ pub use models::{
     install, installed, remove, Manifest, ModelError, ModelFile, ModelPaths, Progress,
 };
 pub use session::{
-    After, Clock, MicOpener, Parts, Session, SessionEvent, SessionSettings, State, SystemClock,
+    After, Clock, MicOpener, Parts, Session, SessionEvent, SessionSettings, SinkOpener, State,
+    SystemClock,
 };
 pub use sherpa::{SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake};
 pub use text::{speakable, trim_spoken, SentenceStream, MAX_SPOKEN_CHARS};
