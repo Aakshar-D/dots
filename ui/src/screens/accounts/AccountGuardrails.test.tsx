@@ -54,6 +54,20 @@ const unguarded: GuardrailsView = {
   guardrails: null,
 };
 
+describe("Settings, Accounts, the account's tabs", () => {
+  it("wrap rather than widen the page in a narrow window", async () => {
+    account({ default: unguarded });
+    renderApp("/settings/account");
+    const section = await screen.findByRole("group", { name: "Accounts" });
+    const row = await within(section).findByRole("listitem", { name: "Acme Engineering" });
+    const tabs = within(row).getByRole("tablist");
+    expect(within(tabs).getAllByRole("tab")).toHaveLength(6);
+    // The list's fixed height would clip a second row.
+    expect(tabs).toHaveClass("flex-wrap", "group-data-horizontal/tabs:h-auto");
+    expect(tabs).not.toHaveClass("group-data-horizontal/tabs:h-8");
+  });
+});
+
 describe("Settings, Accounts, Guardrails", () => {
   it("shows a workspace's guardrails to an Admin, with the git actions in the core's words", async () => {
     account({ default: unguarded, platform: adminView });

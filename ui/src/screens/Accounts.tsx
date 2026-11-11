@@ -226,7 +226,9 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
   return (
     <li aria-label={org.name} className="flex flex-col gap-2 rounded-md border p-3">
       <Tabs defaultValue="overview">
-        <TabsList>
+        {/* Six tabs are wider than the account's box in an 800 px window: they wrap instead of
+            widening the page. */}
+        <TabsList className="flex-wrap group-data-horizontal/tabs:h-auto">
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {org.membership === "active" && <TabsTrigger value="members">Members</TabsTrigger>}
           <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
