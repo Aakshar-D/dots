@@ -868,23 +868,24 @@ mod tests {
 
     #[test]
     fn stop_drops_the_rest_of_a_sounding_reply_and_the_one_queued_behind() {
-        let mut rig = rig();
+        let (speaker, entered, release) = FakeSpeaker::gated();
+        let mut rig = rig_with(speaker);
         rig.sink.idle.store(false, Ordering::SeqCst);
-        rig.voice.say_delta("A one. A tw");
-        assert_eq!(rig.next(), say("A one."));
-        rig.voice.say_delta("o.");
+        rig.voice.say_delta("A one. A two.");
+        entered.wait(); // A's first sentence is being synthesised, held
         rig.voice.end_of_reply();
         rig.voice.say("B one. B two.");
         rig.voice.stop();
         assert_eq!(rig.next(), VoiceEvent::Stopped);
         assert!(!rig.voice.speaking());
+        release.wait();
         rig.sink.idle.store(true, Ordering::SeqCst);
         rig.voice.say("C.");
         assert_eq!(rig.next(), say("C."));
         assert_eq!(rig.next(), VoiceEvent::Finished);
         assert!(rig.nothing_pending());
-        assert!(!rig.speaker.sentences().iter().any(|s| s.starts_with('B')));
-        assert!(!rig.speaker.sentences().contains(&"A two.".to_string()));
-        assert_eq!(rig.sink.clips.lock().unwrap().len(), 2);
+        // Nothing from A or B reached the sink; the held sentence was thrown away.
+        assert_eq!(rig.speaker.sentences(), ["A one.", "C."]);
+        assert_eq!(rig.sink.clips.lock().unwrap().len(), 1);
     }
 }
