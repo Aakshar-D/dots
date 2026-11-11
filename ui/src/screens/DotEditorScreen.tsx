@@ -13,7 +13,12 @@ import { FollowUpsList } from "@/components/FollowUpsList";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useDotAccess, useDotAccessQuery, useWorkspaceRefusal } from "@/lib/access";
+import {
+  useDotAccess,
+  useDotAccessQuery,
+  useRunBlocker,
+  useWorkspaceRefusal,
+} from "@/lib/access";
 import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
@@ -102,6 +107,35 @@ function Editor(props: {
   const changed = hashKey([schedule]) !== hashKey([scheduleOf(stored)]);
   const objection = sendable && preview.isError ? errorMessage(preview.error) : undefined;
 
+  // The workspace's policy ceiling for the policy as typed (guardrails spec section 4.3): which
+  // presets a Member's dot may pick, and why this policy can't be saved. A stored dot also gets
+  // the text its runs are held with while it is past the ceiling.
+  const ceilingOrg = props.existing ? props.existing.org_id : draft.org;
+  const ceilingWorkspace = props.existing
+    ? props.existing.workspace_id
+    : (draft.workspace ?? "default");
+  const typedPolicy = useDebounced(draft.spec.policy, 300);
+  const ceiling = useQuery({
+    queryKey: keys.policyCeiling(ceilingOrg, ceilingWorkspace, typedPolicy),
+    queryFn: () => commands.policyCeiling(ceilingOrg, ceilingWorkspace, typedPolicy),
+    // The last answer stays while the next policy is asked about.
+    placeholderData: (previous) => previous,
+  }).data;
+  const held = useQuery({
+    queryKey: keys.dotCeiling(props.existing?.id ?? ""),
+    queryFn: () => commands.dotCeiling(props.existing?.id ?? ""),
+    enabled: props.existing !== null,
+  }).data?.held;
+  // The core refuses a policy past the ceiling only on a save that changes the policy or the
+  // user settings switch: one that keeps both goes, so a held dot can still be renamed or
+  // switched off (guardrails spec section 4.3). The refusal still shows; Save follows the core.
+  const policyKept =
+    props.existing !== null &&
+    hashKey([draft.spec.policy, draft.spec.use_user_settings]) ===
+      hashKey([props.existing.policy, props.existing.use_user_settings]);
+  const policyRefusal = ceiling?.policy_refusal ?? undefined;
+  const saveRefusal = policyKept ? undefined : policyRefusal;
+
   const errors = specErrors(draft.spec, isNew);
   if (objection && changed) errors.schedule ??= objection;
 
@@ -157,6 +191,8 @@ function Editor(props: {
           note: changed ? undefined : objection,
         }}
         onEnabled={onEnabled}
+        ceiling={ceiling}
+        held={held ?? undefined}
       />
     </div>
   );
@@ -175,9 +211,13 @@ function Editor(props: {
           <Button
             size="sm"
             disabled={
-              save.isPending || props.blocked !== undefined || refusal !== undefined || contextBad
+              save.isPending ||
+              props.blocked !== undefined ||
+              refusal !== undefined ||
+              saveRefusal !== undefined ||
+              contextBad
             }
-            title={props.blocked ?? refusal ?? errors.context_rules}
+            title={props.blocked ?? refusal ?? saveRefusal ?? errors.context_rules}
             onClick={submit}
           >
             {props.saveLabel}
@@ -242,9 +282,10 @@ function ExistingDot({ dotId }: { dotId: string }) {
   });
   const org = useDotOrg(dot.data?.org_id ?? null);
   const blocked = org.removed && dot.data?.org_id ? orgRemovedText(dot.data.org_id) : undefined;
-  // Why Run now is off: the account was left, or the core refuses running it.
-  const access = useDotAccess(dotId);
-  const runRefusal = blocked ?? access?.run ?? undefined;
+  // Why Run now is off: the account was left, the core refuses running it, or its runs are
+  // held past the workspace's policy ceiling.
+  const runBlocker = useRunBlocker(dotId);
+  const runRefusal = blocked ?? runBlocker;
   const runNow = useMutation({
     mutationFn: () => commands.runNow(dotId),
     onSuccess: (run) => void navigate(`/runs/${run.id}`),

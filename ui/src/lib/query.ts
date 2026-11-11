@@ -77,6 +77,15 @@ export const keys = {
   orgAudit: (orgId: string) => ["orgs", orgId, "audit"] as const,
   /// An org's member list for the Members tab, under the orgs' key.
   orgMembers: (orgId: string) => ["orgs", orgId, "members"] as const,
+  /// A workspace's Guardrails tab, under the orgs' key: a member-list edit marks it stale.
+  orgGuardrails: (orgId: string, workspaceId: string) =>
+    ["orgs", orgId, "guardrails", workspaceId] as const,
+  /// The policy ceiling of a workspace for a policy, under the orgs' key: a new member list or
+  /// role marks it stale (guardrails spec section 7).
+  policyCeiling: (orgId: string | null, workspaceId: string, policy: unknown) =>
+    ["orgs", orgId ?? "personal", "ceiling", workspaceId, policy] as const,
+  /// What each role can do, as the core checks it; it never changes while the app runs.
+  roleMatrix: ["role-matrix"] as const,
   /// This PC's age public key for a SOPS org: made once, so no org event asks for it again.
   orgSopsKey: (orgId: string) => ["org-sops-key", orgId] as const,
   dots: ["dots"] as const,
@@ -88,6 +97,8 @@ export const keys = {
   /// What the person may not do with a dot, under the dot's key: a move or an org event (its
   /// member list) marks it stale.
   dotAccess: (id: string) => ["dot", id, "access"] as const,
+  /// A dot's policy ceiling and hold text, under the dot's key likewise.
+  dotCeiling: (id: string) => ["dot", id, "ceiling"] as const,
   newDotSpec: ["new-dot-spec"] as const,
   /// The models of an engine, or of a local endpoint (model switcher spec section 2.1).
   models: (engine: string, endpoint: string | null) => ["models", engine, endpoint] as const,
@@ -114,6 +125,8 @@ export const keys = {
   approvalRules: (approvalId: string) => ["approval-rules", approvalId] as const,
   approvalPrivate: (approvalId: string) => ["approval-private", approvalId] as const,
   approvalGuard: (approvalId: string) => ["approval-guard", approvalId] as const,
+  /// What the workspace's guardrails find in an approval's call.
+  approvalGuardrail: (approvalId: string) => ["approval-guardrail", approvalId] as const,
   diff: (runId: string) => ["diff", runId] as const,
   /// A folder run's changes, and what undo would do to them now (undo spec section 3).
   changes: (runId: string) => ["changes", runId] as const,

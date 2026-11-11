@@ -2,13 +2,22 @@ import { Plus, Trash2 } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 
 import { commands } from "@/api/commands";
-import { Action, Preset, type EngineKind, type Policy, type Rule } from "@/api/types";
+import {
+  Action,
+  Preset,
+  type EngineKind,
+  type Guardrails,
+  type Policy,
+  type PolicyCeiling,
+  type Rule,
+} from "@/api/types";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect } from "@/components/ui/native-select";
 import { describeAllowRule, isDotsOwnRule } from "@/lib/allow-rules";
 import { PRESET_SENTENCES } from "@/lib/dot-rules";
+import { ceilingLine, GIT_LABELS, PRESET_NAMES, protectedCount } from "@/lib/guardrails";
 import { notifyError } from "@/lib/notify";
 import { ManagedPolicyNotice, useManagedCheck } from "@/screens/ManagedPolicyNotice";
 
@@ -27,6 +36,11 @@ export function PolicyEditor(props: {
   error?: string;
   /// Only a dot run by the Claude CLI meets the company's Claude Code policy; default `claude`.
   engine?: EngineKind;
+  /// The workspace's policy ceiling for this policy (guardrails spec section 4.3): presets past
+  /// it are off with the core's reason, and a policy past it says why it can't be saved.
+  ceiling?: PolicyCeiling;
+  /// The stored dot's runs wait with this text: its policy is past the ceiling.
+  held?: string;
 }) {
   const { policy, onChange } = props;
   const managed = useManagedCheck(props.engine ?? "claude", policy);
@@ -57,21 +71,56 @@ export function PolicyEditor(props: {
       .then((p) => onChange({ ...p, ask_send_delete: policy.ask_send_delete }), notifyError);
   }
 
+  const { ceiling } = props;
+  const presetRefusal = (p: Preset) =>
+    ceiling?.presets.find((entry) => entry.preset === p)?.refusal ?? undefined;
+  // The presets this PC may not pick, each with the core's reason; the one in use is told by
+  // `policy_refusal` instead.
+  const refused = Preset.options.filter((p) => p !== policy.preset && presetRefusal(p));
+  const refusedId = useId();
+  const line = ceiling ? ceilingLine(ceiling) : null;
   return (
     <div className="flex flex-col gap-3">
+      {props.held && (
+        <p role="status" className="text-xs text-needs">
+          {props.held}
+        </p>
+      )}
+      {line && <p className="text-xs text-muted-foreground">{line}</p>}
       <Field label="Preset" htmlFor="policy-preset">
         <NativeSelect
           id="policy-preset"
           value={policy.preset}
+          aria-describedby={refused.length > 0 ? refusedId : undefined}
           onChange={(e) => choosePreset(Preset.parse(e.target.value))}
         >
           {Preset.options.map((p) => (
-            <option key={p} value={p}>
+            <option key={p} value={p} disabled={!!presetRefusal(p)} title={presetRefusal(p)}>
               {PRESETS[p]}
             </option>
           ))}
         </NativeSelect>
       </Field>
+      {refused.length > 0 && (
+        <ul id={refusedId} className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+          {refused.map((p) => (
+            <li key={p}>
+              {PRESET_NAMES[p]} is off: {presetRefusal(p)}
+            </li>
+          ))}
+        </ul>
+      )}
+      {ceiling?.policy_refusal && (
+        <p role="alert" className="text-xs text-destructive">
+          {ceiling.policy_refusal}
+        </p>
+      )}
+      {ceiling?.protected && (
+        <ProtectedList
+          guardrails={ceiling.protected}
+          workspace={ceiling.workspace_name ?? "this workspace"}
+        />
+      )}
       <p className="text-xs text-muted-foreground">
         {policy.preset === "custom" ? "Your own rules." : PRESET_SENTENCES[policy.preset]}
       </p>
@@ -223,6 +272,26 @@ function AlwaysAllowed(props: { rules: Rule[]; onRemove: (index: number) => void
         </ul>
       )}
     </div>
+  );
+}
+
+/// What the workspace protects, folded under a count: brief, since the Guardrails tab of the
+/// account has the whole of it.
+function ProtectedList({ guardrails: g, workspace }: { guardrails: Guardrails; workspace: string }) {
+  return (
+    <details className="text-xs">
+      <summary className="cursor-pointer text-muted-foreground">
+        Protected in {workspace}: {protectedCount(g)}
+      </summary>
+      <dl className="mt-1 flex flex-col gap-1 pl-3">
+        <dt className="font-medium">Paths</dt>
+        <dd className="font-mono">{g.protected_paths.join(", ") || "None"}</dd>
+        <dt className="font-medium">Git</dt>
+        <dd>{g.protected_git.map((a) => GIT_LABELS[a]).join(", ") || "None"}</dd>
+        <dt className="font-medium">Commands</dt>
+        <dd className="font-mono">{g.protected_commands.join(", ") || "None"}</dd>
+      </dl>
+    </details>
   );
 }
 

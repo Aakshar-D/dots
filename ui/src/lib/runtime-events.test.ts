@@ -234,6 +234,8 @@ describe("runtime events and the query cache", () => {
       keys.dots,
       keys.overview,
       keys.dot("dot-a"),
+      // A role change can turn a waiting approval into one that needs an Admin, or back.
+      keys.approvalGuardrail("ap-1"),
     ];
     const untouched = [keys.settings, keys.orgSopsKey("acme-eng")];
     for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
