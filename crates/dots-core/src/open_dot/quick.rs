@@ -195,7 +195,18 @@ pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
     if w.iter().all(|x| FILLER_WORDS.contains(&x.as_str())) {
         return None;
     }
-    // Every option the words are a whole-word run of; one match or nothing.
+    // An option whose whole text is what was said wins; two the same is no pick.
+    let mut exact = options
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| words_of(o) == w)
+        .map(|(i, _)| i);
+    match (exact.next(), exact.next()) {
+        (Some(i), None) => return Some(Quick::Pick(i)),
+        (Some(_), Some(_)) => return None,
+        _ => {}
+    }
+    // Else every option the words are a whole-word run of; one match or nothing.
     let mut found = options
         .iter()
         .enumerate()
@@ -344,8 +355,12 @@ mod tests {
         assert_eq!(quick("staging", &o), None);
         assert_eq!(quick("staging database", &o), Some(Quick::Pick(1)));
         assert_eq!(quick("database", &o), Some(Quick::Pick(1)));
-        // an exact option that is also a run of another stays ambiguous
+        // an option that is exactly what was said wins over runs of others
         let o = opts(&["Staging", "Staging server"]);
+        assert_eq!(quick("staging", &o), Some(Quick::Pick(0)));
+        assert_eq!(quick("staging server", &o), Some(Quick::Pick(1)));
+        // two options with the same text are no pick
+        let o = opts(&["Staging", "staging!", "Staging server"]);
         assert_eq!(quick("staging", &o), None);
         assert_eq!(quick("nothing like it", &o), None);
     }

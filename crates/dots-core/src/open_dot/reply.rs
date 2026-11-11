@@ -98,7 +98,6 @@ impl Wish {
             Wish::Open { target } => filled(target),
             Wish::Ask { question, options } => {
                 filled(question)
-                    && !options.is_empty()
                     && options.len() <= MAX_OPTIONS
                     && options
                         .iter()
@@ -143,7 +142,12 @@ fn split_block(text: &str) -> (&str, Option<&str>) {
         return (text, None);
     };
     if is_block_line(last) {
-        return (&text[..last_at], Some(block_json(last)));
+        // a fence line left open just before the block is not speech either
+        let cut = match lines.len().checked_sub(2).map(|i| lines[i]) {
+            Some((open_at, open)) if is_fence_open(open) => open_at,
+            _ => last_at,
+        };
+        return (&text[..cut], Some(block_json(last)));
     }
     if last.trim() == FENCE && lines.len() >= 3 {
         let (_, inner) = lines[lines.len() - 2];
@@ -282,7 +286,7 @@ impl SpeechGate {
             self.capped = true;
             cut_len(settled)
         } else {
-            last_sentence_end(safe, settled.len(), false).unwrap_or(settled.len())
+            last_sentence_end(safe, settled.len(), false).unwrap_or(0)
         };
         if target <= self.released {
             return String::new();
@@ -428,11 +432,27 @@ mod tests {
             (r.words.as_str(), r.wish, bad),
             ("Opening it.", Some(Wish::Needs), false)
         );
-        // an unclosed fence: the last line is still a bare block, the stray fence is speech
-        let (r, bad) = read("Hi.\n```\nDO {\"act\":\"needs\"}");
-        assert_eq!(r.wish, Some(Wish::Needs));
-        assert!(!bad);
-        assert!(r.words.contains("```"));
+        // an unclosed fence: the last line is still a bare block, the stray fence is not speech
+        for fence in ["```", "```json", "  ```  "] {
+            let (r, bad) = read(&format!("Hi.\n{fence}\nDO {{\"act\":\"needs\"}}"));
+            assert_eq!(r.words, "Hi.", "{fence}");
+            assert_eq!(r.wish, Some(Wish::Needs));
+            assert!(!bad);
+        }
+        // an open question with no options keeps its wish
+        let (r, bad) = read(
+            "Say it.\nDO {\"act\":\"ask\",\"question\":\"What should it say?\",\"options\":[]}",
+        );
+        assert_eq!(
+            (r.wish, bad),
+            (
+                Some(Wish::Ask {
+                    question: "What should it say?".into(),
+                    options: vec![]
+                }),
+                false
+            )
+        );
         // a fence holding more than the block is no block
         let (r, _) = read("Hi.\n```\nsome code\nDO {\"act\":\"needs\"}\n```");
         assert_eq!(r.wish, None);
@@ -475,7 +495,6 @@ mod tests {
                 seven.join(",")
             ),
             format!("DO {{\"act\":\"ask\",\"question\":\"Which?\",\"options\":[\"{long}\"]}}"),
-            "DO {\"act\":\"ask\",\"question\":\"Which?\",\"options\":[]}".to_string(),
             "DO {\"act\":\"ask\",\"question\":\"Which?\",\"options\":[\"  \"]}".to_string(),
             "DO {\"act\":\"ask\",\"question\":\"\",\"options\":[\"a\"]}".to_string(),
             "DO {\"act\":\"answer\",\"q\":\"q1\",\"text\":\"\"}".to_string(),
@@ -589,6 +608,8 @@ mod tests {
             "Done.\nDO {\"act\":\"nonsense\"}".to_string(),
             "Done.\nDO {broken".to_string(),
             "No block here at all.".to_string(),
+            "Hi.\n```json\nDO {\"act\":\"needs\"}".to_string(),
+            "Hi.\n```\nDO {\"act\":\"needs\"}\nmore words".to_string(),
             "First.\nDO {\"act\":\"needs\"}\nAnd more words after.".to_string(),
             "日本語の文章です。\nDO {\"act\":\"needs\"}".to_string(),
             format!("{long}\nDO {{\"act\":\"needs\"}}"),
@@ -623,6 +644,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn gate_releases_each_sentence_when_it_ends() {
+        let mut gate = SpeechGate::new();
+        assert_eq!(gate.push("First one"), "");
+        assert_eq!(gate.push(" is here."), "");
+        // the end is seen once whitespace follows the mark
+        assert_eq!(gate.push(" "), "First one is here.");
+        assert_eq!(gate.push("Second?"), "");
+        assert_eq!(gate.push("\nThird, still going"), " Second?");
+        assert_eq!(
+            gate.push("! Fourth"),
+            "
+Third, still going!"
+        );
+        assert_eq!(gate.finish(), " Fourth");
+        // "3.14" is not an end
+        let mut gate = SpeechGate::new();
+        assert_eq!(gate.push("It is 3.14 today. "), "It is 3.14 today.");
     }
 
     #[test]
