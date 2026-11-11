@@ -2,10 +2,10 @@
 
 use crate::engine::Clip;
 
-/// The rate the tone is made at. A clip carries its own rate and the sink resamples every
-/// clip (speech too) to the device's rate; most speakers run at 48 kHz, so there the tone
-/// plays without resampling.
-pub const TONE_RATE: u32 = 48_000;
+/// The rate the tone is made at: the rate of the speech clips (the speaker model makes them
+/// at 44.1 kHz), so the sink treats the tone exactly as it treats speech. A clip carries its
+/// own rate and the sink resamples every clip to the device's rate.
+pub const TONE_RATE: u32 = 44_100;
 
 /// The two notes, rising a fourth.
 const NOTES_HZ: [f32; 2] = [660.0, 880.0];
@@ -81,8 +81,10 @@ mod tests {
         assert_eq!(tone.samples.last(), Some(&0.0));
         // Each note fades in and out: the samples next to the gap are near zero too.
         let note = TONE_RATE as usize * 70 / 1000;
+        let gap = TONE_RATE as usize * 15 / 1000;
         assert!(tone.samples[note - 1].abs() < 1e-6);
-        assert!(tone.samples[note..note + 720].iter().all(|s| *s == 0.0));
+        assert!(tone.samples[note..note + gap].iter().all(|s| *s == 0.0));
+        assert_eq!(tone.samples[note + gap], 0.0);
         // No jump between neighbouring samples is larger than the steepest sine slope allows.
         let slope = 0.2 * std::f32::consts::TAU * 880.0 / TONE_RATE as f32;
         assert!(tone
