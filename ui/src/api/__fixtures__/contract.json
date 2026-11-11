@@ -7447,7 +7447,16 @@
     "spend_daily_tokens": null,
     "spend_daily_usd": 10.0,
     "spend_monthly_usd": 200.0,
-    "tested_claude_version": "2.1.295"
+    "tested_claude_version": "2.1.295",
+    "voice_enabled": false,
+    "voice_hotkey": "CmdOrCtrl+Shift+Space",
+    "voice_id": 0,
+    "voice_interrupt_by_talking": false,
+    "voice_mic": null,
+    "voice_notices": false,
+    "voice_speaker": null,
+    "voice_speed": 1.0,
+    "voice_wake_phrase": false
   },
   "SettingsSaved": {
     "restart_required": true,
@@ -7489,7 +7498,16 @@
       "spend_daily_tokens": null,
       "spend_daily_usd": 10.0,
       "spend_monthly_usd": 200.0,
-      "tested_claude_version": "2.1.295"
+      "tested_claude_version": "2.1.295",
+      "voice_enabled": false,
+      "voice_hotkey": "CmdOrCtrl+Shift+Space",
+      "voice_id": 0,
+      "voice_interrupt_by_talking": false,
+      "voice_mic": null,
+      "voice_notices": false,
+      "voice_speaker": null,
+      "voice_speed": 1.0,
+      "voice_wake_phrase": false
     }
   },
   "SetupAnswer": [

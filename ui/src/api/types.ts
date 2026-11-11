@@ -1106,6 +1106,20 @@ export const Settings = z.strictObject({
   checker_model: z.string(),
   // The Claude model Open Dot, the voice assistant, thinks with.
   open_dot_model: z.string(),
+  // Open Dot listens and speaks; off by default, and with it off nothing voice-related runs.
+  voice_enabled: z.boolean(),
+  // Which of the ten voices speaks (0 to 9) and how fast (0.8 to 1.4).
+  voice_id: z.number().int(),
+  voice_speed: z.number(),
+  // The global shortcut that opens Open Dot (Tauri accelerator form); "" is none.
+  voice_hotkey: z.string(),
+  voice_wake_phrase: z.boolean(),
+  voice_interrupt_by_talking: z.boolean(),
+  // Device ids; null is the system's default.
+  voice_mic: nullable(z.string()),
+  voice_speaker: nullable(z.string()),
+  // Notices are said aloud while Open Dot is idle.
+  voice_notices: z.boolean(),
   // When sessions are compacted or started fresh, unless a dot has its own rules.
   context_rules: ContextRules,
 });

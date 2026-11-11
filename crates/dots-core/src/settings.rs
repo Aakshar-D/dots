@@ -20,6 +20,14 @@ pub const MAX_GLOBAL_INSTRUCTIONS: usize = 32 * 1024;
 pub const MAX_AUTO_ARCHIVE_DAYS: u32 = 3650;
 /// The words when a hold share is out of bounds (usage and limits spec section 4).
 pub const SHARE_RULE: &str = "A share is 10 to 100%, in steps of 5.";
+/// The shortcut that opens Open Dot until the person picks another.
+pub const DEFAULT_VOICE_HOTKEY: &str = "CmdOrCtrl+Shift+Space";
+/// The highest voice id: there are ten voices.
+pub const MAX_VOICE_ID: u8 = 9;
+pub const MIN_VOICE_SPEED: f32 = 0.8;
+pub const MAX_VOICE_SPEED: f32 = 1.4;
+/// The longest microphone or speaker id, in bytes.
+pub const MAX_DEVICE_ID: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -71,6 +79,25 @@ pub struct Settings {
     pub checker_model: String,
     /// The Claude model Open Dot, the voice assistant, thinks with: a fast one by default.
     pub open_dot_model: String,
+    /// Open Dot listens and speaks (Open Dot design spec section 10). Off by default; with it
+    /// off nothing voice-related runs.
+    pub voice_enabled: bool,
+    /// Which of the ten voices speaks, 0 to 9.
+    pub voice_id: u8,
+    /// How fast the voice speaks, 0.8 to 1.4 (1.0 is the voice's own pace).
+    pub voice_speed: f32,
+    /// The global shortcut that opens Open Dot, in Tauri's accelerator form; empty is none.
+    pub voice_hotkey: String,
+    /// "Hey Dot" opens Open Dot without the hotkey.
+    pub voice_wake_phrase: bool,
+    /// Talking over Open Dot stops it speaking.
+    pub voice_interrupt_by_talking: bool,
+    /// The microphone's device id; `None` is the system's default.
+    pub voice_mic: Option<String>,
+    /// The speaker's device id; `None` is the system's default.
+    pub voice_speaker: Option<String>,
+    /// Open Dot says notices (a question waiting, a run that ended) aloud while it is idle.
+    pub voice_notices: bool,
     /// The most every dot together may spend in a local day, in estimated API USD (spend caps
     /// design); `None` is no cap.
     pub spend_daily_usd: Option<f64>,
@@ -111,6 +138,15 @@ impl Default for Settings {
             check_results: true,
             checker_model: crate::result_check::DEFAULT_CHECKER_MODEL.to_string(),
             open_dot_model: crate::open_dot::think::DEFAULT_MODEL.to_string(),
+            voice_enabled: false,
+            voice_id: 0,
+            voice_speed: 1.0,
+            voice_hotkey: DEFAULT_VOICE_HOTKEY.to_string(),
+            voice_wake_phrase: false,
+            voice_interrupt_by_talking: false,
+            voice_mic: None,
+            voice_speaker: None,
+            voice_notices: false,
             spend_daily_usd: None,
             spend_daily_tokens: None,
             spend_monthly_usd: None,
@@ -178,9 +214,36 @@ impl Settings {
         if self.open_dot_model.trim().is_empty() {
             return invalid("open_dot_model must not be empty");
         }
+        self.validate_voice()?;
         crate::spend::GlobalCaps::from(self).validate()?;
         self.auto_models.validate()?;
         self.context_rules.validate()?;
+        Ok(())
+    }
+
+    fn validate_voice(&self) -> Result<()> {
+        let invalid = |m: &str| Err(Error::Invalid(m.to_string()));
+        if self.voice_id > MAX_VOICE_ID {
+            return invalid("Pick one of the ten voices.");
+        }
+        if !(self.voice_speed.is_finite()
+            && (MIN_VOICE_SPEED..=MAX_VOICE_SPEED).contains(&self.voice_speed))
+        {
+            return invalid("Speaking speed must be between 0.8 and 1.4.");
+        }
+        if !hotkey_shape_ok(&self.voice_hotkey) {
+            return invalid(
+                "voice_hotkey must be empty or a shortcut such as CmdOrCtrl+Shift+Space",
+            );
+        }
+        for (field, id) in [
+            ("voice_mic", &self.voice_mic),
+            ("voice_speaker", &self.voice_speaker),
+        ] {
+            if id.as_ref().is_some_and(|id| id.len() > MAX_DEVICE_ID) {
+                return Err(Error::Invalid(format!("{field} must be at most 256 bytes")));
+            }
+        }
         Ok(())
     }
 
@@ -192,6 +255,40 @@ impl Settings {
             || self.claude_path != next.claude_path
     }
 }
+
+/// The shape of a shortcut, not whether the system takes it (the app parses it for real): one
+/// to four tokens joined by `+`, none empty or holding a space, the last one a key rather than a
+/// modifier. Empty is no shortcut.
+fn hotkey_shape_ok(hotkey: &str) -> bool {
+    if hotkey.is_empty() {
+        return true;
+    }
+    let tokens: Vec<&str> = hotkey.split('+').collect();
+    let Some(last) = tokens.last() else {
+        return false;
+    };
+    tokens.len() <= 4
+        && tokens
+            .iter()
+            .all(|t| !t.is_empty() && !t.chars().any(char::is_whitespace))
+        && !MODIFIERS.iter().any(|m| m.eq_ignore_ascii_case(last))
+}
+
+/// The modifier names Tauri's accelerators take.
+const MODIFIERS: &[&str] = &[
+    "Ctrl",
+    "Control",
+    "Alt",
+    "Option",
+    "Shift",
+    "Super",
+    "Cmd",
+    "Command",
+    "CmdOrCtrl",
+    "CmdOrControl",
+    "CommandOrCtrl",
+    "CommandOrControl",
+];
 
 /// Refuses a value with a character that would show it as something other than it is. The
 /// user confirms `claude_path` by reading it in a native dialog (spec §12), and that only works

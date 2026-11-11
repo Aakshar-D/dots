@@ -24,6 +24,16 @@ async fn an_empty_table_gives_the_defaults() {
     assert_eq!(s.default_model, "sonnet");
     assert_eq!(s.checker_model, "haiku");
     assert_eq!(s.open_dot_model, "haiku");
+    // Voice is off, and so is everything it would do.
+    assert!(!s.voice_enabled);
+    assert_eq!(s.voice_id, 0);
+    assert_eq!(s.voice_speed, 1.0);
+    assert_eq!(s.voice_hotkey, "CmdOrCtrl+Shift+Space");
+    assert!(!s.voice_wake_phrase);
+    assert!(!s.voice_interrupt_by_talking);
+    assert_eq!(s.voice_mic, None);
+    assert_eq!(s.voice_speaker, None);
+    assert!(!s.voice_notices);
 }
 
 #[tokio::test]
@@ -53,6 +63,15 @@ async fn settings_round_trip() {
         check_results: false,
         checker_model: "sonnet".into(),
         open_dot_model: "sonnet".into(),
+        voice_enabled: true,
+        voice_id: 9,
+        voice_speed: 1.1,
+        voice_hotkey: "Alt+F9".into(),
+        voice_wake_phrase: true,
+        voice_interrupt_by_talking: true,
+        voice_mic: Some("{0.0.1.00000000}.{mic-id}".into()),
+        voice_speaker: Some("{0.0.0.00000000}.{speaker-id}".into()),
+        voice_notices: true,
         spend_daily_usd: Some(12.5),
         spend_daily_tokens: Some(500_000),
         spend_monthly_usd: Some(100.0),
@@ -524,6 +543,104 @@ async fn hold_shares_default_and_bounds() {
         };
         s.validate().unwrap();
     }
+}
+
+#[test]
+fn voice_settings_out_of_bounds_are_refused_with_their_sentence() {
+    type Case = (fn(&mut Settings), &'static str);
+    let voices = "invalid input: Pick one of the ten voices.";
+    let speed = "invalid input: Speaking speed must be between 0.8 and 1.4.";
+    let hotkey = "voice_hotkey";
+    let device = "256 bytes";
+    let cases: Vec<Case> = vec![
+        (|s| s.voice_id = 10, voices),
+        (|s| s.voice_id = 255, voices),
+        (|s| s.voice_speed = 0.79, speed),
+        (|s| s.voice_speed = 1.41, speed),
+        (|s| s.voice_speed = f32::NAN, speed),
+        (|s| s.voice_speed = f32::INFINITY, speed),
+        (|s| s.voice_hotkey = "Ctrl+".into(), hotkey),
+        (|s| s.voice_hotkey = "+Space".into(), hotkey),
+        (|s| s.voice_hotkey = "Ctrl++Space".into(), hotkey),
+        (|s| s.voice_hotkey = "  ".into(), hotkey),
+        (
+            |s| s.voice_hotkey = "Ctrl+Alt+Shift+Super+Space".into(),
+            hotkey,
+        ),
+        (|s| s.voice_hotkey = "Ctrl+Shift".into(), hotkey),
+        (|s| s.voice_hotkey = "Ctrl+Space Bar".into(), hotkey),
+        (|s| s.voice_mic = Some("x".repeat(257)), device),
+        (|s| s.voice_speaker = Some("x".repeat(257)), device),
+    ];
+    for (mutate, needle) in cases {
+        let mut s = Settings::default();
+        mutate(&mut s);
+        let err = s.validate().unwrap_err().to_string();
+        assert!(err.contains(needle), "{err}");
+    }
+}
+
+#[test]
+fn voice_settings_at_their_bounds_are_accepted() {
+    for ok in [
+        (|s: &mut Settings| s.voice_id = 9) as fn(&mut Settings),
+        |s| s.voice_speed = 0.8,
+        |s| s.voice_speed = 1.4,
+        |s| s.voice_hotkey = String::new(),
+        |s| s.voice_hotkey = "F9".into(),
+        |s| s.voice_hotkey = "CmdOrCtrl+Alt+Shift+K".into(),
+        |s| s.voice_mic = Some("x".repeat(256)),
+        |s| s.voice_speaker = Some("x".repeat(256)),
+    ] {
+        let mut s = Settings::default();
+        ok(&mut s);
+        s.validate().unwrap();
+    }
+}
+
+#[test]
+fn voice_settings_need_no_restart() {
+    let base = Settings::default();
+    let s = Settings {
+        voice_enabled: true,
+        voice_id: 3,
+        voice_speed: 1.2,
+        voice_hotkey: String::new(),
+        voice_wake_phrase: true,
+        voice_interrupt_by_talking: true,
+        voice_mic: Some("mic".into()),
+        voice_speaker: Some("speaker".into()),
+        voice_notices: true,
+        ..base.clone()
+    };
+    assert!(!base.restart_required(&s));
+}
+
+#[tokio::test]
+async fn an_old_settings_table_loads_the_voice_defaults() {
+    let old: Settings = serde_json::from_str(r#"{"port": 47321}"#).unwrap();
+    assert_eq!(old, Settings::default());
+    let (dir, store) = temp_store().await;
+    let pool = sqlx::SqlitePool::connect(&format!(
+        "sqlite://{}",
+        dir.path().join("dots.db").display()
+    ))
+    .await
+    .unwrap();
+    for (k, v) in [("port", "47999"), ("open_dot_model", "\"sonnet\"")] {
+        sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
+            .bind(k)
+            .bind(v)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+    pool.close().await;
+    let s = store.get_settings().await.unwrap();
+    assert_eq!(s.port, 47999);
+    assert!(!s.voice_enabled);
+    assert_eq!(s.voice_speed, 1.0);
+    assert_eq!(s.voice_hotkey, "CmdOrCtrl+Shift+Space");
 }
 
 #[test]
