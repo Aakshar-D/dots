@@ -20,7 +20,8 @@ fn frames_for(ms: u32) -> usize {
 pub struct EarSettings {
     /// Quiet that ends a sentence.
     pub end_quiet_ms: u32,
-    /// Less speech than this in a clip is a cough or a click, not a sentence.
+    /// A clip whose longest unbroken run of speech is shorter than this is a cough or a
+    /// click, not a sentence. Separate bursts do not add up.
     pub min_speech_ms: u32,
     /// Audio kept from before the first speech frame, so the first word is not clipped.
     pub pre_roll_ms: u32,
@@ -72,7 +73,9 @@ pub struct Ears {
     ring: VecDeque<Vec<f32>>,
     clip: Vec<f32>,
     in_clip: bool,
-    speech_frames: usize,
+    /// Speech frames in a row right now, and the longest such run in this clip.
+    speech_run: usize,
+    longest_run: usize,
     quiet_run: usize,
     speech_since_partial: usize,
     last_partial: String,
@@ -98,7 +101,8 @@ impl Ears {
             ring: VecDeque::new(),
             clip: Vec::new(),
             in_clip: false,
-            speech_frames: 0,
+            speech_run: 0,
+            longest_run: 0,
             quiet_run: 0,
             speech_since_partial: 0,
             last_partial: String::new(),
@@ -130,11 +134,13 @@ impl Ears {
 
         self.clip.extend_from_slice(frame16k);
         if speech {
-            self.speech_frames += 1;
+            self.speech_run += 1;
+            self.longest_run = self.longest_run.max(self.speech_run);
             self.quiet_run = 0;
             self.speech_since_partial += 1;
         } else {
             self.quiet_run += 1;
+            self.speech_run = 0;
         }
 
         let clip_frames = self.clip.len() / FRAME;
@@ -163,7 +169,8 @@ impl Ears {
         }
         self.clip.extend_from_slice(first_speech_frame);
         self.in_clip = true;
-        self.speech_frames = 1;
+        self.speech_run = 1;
+        self.longest_run = 1;
         self.quiet_run = 0;
         self.speech_since_partial = 0;
         self.last_partial.clear();
@@ -173,7 +180,8 @@ impl Ears {
     fn end_clip(&mut self) {
         self.clip = Vec::new(); // let go of the memory, not just the length
         self.in_clip = false;
-        self.speech_frames = 0;
+        self.speech_run = 0;
+        self.longest_run = 0;
         self.quiet_run = 0;
         self.speech_since_partial = 0;
         self.last_partial.clear();
@@ -210,7 +218,7 @@ impl Ears {
     }
 
     fn finish(&mut self) -> EarEvent {
-        let enough = self.speech_frames >= self.min_speech;
+        let enough = self.longest_run >= self.min_speech;
         let event = if enough {
             match self.recognizer.transcribe(&self.clip_audio()) {
                 Ok(text) if !text.trim().is_empty() => EarEvent::Final(text.trim().to_string()),
@@ -372,14 +380,70 @@ mod tests {
     fn a_pause_shorter_than_the_end_quiet_does_not_end_the_sentence() {
         let mut r = rig(Mode::Count, EarSettings::default());
         let mut events = feed(&mut r.ears, true, 20, 1.0);
-        events.extend(feed(&mut r.ears, false, 19, 1.0)); // 600 ms
+        events.extend(feed(&mut r.ears, false, 19, 1.0)); // 608 ms, under the 22 frames
         events.extend(feed(&mut r.ears, true, 20, 1.0));
+        assert!(finals(&events).is_empty(), "ended inside the sentence");
         events.extend(feed(&mut r.ears, false, 30, 1.0));
-        assert_eq!(finals(&events).len(), 1);
+        // no pre-roll (speech from frame 0): 20 speech + 19 pause + 20 speech
+        // + 22 quiet until the end = 81
+        assert_eq!(finals(&events), vec![&EarEvent::Final("81 frames".into())]);
         assert_eq!(
             events.iter().filter(|e| **e == EarEvent::Started).count(),
             1
         );
+    }
+
+    #[test]
+    fn the_end_quiet_boundary_is_21_frames_in_and_22_out() {
+        let finals_after = |pause: usize| {
+            let mut r = rig(Mode::Count, EarSettings::default());
+            let mut events = feed(&mut r.ears, true, 20, 1.0);
+            events.extend(feed(&mut r.ears, false, pause, 1.0));
+            events.extend(feed(&mut r.ears, true, 20, 1.0));
+            events.extend(feed(&mut r.ears, false, 30, 1.0));
+            finals(&events).len()
+        };
+        assert_eq!(finals_after(21), 1);
+        assert_eq!(finals_after(22), 2);
+    }
+
+    #[test]
+    fn the_minimum_speech_boundary_is_7_frames_out_and_8_in() {
+        let mut r = rig(Mode::Count, EarSettings::default());
+        let mut events = feed(&mut r.ears, true, 7, 1.0); // 224 ms
+        events.extend(feed(&mut r.ears, false, 30, 1.0));
+        assert_eq!(events, vec![EarEvent::Started, EarEvent::Dropped]);
+        assert!(r.recognizer.clips.lock().unwrap().is_empty());
+
+        let mut r = rig(Mode::Count, EarSettings::default());
+        let mut events = feed(&mut r.ears, true, 8, 1.0); // 256 ms
+        events.extend(feed(&mut r.ears, false, 30, 1.0));
+        assert_eq!(finals(&events).len(), 1);
+    }
+
+    #[test]
+    fn two_short_coughs_do_not_add_up_to_speech() {
+        let mut r = rig(Mode::Count, EarSettings::default());
+        let mut events = feed(&mut r.ears, true, 5, 1.0);
+        events.extend(feed(&mut r.ears, false, 9, 1.0)); // 288 ms apart
+        events.extend(feed(&mut r.ears, true, 5, 1.0));
+        events.extend(feed(&mut r.ears, false, 30, 1.0));
+        assert_eq!(events, vec![EarEvent::Started, EarEvent::Dropped]);
+        assert!(r.recognizer.clips.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_long_enough_run_with_scattered_speech_frames_is_a_final() {
+        let mut r = rig(Mode::Count, EarSettings::default());
+        let mut events = feed(&mut r.ears, true, 1, 1.0);
+        events.extend(feed(&mut r.ears, false, 3, 1.0));
+        events.extend(feed(&mut r.ears, true, 1, 1.0));
+        events.extend(feed(&mut r.ears, false, 3, 1.0));
+        events.extend(feed(&mut r.ears, true, 10, 1.0));
+        events.extend(feed(&mut r.ears, false, 3, 1.0));
+        events.extend(feed(&mut r.ears, true, 1, 1.0));
+        events.extend(feed(&mut r.ears, false, 30, 1.0));
+        assert_eq!(finals(&events).len(), 1);
     }
 
     #[test]
