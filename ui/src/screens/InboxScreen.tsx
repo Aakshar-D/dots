@@ -31,6 +31,7 @@ import { CapActions } from "@/components/SpendCaps";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useRunBlocker } from "@/lib/access";
 import { byRun, type RunApprovals } from "@/lib/approvals";
 import { relativeTime } from "@/lib/format";
 import { triggerLabel } from "@/lib/home-topics";
@@ -237,6 +238,8 @@ function AttentionRow({ item, actions }: { item: NeedsAttention; actions?: React
     onError: notifyError,
     onSettled: reload,
   });
+  // Off, with the core's reason, while the dot may not run or its runs are held.
+  const runBlocker = useRunBlocker(item.dot_id);
   const dismiss = useMutation({
     mutationFn: () => commands.dismissScheduleAttention(item.dot_id),
     onError: notifyError,
@@ -262,7 +265,8 @@ function AttentionRow({ item, actions }: { item: NeedsAttention; actions?: React
       <Button
         size="sm"
         variant="outline"
-        disabled={runNow.isPending}
+        disabled={runNow.isPending || runBlocker !== undefined}
+        title={runBlocker}
         onClick={onSingleClick(() => runNow.mutate())}
       >
         <Play aria-hidden /> Run now

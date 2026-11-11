@@ -13,7 +13,12 @@ import { FollowUpsList } from "@/components/FollowUpsList";
 import { Page } from "@/components/Page";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useDotAccess, useDotAccessQuery, useWorkspaceRefusal } from "@/lib/access";
+import {
+  useDotAccess,
+  useDotAccessQuery,
+  useRunBlocker,
+  useWorkspaceRefusal,
+} from "@/lib/access";
 import { scheduleError, scheduleOf, specErrors, specOf } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { orgRemovedText, useDotOrg } from "@/lib/dot-org";
@@ -277,9 +282,10 @@ function ExistingDot({ dotId }: { dotId: string }) {
   });
   const org = useDotOrg(dot.data?.org_id ?? null);
   const blocked = org.removed && dot.data?.org_id ? orgRemovedText(dot.data.org_id) : undefined;
-  // Why Run now is off: the account was left, or the core refuses running it.
-  const access = useDotAccess(dotId);
-  const runRefusal = blocked ?? access?.run ?? undefined;
+  // Why Run now is off: the account was left, the core refuses running it, or its runs are
+  // held past the workspace's policy ceiling.
+  const runBlocker = useRunBlocker(dotId);
+  const runRefusal = blocked ?? runBlocker;
   const runNow = useMutation({
     mutationFn: () => commands.runNow(dotId),
     onSuccess: (run) => void navigate(`/runs/${run.id}`),
