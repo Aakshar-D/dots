@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { VoiceEvent } from "@/api/types";
 import { createQueryClient, keys } from "@/lib/query";
-import { useVoice, voiceStore } from "@/lib/use-voice";
+import { useVoice, useVoiceStatus, voiceStore } from "@/lib/use-voice";
 import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
@@ -151,6 +151,61 @@ describe("useVoice", () => {
       backend.emit("voice", { kind: "status", status: { ...sample.voiceReady, trouble: null } }),
     );
     expect(voiceStore.get().trouble).toBeNull();
+  });
+
+  it("keeps the last three lines of a reply, and starts afresh on what is heard next", async () => {
+    mount("/home");
+    await hear({ kind: "hearing", text: "what is" }, () =>
+      expect(voiceStore.get().hearing).toBe("what is"),
+    );
+    act(() => backend.emit("voice", { kind: "heard", text: "what is waiting" }));
+    expect(voiceStore.get().hearing).toBe("what is waiting");
+    act(() => backend.emit("voice", { kind: "saying", text: "One." }));
+    // A reply starts: what was heard is done with.
+    expect(voiceStore.get().hearing).toBe("");
+    expect(voiceStore.get().said).toEqual(["One."]);
+    for (const line of ["Two.", "Three.", "Four."]) {
+      act(() => backend.emit("voice", { kind: "saying", text: line }));
+    }
+    expect(voiceStore.get().said).toEqual(["Two.", "Three.", "Four."]);
+    expect(voiceStore.get().saying).toBe("Four.");
+    act(() => backend.emit("voice", { kind: "heard", text: "and then" }));
+    expect(voiceStore.get().said).toEqual([]);
+    act(() => backend.emit("voice", { kind: "saying", text: "Then." }));
+    act(() => backend.emit("voice", { kind: "cleared" }));
+    expect(voiceStore.get().said).toEqual([]);
+  });
+
+  it("keeps a status event when a screen's read of the status was on its way", async () => {
+    const reads: ReturnType<typeof later<typeof sample.voiceOff>>[] = [];
+    backend.on("voice_status", () => {
+      const read = later<typeof sample.voiceOff>();
+      reads.push(read);
+      return read.answer;
+    });
+    const qc = createQueryClient();
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      createElement(
+        QueryClientProvider,
+        { client: qc },
+        createElement(MemoryRouter, { initialEntries: ["/home"] }, children),
+      );
+    const { result } = renderHook(
+      () => {
+        useVoice();
+        return useVoiceStatus();
+      },
+      { wrapper },
+    );
+    // One question only: the screen's reader and the frame share it.
+    await waitFor(() => expect(reads).toHaveLength(1));
+    await hear({ kind: "status", status: sample.voiceReady }, () =>
+      expect(result.current.data).toEqual(sample.voiceReady),
+    );
+    await act(async () => reads[0]!.give(sample.voiceOff));
+    expect(qc.getQueryData(keys.voice)).toEqual(sample.voiceReady);
+    expect(result.current.data).toEqual(sample.voiceReady);
+    expect(backend.callsTo("voice_status")).toHaveLength(1);
   });
 
   it("stops listening when it unmounts", async () => {

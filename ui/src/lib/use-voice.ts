@@ -25,6 +25,8 @@ export type VoiceLive = {
   /// What the person is saying, as it is heard; the whole of it once heard.
   hearing: string;
   saying: string;
+  /// The lines of the current reply, oldest first: the last `SAID_KEPT` of them.
+  said: string[];
   ask: { question: string; options: string[] } | null;
   card: OpenDotCard | null;
   /// The speech files' download, while one runs.
@@ -38,6 +40,7 @@ const quiet: VoiceLive = {
   level: { mic: 0, voice: 0 },
   hearing: "",
   saying: "",
+  said: [],
   ask: null,
   card: null,
   download: null,
@@ -73,9 +76,41 @@ export function useVoiceLive<T>(select: (live: VoiceLive) => T): T {
   return useSyncExternalStore(voiceStore.subscribe, () => select(voiceStore.get()));
 }
 
-/// The voice status, seeded by `voice_status` and kept by `status` events.
+/// How many lines of a reply the store keeps.
+const SAID_KEPT = 3;
+
+/// How many times the voice status was set from something newer than a read (an event, or a
+/// command's answer), per query client. A read that began before such a change keeps the newer
+/// status instead of its own answer.
+const changes = new WeakMap<QueryClient, number>();
+const changesOf = (qc: QueryClient) => changes.get(qc) ?? 0;
+
+/// Takes a voice status newer than any read on its way: a `status` event, or the answer of a
+/// command that changed it.
+export function takeVoiceStatus(qc: QueryClient, status: VoiceStatus): void {
+  changes.set(qc, changesOf(qc) + 1);
+  qc.setQueryData(keys.voice, status);
+}
+
+/// Reads the voice status, unless a newer one arrived while the read was on its way.
+async function readVoiceStatus(qc: QueryClient): Promise<VoiceStatus> {
+  const before = changesOf(qc);
+  const status = await commands.voiceStatus();
+  if (changesOf(qc) === before) return status;
+  return qc.getQueryData<VoiceStatus>(keys.voice) ?? status;
+}
+
+const statusQuery = (qc: QueryClient) => ({
+  queryKey: keys.voice,
+  queryFn: () => readVoiceStatus(qc),
+  staleTime: Infinity,
+});
+
+/// The voice status: the one reader of `keys.voice`. `useVoice` seeds it and keeps it from
+/// events; a read never replaces a status that arrived while it was on its way.
 export function useVoiceStatus() {
-  return useQuery({ queryKey: keys.voice, queryFn: commands.voiceStatus });
+  const qc = useQueryClient();
+  return useQuery(statusQuery(qc));
 }
 
 /// Where an `open` event takes the person (app/routes.tsx). The Inbox has no address per
@@ -128,27 +163,38 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
         micOpen: event.mic_open,
         ...(event.state === "listening" ? { trouble: null } : {}),
       });
-      qc.setQueryData<VoiceStatus>(keys.voice, (old) =>
-        old
-          ? {
-              ...old,
-              state: event.state,
-              mic_open: event.mic_open,
-              ...(event.state === "listening" ? { trouble: null } : {}),
-            }
-          : old,
-      );
+      {
+        const old = qc.getQueryData<VoiceStatus>(keys.voice);
+        if (old) {
+          takeVoiceStatus(qc, {
+            ...old,
+            state: event.state,
+            mic_open: event.mic_open,
+            ...(event.state === "listening" ? { trouble: null } : {}),
+          });
+        }
+      }
       return;
     case "level":
       voiceStore.set({ level: { mic: event.mic, voice: event.voice } });
       return;
     case "hearing":
-    case "heard":
       voiceStore.set({ hearing: event.text });
       return;
-    case "saying":
-      voiceStore.set({ saying: event.text });
+    case "heard":
+      // What the person said in full: the reply before it is done with.
+      voiceStore.set({ hearing: event.text, said: [] });
       return;
+    case "saying": {
+      // The first line of a reply: what was heard gives way to it.
+      const { said } = voiceStore.get();
+      voiceStore.set({
+        saying: event.text,
+        said: [...said, event.text].slice(-SAID_KEPT),
+        ...(said.length === 0 ? { hearing: "" } : {}),
+      });
+      return;
+    }
     case "ask":
       voiceStore.set({ ask: { question: event.question, options: event.options } });
       return;
@@ -159,7 +205,7 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       open(pathOf(event.target));
       return;
     case "cleared":
-      voiceStore.set({ hearing: "", saying: "", ask: null, card: null });
+      voiceStore.set({ hearing: "", saying: "", said: [], ask: null, card: null });
       return;
     case "woke":
       return;
@@ -171,7 +217,7 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       return;
     case "status": {
       const status = event.status;
-      qc.setQueryData(keys.voice, status);
+      takeVoiceStatus(qc, status);
       voiceStore.set({
         state: status.state,
         micOpen: status.mic_open,
@@ -210,11 +256,11 @@ export function useVoice(): void {
       },
       () => invalidate(qc, keys.voice),
     );
-    commands
-      .voiceStatus()
+    // Through the query, so a screen that reads the status shares this read, and a status
+    // event that comes first is kept (`readVoiceStatus`).
+    qc.fetchQuery({ ...statusQuery(qc), staleTime: 0 })
       .then((status) => {
         if (!subscribed || heard) return;
-        qc.setQueryData(keys.voice, status);
         voiceStore.set({ state: status.state, micOpen: status.mic_open, trouble: status.trouble });
       })
       .catch(() => {});

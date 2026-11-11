@@ -14,7 +14,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
-import { useVoiceLive, useVoiceStatus } from "@/lib/use-voice";
+import { takeVoiceStatus, useVoiceLive, useVoiceStatus } from "@/lib/use-voice";
 
 function Section(props: { title: string; children: ReactNode }) {
   return (
@@ -190,7 +190,7 @@ export function VoiceSection({
 
   /// The core saved `voice_enabled` itself: the stored settings are read again.
   const took = (next: VoiceStatus) => {
-    qc.setQueryData(keys.voice, next);
+    takeVoiceStatus(qc, next);
     invalidate(qc, keys.settings);
   };
   const enable = useMutation({
