@@ -28,8 +28,13 @@ const ASK_LIMIT: Duration = Duration::from_secs(20);
 const THINK_LIMIT: Duration = Duration::from_secs(120);
 /// At most 30 `Level` events a second.
 const LEVEL_GAP: Duration = Duration::from_micros(33_334);
+/// How long `Speaking` may go without word from the voice before the session gives up on it.
+const VOICE_LIMIT: Duration = Duration::from_secs(60);
+/// Microphone frames handled in one pass, so commands and timers are seen between batches.
+const FRAMES_PER_PASS: usize = 8;
 
 const NO_REPLY: &str = "No reply came back.";
+const VOICE_STUCK: &str = "The voice stopped responding.";
 const MIC_LOST: &str = "The microphone stopped working.";
 const BROKE: &str = "Speech stopped working and was turned off.";
 
@@ -190,6 +195,10 @@ enum Command {
     },
     Notice(String),
     Settings(SessionSettings),
+    SetVoice {
+        voice: u8,
+        speed: f32,
+    },
     Shutdown,
     #[cfg(test)]
     Probe(Sender<Probe>),
@@ -304,6 +313,11 @@ impl Session {
 
     /// `Speaking` or `Thinking` -> `Listening`; stops speech first. A reply still coming for
     /// the current turn is no longer spoken; the app cancels its own request.
+    ///
+    /// After interrupting speech, `Listening` shows at once but the ears hear nothing for
+    /// `reopen_after_ms`, so Dot's own voice is never transcribed (the wake phrase is still
+    /// heard). Known limit: a "Dot, stop" said while a finished sentence is being transcribed
+    /// is thrown away with the rest of that backlog.
     pub fn interrupt(&self) {
         self.send(Command::Interrupt);
     }
@@ -345,6 +359,12 @@ impl Session {
     /// Takes effect at once.
     pub fn settings(&self, settings: SessionSettings) {
         self.send(Command::Settings(settings));
+    }
+
+    /// The voice and speed for sentences synthesised from now on; see `Voice::set_voice`
+    /// (speed is kept within 0.8..=1.4).
+    pub fn set_voice(&self, voice: u8, speed: f32) {
+        self.send(Command::SetVoice { voice, speed });
     }
 
     /// Final: speech stops, the microphone closes, the state becomes `Off` and the worker
@@ -404,10 +424,23 @@ struct Worker {
     last_level: Option<Instant>,
 
     /// Listening and Asking: when the quiet began, how much of it ends the listening, and
-    /// whether a clip is open (no timeout then).
+    /// whether a clip is open (the limit is paused then; `clip_started` is when it opened).
+    /// A dropped clip moves `quiet_since` on by the clip's length only, so noise cannot hold
+    /// the listening open.
     quiet_since: Instant,
     listen_limit: Duration,
     in_speech: bool,
+    clip_started: Instant,
+    /// After speech was interrupted (not by talking), the ears hear nothing until then:
+    /// frames from before it hold Dot's own voice. The wake spotter still hears them.
+    deaf_until: Option<Instant>,
+    /// Stop handling frames for the rest of this pass.
+    halt_frames: bool,
+    /// Frames were left waiting at the end of the last pass.
+    frames_left: bool,
+
+    /// Speaking: the last word from the voice (or the start of speaking).
+    voice_heard_at: Instant,
 
     /// Thinking: since when, and whether `thinking()` has restarted the limit.
     thinking_since: Instant,
@@ -454,6 +487,11 @@ impl Worker {
             quiet_since: now,
             listen_limit: LISTEN_AFTER_OPEN,
             in_speech: false,
+            clip_started: now,
+            deaf_until: None,
+            halt_frames: false,
+            frames_left: false,
+            voice_heard_at: now,
             thinking_since: now,
             asked: false,
             turn: 0,
@@ -468,7 +506,13 @@ impl Worker {
     fn run(mut self, inbox: &Receiver<Command>) {
         self.refresh();
         loop {
-            let mut next = match inbox.recv_timeout(TICK) {
+            // With frames still waiting, only look for commands; do not wait.
+            let wait = if self.frames_left {
+                Duration::ZERO
+            } else {
+                TICK
+            };
+            let mut next = match inbox.recv_timeout(wait) {
                 Ok(command) => Some(command),
                 Err(RecvTimeoutError::Timeout) => None,
                 Err(RecvTimeoutError::Disconnected) => Some(Command::Shutdown),
@@ -578,6 +622,7 @@ impl Worker {
                 self.mic_broken = false;
                 self.refresh();
             }
+            Command::SetVoice { voice, speed } => self.voice.set_voice(voice, speed),
             Command::Shutdown => {}
             #[cfg(test)]
             Command::Probe(_) => {}
@@ -610,9 +655,25 @@ impl Worker {
         }
     }
 
+    /// Stops speech and listens. The state shows `Listening` at once, but when Dot was
+    /// speaking, the frames already waiting are thrown away (they hold Dot's voice), the rest
+    /// of this pass's frames are left for the next pass, and the ears stay deaf for
+    /// `reopen_after_ms`, as after a normal end of speech. (Interruption by talking does not
+    /// come here: that clip is kept.)
     fn interrupt(&mut self) {
+        let was_speaking = self.state == State::Speaking;
+        // Timed from the stop, before `Listening` is published.
+        let tail = Duration::from_millis(u64::from(self.settings.reopen_after_ms));
+        let deaf_until = was_speaking.then(|| self.clock.now() + tail);
         self.stop_speech();
+        if was_speaking {
+            if !self.discard_backlog() {
+                return; // the microphone was lost: reported, and resting
+            }
+            self.halt_frames = true;
+        }
         self.listen(LISTEN_AFTER_OPEN);
+        self.deaf_until = deaf_until;
     }
 
     fn shut_down(&mut self) {
@@ -644,6 +705,7 @@ impl Worker {
     fn listen(&mut self, limit: Duration) {
         self.ears.reset();
         self.in_speech = false;
+        self.deaf_until = None;
         self.quiet_since = self.clock.now();
         self.listen_limit = limit;
         self.enter(State::Listening);
@@ -652,6 +714,7 @@ impl Worker {
     fn ask(&mut self) {
         self.short_ears.reset();
         self.in_speech = false;
+        self.deaf_until = None;
         self.quiet_since = self.clock.now();
         self.listen_limit = ASK_LIMIT;
         self.enter(State::Asking);
@@ -671,10 +734,14 @@ impl Worker {
                 self.ears.reset();
                 self.short_ears.reset();
                 self.in_speech = false;
+                self.deaf_until = None;
             }
             if new == State::Thinking {
                 self.thinking_since = self.clock.now();
                 self.asked = false;
+            }
+            if new == State::Speaking {
+                self.voice_heard_at = self.clock.now();
             }
             self.state = new;
         }
@@ -740,8 +807,16 @@ impl Worker {
 
     // ---- the microphone --------------------------------------------------------------------
 
+    /// Handles up to `FRAMES_PER_PASS` waiting frames; more are left for the next pass, which
+    /// then comes without waiting.
     fn mic_frames(&mut self) {
-        loop {
+        self.halt_frames = false;
+        self.frames_left = false;
+        self.end_deafness();
+        for _ in 0..FRAMES_PER_PASS {
+            if self.halt_frames {
+                return;
+            }
             let Some(mic) = &self.mic else { return };
             match mic.frames.try_recv() {
                 Ok(MicFrame::Audio(frame)) => self.frame(&frame),
@@ -750,6 +825,19 @@ impl Worker {
                     return;
                 }
                 Err(TryRecvError::Empty) => return,
+            }
+        }
+        self.frames_left = true;
+    }
+
+    /// Once the tail after an interruption has passed, the frames still waiting (captured
+    /// before its end) are thrown away and the ears start clean.
+    fn end_deafness(&mut self) {
+        if self.deaf_until.is_some_and(|at| self.clock.now() >= at) {
+            self.deaf_until = None;
+            if self.discard_backlog() {
+                self.ears.reset();
+                self.short_ears.reset();
             }
         }
     }
@@ -818,6 +906,7 @@ impl Worker {
                         self.stop_speech();
                         // The clip just begun carries on: the ears are not reset.
                         self.in_speech = true;
+                        self.clip_started = now;
                         self.quiet_since = now;
                         self.listen_limit = LISTEN_AFTER_OPEN;
                         self.enter(State::Listening);
@@ -829,6 +918,9 @@ impl Worker {
                 if word == Some(WakeWord::DotStop) {
                     self.close();
                     return;
+                }
+                if self.deaf_until.is_some() {
+                    return; // still the tail of Dot's own voice
                 }
                 let events = if self.state == State::Asking {
                     self.short_ears.push(frame)
@@ -847,10 +939,14 @@ impl Worker {
 
     fn ear_event(&mut self, event: EarEvent, now: Instant) {
         match event {
-            EarEvent::Started => self.in_speech = true,
+            EarEvent::Started => {
+                self.in_speech = true;
+                self.clip_started = now;
+            }
             EarEvent::Partial(text) => self.send(SessionEvent::Hearing { text }),
             EarEvent::Final(text) => {
-                // What queued up while the sentence was transcribed is not fresh sound.
+                // What queued up while the sentence was transcribed is not fresh sound. Known
+                // limit: a "Dot, stop" said during that transcription is thrown away with it.
                 if !self.discard_backlog() {
                     return;
                 }
@@ -867,8 +963,9 @@ impl Worker {
                 self.enter(State::Thinking);
             }
             EarEvent::Dropped => {
+                // The limit was paused while the clip was open; it is not restarted.
                 self.in_speech = false;
-                self.quiet_since = now;
+                self.quiet_since += now.saturating_duration_since(self.clip_started);
             }
         }
     }
@@ -889,11 +986,13 @@ impl Worker {
         while let Ok(event) = self.voice_events.try_recv() {
             match event {
                 VoiceEvent::Saying(text) => {
+                    self.voice_heard_at = self.clock.now();
                     if self.state == State::Speaking {
                         self.send(SessionEvent::Saying { text });
                     }
                 }
                 VoiceEvent::Finished => {
+                    self.voice_heard_at = self.clock.now();
                     self.replies_pending = self.replies_pending.saturating_sub(1);
                 }
                 VoiceEvent::Stopped => {}
@@ -931,6 +1030,13 @@ impl Worker {
                 }
             }
             State::Speaking => {
+                if now.saturating_duration_since(self.voice_heard_at) >= VOICE_LIMIT {
+                    // The voice thread died, or the sink never goes quiet.
+                    self.trouble(VOICE_STUCK);
+                    self.stop_speech();
+                    self.enter(State::Idle);
+                    return;
+                }
                 if !self.speech_done() {
                     let voice = self.sink.level();
                     self.level(0.0, voice, now);
@@ -1015,12 +1121,20 @@ mod tests {
         }
     }
 
+    type Gate = (Arc<Barrier>, Arc<Barrier>);
+
     struct Detector {
         seen: Arc<AtomicUsize>,
+        /// Holds the first call: it reaches `entered`, then waits at `release`.
+        gate: Option<Gate>,
     }
 
     impl SpeechDetector for Detector {
         fn is_speech(&mut self, frame16k: &[f32]) -> bool {
+            if let Some((entered, release)) = self.gate.take() {
+                entered.wait();
+                release.wait();
+            }
             self.seen.fetch_add(1, Ordering::SeqCst);
             frame16k[0] > 0.0
         }
@@ -1064,6 +1178,7 @@ mod tests {
     #[derive(Default)]
     struct FakeSpeaker {
         said: Mutex<Vec<String>>,
+        voices: Mutex<Vec<(u8, f32)>>,
     }
 
     impl FakeSpeaker {
@@ -1073,8 +1188,9 @@ mod tests {
     }
 
     impl Speaker for FakeSpeaker {
-        fn speak(&self, sentence: &str, _voice: u8, _speed: f32) -> Result<Clip, EngineError> {
+        fn speak(&self, sentence: &str, voice: u8, speed: f32) -> Result<Clip, EngineError> {
             self.said.lock().unwrap().push(sentence.to_string());
+            self.voices.lock().unwrap().push((voice, speed));
             Ok(Clip {
                 samples: vec![0.1; 8],
                 rate: 16_000,
@@ -1222,6 +1338,8 @@ mod tests {
         talk: bool,
         ears: EarSettings,
         recognizer: Option<Arc<FakeRecognizer>>,
+        /// Holds the sentence ears' first detector call.
+        detector_gate: Option<Gate>,
     }
 
     impl Default for Opts {
@@ -1231,6 +1349,7 @@ mod tests {
                 talk: false,
                 ears: test_ears(),
                 recognizer: None,
+                detector_gate: None,
             }
         }
     }
@@ -1258,12 +1377,18 @@ mod tests {
             .recognizer
             .unwrap_or_else(|| FakeRecognizer::new("hello"));
         let ears = Ears::new(
-            Box::new(Detector { seen: seen.clone() }),
+            Box::new(Detector {
+                seen: seen.clone(),
+                gate: opts.detector_gate,
+            }),
             recognizer.clone(),
             opts.ears,
         );
         let short_ears = Ears::new(
-            Box::new(Detector { seen: seen.clone() }),
+            Box::new(Detector {
+                seen: seen.clone(),
+                gate: None,
+            }),
             FakeRecognizer::new("yes"),
             opts.ears,
         );
@@ -1411,6 +1536,12 @@ mod tests {
                 assert!(Instant::now() < deadline, "the speech never finished");
                 std::thread::yield_now();
             }
+        }
+
+        /// Lets the 250 ms tail after an interruption pass, and the worker notice.
+        fn past_tail(&self) {
+            self.clock.advance(250);
+            self.sync();
         }
 
         fn seen(&self) -> usize {
@@ -1731,6 +1862,7 @@ mod tests {
         assert_eq!(r.sink.stops(), 2);
 
         r.sink.sounding(true);
+        r.past_tail();
         let turn = r.hear_sentence();
         r.session.say(turn, "Three.", After::FollowUp);
         r.expect_state(State::Speaking, false);
@@ -1842,6 +1974,7 @@ mod tests {
         assert_eq!(r.sync().state, State::Listening);
         assert_eq!(r.speaker.said(), ["First one."]);
         // The voice is free for the next turn's streamed reply.
+        r.past_tail();
         let next = r.hear_sentence();
         assert_eq!(next, turn + 1);
         r.session.say_delta(next, "Fresh.");
@@ -2120,6 +2253,160 @@ mod tests {
         assert_eq!(r.session.state(), State::Off);
         r.session.open(); // nothing to talk to any more; must not hang or panic
         assert_eq!(r.session.state(), State::Off);
+    }
+
+    // ---- fix round 1 ---------------------------------------------------------------------------
+
+    impl Rig {
+        /// From Idle (no wake phrase) to Asking after a question.
+        fn asking(&mut self) {
+            let turn = self.hear();
+            self.session.say(turn, "Shall I?", After::Ask);
+            self.expect_state(State::Speaking, self.wake);
+            self.expect_saying("Shall I?");
+            self.until_speech_done();
+            self.clock.advance(250);
+            self.expect_state(State::Asking, true);
+        }
+
+        /// From Idle with the wake phrase on to Speaking a reply that keeps sounding.
+        fn speaking(&mut self) {
+            let turn = self.hear();
+            self.sink.sounding(true);
+            self.session.say(turn, "A long answer.", After::Rest);
+            self.expect_state(State::Speaking, true);
+            self.expect_saying("A long answer.");
+        }
+    }
+
+    #[test]
+    fn a_wake_word_interruption_gives_no_speech_time_audio_to_the_ears() {
+        let mut r = rig(Opts {
+            wake: true,
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        r.speaking();
+        let seen = r.seen();
+        // The stop word, and Dot's own voice queued right behind it.
+        r.mic.send(DOT_STOP, 1);
+        r.mic.send(SPEECH, 6);
+        r.mic.send(QUIET, 3);
+        r.expect_state(State::Listening, true);
+        r.nothing_more();
+        assert_eq!(r.seen(), seen, "speech-time audio reached the ears");
+        // Once the tail has passed, the person is heard normally.
+        r.past_tail();
+        r.hear_sentence();
+    }
+
+    #[test]
+    fn a_command_interruption_gives_no_speech_time_audio_to_the_ears() {
+        let mut r = rig(Opts {
+            wake: true,
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        r.speaking();
+        let seen = r.seen();
+        r.mic.send(SPEECH, 6);
+        r.mic.send(QUIET, 3);
+        r.session.interrupt();
+        r.expect_state(State::Listening, true); // shown at once
+        r.mic.send(SPEECH, 6); // still inside the tail
+        r.mic.send(QUIET, 3);
+        r.nothing_more();
+        assert_eq!(r.seen(), seen, "speech-time audio reached the ears");
+        r.past_tail();
+        r.hear_sentence();
+    }
+
+    #[test]
+    fn set_voice_applies_to_the_next_sentence() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.session.set_voice(2, 1.2);
+        r.session.notice("Hello.");
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Hello.");
+        assert_eq!(r.speaker.voices.lock().unwrap().clone(), [(2, 1.2)]);
+    }
+
+    #[test]
+    fn a_voice_that_stops_responding_is_given_up_after_a_minute() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let turn = r.hear();
+        r.sink.sounding(true); // the sink never goes quiet, so no Finished comes
+        r.session.say(turn, "Stuck.", After::Rest);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Stuck.");
+        r.clock.advance(59_999);
+        r.nothing_more();
+        r.clock.advance(1);
+        assert_eq!(
+            r.next(),
+            SessionEvent::Trouble {
+                message: "The voice stopped responding.".into()
+            }
+        );
+        r.expect_state(State::Idle, false);
+        assert!(r.sink.stops() >= 1);
+    }
+
+    #[test]
+    fn a_long_backlog_does_not_hold_up_commands() {
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let mut r = rig(Opts {
+            detector_gate: Some((entered.clone(), release.clone())),
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, false);
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        r.mic.send(QUIET, 100);
+        entered.wait(); // the worker is on the first frame of the backlog
+        r.session.close();
+        release.wait();
+        r.expect_state(State::Idle, false);
+        assert!(r.seen() <= 8, "{} frames were handled first", r.seen());
+    }
+
+    #[test]
+    fn coughs_do_not_extend_the_wait_for_an_answer() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.asking();
+        for _ in 0..3 {
+            r.clock.advance(5_000);
+            r.mic.send(SPEECH, 1); // too short to be speech: Started, then Dropped
+            r.mic.send(QUIET, 2);
+            r.nothing_more();
+        }
+        assert_eq!(r.sync().state, State::Asking);
+        r.clock.advance(4_999);
+        r.nothing_more();
+        r.clock.advance(1);
+        r.expect_state(State::Idle, false);
+    }
+
+    #[test]
+    fn a_sentence_begun_before_the_limit_is_still_heard() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.asking();
+        r.clock.advance(19_000);
+        r.mic.send(SPEECH, 3);
+        assert_eq!(r.next(), SessionEvent::Hearing { text: "yes".into() });
+        r.clock.advance(4_000); // the limit passes mid-sentence
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Asking);
+        r.mic.send(QUIET, 2);
+        match r.next() {
+            SessionEvent::Heard { text, .. } => assert_eq!(text, "yes"),
+            other => panic!("expected Heard, got {other:?}"),
+        }
     }
 
     #[test]
