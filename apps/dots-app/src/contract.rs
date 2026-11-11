@@ -892,7 +892,7 @@ fn usage_summary() -> UsageSummary {
             requests: 38,
             tokens_in: 152_000,
             tokens_out: 4_100,
-            cost_usd: 0.21,
+            cost_usd: Some(0.21),
         }),
     }
 }

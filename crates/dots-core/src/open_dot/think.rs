@@ -86,10 +86,12 @@ impl Thinker for CliThinker {
                 cwd.display()
             )));
         }
+        // Removed on every path: an answer, an error, this future dropped, a panic in `on_text`.
+        let folder = Folder(cwd);
         let once = Once {
             program,
             env: &self.env,
-            cwd: &cwd,
+            cwd: &folder.0,
             model,
             system_prompt: system,
             prompt,
@@ -97,7 +99,7 @@ impl Thinker for CliThinker {
         };
         let started = std::time::Instant::now();
         let asked = ask_once_streamed(&once, cancel, on_text).await;
-        let _ = std::fs::remove_dir_all(&cwd);
+        drop(folder);
         let ended = match &asked {
             Ok(_) => "answered",
             Err(OnceFailure::Cancelled) => "cancelled",
@@ -111,6 +113,33 @@ impl Thinker for CliThinker {
             "open dot request"
         );
         asked
+    }
+}
+
+/// A request's folder, removed when this is dropped. A CLI still ending may hold the folder
+/// for a moment (on Windows a process's working folder cannot be removed), so a removal that
+/// fails is tried again for a few seconds on a thread of its own.
+struct Folder(PathBuf);
+
+/// How long, and how often, a held folder's removal is tried again.
+const REMOVE_TRIES: u32 = 50;
+const REMOVE_PAUSE: Duration = Duration::from_millis(200);
+
+impl Drop for Folder {
+    fn drop(&mut self) {
+        if std::fs::remove_dir_all(&self.0).is_ok() || !self.0.exists() {
+            return;
+        }
+        let path = std::mem::take(&mut self.0);
+        std::thread::spawn(move || {
+            for _ in 0..REMOVE_TRIES {
+                std::thread::sleep(REMOVE_PAUSE);
+                if std::fs::remove_dir_all(&path).is_ok() || !path.exists() {
+                    return;
+                }
+            }
+            tracing::warn!("an Open Dot request folder could not be removed");
+        });
     }
 }
 

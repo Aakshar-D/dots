@@ -504,32 +504,54 @@ const TARGET_FIELDS: [&str; 3] = ["command", "file_path", "url"];
 /// each is judged as a shell command's text, and `file_path` also as a file tool's path. The
 /// private check judges only command and file tools, so a tool from an MCP server holding
 /// `~/.ssh/id_rsa` would otherwise be described.
+///
+/// Each field is judged both as it is and as `clean` shows it: `clean` drops hidden
+/// characters, so a path with one inside would otherwise pass the check and be shown whole.
 fn fields_touch_private(input: &Value) -> bool {
     use crate::policy::touches_private;
     TARGET_FIELDS.iter().any(|key| {
         input.get(*key).and_then(Value::as_str).is_some_and(|raw| {
-            touches_private("Bash", &json!({ "command": raw }), None)
-                || (*key == "file_path"
-                    && touches_private("Read", &json!({ "file_path": raw }), None))
+            [raw.to_string(), one_line(raw, None)].iter().any(|value| {
+                touches_private("Bash", &json!({ "command": value }), None)
+                    || (*key == "file_path"
+                        && touches_private("Read", &json!({ "file_path": value }), None))
+            })
         })
     })
 }
 
 /// What an approval's call does: the send-and-delete guard's summary when it gives one, else
-/// its command, file or address; with known secrets scrubbed, cleaned and cut to
+/// its command, file or address (an address without its credentials, query and fragment).
+/// Cleaned first, so known secrets are scrubbed from the text as shown, then cut to
 /// `TARGET_BYTES`.
 fn target(tool: &str, input: &Value) -> String {
     let summary = crate::policy::guard::classify(tool, input)
         .map(|g| g.summary)
         .filter(|s| !s.trim().is_empty());
     let raw = summary.or_else(|| {
-        TARGET_FIELDS
-            .iter()
-            .find_map(|key| input.get(*key).and_then(Value::as_str))
-            .map(str::to_string)
+        TARGET_FIELDS.iter().find_map(|key| {
+            let value = input.get(*key).and_then(Value::as_str)?;
+            Some(if *key == "url" {
+                plain_url(&one_line(value, None))
+            } else {
+                value.to_string()
+            })
+        })
     });
-    let raw = raw.unwrap_or_default();
-    clean(&crate::vault::redact::global().scrub(&raw), TARGET_BYTES)
+    let shown = one_line(&raw.unwrap_or_default(), None);
+    clean(&crate::vault::redact::global().scrub(&shown), TARGET_BYTES)
+}
+
+/// `url` without credentials (`user:pass@`), query string and fragment.
+fn plain_url(url: &str) -> String {
+    let url = url.split(['?', '#']).next().unwrap_or_default();
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let host_end = rest.find('/').unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(host_end);
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    format!("{scheme}://{host}{path}")
 }
 
 /// Characters that are not seen but can change how text reads: controls, line and paragraph
@@ -541,6 +563,7 @@ fn is_hidden(c: char) -> bool {
             c,
             '\u{00AD}'
                 | '\u{034F}'
+                | '\u{0600}'..='\u{0605}'
                 | '\u{061C}'
                 | '\u{115F}'..='\u{1160}'
                 | '\u{17B4}'..='\u{17B5}'
@@ -553,6 +576,8 @@ fn is_hidden(c: char) -> bool {
                 | '\u{FEFF}'
                 | '\u{FFA0}'
                 | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{13430}'..='\u{1343F}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
                 | '\u{1D173}'..='\u{1D17A}'
                 | '\u{E0000}'..='\u{E007F}'
                 | '\u{E0100}'..='\u{E01EF}'
@@ -562,11 +587,32 @@ fn is_hidden(c: char) -> bool {
 /// `s` on one line: control characters and runs of white space become one space, other hidden
 /// characters are dropped, trimmed, then cut to at most `max` bytes on a char boundary.
 pub(crate) fn clean(s: &str, max: usize) -> String {
-    let mut out = String::with_capacity(s.len().min(max + 4));
+    let out = one_line(s, Some(max));
+    // a cut may leave a joiner with nothing after it
+    cut(&out, max)
+        .trim_end_matches(['\u{200C}', '\u{200D}'])
+        .trim_end()
+        .to_string()
+}
+
+/// `clean` without the cut: with `stop`, it may stop reading once past that many bytes. A
+/// zero-width joiner or non-joiner stays only between two non-ASCII letters or emoji (a
+/// family emoji, a Persian word), where it shapes what is seen.
+fn one_line(s: &str, stop: Option<usize>) -> String {
+    let mut out = String::with_capacity(s.len().min(stop.unwrap_or(usize::MAX).saturating_add(4)));
     let mut gap = false;
-    for c in s.chars() {
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
         if c.is_whitespace() || c.is_control() {
             gap = gap || !out.is_empty();
+            continue;
+        }
+        if matches!(c, '\u{200C}' | '\u{200D}') {
+            let before = !gap && out.chars().next_back().is_some_and(joins);
+            let after = chars.peek().copied().is_some_and(joins);
+            if before && after {
+                out.push(c);
+            }
             continue;
         }
         if is_hidden(c) {
@@ -577,11 +623,17 @@ pub(crate) fn clean(s: &str, max: usize) -> String {
             gap = false;
         }
         out.push(c);
-        if out.len() > max {
+        if stop.is_some_and(|max| out.len() > max) {
             break;
         }
     }
-    cut(&out, max).trim_end().to_string()
+    out.trim_end().to_string()
+}
+
+/// A character a joiner may sit next to: a letter outside ASCII, or an emoji.
+fn joins(c: char) -> bool {
+    (!c.is_ascii() && c.is_alphabetic())
+        || matches!(c, '\u{1F000}'..='\u{1FAFF}' | '\u{2600}'..='\u{27BF}' | '\u{2B00}'..='\u{2BFF}')
 }
 
 /// The longest start of `s` of at most `max` bytes that ends on a char boundary.
@@ -940,10 +992,106 @@ mod tests {
         crate::vault::redact::global().add("PICTURE_TOKEN", secret);
         let t = target(
             "mcp__x__call",
-            &json!({"url": format!("https://example.com/?token={secret}")}),
+            &json!({"url": format!("https://example.com/files/{secret}/report")}),
         );
         assert!(!t.contains(secret), "{t}");
         assert!(t.contains("[secret:PICTURE_TOKEN]"), "{t}");
+    }
+
+    #[test]
+    fn private_paths_hidden_by_invisible_characters_are_counted() {
+        let dots = dot_lines(vec![row("Helper", 0, "2026-11-01T00:00:00.000Z")]);
+        let p = assemble(
+            dots,
+            vec![
+                asked(
+                    "ap-1",
+                    "Helper",
+                    "mcp__x__read",
+                    json!({"file_path": "~/.s\u{200B}sh/id_rsa"}),
+                    false,
+                ),
+                asked(
+                    "ap-2",
+                    "Helper",
+                    "mcp__x__run",
+                    json!({"command": "cat ~/.\u{2060}aws/credentials"}),
+                    false,
+                ),
+                asked(
+                    "ap-3",
+                    "Helper",
+                    "Bash",
+                    json!({"command": "cat ~/.s\u{FEFF}sh/id_rsa"}),
+                    false,
+                ),
+            ],
+            vec![],
+            None,
+            String::new(),
+        );
+        assert_eq!(p.private_approvals, 3);
+        assert!(p.approvals.is_empty());
+        let text = p.text();
+        assert!(!text.contains("ssh") && !text.contains("aws"), "{text}");
+    }
+
+    #[test]
+    fn secrets_hidden_by_invisible_characters_are_scrubbed() {
+        let secret = "open-dot-zwsp-secret-41c8e2";
+        crate::vault::redact::global().add("ZWSP_TOKEN", secret);
+        let hidden = format!("{}\u{200B}{}", &secret[..10], &secret[10..]);
+        let t = target("mcp__x__call", &json!({"command": format!("use {hidden}")}));
+        assert!(!t.contains(secret), "{t}");
+        assert!(t.contains("[secret:ZWSP_TOKEN]"), "{t}");
+    }
+
+    #[test]
+    fn url_targets_lose_credentials_query_and_fragment() {
+        assert_eq!(
+            target(
+                "WebFetch",
+                &json!({"url": "https://user:pa55@example.com/a/b?token=abc&x=1#part"})
+            ),
+            "https://example.com/a/b"
+        );
+        assert_eq!(
+            target("WebFetch", &json!({"url": "https://me@example.com?q=1"})),
+            "https://example.com"
+        );
+        assert_eq!(
+            target("WebFetch", &json!({"url": "http://example.com/path"})),
+            "http://example.com/path"
+        );
+        // an @ after the host is not a credential
+        assert_eq!(
+            target("WebFetch", &json!({"url": "https://example.com/@user#top"})),
+            "https://example.com/@user"
+        );
+    }
+
+    #[test]
+    fn joiners_stay_only_inside_words_and_emoji() {
+        let family = "👨\u{200D}👩\u{200D}👧";
+        assert_eq!(clean(family, 200), family);
+        let persian = "می\u{200C}خواهم";
+        assert_eq!(clean(persian, 200), persian);
+        assert_eq!(clean("a\u{200D}b", 200), "ab");
+        assert_eq!(clean("a\u{200C}b", 200), "ab");
+        assert_eq!(clean("👨\u{200D}", 200), "👨");
+        assert_eq!(clean("\u{200D}👩", 200), "👩");
+        assert_eq!(clean("é\u{200D} x", 200), "é x");
+        for c in [
+            '\u{1BCA0}',
+            '\u{1BCA3}',
+            '\u{13430}',
+            '\u{1343F}',
+            '\u{0600}',
+            '\u{0605}',
+        ] {
+            assert!(is_hidden(c), "{:04X}", c as u32);
+            assert_eq!(clean(&format!("a{c}b"), 200), "ab");
+        }
     }
 
     #[test]

@@ -221,6 +221,12 @@ const PARTIAL_MESSAGES: &str = "--include-partial-messages";
 /// gets the whole answer once at the end (unless it is empty), so a caller always sees the
 /// reply through `on_text`. Same command line as `once_args`, plus
 /// `--include-partial-messages`.
+///
+/// The two outputs have different jobs. `on_text` receives what should be spoken, as it
+/// arrives: pieces already handed over stay handed over, even when the request then fails,
+/// times out or is cancelled. `OnceAnswer.text` is the authoritative full reply, and the one to
+/// parse (for its `DO` line, say); only an `Ok` carries it. A caller that speaks the pieces
+/// must still read the result: a failed `result` after some pieces is `Failed`.
 pub async fn ask_once_streamed(
     req: &Once<'_>,
     cancel: &CancellationToken,

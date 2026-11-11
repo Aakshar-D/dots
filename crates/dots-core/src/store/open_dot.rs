@@ -16,8 +16,9 @@ pub struct OpenDotUsage {
     pub requests: i64,
     pub tokens_in: i64,
     pub tokens_out: i64,
-    /// The estimated API cost the CLI reported; a request that reported none adds nothing.
-    pub cost_usd: f64,
+    /// The estimated API cost the CLI reported; a request that reported none adds nothing, and
+    /// it is `None` when no request reported one.
+    pub cost_usd: Option<f64>,
 }
 
 /// A count as SQLite stores it: at most `i64::MAX`.
@@ -28,13 +29,19 @@ fn stored(n: u64) -> i64 {
 impl Store {
     /// Records one request of `model` that used `u`, now.
     pub async fn add_open_dot_usage(&self, model: &str, u: &OnceUsage) -> Result<()> {
+        self.add_open_dot_usage_at(model, u, &now()).await
+    }
+
+    /// Records one request of `model` that used `u`, at `at` (a time as `util::timestamp`
+    /// writes it).
+    pub async fn add_open_dot_usage_at(&self, model: &str, u: &OnceUsage, at: &str) -> Result<()> {
         sqlx::query(
             "INSERT INTO open_dot_usage \
              (id, at, model, tokens_in, tokens_out, cache_read, cost_usd) \
              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(new_id())
-        .bind(now())
+        .bind(at)
         .bind(model)
         .bind(stored(u.tokens_in))
         .bind(stored(u.tokens_out))
@@ -68,7 +75,7 @@ impl Store {
             "SELECT COUNT(*) AS requests, \
              COALESCE(SUM(tokens_in), 0) AS tokens_in, \
              COALESCE(SUM(tokens_out), 0) AS tokens_out, \
-             COALESCE(SUM(cost_usd), 0.0) AS cost \
+             SUM(cost_usd) AS cost \
              FROM open_dot_usage WHERE (? IS NULL OR at >= ?)",
         )
         .bind(since)

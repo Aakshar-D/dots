@@ -873,6 +873,66 @@ async fn times_out() {
 }
 
 #[tokio::test]
+async fn a_dropped_request_leaves_no_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut script = vec![init(), delta("First words."), json!({"sleep_ms": 20000})];
+    script.extend(finished("First words. More."));
+    let t = thinker(dir.path(), Value::Array(script), THINK_LIMIT);
+    let cancel = CancellationToken::new();
+    let mut got: Vec<String> = Vec::new();
+    let (first, mut heard) = tokio::sync::mpsc::unbounded_channel::<()>();
+    {
+        let mut on_text = |s: &str| {
+            got.push(s.to_string());
+            let _ = first.send(());
+        };
+        let request = t.think("system", "prompt", "haiku", &cancel, &mut on_text);
+        // run the request until its first words arrive, then drop it mid-request
+        tokio::select! {
+            _ = request => panic!("the request should still be running"),
+            _ = heard.recv() => {}
+        }
+    }
+    assert_eq!(got, vec!["First words."]);
+    // the folder goes with the request, also when the CLI takes a moment to end
+    let started = Instant::now();
+    while folders_left(dir.path()) > 0 {
+        assert!(
+            started.elapsed() < Duration::from_secs(15),
+            "the request folder was left behind"
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+#[tokio::test]
+async fn partials_then_a_failed_result_is_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = json!([
+        init(),
+        delta("Half "),
+        delta("done"),
+        {"emit": {"type": "result", "subtype": "error_during_execution", "is_error": true,
+                  "result": "overloaded"}}
+    ]);
+    let t = thinker(dir.path(), script, THINK_LIMIT);
+    let mut got: Vec<String> = Vec::new();
+    let asked = t
+        .think(
+            "system",
+            "prompt",
+            "haiku",
+            &CancellationToken::new(),
+            &mut |s: &str| got.push(s.to_string()),
+        )
+        .await;
+    assert!(matches!(asked, Err(OnceFailure::Failed(_))), "{asked:?}");
+    // what was streamed was delivered; the failure is what counts
+    assert_eq!(got, vec!["Half ", "done"]);
+    assert_eq!(folders_left(dir.path()), 0);
+}
+
+#[tokio::test]
 async fn missing_cli_is_no_cli() {
     let dir = tempfile::tempdir().unwrap();
     let t = CliThinker::new(None, vec![], dir.path().join("think"), THINK_LIMIT);
@@ -901,20 +961,38 @@ fn usage(tokens_in: u64, tokens_out: u64, cost_usd: Option<f64>) -> OnceUsage {
     }
 }
 
-fn today() -> (String, String) {
-    day_bounds_in(chrono::Utc::now(), &chrono::Local)
+/// The local day of `now`; each test takes one `now` for its writes and this, so they cannot
+/// fall on two sides of midnight.
+fn today(now: chrono::DateTime<chrono::Utc>) -> (String, String) {
+    day_bounds_in(now, &chrono::Local)
+}
+
+/// `now` as the store writes times.
+fn at(now: chrono::DateTime<chrono::Utc>) -> String {
+    dots_core::util::timestamp(now)
 }
 
 #[tokio::test]
 async fn usage_is_recorded_and_summed() {
     let (_d, store) = temp_store().await;
+    let now = chrono::Utc::now();
     assert_eq!(store.open_dot_usage_since(None).await.unwrap(), None);
+    // no request reported a cost: none is known
     store
-        .add_open_dot_usage("haiku", &usage(100, 20, Some(0.01)))
+        .add_open_dot_usage_at("haiku", &usage(50, 5, None), &at(now))
         .await
         .unwrap();
+    assert_eq!(
+        store.open_dot_usage_since(None).await.unwrap(),
+        Some(OpenDotUsage {
+            requests: 1,
+            tokens_in: 50,
+            tokens_out: 5,
+            cost_usd: None,
+        })
+    );
     store
-        .add_open_dot_usage("haiku", &usage(50, 5, None))
+        .add_open_dot_usage_at("haiku", &usage(100, 20, Some(0.01)), &at(now))
         .await
         .unwrap();
     assert_eq!(
@@ -923,10 +1001,10 @@ async fn usage_is_recorded_and_summed() {
             requests: 2,
             tokens_in: 150,
             tokens_out: 25,
-            cost_usd: 0.01,
+            cost_usd: Some(0.01),
         })
     );
-    let (start, end) = today();
+    let (start, end) = today(now);
     assert_eq!(
         store.open_dot_spend_between(&start, &end).await.unwrap(),
         Spend {
@@ -935,7 +1013,7 @@ async fn usage_is_recorded_and_summed() {
         }
     );
     // nothing since a time in the future
-    let later = dots_core::util::timestamp(chrono::Utc::now() + chrono::TimeDelta::hours(1));
+    let later = at(now + chrono::TimeDelta::hours(1));
     assert_eq!(
         store.open_dot_usage_since(Some(&later)).await.unwrap(),
         None
@@ -946,8 +1024,13 @@ async fn usage_is_recorded_and_summed() {
     );
 }
 
-/// A run of a new dot started now that used `tokens` and `cost`; returns the dot's id.
-async fn a_run(store: &dots_core::store::Store, tokens: (i64, i64), cost: f64) -> String {
+/// A run of a new dot started at `now` that used `tokens` and `cost`; returns the dot's id.
+async fn a_run(
+    store: &dots_core::store::Store,
+    now: chrono::DateTime<chrono::Utc>,
+    tokens: (i64, i64),
+    cost: f64,
+) -> String {
     let dot = store
         .create_dot(&spec("Spender"), None, "default")
         .await
@@ -956,8 +1039,7 @@ async fn a_run(store: &dots_core::store::Store, tokens: (i64, i64), cost: f64) -
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
         .unwrap();
-    let now = dots_core::util::now();
-    store.set_run_times(&r.id, &now, None).await.unwrap();
+    store.set_run_times(&r.id, &at(now), None).await.unwrap();
     store
         .add_usage(&r.id, tokens.0, tokens.1, 0, Some(cost))
         .await
@@ -968,12 +1050,13 @@ async fn a_run(store: &dots_core::store::Store, tokens: (i64, i64), cost: f64) -
 #[tokio::test]
 async fn global_spend_includes_open_dot() {
     let (_d, store) = temp_store().await;
-    a_run(&store, (1000, 100), 0.5).await;
+    let now = chrono::Utc::now();
+    a_run(&store, now, (1000, 100), 0.5).await;
     store
-        .add_open_dot_usage("haiku", &usage(200, 40, Some(0.25)))
+        .add_open_dot_usage_at("haiku", &usage(200, 40, Some(0.25)), &at(now))
         .await
         .unwrap();
-    let (start, end) = today();
+    let (start, end) = today(now);
     assert_eq!(
         store.spend_between(None, &start, &end).await.unwrap(),
         Spend {
@@ -986,12 +1069,13 @@ async fn global_spend_includes_open_dot() {
 #[tokio::test]
 async fn per_dot_spend_does_not() {
     let (_d, store) = temp_store().await;
-    let dot_id = a_run(&store, (1000, 100), 0.5).await;
+    let now = chrono::Utc::now();
+    let dot_id = a_run(&store, now, (1000, 100), 0.5).await;
     store
-        .add_open_dot_usage("haiku", &usage(200, 40, Some(0.25)))
+        .add_open_dot_usage_at("haiku", &usage(200, 40, Some(0.25)), &at(now))
         .await
         .unwrap();
-    let (start, end) = today();
+    let (start, end) = today(now);
     assert_eq!(
         store
             .spend_between(Some(&dot_id), &start, &end)
@@ -1020,7 +1104,7 @@ async fn usage_summary_carries_open_dot() {
             requests: 1,
             tokens_in: 10,
             tokens_out: 2,
-            cost_usd: 0.002,
+            cost_usd: Some(0.002),
         })
     );
     // the dots' rows are not changed by it
@@ -1038,7 +1122,7 @@ async fn cap_hit_names_the_daily_cap() {
     };
     assert_eq!(cap_hit(&store, &settings, now).await.unwrap(), None);
     store
-        .add_open_dot_usage("haiku", &usage(10, 2, Some(1.5)))
+        .add_open_dot_usage_at("haiku", &usage(10, 2, Some(1.5)), &at(now))
         .await
         .unwrap();
     let said = cap_hit(&store, &settings, now)

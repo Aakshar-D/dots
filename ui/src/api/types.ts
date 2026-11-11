@@ -363,12 +363,13 @@ export const UsageRow = z.strictObject({
   cost_usd: nullable(z.number()),
   heaviest: z.array(UsageRun),
 });
-// Open Dot's requests in the period, summed; null when it made none.
+// Open Dot's requests in the period, summed; null when it made none. `cost_usd` is null when no
+// request reported a cost.
 export const OpenDotUsage = z.strictObject({
   requests: z.number().int(),
   tokens_in: z.number().int(),
   tokens_out: z.number().int(),
-  cost_usd: z.number(),
+  cost_usd: nullable(z.number()),
 });
 export const UsageSummary = z.strictObject({
   period: UsagePeriod,
