@@ -7,6 +7,7 @@ mod engine;
 mod models;
 mod sherpa;
 mod text;
+mod voice;
 
 pub use ears::{level, EarEvent, EarSettings, Ears};
 pub use engine::{
@@ -18,3 +19,4 @@ pub use models::{
 };
 pub use sherpa::{SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake};
 pub use text::{speakable, trim_spoken, SentenceStream, MAX_SPOKEN_CHARS};
+pub use voice::{Sink, Voice, VoiceEvent};

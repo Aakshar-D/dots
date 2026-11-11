@@ -1,0 +1,736 @@
+//! The speaking queue: a reply, whole or streaming, is cut into sentences, each is synthesised
+//! in turn on a worker thread and handed to a [`Sink`], and `stop` silences everything at once.
+//!
+//! Nothing here logs; no spoken text or audio leaves memory except through the events and the
+//! sink.
+
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::time::Duration;
+
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::engine::{Clip, Speaker};
+use crate::text::{speakable, trim_spoken, SentenceStream, MAX_SPOKEN_CHARS};
+
+/// How often the worker asks the sink whether it has gone quiet.
+const IDLE_POLL: Duration = Duration::from_millis(20);
+const MIN_SPEED: f32 = 0.8;
+const MAX_SPEED: f32 = 1.4;
+
+/// Where clips are played. Implemented by the speaker output.
+pub trait Sink: Send + Sync {
+    /// Queues the clip; returns at once.
+    fn play(&self, clip: Clip);
+    /// Drops everything queued and playing, at once.
+    fn stop(&self);
+    /// True when nothing is queued or playing.
+    fn idle(&self) -> bool;
+    /// 0.0..=1.0 of what is sounding now.
+    fn level(&self) -> f32;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum VoiceEvent {
+    /// A sentence was handed to the sink.
+    Saying(String),
+    /// The reply was spoken to the end.
+    Finished,
+    /// `stop` cut the speech short.
+    Stopped,
+    /// Speech could not be made; the reply ends.
+    Trouble(String),
+}
+
+enum Command {
+    Delta { gen: u64, reply: u64, text: String },
+    End { gen: u64, reply: u64 },
+}
+
+struct State {
+    /// Bumped by every `stop`; work for an older generation is thrown away.
+    gen: u64,
+    next_reply: u64,
+    /// The reply still taking text, if any.
+    open: Option<u64>,
+    /// Replies begun and not yet finished, stopped or failed.
+    pending: usize,
+    voice: u8,
+    speed: f32,
+}
+
+struct Shared {
+    state: Mutex<State>,
+    /// Woken by `stop`, so a wait for the sink to go idle ends at once.
+    wake: Condvar,
+    sink: Arc<dyn Sink>,
+    events: UnboundedSender<VoiceEvent>,
+}
+
+impl Shared {
+    fn lock(&self) -> MutexGuard<'_, State> {
+        self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn send(&self, event: VoiceEvent) {
+        // A closed receiver only means nobody is listening any more.
+        let _ = self.events.send(event);
+    }
+}
+
+/// The speaking queue. Every method returns at once; the speaker runs on a worker thread that
+/// ends when this handle is dropped.
+pub struct Voice {
+    shared: Arc<Shared>,
+    commands: Sender<Command>,
+}
+
+impl Voice {
+    pub fn new(
+        speaker: Arc<dyn Speaker>,
+        sink: Arc<dyn Sink>,
+        events: UnboundedSender<VoiceEvent>,
+    ) -> Self {
+        let shared = Arc::new(Shared {
+            state: Mutex::new(State {
+                gen: 0,
+                next_reply: 0,
+                open: None,
+                pending: 0,
+                voice: 0,
+                speed: 1.0,
+            }),
+            wake: Condvar::new(),
+            sink,
+            events,
+        });
+        let (commands, inbox) = channel();
+        let worker = Worker {
+            shared: shared.clone(),
+            speaker,
+            inbox,
+            reply: None,
+        };
+        std::thread::Builder::new()
+            .name("dots-voice-speaking".into())
+            .spawn(move || worker.run())
+            .expect("the speaking thread starts");
+        Self { shared, commands }
+    }
+
+    /// Applies to sentences synthesised after the call. Speed is kept within 0.8..=1.4.
+    pub fn set_voice(&self, voice: u8, speed: f32) {
+        let speed = if speed.is_nan() {
+            1.0
+        } else {
+            speed.clamp(MIN_SPEED, MAX_SPEED)
+        };
+        let mut st = self.shared.lock();
+        st.voice = voice;
+        st.speed = speed;
+    }
+
+    /// A whole reply: the same as `say_delta(text)` then `end_of_reply()`.
+    pub fn say(&self, text: &str) {
+        self.say_delta(text);
+        self.end_of_reply();
+    }
+
+    /// Part of a reply still arriving. A reply spoken while an earlier one is still sounding
+    /// queues behind it.
+    pub fn say_delta(&self, delta: &str) {
+        let mut st = self.shared.lock();
+        let reply = match st.open {
+            Some(reply) => reply,
+            None => {
+                let reply = st.next_reply;
+                st.next_reply += 1;
+                st.open = Some(reply);
+                st.pending += 1;
+                reply
+            }
+        };
+        let gen = st.gen;
+        // Sent under the lock so commands reach the worker in the order they were made.
+        let _ = self.commands.send(Command::Delta {
+            gen,
+            reply,
+            text: delta.to_string(),
+        });
+    }
+
+    /// The reply has no more text; whatever partial sentence is left is spoken.
+    pub fn end_of_reply(&self) {
+        let mut st = self.shared.lock();
+        if let Some(reply) = st.open.take() {
+            let gen = st.gen;
+            let _ = self.commands.send(Command::End { gen, reply });
+        }
+    }
+
+    /// Silences everything now. Sends `Stopped` once, and nothing when nothing was being said.
+    pub fn stop(&self) {
+        let mut st = self.shared.lock();
+        let was_speaking = st.pending > 0;
+        if !was_speaking && st.open.is_none() {
+            return;
+        }
+        st.gen += 1;
+        st.pending = 0;
+        st.open = None;
+        self.shared.sink.stop();
+        self.shared.wake.notify_all();
+        if was_speaking {
+            self.shared.send(VoiceEvent::Stopped);
+        }
+    }
+
+    /// True from the first text of a reply until it finishes, is stopped or fails.
+    pub fn speaking(&self) -> bool {
+        self.shared.lock().pending > 0
+    }
+}
+
+impl Drop for Voice {
+    fn drop(&mut self) {
+        // Silence the sink; the worker ends when the command channel closes.
+        self.stop();
+    }
+}
+
+/// What the worker has done so far for the reply it is on.
+struct ReplyState {
+    id: u64,
+    stream: SentenceStream,
+    /// Characters of spoken text handed on so far.
+    spoken: usize,
+    /// The length cap was reached: later sentences are dropped silently.
+    capped: bool,
+    /// Speech failed: the rest of the reply is dropped.
+    failed: bool,
+}
+
+struct Worker {
+    shared: Arc<Shared>,
+    speaker: Arc<dyn Speaker>,
+    inbox: Receiver<Command>,
+    reply: Option<ReplyState>,
+}
+
+impl Worker {
+    fn run(mut self) {
+        while let Ok(command) = self.inbox.recv() {
+            match command {
+                Command::Delta { gen, reply, text } => self.on_delta(gen, reply, &text),
+                Command::End { gen, reply } => self.on_end(gen, reply),
+            }
+        }
+    }
+
+    fn current(&self, gen: u64) -> bool {
+        self.shared.lock().gen == gen
+    }
+
+    /// The state of reply `id`, started afresh if the worker was on another one.
+    fn reply_state(&mut self, id: u64) -> &mut ReplyState {
+        if self.reply.as_ref().map(|r| r.id) != Some(id) {
+            self.reply = Some(ReplyState {
+                id,
+                stream: SentenceStream::new(),
+                spoken: 0,
+                capped: false,
+                failed: false,
+            });
+        }
+        self.reply.as_mut().expect("just set")
+    }
+
+    fn on_delta(&mut self, gen: u64, reply: u64, text: &str) {
+        if !self.current(gen) || self.reply_state(reply).failed {
+            return;
+        }
+        let sentences = self.reply_state(reply).stream.push(text);
+        self.speak_all(gen, reply, sentences);
+    }
+
+    fn on_end(&mut self, gen: u64, reply: u64) {
+        if !self.current(gen) {
+            return;
+        }
+        if !self.reply_state(reply).failed {
+            let rest = self.reply_state(reply).stream.finish();
+            self.speak_all(gen, reply, rest);
+            if !self.reply_state(reply).failed && self.wait_until_idle(gen) {
+                let mut st = self.shared.lock();
+                if st.gen == gen {
+                    st.pending = st.pending.saturating_sub(1);
+                    self.shared.send(VoiceEvent::Finished);
+                }
+            }
+        }
+        self.reply = None;
+    }
+
+    fn speak_all(&mut self, gen: u64, reply: u64, sentences: Vec<String>) {
+        for sentence in sentences {
+            if !self.current(gen) || self.reply_state(reply).failed {
+                return;
+            }
+            self.speak(gen, reply, &sentence);
+        }
+    }
+
+    fn speak(&mut self, gen: u64, reply: u64, sentence: &str) {
+        let mut cleaned = speakable(sentence);
+        let state = self.reply_state(reply);
+        if cleaned.is_empty() || state.capped {
+            return;
+        }
+        if state.spoken == 0 && cleaned.chars().count() > MAX_SPOKEN_CHARS {
+            cleaned = trim_spoken(&cleaned);
+        }
+        let separator = usize::from(state.spoken > 0);
+        let length = cleaned.chars().count();
+        if state.spoken + separator + length > MAX_SPOKEN_CHARS {
+            state.capped = true;
+            return;
+        }
+        let (voice, speed) = {
+            let st = self.shared.lock();
+            (st.voice, st.speed)
+        };
+        match self.speaker.speak(&cleaned, voice, speed) {
+            Ok(clip) => {
+                let st = self.shared.lock();
+                if st.gen != gen {
+                    return; // stopped while synthesising: the clip is thrown away
+                }
+                self.shared.sink.play(clip);
+                self.shared.send(VoiceEvent::Saying(cleaned));
+                drop(st);
+                self.reply_state(reply).spoken += separator + length;
+            }
+            Err(error) => {
+                self.reply_state(reply).failed = true;
+                let mut st = self.shared.lock();
+                if st.gen == gen {
+                    st.pending = st.pending.saturating_sub(1);
+                    self.shared.send(VoiceEvent::Trouble(error.to_string()));
+                }
+            }
+        }
+    }
+
+    /// Waits for the sink to go quiet. False when `stop` ended the wait.
+    fn wait_until_idle(&self, gen: u64) -> bool {
+        let mut st = self.shared.lock();
+        loop {
+            if st.gen != gen {
+                return false;
+            }
+            if self.shared.sink.idle() {
+                return true;
+            }
+            st = self
+                .shared
+                .wake
+                .wait_timeout(st, IDLE_POLL)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::EngineError;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Barrier;
+    use std::thread::ThreadId;
+    use std::time::Instant;
+    use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
+
+    const WAIT: Duration = Duration::from_secs(10);
+
+    /// Records what it was asked; the first call can be held on a pair of barriers.
+    struct FakeSpeaker {
+        calls: Mutex<Vec<(String, u8, f32)>>,
+        threads: Mutex<Vec<ThreadId>>,
+        gate: Option<(Arc<Barrier>, Arc<Barrier>)>,
+        fail: AtomicBool,
+        count: AtomicUsize,
+    }
+
+    impl FakeSpeaker {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                calls: Mutex::default(),
+                threads: Mutex::default(),
+                gate: None,
+                fail: AtomicBool::new(false),
+                count: AtomicUsize::new(0),
+            })
+        }
+
+        /// Holds the first call: it reaches `entered`, then waits at `release`.
+        fn gated() -> (Arc<Self>, Arc<Barrier>, Arc<Barrier>) {
+            let entered = Arc::new(Barrier::new(2));
+            let release = Arc::new(Barrier::new(2));
+            let speaker = Arc::new(Self {
+                calls: Mutex::default(),
+                threads: Mutex::default(),
+                gate: Some((entered.clone(), release.clone())),
+                fail: AtomicBool::new(false),
+                count: AtomicUsize::new(0),
+            });
+            (speaker, entered, release)
+        }
+
+        fn sentences(&self) -> Vec<String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|c| c.0.clone())
+                .collect()
+        }
+    }
+
+    impl Speaker for FakeSpeaker {
+        fn speak(&self, sentence: &str, voice: u8, speed: f32) -> Result<Clip, EngineError> {
+            self.threads
+                .lock()
+                .unwrap()
+                .push(std::thread::current().id());
+            self.calls
+                .lock()
+                .unwrap()
+                .push((sentence.to_string(), voice, speed));
+            if self.count.fetch_add(1, Ordering::SeqCst) == 0 {
+                if let Some((entered, release)) = &self.gate {
+                    entered.wait();
+                    release.wait();
+                }
+            }
+            if self.fail.load(Ordering::SeqCst) {
+                return Err(EngineError::Failed("no voice".into()));
+            }
+            Ok(Clip {
+                samples: vec![0.0; 8],
+                rate: 22_050,
+            })
+        }
+
+        fn voices(&self) -> u8 {
+            1
+        }
+    }
+
+    struct FakeSink {
+        clips: Mutex<Vec<Clip>>,
+        idle: AtomicBool,
+        stops: AtomicUsize,
+    }
+
+    impl FakeSink {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                clips: Mutex::default(),
+                idle: AtomicBool::new(true),
+                stops: AtomicUsize::new(0),
+            })
+        }
+    }
+
+    impl Sink for FakeSink {
+        fn play(&self, clip: Clip) {
+            self.clips.lock().unwrap().push(clip);
+        }
+        fn stop(&self) {
+            self.stops.fetch_add(1, Ordering::SeqCst);
+            self.idle.store(true, Ordering::SeqCst);
+        }
+        fn idle(&self) -> bool {
+            self.idle.load(Ordering::SeqCst)
+        }
+        fn level(&self) -> f32 {
+            0.0
+        }
+    }
+
+    struct Rig {
+        voice: Voice,
+        events: UnboundedReceiver<VoiceEvent>,
+        speaker: Arc<FakeSpeaker>,
+        sink: Arc<FakeSink>,
+    }
+
+    fn rig_with(speaker: Arc<FakeSpeaker>) -> Rig {
+        let sink = FakeSink::new();
+        let (tx, events) = unbounded_channel();
+        let voice = Voice::new(speaker.clone(), sink.clone(), tx);
+        Rig {
+            voice,
+            events,
+            speaker,
+            sink,
+        }
+    }
+
+    fn rig() -> Rig {
+        rig_with(FakeSpeaker::new())
+    }
+
+    impl Rig {
+        /// The next event, waiting up to `WAIT`; a timeout means something is broken.
+        fn next(&mut self) -> VoiceEvent {
+            let deadline = Instant::now() + WAIT;
+            loop {
+                if let Ok(event) = self.events.try_recv() {
+                    return event;
+                }
+                assert!(Instant::now() < deadline, "no event arrived in time");
+                std::thread::yield_now();
+            }
+        }
+
+        fn nothing_pending(&mut self) -> bool {
+            self.events.try_recv().is_err()
+        }
+    }
+
+    fn say(s: &str) -> VoiceEvent {
+        VoiceEvent::Saying(s.to_string())
+    }
+
+    #[test]
+    fn a_reply_is_spoken_sentence_by_sentence_in_order() {
+        let mut rig = rig();
+        rig.voice.say("One. Two. Three.");
+        assert_eq!(rig.next(), say("One."));
+        assert_eq!(rig.next(), say("Two."));
+        assert_eq!(rig.next(), say("Three."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert_eq!(rig.speaker.sentences(), ["One.", "Two.", "Three."]);
+        assert_eq!(rig.sink.clips.lock().unwrap().len(), 3);
+        assert!(!rig.voice.speaking());
+        // The speaker only ever runs on the worker thread.
+        let me = std::thread::current().id();
+        assert!(rig.speaker.threads.lock().unwrap().iter().all(|t| *t != me));
+    }
+
+    #[test]
+    fn streamed_text_starts_speaking_before_the_reply_ends() {
+        let mut rig = rig();
+        rig.voice.say_delta("Hello the");
+        rig.voice.say_delta("re. Second par");
+        assert_eq!(rig.next(), say("Hello there."));
+        assert!(rig.voice.speaking());
+        assert!(rig.nothing_pending());
+        rig.voice.say_delta("t");
+        rig.voice.end_of_reply();
+        assert_eq!(rig.next(), say("Second part"));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+    }
+
+    #[test]
+    fn stop_during_synthesis_plays_nothing_from_that_sentence() {
+        let (speaker, entered, release) = FakeSpeaker::gated();
+        let mut rig = rig_with(speaker);
+        rig.voice.say("Held back.");
+        entered.wait(); // the speaker is inside the call, blocked; `say` has already returned
+        rig.voice.stop();
+        assert_eq!(rig.next(), VoiceEvent::Stopped);
+        assert!(!rig.voice.speaking());
+        release.wait();
+        // A following reply shows the worker has moved on, and that the old clip never played.
+        rig.voice.say("Next.");
+        assert_eq!(rig.next(), say("Next."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert_eq!(rig.sink.clips.lock().unwrap().len(), 1);
+        assert!(rig.nothing_pending());
+    }
+
+    #[test]
+    fn a_new_reply_after_stop_is_spoken() {
+        let mut rig = rig();
+        rig.sink.idle.store(false, Ordering::SeqCst); // keeps the first reply sounding
+        rig.voice.say("First.");
+        assert_eq!(rig.next(), say("First."));
+        rig.voice.stop();
+        assert_eq!(rig.next(), VoiceEvent::Stopped);
+        assert!(rig.sink.stops.load(Ordering::SeqCst) >= 1);
+        rig.voice.say("Second.");
+        assert_eq!(rig.next(), say("Second."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert!(rig.nothing_pending());
+    }
+
+    #[test]
+    fn stop_with_nothing_to_stop_sends_nothing() {
+        let mut rig = rig();
+        rig.voice.stop();
+        assert!(rig.nothing_pending());
+        rig.voice.say("Done.");
+        assert_eq!(rig.next(), say("Done."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        rig.voice.stop();
+        assert!(rig.nothing_pending());
+    }
+
+    #[test]
+    fn only_markdown_or_empty_text_says_nothing_and_finishes() {
+        let mut rig = rig();
+        rig.voice.say("---\n\u{1F642}");
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        rig.voice.say("");
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert!(rig.speaker.sentences().is_empty());
+        assert!(rig.nothing_pending());
+    }
+
+    #[test]
+    fn a_code_only_reply_says_code_is_on_screen() {
+        let mut rig = rig();
+        rig.voice.say("```rust\nlet x = 1;\nprintln!(\"hi\");\n```");
+        assert_eq!(rig.next(), say("(code is on screen)"));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+    }
+
+    #[test]
+    fn a_speaker_error_reports_trouble_and_ends() {
+        let mut rig = rig();
+        rig.speaker.fail.store(true, Ordering::SeqCst);
+        rig.voice.say_delta("Broken. More text. ");
+        assert_eq!(rig.next(), VoiceEvent::Trouble("no voice".into()));
+        assert!(!rig.voice.speaking());
+        rig.voice.say_delta("Even more.");
+        rig.voice.end_of_reply();
+        rig.speaker.fail.store(false, Ordering::SeqCst);
+        // The failed reply is over; the next one speaks normally.
+        rig.voice.say("Fine.");
+        assert_eq!(rig.next(), say("Fine."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert_eq!(rig.speaker.sentences(), ["Broken.", "Fine."]);
+    }
+
+    #[test]
+    fn speed_is_clamped() {
+        let mut rig = rig();
+        rig.voice.set_voice(3, 9.0);
+        rig.voice.say("Fast.");
+        assert_eq!(rig.next(), say("Fast."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        rig.voice.set_voice(0, 0.1);
+        rig.voice.say("Slow.");
+        assert_eq!(rig.next(), say("Slow."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        let calls = rig.speaker.calls.lock().unwrap().clone();
+        assert_eq!(calls[0], ("Fast.".to_string(), 3, 1.4));
+        assert_eq!(calls[1], ("Slow.".to_string(), 0, 0.8));
+    }
+
+    #[test]
+    fn a_reply_started_while_another_sounds_queues_behind_it() {
+        let mut rig = rig();
+        rig.sink.idle.store(false, Ordering::SeqCst);
+        rig.voice.say("Alpha.");
+        rig.voice.say("Beta.");
+        assert_eq!(rig.next(), say("Alpha."));
+        assert!(rig.nothing_pending());
+        rig.sink.idle.store(true, Ordering::SeqCst);
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert_eq!(rig.next(), say("Beta."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+    }
+
+    #[test]
+    fn finished_waits_for_the_sink_and_stop_ends_the_wait() {
+        let mut rig = rig();
+        rig.sink.idle.store(false, Ordering::SeqCst);
+        rig.voice.say("Waiting.");
+        assert_eq!(rig.next(), say("Waiting."));
+        assert!(rig.voice.speaking());
+        rig.voice.stop();
+        assert_eq!(rig.next(), VoiceEvent::Stopped);
+        // Nothing follows: the wait ended without a Finished.
+        rig.sink.idle.store(false, Ordering::SeqCst);
+        rig.voice.say("Again.");
+        assert_eq!(rig.next(), say("Again."));
+        rig.sink.idle.store(true, Ordering::SeqCst);
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert!(rig.nothing_pending());
+    }
+
+    #[test]
+    fn a_very_long_reply_is_cut_at_the_cap_and_still_finishes() {
+        let mut rig = rig();
+        for n in 0..200 {
+            rig.voice
+                .say_delta(&format!("This is sentence number {n}. "));
+        }
+        rig.voice.end_of_reply();
+        let mut total = 0;
+        let mut said = 0;
+        loop {
+            match rig.next() {
+                VoiceEvent::Saying(text) => {
+                    total += text.chars().count();
+                    said += 1;
+                }
+                VoiceEvent::Finished => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert!(said > 1);
+        assert!(total <= MAX_SPOKEN_CHARS, "{total} chars were spoken");
+        assert_eq!(rig.speaker.sentences().len(), said);
+    }
+
+    #[test]
+    fn dropping_the_voice_ends_the_worker() {
+        let speaker = FakeSpeaker::new();
+        let rig = rig_with(speaker.clone());
+        assert!(Arc::strong_count(&speaker) > 2); // the test, the rig and the worker
+        let Rig {
+            voice,
+            events,
+            speaker: rig_speaker,
+            sink,
+        } = rig;
+        drop(rig_speaker);
+        drop(voice);
+        let deadline = Instant::now() + WAIT;
+        while Arc::strong_count(&speaker) > 1 {
+            assert!(Instant::now() < deadline, "the worker did not end");
+            std::thread::yield_now();
+        }
+        drop((events, sink));
+    }
+
+    #[test]
+    fn a_closed_event_receiver_does_not_stop_the_speech() {
+        let mut rig = rig();
+        let Rig {
+            voice,
+            events,
+            speaker,
+            sink,
+        } = {
+            rig.voice.say("Hello.");
+            assert_eq!(rig.next(), say("Hello."));
+            rig
+        };
+        drop(events);
+        voice.say("Still going.");
+        voice.stop();
+        voice.say("And again.");
+        let deadline = Instant::now() + WAIT;
+        while speaker.sentences().len() < 2 {
+            assert!(Instant::now() < deadline, "the worker stopped working");
+            std::thread::yield_now();
+        }
+        drop(sink);
+    }
+}
