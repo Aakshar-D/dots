@@ -1,7 +1,7 @@
 # Open Dot, the voice assistant: design
 
 - Date: 2026-11-11
-- Status: builder check done; written for the person's review
+- Status: step 1 (ears and voice) is built; steps 2 to 6 are not
 - Builds on: `2026-10-08-dots-design.md` (dots, runs), `2026-11-03-setup-agent-design.md` (describe a task, get a dot), `2026-10-22-needs-you-design.md` (approvals and questions), `2026-10-27-conversational-chat-design.md` (chat topics), `2026-11-04-topic-tools-design.md` (topics), `2026-10-22-deep-teal-design.md` (colours).
 
 ## 1. Intent
@@ -255,4 +255,57 @@ One branch (`feat/open-dot`), one pull request per step where a step stands alon
 
 ## 10. As built
 
-(Filled in when the work is done.)
+### Step 1: ears and voice (2026-11-11)
+
+**What exists now.** The crate `crates/dots-voice` is a workspace member. It has no Tauri or core dependency; the app will own a `Session`. Its modules:
+
+- `text`: turns a model reply into speakable sentences (strips markdown, code fences, links and list markers; cuts at sentence ends; caps what is spoken).
+- `models`: the pinned manifest, the resumable downloader, the SHA-256 check and the unpacker (nothing is loaded unless its hash matches).
+- `engine`: the traits (`Speaker`, `Recognizer`, `SpeechDetector`, `WakeSpotter`), `Clip`, and resampling.
+- `sherpa`: the real engines behind those traits, through `sherpa-onnx` 2.0.1.
+- `ears`: speech detection with a pre-roll, end-of-sentence detection, live partial words and the final words.
+- `voice`: one speech queue; synthesises sentence by sentence; stop is immediate.
+- `audio`: microphone and speaker through `cpal`, with a bounded playback queue and level readings.
+- `session`: the state machine (`Off, Idle, Listening, Thinking, Speaking, Asking`) and its events. Its calls are `open`, `close`, `interrupt`, `thinking`, `say(turn, text, then)`, `say_delta(turn, delta)`, `end_of_reply(turn, then)`, `notice`, `settings`, `set_voice`, `state`, `turn` and `shutdown`; the person's words arrive as `Heard { text, turn }`.
+- `examples/talk.rs`: a command-line program that hears one sentence and says it back; it is the hand check.
+
+The crate has 141 unit tests, all passing, and 6 tests that use the real models and are ignored unless `DOTS_VOICE_MODELS` is set.
+
+**The speech models** are pinned by size and SHA-256 and come from the speech library's public release pages. Total download: 258 MB (258,311,120 bytes). They install under `<data dir>/voice/models`; in development `DOTS_VOICE_MODELS` points at a folder (here `C:\dev\dots-voice-models`).
+
+| Folder | Model | Size | Licence |
+|---|---|---|---|
+| `speak` | Supertonic 3 (int8), 10 voices | 128.8 MB | MIT |
+| `hear` | Moonshine base English (quantised) | 111.3 MB | MIT |
+| `wake` | Zipformer keyword spotter (gigaspeech, 3.3 M) | 17.6 MB | Apache-2.0 |
+| `vad` | Silero VAD | 0.6 MB | MIT |
+
+**Measured on the development machine (Windows ARM64, debug build, synthetic voices).** The six real-engine tests pass (about 70 to 110 s for the set, depending on load). A short sentence ("Okay, I'm on it.") is ready to play in 672 ms in the last run (980 and 1374 ms in two earlier runs; the test's limit is 1500 ms, and a release build will be faster). The wake phrase "Hey Dot, what needs me?" was caught 10 of 10 times, one per voice. "Dot, stop." was caught 10 of 10 times, with the keyword spelled `▁DO T ▁ST O P` because the model's token list has no `TO`. Two near-miss sentences ("Hey Dad, I connected the dots on that report." and "Please stop the music before the dog gets a hot donut.") caused no wake, 0 false hits in 20.
+
+**What differed from the design or the plan.**
+
+- `min_speech` is judged on the longest unbroken run of speech, not the total, because two coughs could otherwise add up to a turn and cost a wasted model request.
+- A reply to a turn the person interrupted is never spoken: every reply call carries a turn id, and the voice drops late text of a stopped reply (a latch) until that reply is closed, because a model stream cannot be halted at once and the queue has to swallow its tail.
+- With the wake phrase off, the microphone is closed in Idle, Thinking and Speaking (unless "Interrupt by just talking" is on), because the design forbids an open microphone without a visible sign and there is nothing to listen for.
+- Safety limits were added so the assistant cannot stay stuck: 120 s in Thinking (then "No reply came back." and Idle), 60 s in Speaking, hard limits on how long quiet may hold Listening open (noise no longer restarts it), and 20 s for a question (Asking, then Idle; the comment on `After::Ask` said otherwise and is wrong).
+- The speech library's own build script downloads a prebuilt native library with no hash check, so CI and release builds use `tools/voice` instead: it fetches the pinned archive per target, checks size and SHA-256, and sets `SHERPA_ONNX_LIB_DIR`. `release.yml` and `mac-check.yml` call it and run `cargo test -p dots-voice --locked`. Local builds still use the library's own download.
+- The playback queue is bounded to 60 s of sound, and the output callback never waits on the queue, because a stuck callback would stop the sound.
+- The session gained `Parts.voice_events`, `MicOpener`, `SystemClock`, `notice`, `turn` and `set_voice`, because the plan gave it no way to hear the voice, to be tested against a clock, to speak a notice, or to change voice. It also drops late text for a cut turn itself and stops the voice at once.
+- Choices the plan left open: "Dot, stop" while Listening or Asking closes the session; `open` while Thinking interrupts; a lost microphone is not reopened for the wake phrase until `open` or `settings`; a lost microphone while Speaking stops speech; a voice error while Speaking returns to Idle; the wake phrase defaults to off.
+- A reply ends (`Finished`) only after it is closed, every sentence has been handed over and the speaker is idle, so a gap between sentences cannot end it.
+
+**Known and not fixed.** All were found in review and judged small. The first group should be fixed before shipping.
+
+- Downloads (`models`): there is no connect or read timeout, so a stalled connection hangs (fix before shipping). A `.part` is deleted before the marker is written and a crash between re-downloads is not handled; there is no fsync before the marker; the `206 Content-Range` is not checked (a wrong offset surfaces as `WrongHash`) and a `416` errors instead of restarting; a Windows rename can fail under an antivirus scan with no retry; two installs on one root are not guarded; there are no tests for a stale `.tmp`, a stale marker with a changed hash, or cancel mid-stream.
+- Text (`text`): a one-line "```x```" opens a fence and swallows the rest; text with no `. ! ?` is not cut at newlines, so the first speech waits; "2024. Great year" loses "2024." as a list marker; an indented "  1. x" can still leave a lone "1."; mixed `~~~` and "```" fences toggle state; the length cap counts bytes.
+- Engines (`sherpa`): `get_result` allocates for each ready frame; `heard` and `is_speech` do not `debug_assert` the frame length; the 1500 ms "short sentence" test can flake in a debug build on a loaded machine; the doc comment on the hit-rate test is misleading; the voice clamp is undocumented; the downsample tail is untested; the linker warning LNK4098 (see below) is accepted for now.
+- Ears (`ears`): the slow-partial backoff only skips every other interval; the partial cadence and unchanged-text suppression are untested; the wrong-size-frame test is skipped in debug; a reset after `Started` emits no `Dropped`, so the session must clear its own state on reset.
+- Voice (`voice`): `sink.idle()` is called under the state lock; a barrier waits without a timeout; the closed-receiver test is weak; there is a gap between queued replies; `say()` clears the latch and appends in two lock scopes, and no doc line says `say()` is the way out of the latch.
+- Audio (`audio`): the microphone callback allocates on each call; there is no `frames_from` test for buffers that are not a whole multiple; the sample-format test tests `cpal`, not our code; the example can hear its own last syllables because idle comes before the device tail ends (the session's `reopen_after_ms` covers this in the app); playback reserves 60 s of `f32` up front (11.5 MB at 48 kHz, 46 MB at 192 kHz) and should grow lazily.
+- Session (`session`): `shutdown()` does not join the worker, so the microphone is released asynchronously; `thinking()` is not tied to a turn (harmless).
+
+**Still owed before this can ship.**
+
+- The hand check: `cargo run -p dots-voice --example talk` with `DOTS_VOICE_MODELS` set, on speakers and on headphones. No person has heard this yet; the real-engine tests use synthetic voices.
+- A first CI run on Windows x64, where the linker warning LNK4098 needs watching (the speech library's Windows archives use the static C runtime while Rust links the dynamic one), and on Mac, where the crate has never been built.
+- Steps 2 to 6 of section 8. None is started, and nothing of this is wired into the app yet.
