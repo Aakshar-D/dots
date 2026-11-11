@@ -25,7 +25,12 @@ const HALO_BLUR = 26 * 0.7;
 /// Below this many pixels the dots are drawn without melting. The melt blurs the dots and cuts
 /// the blur at a hard edge: at 24 px the small dot is about 2 px across in radius and the blur
 /// under 1 px, so the cut leaves jagged specks with no antialiasing. Plain circles read better.
-const MELT_MIN_SIZE = 48;
+const MELT_MIN_SIZE = 40;
+/// The melt's alpha ramp: a soft edge (12) cut at the prototype's point (alpha 5/12, as 24 -10).
+const MELT_ALPHA = "0 0 0 12 -5";
+/// The rail form draws the arrangement this much larger around the middle, so the logo fills
+/// about 80% of its box instead of 56%.
+const FIT = 1.45;
 
 export type BreathProps = {
   size: number;
@@ -38,7 +43,8 @@ export type BreathProps = {
 };
 
 /// The Breath: Open Dot's mark, three soft dots that move with the person's voice and Dot's.
-/// One animation loop writes the circles' attributes directly; nothing renders per frame.
+/// One animation loop writes the circles' attributes directly; nothing renders per frame. The
+/// loop sleeps while nothing can move and wakes on a new state, options or voice change.
 export function Breath({
   size,
   state,
@@ -58,8 +64,11 @@ export function Breath({
   const halos = useRef<(SVGCircleElement | null)[]>([]);
   // What the loop reads each frame; kept current without restarting it.
   const props = useRef({ state, options, quiet });
+  // Starts the frame loop again after it went to sleep; set by the loop's effect.
+  const wake = useRef<() => void>(() => {});
   useLayoutEffect(() => {
     props.current = { state, options, quiet };
+    wake.current();
   }, [state, options, quiet]);
 
   useEffect(() => {
@@ -69,14 +78,10 @@ export function Breath({
         ? window.matchMedia("(prefers-reduced-motion: reduce)")
         : null;
     let still = media?.matches ?? false;
-    const onMedia = () => {
-      still = media?.matches ?? false;
-    };
-    media?.addEventListener?.("change", onMedia);
 
     // The last value written to each attribute, so a mark at rest touches nothing.
     const written = new Map<Element, Record<string, string>>();
-    const put = (el: Element | null, name: string, value: string) => {
+    const put = (el: Element | null | undefined, name: string, value: string) => {
       if (!el) return;
       let seen = written.get(el);
       if (!seen) written.set(el, (seen = {}));
@@ -96,20 +101,25 @@ export function Breath({
         { state: shown, mic: live.level.mic, voice: live.level.voice, options, still },
         now,
       );
-      const all = [...frame.dots, frame.lobes[0]];
-      all.forEach((dot, i) => {
+      for (let i = 0; i < 4; i++) {
+        const dot = i < 3 ? frame.dots[i as 0 | 1 | 2] : frame.lobes[0];
         const cx = (dot?.x ?? 0).toFixed(2);
         const cy = (dot?.y ?? 0).toFixed(2);
         const r = Math.max(0, dot?.r ?? 0).toFixed(2);
         for (const el of [circles.current[i], halos.current[i]]) {
-          put(el ?? null, "cx", cx);
-          put(el ?? null, "cy", cy);
-          put(el ?? null, "r", r);
+          put(el, "cx", cx);
+          put(el, "cy", cy);
+          put(el, "r", r);
         }
-      });
+      }
       put(bodies.current, "opacity", frame.dots[0].opacity.toFixed(3));
       put(glow.current, "opacity", frame.glow.toFixed(3));
-      handle = window.requestAnimationFrame(draw);
+      // Nothing can move: every value is at its target (a held state, or any state with reduced
+      // motion, once its morph is done), no sound is coming in or fading out, and the
+      // microphone is shut. Sleep until the state, the options or the voice changes.
+      const asleep =
+        frame.settled && !live.micOpen && live.level.mic === 0 && live.level.voice === 0;
+      if (!asleep) handle = window.requestAnimationFrame(draw);
     };
     const start = () => {
       if (handle === null && !document.hidden) handle = window.requestAnimationFrame(draw);
@@ -118,11 +128,21 @@ export function Breath({
       if (handle !== null) window.cancelAnimationFrame(handle);
       handle = null;
     };
+    wake.current = start;
+    const onMedia = () => {
+      still = media?.matches ?? false;
+      start();
+    };
+    media?.addEventListener?.("change", onMedia);
+    // The voice changed (the microphone, a level, anything): one frame tells whether to move.
+    const unsubscribe = voiceStore.subscribe(start);
     const onVisibility = () => (document.hidden ? stop() : start());
     document.addEventListener("visibilitychange", onVisibility);
     start();
     return () => {
       stop();
+      wake.current = () => {};
+      unsubscribe();
       document.removeEventListener("visibilitychange", onVisibility);
       media?.removeEventListener?.("change", onMedia);
     };
@@ -131,11 +151,30 @@ export function Breath({
   // Drawn in the logo arrangement; the loop takes over from the first frame. React never
   // changes these attributes again, as their values here never change.
   const start = [...LOGO, { x: LOGO[0].x, y: LOGO[0].y, r: 0 }];
+  const body = (
+    <g data-bodies="" ref={bodies} filter={melts ? `url(#${meltId})` : undefined}>
+      {start.map((d, i) => (
+        <circle
+          key={i}
+          {...(i < 3 ? { "data-dot": "" } : { "data-lobe": "" })}
+          ref={(el) => {
+            circles.current[i] = el;
+          }}
+          cx={d.x.toFixed(2)}
+          cy={d.y.toFixed(2)}
+          r={d.r.toFixed(2)}
+          fill={COLOURS[i]}
+        />
+      ))}
+    </g>
+  );
   const svg = (
     <svg
       width={size}
       height={size}
       viewBox="0 0 200 200"
+      // The glow and a swelling shape may reach past the box; the rail form has no glow.
+      overflow={quiet ? undefined : "visible"}
       {...(onClick
         ? { "aria-hidden": true }
         : { role: "img", "aria-label": label ?? LABELS[state] })}
@@ -154,7 +193,7 @@ export function Breath({
             <feColorMatrix
               in="blur"
               mode="matrix"
-              values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -10"
+              values={`1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  ${MELT_ALPHA}`}
             />
           </filter>
         )}
@@ -180,21 +219,7 @@ export function Breath({
           ))}
         </g>
       )}
-      <g data-bodies="" ref={bodies} filter={melts ? `url(#${meltId})` : undefined}>
-        {start.map((d, i) => (
-          <circle
-            key={i}
-            {...(i < 3 ? { "data-dot": "" } : { "data-lobe": "" })}
-            ref={(el) => {
-              circles.current[i] = el;
-            }}
-            cx={d.x.toFixed(2)}
-            cy={d.y.toFixed(2)}
-            r={d.r.toFixed(2)}
-            fill={COLOURS[i]}
-          />
-        ))}
-      </g>
+      {quiet ? <g data-fit="" transform={`translate(100 100) scale(${FIT}) translate(-100 -100)`}>{body}</g> : body}
     </svg>
   );
 

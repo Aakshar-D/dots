@@ -140,23 +140,69 @@ describe("Breath", () => {
     expect(callbacks.size).toBe(0);
   });
 
-  it("quiet and resting writes the same numbers every frame", () => {
+  it("the_quiet_mark_stops_asking_for_frames_when_resting", () => {
     const { container } = render(<Breath size={24} state="resting" quiet />);
+    frames(5);
+    // Still and in the logo: no frame is asked for any more.
+    expect(callbacks.size).toBe(0);
+    expect(written(container)).toEqual(logoWritten());
+    // The rail form has no glow.
+    expect(container.querySelector("[data-glow]")).toBeNull();
+    // A store change that moves nothing wakes it for a frame, and it sleeps again.
+    voiceStore.set({ hearing: "x" });
+    frames(3);
+    expect(callbacks.size).toBe(0);
+  });
+
+  it("it_wakes_when_the_microphone_opens", () => {
+    const { container } = render(<Breath size={24} state="resting" quiet />);
+    frames(5);
+    expect(callbacks.size).toBe(0);
+    voiceStore.set({ micOpen: true });
+    expect(callbacks.size).toBe(1);
     const seen = new Set<string>();
     for (let i = 0; i < 120; i++) {
       frame();
       seen.add(written(container).join("|"));
     }
-    expect([...seen]).toEqual([logoWritten().join("|")]);
-    // The rail form has no glow.
-    expect(container.querySelector("[data-glow]")).toBeNull();
-    // With the microphone open it breathes.
-    voiceStore.set({ micOpen: true });
-    for (let i = 0; i < 120; i++) {
-      frame();
-      seen.add(written(container).join("|"));
-    }
+    // It breathes for as long as the microphone is open.
     expect(seen.size).toBeGreaterThan(10);
+    expect(callbacks.size).toBe(1);
+    // Closed again: it settles back into the logo and sleeps.
+    voiceStore.set({ micOpen: false });
+    frames(120);
+    expect(callbacks.size).toBe(0);
+    expect(written(container)).toEqual(logoWritten());
+  });
+
+  it("it_wakes_on_a_state_change", () => {
+    const { container, rerender } = render(<Breath size={132} state="done" />);
+    frames(5);
+    expect(callbacks.size).toBe(0);
+    rerender(<Breath size={132} state="thinking" />);
+    expect(callbacks.size).toBe(1);
+    frames(10);
+    expect(written(container)).not.toEqual(logoWritten());
+    // Done again settles and sleeps; the options changing wakes it too.
+    rerender(<Breath size={132} state="done" />);
+    frames(200);
+    expect(callbacks.size).toBe(0);
+    rerender(<Breath size={132} state="done" options={4} />);
+    expect(callbacks.size).toBe(1);
+  });
+
+  it("the rail form fills its box and the stage form may glow past it", () => {
+    const { container } = render(
+      <>
+        <Breath size={24} state="resting" quiet />
+        <Breath size={132} state="resting" />
+      </>,
+    );
+    const [rail, stage] = [...container.querySelectorAll("svg")];
+    expect(rail!.querySelector("[data-fit]")?.getAttribute("transform")).toMatch(/scale\(1\.45\)/);
+    expect(stage!.querySelector("[data-fit]")).toBeNull();
+    expect(stage!.getAttribute("overflow")).toBe("visible");
+    expect(rail!.getAttribute("overflow")).toBeNull();
   });
 
   it("the stage form breathes while resting", () => {
@@ -220,19 +266,25 @@ describe("Breath", () => {
         <Breath size={132} state="speaking" />
         <Breath size={132} state="speaking" />
         <Breath size={24} state="speaking" quiet />
+        <Breath size={39} state="speaking" />
       </>,
     );
     const ids = [...container.querySelectorAll("filter")].map((f) => f.id);
     expect(new Set(ids).size).toBe(ids.length);
     const groups = [...container.querySelectorAll("[data-bodies]")];
-    expect(groups).toHaveLength(3);
+    expect(groups).toHaveLength(4);
     const used = groups.map((g) => g.getAttribute("filter"));
     expect(used[0]).not.toEqual(used[1]);
     for (const u of used.slice(0, 2)) {
       const id = /^url\(#(.+)\)$/.exec(u ?? "")?.[1];
       expect(id).toBeTruthy();
-      expect(container.querySelector(`filter[id="${id}"]`)).not.toBeNull();
+      const filter = container.querySelector(`filter[id="${id}"]`);
+      expect(filter).not.toBeNull();
+      // A soft ramp with the same cut point as 24 -10: alpha 5/12.
+      expect(filter!.querySelector("feColorMatrix")?.getAttribute("values")).toMatch(/0 0 0 12 -5$/);
     }
+    // Below 40 px no melt.
     expect(used[2]).toBeNull();
+    expect(used[3]).toBeNull();
   });
 });

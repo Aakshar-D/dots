@@ -163,24 +163,65 @@ describe("The Breath's model", () => {
       expect(Math.min(...gaps)).toBeLessThan(0);
       expect(Math.max(...gaps)).toBeGreaterThan(0);
     }
+    // They touch for a visible stretch: some pair overlaps for at least 15% of the loop.
+    const touching = frames.filter((f) =>
+      (
+        [
+          [0, 1],
+          [1, 2],
+          [0, 2],
+        ] as const
+      ).some(([a, b]) => dist(f.dots[a], f.dots[b]) < f.dots[a].r + f.dots[b].r),
+    );
+    expect(touching.length / frames.length).toBeGreaterThanOrEqual(0.15);
+  });
+
+  it("levels_too_small_to_see_are_zero", () => {
+    // A level that fades out reaches exactly nothing, so a mark at rest can tell it is still.
+    const d = driver();
+    const loud = d.run({ state: "listening", mic: 1, voice: 1 }, 500).at(-1)!;
+    expect(loud.mic).toBeGreaterThan(0.5);
+    expect(loud.voice).toBeGreaterThan(0.5);
+    const faded = d.run({ state: "resting" }, 5000).at(-1)!;
+    expect(faded.mic).toBe(0);
+    expect(faded.voice).toBe(0);
+  });
+
+  it("says_when_it_has_settled", () => {
+    const d = driver();
+    expect(d.run({ state: "thinking" }, 2000).some((f) => f.settled)).toBe(false);
+    expect(d.run({ state: "resting" }, 2000).some((f) => f.settled)).toBe(false);
+    const done = d.run({ state: "done" }, 3000);
+    expect(done[0]!.settled).toBe(false);
+    expect(done.at(-1)!.settled).toBe(true);
+    const still = d.run({ state: "speaking", still: true }, 3000);
+    expect(still.at(-1)!.settled).toBe(true);
+    expect(d.run({ state: "speaking", voice: 0.5, still: true }, 100).at(-1)!.settled).toBe(false);
   });
 
   it("speaking_melts_and_pulses_with_voice", () => {
     const d = driver();
+    /// One shape, three colours: every pair overlaps, and no centre lies inside another body's
+    /// inner 60%, so each colour owns part of the outline.
+    const melted = (f: Frame) => {
+      for (const [a, b] of [
+        [0, 1],
+        [1, 2],
+        [0, 2],
+      ] as const) {
+        const gap = dist(f.dots[a], f.dots[b]);
+        expect(gap).toBeLessThan(f.dots[a].r + f.dots[b].r);
+        expect(gap).toBeGreaterThan(0.6 * f.dots[a].r);
+        expect(gap).toBeGreaterThan(0.6 * f.dots[b].r);
+      }
+    };
     d.run({ state: "speaking" }, 2000);
     const quiet = d.run({ state: "speaking" }, 3000);
-    for (const f of quiet) {
-      const smallest = Math.min(...f.dots.map((dot) => dot.r));
-      expect(dist(f.dots[0], f.dots[1])).toBeLessThan(smallest);
-      expect(dist(f.dots[1], f.dots[2])).toBeLessThan(smallest);
-      expect(dist(f.dots[0], f.dots[2])).toBeLessThan(smallest);
-    }
+    quiet.forEach(melted);
     d.run({ state: "speaking", voice: 0.9 }, 1000);
     const loud = d.run({ state: "speaking", voice: 0.9 }, 3000);
-    for (const f of loud) {
-      const smallest = Math.min(...f.dots.map((dot) => dot.r));
-      expect(dist(f.dots[0], f.dots[1])).toBeLessThan(smallest);
-    }
+    loud.forEach(melted);
+    for (const v of [0.3, 0.6, 1]) d.run({ state: "speaking", voice: v }, 1500).forEach(melted);
     [0, 1, 2].forEach((i) => {
       expect(mean(loud.map((f) => f.dots[i]!.r)) - mean(quiet.map((f) => f.dots[i]!.r))).toBeGreaterThan(8);
     });
@@ -260,30 +301,58 @@ describe("The Breath's model", () => {
   });
 
   it("state_changes_are_continuous", () => {
-    // At 60 frames a second no value moves more than this in one frame: under a tenth of the
-    // box, where a cut would move up to the whole distance between two shapes (over 100).
-    // The largest is the extra lobe leaving the yellow dot for the far right (about 14).
+    // No value moves more than this per 60th of a second: under a tenth of the box, where a
+    // cut would move up to the whole distance between two shapes (over 100). The largest is
+    // the extra lobe leaving the yellow dot for the far right (about 14).
     const BOUND = 16;
-    let worst = 0;
-    for (const from of STATES) {
-      for (const to of STATES) {
-        if (from === to) continue;
-        const d = driver();
-        const input = { mic: 0.6, voice: 0.6, options: 4 };
-        let prev = d.run({ ...input, state: from }, 1500).at(-1)!;
-        for (const f of d.run({ ...input, state: to }, 1000)) {
+    const input = { mic: 0.6, voice: 0.6, options: 4 };
+    for (const fps of [30, 60, 144]) {
+      const frameMs = 1000 / fps;
+      // Distance moved per frame, scaled to a 60th of a second.
+      const scale = FRAME_MS / frameMs;
+      let worst = 0;
+      const check = (frames: Frame[], prev: Frame) => {
+        for (const f of frames) {
           const a = values(prev);
           const b = values(f);
           for (let i = 0; i < a.length; i++) {
             if (Number.isNaN(a[i]!) || Number.isNaN(b[i]!)) continue;
-            worst = Math.max(worst, Math.abs(b[i]! - a[i]!));
+            worst = Math.max(worst, Math.abs(b[i]! - a[i]!) * scale);
           }
           prev = f;
         }
+        return prev;
+      };
+      const run = (breath: ReturnType<typeof createBreath>, clock: { now: number }, state: BreathState, ms: number) => {
+        const frames: Frame[] = [];
+        const end = clock.now + ms;
+        while (clock.now < end - 1e-6) {
+          clock.now += frameMs;
+          frames.push(breath.step({ ...BASE, ...input, state }, clock.now));
+        }
+        return frames;
+      };
+      for (const from of STATES) {
+        for (const to of STATES) {
+          if (from === to) continue;
+          const breath = createBreath();
+          const clock = { now: 0 };
+          const prev = run(breath, clock, from, 1500).at(-1)!;
+          check(run(breath, clock, to, 1000), prev);
+          // And a switch 100 ms into a morph, to a third state.
+          for (const third of STATES) {
+            if (third === to) continue;
+            const b2 = createBreath();
+            const c2 = { now: 0 };
+            let p = run(b2, c2, from, 1500).at(-1)!;
+            p = check(run(b2, c2, to, 100), p);
+            check(run(b2, c2, third, 600), p);
+          }
+        }
       }
+      expect(worst).toBeGreaterThan(1);
+      expect(worst).toBeLessThan(BOUND);
     }
-    expect(worst).toBeGreaterThan(1);
-    expect(worst).toBeLessThan(BOUND);
   });
 
   it("a_frame_after_a_long_pause_does_not_cut", () => {

@@ -16,7 +16,16 @@ export type BreathState =
 /// One body, in a 200 × 200 box.
 export type Dot = { x: number; y: number; r: number; opacity: number };
 /// `lobes`: the extra body shown while asking with four or more options, empty otherwise.
-export type Frame = { dots: [Dot, Dot, Dot]; lobes: Dot[]; glow: number };
+/// `mic`, `voice`: the smoothed levels, exactly 0 once too small to see. `settled`: every value
+/// is at its target, so with the same input the next frame is this one.
+export type Frame = {
+  dots: [Dot, Dot, Dot];
+  lobes: Dot[];
+  glow: number;
+  mic: number;
+  voice: number;
+  settled: boolean;
+};
 export type BreathInput = {
   state: BreathState;
   mic: number;
@@ -71,6 +80,8 @@ const RELEASE_RATE = 7;
 const MAX_DT = 0.05;
 /// Below this a value is at its target.
 const SNAP = 1e-3;
+/// Below this a smoothed level is silence, so a mark at rest can tell nothing moves.
+const LEVEL_SNAP = 1e-4;
 /// The glow behind the dots (prototype halo opacity).
 const GLOW = 0.28;
 /// How dim the dots are when something is wrong (prototype).
@@ -115,7 +126,7 @@ function targets(state: BreathState, t: number, level: number, n: number): Body[
       case "thinking": {
         // Circling one another, drifting in and out so they touch and part.
         const a = (i * 2 * Math.PI) / 3 + t * 1.1;
-        const d = 40 + 16 * Math.sin(t * 1.9 + i * 2.1);
+        const d = 36 + 14 * Math.sin(t * 1.9 + i * 2.1);
         return {
           x: Math.cos(a) * d,
           y: Math.sin(a) * d * 0.8,
@@ -123,13 +134,14 @@ function targets(state: BreathState, t: number, level: number, n: number): Body[
         };
       }
       case "speaking": {
-        // Melted into one shape, turning slowly, pulsing with Dot's voice.
+        // Melted into one shape, turning slowly, pulsing with Dot's voice. Far enough apart and
+        // close enough in size that each colour keeps part of the outline.
         const a = (i * 2 * Math.PI) / 3 + t * 0.7;
-        const d = 13 + level * 9;
+        const d = 18 + level * 9;
         return {
           x: Math.cos(a) * d,
           y: Math.sin(a) * d,
-          r: i === 3 ? 0 : h.r * 1.12 + level * 20 + 2 * Math.sin(t * 3 + i),
+          r: i === 3 ? 0 : h.r * (i === 0 ? 1 : 1.2) + level * 20 + 2 * Math.sin(t * 3 + i),
         };
       }
       case "asking": {
@@ -171,13 +183,17 @@ export function createBreath(): { step(input: BreathInput, nowMs: number): Frame
       // The breath's own clock, so a long pause does not jump its phase.
       t += dt;
 
-      const follow = (value: number, want: number) =>
-        value + (want - value) * (1 - Math.exp(-dt * (want > value ? ATTACK_RATE : RELEASE_RATE)));
+      const follow = (value: number, want: number) => {
+        const next =
+          value + (want - value) * (1 - Math.exp(-dt * (want > value ? ATTACK_RATE : RELEASE_RATE)));
+        return next < LEVEL_SNAP ? 0 : next;
+      };
       mic = follow(mic, unit(input.mic));
       voice = follow(voice, unit(input.voice));
       const { state } = input;
       const level = state === "listening" ? mic : state === "speaking" ? voice : 0;
 
+      let settled = true;
       if (input.still) {
         // Reduced motion: the logo, always; only brightness moves.
         HOME.forEach((h, i) => Object.assign(bodies[i]!, toBox(h)));
@@ -195,10 +211,13 @@ export function createBreath(): { step(input: BreathInput, nowMs: number): Frame
           b.x = ease(b.x, g.x, k);
           b.y = ease(b.y, g.y, k);
           b.r = ease(b.r, Math.max(0, g.r), k);
+          if (b.x !== g.x || b.y !== g.y || b.r !== Math.max(0, g.r)) settled = false;
         });
       }
 
-      dim = ease(dim, state === "trouble" ? TROUBLE_DIM : 1, 1 - Math.exp(-dt * FADE_RATE));
+      const wantDim = state === "trouble" ? TROUBLE_DIM : 1;
+      dim = ease(dim, wantDim, 1 - Math.exp(-dt * FADE_RATE));
+      if (dim !== wantDim || mic !== 0 || voice !== 0) settled = false;
       const opacity = input.still ? dim * (STILL_BASE + (1 - STILL_BASE) * level) : dim;
       const glow = input.still ? dim * (GLOW + STILL_GLOW_GAIN * level) : dim * GLOW;
 
@@ -208,6 +227,9 @@ export function createBreath(): { step(input: BreathInput, nowMs: number): Frame
         dots: [dot(bodies[0]!), dot(bodies[1]!), dot(bodies[2]!)],
         lobes: lobe.r > 0.05 ? [dot(lobe)] : [],
         glow,
+        mic,
+        voice,
+        settled,
       };
     },
   };
