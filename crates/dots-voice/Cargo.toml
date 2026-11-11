@@ -12,7 +12,9 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls-webpki-roots",
     "rustls-tls-native-roots",
 ] }
+serde_json = "1"
 sha2 = "0.10"
+sherpa-onnx = "=2.0.1"
 tar = "0.4.46"
 thiserror = "2"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
