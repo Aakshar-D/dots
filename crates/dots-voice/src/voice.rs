@@ -18,16 +18,22 @@ const IDLE_POLL: Duration = Duration::from_millis(20);
 const MIN_SPEED: f32 = 0.8;
 const MAX_SPEED: f32 = 1.4;
 
+/// What `Voice` says when the sink refuses a clip or has failed.
+pub(crate) const SPEAKER_BROKE: &str = "The speaker stopped working.";
+
 /// Where clips are played. Implemented by the speaker output.
 pub trait Sink: Send + Sync {
-    /// Queues the clip; returns at once.
-    fn play(&self, clip: Clip);
+    /// Queues the clip; returns at once. False when the clip was refused (the speaker failed,
+    /// or the queue is full) and will not be heard.
+    fn play(&self, clip: Clip) -> bool;
     /// Drops everything queued and playing, at once.
     fn stop(&self);
-    /// True when nothing is queued or playing.
+    /// True when nothing is queued or playing. A failed sink is idle.
     fn idle(&self) -> bool;
     /// 0.0..=1.0 of what is sounding now.
     fn level(&self) -> f32;
+    /// True once the speaker has stopped working for good; a new sink is needed.
+    fn failed(&self) -> bool;
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -60,13 +66,14 @@ struct State {
     pending: usize,
     voice: u8,
     speed: f32,
+    /// Where clips go; replaced by `set_sink` after a failure.
+    sink: Arc<dyn Sink>,
 }
 
 struct Shared {
     state: Mutex<State>,
     /// Woken by `stop`, so a wait for the sink to go idle ends at once.
     wake: Condvar,
-    sink: Arc<dyn Sink>,
     events: UnboundedSender<VoiceEvent>,
 }
 
@@ -103,9 +110,9 @@ impl Voice {
                 pending: 0,
                 voice: 0,
                 speed: 1.0,
+                sink,
             }),
             wake: Condvar::new(),
-            sink,
             events,
         });
         let (commands, inbox) = channel();
@@ -132,6 +139,14 @@ impl Voice {
         let mut st = self.shared.lock();
         st.voice = voice;
         st.speed = speed;
+    }
+
+    /// Plays into `sink` from now on, typically after the old one failed. Whatever the old
+    /// sink still held is stopped.
+    pub fn set_sink(&self, sink: Arc<dyn Sink>) {
+        let mut st = self.shared.lock();
+        let old = std::mem::replace(&mut st.sink, sink);
+        old.stop();
     }
 
     /// A whole reply: the same as `say_delta(text)` then `end_of_reply()`. Always a new reply,
@@ -197,7 +212,7 @@ impl Voice {
         if st.open.take().is_some() {
             st.dropping = true;
         }
-        self.shared.sink.stop();
+        st.sink.stop();
         self.shared.wake.notify_all();
         if was_speaking {
             self.shared.send(VoiceEvent::Stopped);
@@ -283,7 +298,12 @@ impl Worker {
                 let mut st = self.shared.lock();
                 if st.gen == gen {
                     st.pending = st.pending.saturating_sub(1);
-                    self.shared.send(VoiceEvent::Finished);
+                    // A sink that failed while sounding went idle by throwing the rest away.
+                    if st.sink.failed() {
+                        self.shared.send(VoiceEvent::Trouble(SPEAKER_BROKE.into()));
+                    } else {
+                        self.shared.send(VoiceEvent::Finished);
+                    }
                 }
             }
         }
@@ -324,23 +344,30 @@ impl Worker {
                 if st.gen != gen {
                     return; // stopped while synthesising: the clip is thrown away
                 }
-                self.shared.sink.play(clip);
+                if !st.sink.play(clip) {
+                    drop(st);
+                    self.fail(gen, reply, SPEAKER_BROKE.into());
+                    return;
+                }
                 self.shared.send(VoiceEvent::Saying(cleaned));
                 drop(st);
                 self.reply_state(reply).spoken += separator + length;
             }
-            Err(error) => {
-                self.reply_state(reply).failed = true;
-                let mut st = self.shared.lock();
-                if st.gen == gen {
-                    st.pending = st.pending.saturating_sub(1);
-                    if st.open == Some(reply) {
-                        st.open = None;
-                        st.dropping = true;
-                    }
-                    self.shared.send(VoiceEvent::Trouble(error.to_string()));
-                }
+            Err(error) => self.fail(gen, reply, error.to_string()),
+        }
+    }
+
+    /// The reply cannot go on: the rest of it is dropped and `Trouble` ends it, once.
+    fn fail(&mut self, gen: u64, reply: u64, message: String) {
+        self.reply_state(reply).failed = true;
+        let mut st = self.shared.lock();
+        if st.gen == gen {
+            st.pending = st.pending.saturating_sub(1);
+            if st.open == Some(reply) {
+                st.open = None;
+                st.dropping = true;
             }
+            self.shared.send(VoiceEvent::Trouble(message));
         }
     }
 
@@ -351,7 +378,7 @@ impl Worker {
             if st.gen != gen {
                 return false;
             }
-            if self.shared.sink.idle() {
+            if st.sink.idle() {
                 return true;
             }
             st = self
@@ -454,6 +481,7 @@ mod tests {
         clips: Mutex<Vec<Clip>>,
         idle: AtomicBool,
         stops: AtomicUsize,
+        failed: AtomicBool,
     }
 
     impl FakeSink {
@@ -462,13 +490,27 @@ mod tests {
                 clips: Mutex::default(),
                 idle: AtomicBool::new(true),
                 stops: AtomicUsize::new(0),
+                failed: AtomicBool::new(false),
             })
+        }
+
+        /// The device went away: what was queued is gone and nothing more is taken.
+        fn fail(&self) {
+            self.failed.store(true, Ordering::SeqCst);
+            self.idle.store(true, Ordering::SeqCst);
         }
     }
 
     impl Sink for FakeSink {
-        fn play(&self, clip: Clip) {
+        fn play(&self, clip: Clip) -> bool {
+            if self.failed.load(Ordering::SeqCst) {
+                return false;
+            }
             self.clips.lock().unwrap().push(clip);
+            true
+        }
+        fn failed(&self) -> bool {
+            self.failed.load(Ordering::SeqCst)
         }
         fn stop(&self) {
             self.stops.fetch_add(1, Ordering::SeqCst);
@@ -864,6 +906,41 @@ mod tests {
         let joined = said.join(" ");
         assert_eq!(joined, "Here it is: (code is on screen) Done.");
         assert!(!joined.contains("fn") && !joined.contains("let"));
+    }
+
+    #[test]
+    fn a_sink_that_fails_mid_reply_gives_one_trouble_instead_of_finished() {
+        let mut rig = rig();
+        rig.sink.idle.store(false, Ordering::SeqCst);
+        rig.voice.say("One. Two.");
+        assert_eq!(rig.next(), say("One."));
+        assert_eq!(rig.next(), say("Two."));
+        rig.sink.fail();
+        assert_eq!(rig.next(), VoiceEvent::Trouble(SPEAKER_BROKE.into()));
+        assert!(!rig.voice.speaking());
+        rig.voice.stop(); // nothing left to stop: no event
+        assert!(rig.nothing_pending());
+    }
+
+    #[test]
+    fn a_clip_the_sink_refuses_ends_the_reply_with_trouble() {
+        let mut rig = rig();
+        rig.sink.fail();
+        rig.voice.say_delta("Refused. And the rest. ");
+        assert_eq!(rig.next(), VoiceEvent::Trouble(SPEAKER_BROKE.into()));
+        assert!(!rig.voice.speaking());
+        rig.voice.say_delta("Dropped too.");
+        rig.voice.end_of_reply();
+        // A new sink takes the next reply.
+        let fresh = FakeSink::new();
+        rig.voice.set_sink(fresh.clone());
+        rig.voice.say("Again.");
+        assert_eq!(rig.next(), say("Again."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert!(rig.nothing_pending());
+        assert_eq!(fresh.clips.lock().unwrap().len(), 1);
+        assert!(rig.sink.clips.lock().unwrap().is_empty());
+        assert_eq!(rig.speaker.sentences(), ["Refused.", "Again."]);
     }
 
     #[test]

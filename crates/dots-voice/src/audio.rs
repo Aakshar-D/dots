@@ -573,9 +573,9 @@ impl CpalSink {
 }
 
 impl Sink for CpalSink {
-    fn play(&self, clip: Clip) {
+    fn play(&self, clip: Clip) -> bool {
         if clip.samples.is_empty() {
-            return;
+            return !self.failed();
         }
         let clip = resample(&clip, self.rate); // outside the lock
         if !self.started.swap(true, Ordering::SeqCst) {
@@ -584,7 +584,11 @@ impl Sink for CpalSink {
             }
         }
         // The lock is held for the append only; a refused clip is dropped.
-        locked(&self.shared.playback).push(&clip.samples);
+        locked(&self.shared.playback).push(&clip.samples)
+    }
+
+    fn failed(&self) -> bool {
+        locked(&self.shared.playback).failed
     }
 
     fn stop(&self) {

@@ -32,6 +32,8 @@ const LEVEL_GAP: Duration = Duration::from_micros(33_334);
 const VOICE_LIMIT: Duration = Duration::from_secs(60);
 /// Microphone frames handled in one pass, so commands and timers are seen between batches.
 const FRAMES_PER_PASS: usize = 8;
+/// How often a lost microphone is tried again while only the wake phrase wants it.
+const MIC_RETRY: Duration = Duration::from_secs(5);
 
 const NO_REPLY: &str = "No reply came back.";
 const VOICE_STUCK: &str = "The voice stopped responding.";
@@ -158,6 +160,9 @@ impl Clock for SystemClock {
 /// Opens the microphone each time the session needs a stream.
 pub type MicOpener = Box<dyn Fn() -> Result<Box<dyn Mic>, EngineError> + Send>;
 
+/// Opens a fresh speaker when the one in use has failed.
+pub type SinkOpener = Box<dyn Fn() -> Result<Arc<dyn Sink>, EngineError> + Send>;
+
 /// Everything the session runs on. It takes ownership; all of it lives on the worker thread.
 pub struct Parts {
     /// For sentences.
@@ -169,6 +174,8 @@ pub struct Parts {
     pub voice_events: UnboundedReceiver<VoiceEvent>,
     /// The sink `voice` plays into.
     pub sink: Arc<dyn Sink>,
+    /// Called before speaking when `sink` has failed; the new sink replaces it in `voice`.
+    pub open_sink: SinkOpener,
     /// `None` makes the wake phrase setting do nothing.
     pub wake: Option<Box<dyn WakeSpotter>>,
     /// Called when a stream is needed; the `Mic` is dropped when it no longer is.
@@ -193,6 +200,14 @@ enum Command {
         turn: u64,
         then: After,
     },
+    Answered {
+        turn: u64,
+        text: String,
+    },
+    Filler {
+        turn: u64,
+        text: String,
+    },
     Notice(String),
     Settings(SessionSettings),
     SetVoice {
@@ -215,7 +230,10 @@ struct Probe {
 
 struct Shared {
     state: AtomicU8,
+    /// The turn of the latest `Heard` sent.
     turn: AtomicU64,
+    /// The last turn id handed out; spoken and clicked turns share it, so ids never repeat.
+    next_turn: AtomicU64,
     /// Set by `shutdown`, the last handle going, or a panic in the worker.
     ended: AtomicBool,
 }
@@ -265,6 +283,7 @@ impl Session {
         let shared = Arc::new(Shared {
             state: AtomicU8::new(State::Idle as u8),
             turn: AtomicU64::new(0),
+            next_turn: AtomicU64::new(0),
             ended: AtomicBool::new(false),
         });
         let (commands, inbox) = channel();
@@ -351,6 +370,37 @@ impl Session {
         self.send(Command::End { turn, then });
     }
 
+    /// A click or key press on an option: it becomes a turn exactly as if it had been said.
+    /// Listening or asking stops (and speech or a reply in progress is stopped, as
+    /// `interrupt` does), `Heard { text, turn }` is sent with a new turn id, and the session
+    /// is `Thinking`. Returns that turn id, or `None` once the session is `Off`.
+    ///
+    /// Turn ids never repeat, but when a spoken sentence ends at the same moment, the two
+    /// `Heard` events can arrive in either order; the later one is the current turn.
+    pub fn answered(&self, text: &str) -> Option<u64> {
+        let shared = &self.handle.shared;
+        if shared.ended.load(Ordering::SeqCst) {
+            return None;
+        }
+        let turn = shared.next_turn.fetch_add(1, Ordering::SeqCst) + 1;
+        self.send(Command::Answered {
+            turn,
+            text: text.to_string(),
+        });
+        Some(turn)
+    }
+
+    /// A short line ("One moment.") spoken while `Thinking` for `turn`, which stays
+    /// `Thinking`: the two-minute limit keeps running from where it was, and the line is not
+    /// the reply. The reply that follows (`say`, `say_delta`) is spoken after it. Dropped
+    /// unless `turn` is the current turn, still waiting for its reply.
+    pub fn filler(&self, turn: u64, text: &str) {
+        self.send(Command::Filler {
+            turn,
+            text: text.to_string(),
+        });
+    }
+
     /// Something to say that answers no turn; spoken only while `Idle`, dropped otherwise.
     pub fn notice(&self, text: &str) {
         self.send(Command::Notice(text.to_string()));
@@ -369,6 +419,10 @@ impl Session {
 
     /// Final: speech stops, the microphone closes, the state becomes `Off` and the worker
     /// ends. Later calls do nothing.
+    ///
+    /// Returns at once and does not wait for the worker. The worker is gone, with the
+    /// microphone and speaker released, when the event channel closes (the receiver's
+    /// `recv` returns `None`); wait on that if it matters.
     pub fn shutdown(&self) {
         self.handle.end();
     }
@@ -408,6 +462,7 @@ struct Worker {
     voice: Voice,
     voice_events: UnboundedReceiver<VoiceEvent>,
     sink: Arc<dyn Sink>,
+    open_sink: SinkOpener,
     wake: Option<Box<dyn WakeSpotter>>,
     open_mic: MicOpener,
     settings: SessionSettings,
@@ -417,9 +472,13 @@ struct Worker {
 
     state: State,
     mic: Option<MicStream>,
-    /// The microphone failed: it is not reopened just for the wake phrase until the app
-    /// asks (`open`, `settings`).
+    /// The microphone failed. Only listening opens it at once; for the wake phrase (or
+    /// talking over Dot) it is tried again every `MIC_RETRY`, from `mic_retry_at`.
     mic_broken: bool,
+    mic_retry_at: Instant,
+    /// The microphone was lost while Thinking or Speaking and nobody has been told yet: the
+    /// next state that needs it tries it at once and reports if it still will not open.
+    mic_owed: bool,
     published: Option<(State, bool)>,
     last_level: Option<Instant>,
 
@@ -453,6 +512,9 @@ struct Worker {
     reply_open: bool,
     /// Replies ended at the voice whose `Finished` has not come.
     replies_pending: usize,
+    /// Filler lines at the voice whose `Finished` has not come. They were queued before any
+    /// reply, so the first `Finished` events are theirs.
+    fillers_pending: usize,
     then: After,
     /// When the ears may hear again after speech.
     reopen_at: Option<Instant>,
@@ -473,6 +535,7 @@ impl Worker {
             voice: parts.voice,
             voice_events: parts.voice_events,
             sink: parts.sink,
+            open_sink: parts.open_sink,
             wake: parts.wake,
             open_mic: parts.open_mic,
             settings,
@@ -482,6 +545,8 @@ impl Worker {
             state: State::Idle,
             mic: None,
             mic_broken: false,
+            mic_retry_at: now,
+            mic_owed: false,
             published: None,
             last_level: None,
             quiet_since: now,
@@ -498,6 +563,7 @@ impl Worker {
             turn_open: false,
             reply_open: false,
             replies_pending: 0,
+            fillers_pending: 0,
             then: After::Rest,
             reopen_at: None,
         }
@@ -585,6 +651,10 @@ impl Worker {
             }
             Command::Say { turn, text, then } => {
                 if self.answers(turn) {
+                    self.voice_heard_at = self.clock.now();
+                    if !self.ready_sink() {
+                        return self.speaker_gone();
+                    }
                     self.voice.say(&text);
                     self.reply_open = false;
                     self.replies_pending += 1;
@@ -593,6 +663,11 @@ impl Worker {
             }
             Command::Delta { turn, text } => {
                 if self.answers(turn) {
+                    // A long streamed reply is not cut while its text is still arriving.
+                    self.voice_heard_at = self.clock.now();
+                    if !self.reply_open && !self.ready_sink() {
+                        return self.speaker_gone();
+                    }
                     self.reply_open = true;
                     self.voice.say_delta(&text);
                     self.enter(State::Speaking);
@@ -600,6 +675,7 @@ impl Worker {
             }
             Command::End { turn, then } => {
                 if self.answers(turn) {
+                    self.voice_heard_at = self.clock.now();
                     if self.reply_open {
                         self.voice.end_of_reply();
                         self.reply_open = false;
@@ -608,8 +684,24 @@ impl Worker {
                     self.reply_ended(then);
                 }
             }
+            Command::Answered { turn, text } => {
+                if self.state != State::Off {
+                    self.stop_speech();
+                    self.heard(turn, text);
+                }
+            }
+            Command::Filler { turn, text } => {
+                if self.turn_open
+                    && turn == self.turn
+                    && self.state == State::Thinking
+                    && self.ready_sink()
+                {
+                    self.voice.say(&text);
+                    self.fillers_pending += 1;
+                }
+            }
             Command::Notice(text) => {
-                if self.state == State::Idle {
+                if self.state == State::Idle && self.ready_sink() {
                     self.voice.say(&text);
                     self.replies_pending += 1;
                     self.then = After::Rest;
@@ -641,11 +733,50 @@ impl Worker {
         self.turn_open = false;
         self.then = then;
         self.reopen_at = None;
-        if self.replies_pending == 0 {
+        if self.speech_done() {
             self.after_speech(); // nothing to say: move on at once
         } else {
             self.enter(State::Speaking);
         }
+    }
+
+    /// Makes sure the voice has a working speaker, opening a fresh one if the last one
+    /// failed. False (and reported) when none will open.
+    fn ready_sink(&mut self) -> bool {
+        if !self.sink.failed() {
+            return true;
+        }
+        match (self.open_sink)() {
+            Ok(sink) => {
+                self.voice.set_sink(sink.clone());
+                self.sink = sink;
+                true
+            }
+            Err(e) => {
+                self.send(SessionEvent::Trouble {
+                    message: format!("The speaker could not be opened: {e}"),
+                });
+                false
+            }
+        }
+    }
+
+    /// The reply cannot be spoken: no speaker will open. Already reported; rest.
+    fn speaker_gone(&mut self) {
+        self.stop_speech();
+        self.enter(State::Idle);
+    }
+
+    /// A finished sentence, spoken or clicked, becomes turn `turn`.
+    fn heard(&mut self, turn: u64, text: String) {
+        self.turn = turn;
+        self.shared.turn.store(turn, Ordering::SeqCst);
+        self.turn_open = true;
+        self.send(SessionEvent::Heard { text, turn });
+        if let Some(spotter) = &mut self.wake {
+            spotter.reset();
+        }
+        self.enter(State::Thinking);
     }
 
     fn close(&mut self) {
@@ -661,7 +792,7 @@ impl Worker {
     /// `reopen_after_ms`, as after a normal end of speech. (Interruption by talking does not
     /// come here: that clip is kept.)
     fn interrupt(&mut self) {
-        let was_speaking = self.state == State::Speaking;
+        let was_speaking = self.state == State::Speaking || self.fillers_pending > 0;
         // Timed from the stop, before `Listening` is published.
         let tail = Duration::from_millis(u64::from(self.settings.reopen_after_ms));
         let deaf_until = was_speaking.then(|| self.clock.now() + tail);
@@ -697,6 +828,7 @@ impl Worker {
         self.asked = false;
         self.reply_open = false;
         self.replies_pending = 0;
+        self.fillers_pending = 0;
         self.reopen_at = None;
     }
 
@@ -749,48 +881,79 @@ impl Worker {
     }
 
     /// Opens or closes the microphone to fit the state and settings, then publishes. A
-    /// microphone that will not open is reported and the session rests.
+    /// microphone that will not open is reported; when listening needed it, the session
+    /// rests, and otherwise it is tried again every `MIC_RETRY`.
     fn refresh(&mut self) {
         if let Err(e) = self.fit_mic() {
             self.send(SessionEvent::Trouble {
                 message: format!("The microphone could not be opened: {e}"),
             });
             self.mic_broken = true;
-            self.stop_speech();
-            self.ears.reset();
-            self.short_ears.reset();
-            self.in_speech = false;
-            self.last_level = None;
-            self.state = State::Idle;
-            let _ = self.fit_mic(); // only closes now
+            self.mic_owed = false;
+            self.mic_retry_at = self.clock.now() + MIC_RETRY;
+            if self.state.hears() {
+                self.stop_speech();
+                self.ears.reset();
+                self.short_ears.reset();
+                self.in_speech = false;
+                self.last_level = None;
+                self.state = State::Idle;
+                let _ = self.fit_mic(); // only closes now, or waits for the retry
+            }
         }
         self.publish();
     }
 
     fn wants_mic(&self) -> bool {
-        let usable = !self.mic_broken;
-        let wake = self.settings.wake_phrase && self.wake.is_some() && usable;
+        let wake = self.settings.wake_phrase && self.wake.is_some();
         match self.state {
             State::Off => false,
             State::Listening | State::Asking => true,
             State::Idle | State::Thinking => wake,
-            State::Speaking => wake || (self.settings.interrupt_by_talking && usable),
+            State::Speaking => wake || self.settings.interrupt_by_talking,
         }
     }
 
     fn fit_mic(&mut self) -> Result<(), EngineError> {
         if !self.wants_mic() {
             self.mic = None;
-        } else if self.mic.is_none() {
-            let mut mic = (self.open_mic)()?;
-            let frames = mic.frames();
-            self.mic = Some(MicStream { frames, _mic: mic });
-            self.mic_broken = false;
-            if let Some(spotter) = &mut self.wake {
-                spotter.reset();
-            }
+            return Ok(());
+        }
+        if self.mic.is_some() {
+            return Ok(());
+        }
+        // A broken microphone is opened at once only to listen, or when its loss is still
+        // to be reported and speech is over; otherwise the retry timer tries it.
+        let busy = matches!(self.state, State::Thinking | State::Speaking);
+        if self.mic_broken && !self.state.hears() && !(self.mic_owed && !busy) {
+            return Ok(());
+        }
+        self.open_mic_now()
+    }
+
+    fn open_mic_now(&mut self) -> Result<(), EngineError> {
+        let mut mic = (self.open_mic)()?;
+        let frames = mic.frames();
+        self.mic = Some(MicStream { frames, _mic: mic });
+        self.mic_broken = false;
+        self.mic_owed = false;
+        if let Some(spotter) = &mut self.wake {
+            spotter.reset();
         }
         Ok(())
+    }
+
+    /// Every `MIC_RETRY` a broken microphone that the wake phrase (or talking over Dot)
+    /// wants is tried again, quietly: its loss was reported once already, or will be.
+    fn retry_mic(&mut self, now: Instant) {
+        if !self.mic_broken || self.mic.is_some() || !self.wants_mic() || now < self.mic_retry_at {
+            return;
+        }
+        if self.open_mic_now().is_ok() {
+            self.publish();
+        } else {
+            self.mic_retry_at = now + MIC_RETRY;
+        }
     }
 
     fn publish(&mut self) {
@@ -845,27 +1008,37 @@ impl Worker {
     /// Throws away the frames already waiting: they were captured before the moment the
     /// caller cares about (a sentence just ended, or speech just finished). Called before the
     /// state change is published, so nothing sent after the app saw it is lost. False when
-    /// the microphone turned out to be lost (already reported, and the session rests).
+    /// the microphone turned out to be lost and the session rested because of it.
     fn discard_backlog(&mut self) -> bool {
         loop {
             let Some(mic) = &self.mic else { return true };
             match mic.frames.try_recv() {
                 Ok(MicFrame::Audio(_)) => {}
                 Ok(MicFrame::Lost(_)) | Err(TryRecvError::Disconnected) => {
-                    self.mic_lost();
-                    return false;
+                    return !self.mic_lost();
                 }
                 Err(TryRecvError::Empty) => return true,
             }
         }
     }
 
-    fn mic_lost(&mut self) {
+    /// The open microphone stopped working. It is tried again every `MIC_RETRY` while the
+    /// wake phrase wants it. Thinking and Speaking do not need it, so they carry on and the
+    /// loss is reported once speech is over, if the microphone still will not open then.
+    /// Otherwise it is reported now and the session rests. True when it rested.
+    fn mic_lost(&mut self) -> bool {
         self.mic = None;
         self.mic_broken = true;
+        self.mic_retry_at = self.clock.now() + MIC_RETRY;
+        if matches!(self.state, State::Thinking | State::Speaking) {
+            self.mic_owed = true;
+            self.publish();
+            return false;
+        }
         self.trouble(MIC_LOST);
         self.stop_speech();
         self.enter(State::Idle);
+        true
     }
 
     /// The wake word in this frame, if the wake phrase is on.
@@ -950,17 +1123,8 @@ impl Worker {
                 if !self.discard_backlog() {
                     return;
                 }
-                self.turn += 1;
-                self.shared.turn.store(self.turn, Ordering::SeqCst);
-                self.turn_open = true;
-                self.send(SessionEvent::Heard {
-                    text,
-                    turn: self.turn,
-                });
-                if let Some(spotter) = &mut self.wake {
-                    spotter.reset();
-                }
-                self.enter(State::Thinking);
+                let turn = self.shared.next_turn.fetch_add(1, Ordering::SeqCst) + 1;
+                self.heard(turn, text);
             }
             EarEvent::Dropped => {
                 // The limit was paused while the clip was open; it is not restarted.
@@ -984,23 +1148,36 @@ impl Worker {
 
     fn voice_events(&mut self) {
         while let Ok(event) = self.voice_events.try_recv() {
+            // Any word from the voice shows it is alive.
+            self.voice_heard_at = self.clock.now();
             match event {
                 VoiceEvent::Saying(text) => {
-                    self.voice_heard_at = self.clock.now();
-                    if self.state == State::Speaking {
+                    if matches!(self.state, State::Speaking | State::Thinking) {
                         self.send(SessionEvent::Saying { text });
                     }
                 }
                 VoiceEvent::Finished => {
-                    self.voice_heard_at = self.clock.now();
-                    self.replies_pending = self.replies_pending.saturating_sub(1);
+                    if self.fillers_pending > 0 {
+                        self.fillers_pending -= 1;
+                    } else {
+                        self.replies_pending = self.replies_pending.saturating_sub(1);
+                    }
                 }
                 VoiceEvent::Stopped => {}
                 VoiceEvent::Trouble(message) => {
                     self.send(SessionEvent::Trouble { message });
-                    if self.state == State::Speaking {
-                        self.stop_speech();
-                        self.enter(State::Idle);
+                    match self.state {
+                        State::Speaking => {
+                            self.stop_speech();
+                            self.enter(State::Idle);
+                        }
+                        // Only a filler can be at the voice: the reply may still come, and
+                        // a fresh speaker is opened for it.
+                        State::Thinking => {
+                            self.voice.stop();
+                            self.fillers_pending = 0;
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -1009,11 +1186,12 @@ impl Worker {
 
     /// Every reply has been spoken to its end.
     fn speech_done(&self) -> bool {
-        self.replies_pending == 0 && !self.reply_open
+        self.replies_pending == 0 && self.fillers_pending == 0 && !self.reply_open
     }
 
     fn timers(&mut self) {
         let now = self.clock.now();
+        self.retry_mic(now);
         match self.state {
             State::Listening | State::Asking => {
                 if !self.in_speech
@@ -1205,6 +1383,8 @@ mod tests {
         idle: AtomicBool,
         level: AtomicU32,
         stops: AtomicUsize,
+        plays: AtomicUsize,
+        failed: AtomicBool,
     }
 
     impl FakeSink {
@@ -1213,6 +1393,8 @@ mod tests {
                 idle: AtomicBool::new(true),
                 level: AtomicU32::new(0f32.to_bits()),
                 stops: AtomicUsize::new(0),
+                plays: AtomicUsize::new(0),
+                failed: AtomicBool::new(false),
             })
         }
         fn sounding(&self, on: bool) {
@@ -1221,10 +1403,27 @@ mod tests {
         fn stops(&self) -> usize {
             self.stops.load(Ordering::SeqCst)
         }
+        fn plays(&self) -> usize {
+            self.plays.load(Ordering::SeqCst)
+        }
+        /// The device went away: what was queued is gone and nothing more is taken.
+        fn fail(&self) {
+            self.failed.store(true, Ordering::SeqCst);
+            self.idle.store(true, Ordering::SeqCst);
+        }
     }
 
     impl Sink for FakeSink {
-        fn play(&self, _clip: Clip) {}
+        fn play(&self, _clip: Clip) -> bool {
+            if self.failed.load(Ordering::SeqCst) {
+                return false;
+            }
+            self.plays.fetch_add(1, Ordering::SeqCst);
+            true
+        }
+        fn failed(&self) -> bool {
+            self.failed.load(Ordering::SeqCst)
+        }
         fn stop(&self) {
             self.stops.fetch_add(1, Ordering::SeqCst);
             self.idle.store(true, Ordering::SeqCst);
@@ -1364,6 +1563,9 @@ mod tests {
         recognizer: Arc<FakeRecognizer>,
         speaker: Arc<FakeSpeaker>,
         sink: Arc<FakeSink>,
+        /// Sinks opened after `sink` failed, in order; none opens while `sink_fails` is set.
+        reopened: Arc<Mutex<Vec<Arc<FakeSink>>>>,
+        sink_fails: Arc<AtomicBool>,
         wake: bool,
     }
 
@@ -1398,12 +1600,23 @@ mod tests {
         let voice = Voice::new(speaker.clone(), sink.clone(), voice_tx);
         let mic = Arc::new(MicFeed::default());
         let feed = mic.clone();
+        let reopened: Arc<Mutex<Vec<Arc<FakeSink>>>> = Arc::default();
+        let sink_fails = Arc::new(AtomicBool::new(false));
+        let (opened, fails) = (reopened.clone(), sink_fails.clone());
         let parts = Parts {
             ears,
             short_ears,
             voice,
             voice_events,
             sink: sink.clone(),
+            open_sink: Box::new(move || {
+                if fails.load(Ordering::SeqCst) {
+                    return Err(EngineError::Failed("no speaker was found".into()));
+                }
+                let fresh = FakeSink::new();
+                opened.lock().unwrap().push(fresh.clone());
+                Ok(fresh as Arc<dyn Sink>)
+            }),
             wake: Some(Box::new(Spotter)),
             open_mic: Box::new(move || feed.open_mic()),
         };
@@ -1428,6 +1641,8 @@ mod tests {
             recognizer,
             speaker,
             sink,
+            reopened,
+            sink_fails,
             wake: opts.wake,
         }
     }
@@ -1901,19 +2116,127 @@ mod tests {
     }
 
     #[test]
-    fn with_the_wake_phrase_a_lost_mic_is_not_reopened_until_asked() {
+    fn with_the_wake_phrase_a_lost_mic_is_tried_again_every_five_seconds() {
         let mut r = rig(Opts {
             wake: true,
             ..Opts::default()
         });
         r.expect_state(State::Idle, true);
+        r.mic.fail.store(true, Ordering::SeqCst);
+        r.mic.lost();
+        assert_eq!(
+            r.next(),
+            SessionEvent::Trouble {
+                message: MIC_LOST.into()
+            }
+        );
+        r.expect_state(State::Idle, false);
+        // Tries that fail are quiet: the loss was reported once.
+        for _ in 0..3 {
+            r.clock.advance(4_999);
+            r.nothing_more();
+            r.clock.advance(1);
+            r.nothing_more();
+        }
+        assert_eq!(r.mic.opens(), 1);
+        r.mic.fail.store(false, Ordering::SeqCst);
+        r.clock.advance(4_999);
+        r.nothing_more();
+        r.clock.advance(1);
+        r.expect_state(State::Idle, true);
+        assert_eq!(r.mic.opens(), 2);
+        // "Hey Dot" works again.
+        r.mic.send(HEY_DOT, 1);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+    }
+
+    #[test]
+    fn without_the_wake_phrase_a_lost_mic_is_not_tried_in_idle() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.session.open();
+        r.expect_state(State::Listening, true);
         r.mic.lost();
         assert!(matches!(r.next(), SessionEvent::Trouble { .. }));
         r.expect_state(State::Idle, false);
+        r.clock.advance(60_000);
         r.nothing_more();
         assert_eq!(r.mic.opens(), 1);
-        r.session.open();
-        r.expect_state(State::Listening, true);
+    }
+
+    #[test]
+    fn a_mic_lost_while_speaking_lets_the_reply_finish_then_reports_once() {
+        let mut r = rig(Opts {
+            wake: true,
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        r.speaking();
+        r.mic.fail.store(true, Ordering::SeqCst);
+        r.mic.lost();
+        r.expect_state(State::Speaking, false);
+        r.nothing_more(); // no Trouble yet, and the speech goes on
+        assert_eq!(r.sink.stops(), 0);
+        r.clock.advance(5_000); // a quiet try while speaking fails
+        r.nothing_more();
+        r.sink.sounding(false);
+        r.until_speech_done();
+        r.clock.advance(250);
+        assert_eq!(
+            r.next(),
+            SessionEvent::Trouble {
+                message: "The microphone could not be opened: no microphone was found".into()
+            }
+        );
+        r.expect_state(State::Idle, false);
+        r.clock.advance(5_000);
+        r.nothing_more(); // once only
+        r.mic.fail.store(false, Ordering::SeqCst);
+        r.clock.advance(5_000);
+        r.expect_state(State::Idle, true);
+    }
+
+    #[test]
+    fn a_mic_lost_while_speaking_and_back_by_the_end_reports_nothing() {
+        let mut r = rig(Opts {
+            wake: true,
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        r.speaking();
+        r.mic.lost();
+        r.expect_state(State::Speaking, false);
+        r.clock.advance(5_000);
+        r.expect_state(State::Speaking, true); // the quiet try worked
+        r.sink.sounding(false);
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Idle, true);
+        r.nothing_more();
+    }
+
+    #[test]
+    fn a_mic_lost_while_speaking_a_follow_up_is_tried_when_listening_starts() {
+        let mut r = rig(Opts {
+            wake: true,
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        let turn = r.hear();
+        r.sink.sounding(true);
+        r.session.say(turn, "And then?", After::FollowUp);
+        r.expect_state(State::Speaking, true);
+        r.expect_saying("And then?");
+        r.mic.fail.store(true, Ordering::SeqCst);
+        r.mic.lost();
+        r.expect_state(State::Speaking, false);
+        r.sink.sounding(false);
+        r.until_speech_done();
+        r.clock.advance(250);
+        assert!(matches!(r.next(), SessionEvent::Trouble { .. }));
+        r.expect_state(State::Idle, false);
+        r.nothing_more();
     }
 
     // ---- rule 9: mic_open ------------------------------------------------------------------------
@@ -2461,5 +2784,256 @@ mod tests {
         let s = SessionSettings::default();
         assert_eq!((s.follow_up_secs, s.reopen_after_ms), (6, 250));
         assert!(!s.interrupt_by_talking);
+    }
+
+    // ---- final fix round: a failed speaker -----------------------------------------------------
+
+    #[test]
+    fn a_speaker_that_fails_mid_reply_gives_one_trouble_and_the_next_reply_plays_on_a_new_one() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let turn = r.hear();
+        r.sink.sounding(true);
+        r.session.say(turn, "One. Two.", After::FollowUp);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("One.");
+        r.expect_saying("Two.");
+        r.sink.fail();
+        assert_eq!(
+            r.next(),
+            SessionEvent::Trouble {
+                message: "The speaker stopped working.".into()
+            }
+        );
+        r.expect_state(State::Idle, false);
+        r.nothing_more();
+        assert!(
+            r.reopened.lock().unwrap().is_empty(),
+            "opened before needed"
+        );
+
+        // Not stuck: the next turn is heard and its reply plays on a fresh speaker.
+        let turn = r.hear();
+        r.session.say(turn, "Three.", After::Rest);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Three.");
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Idle, false);
+        let reopened = r.reopened.lock().unwrap().clone();
+        assert_eq!(reopened.len(), 1);
+        assert_eq!(reopened[0].plays(), 1);
+        assert_eq!(r.sink.plays(), 2);
+    }
+
+    #[test]
+    fn a_speaker_that_will_not_reopen_is_reported_and_the_session_rests() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.sink.fail();
+        r.sink_fails.store(true, Ordering::SeqCst);
+        let turn = r.hear();
+        r.session.say_delta(turn, "Lost words. ");
+        assert_eq!(
+            r.next(),
+            SessionEvent::Trouble {
+                message: "The speaker could not be opened: no speaker was found".into()
+            }
+        );
+        r.expect_state(State::Idle, false);
+        r.session.end_of_reply(turn, After::Rest);
+        r.nothing_more();
+        assert!(r.speaker.said().is_empty());
+        // Once a speaker is there again, a notice is spoken.
+        r.sink_fails.store(false, Ordering::SeqCst);
+        r.session.notice("Back.");
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Back.");
+    }
+
+    // ---- final fix round: clicks become turns ---------------------------------------------------
+
+    fn expect_heard(r: &mut Rig, text: &str, turn: u64) {
+        assert_eq!(
+            r.next(),
+            SessionEvent::Heard {
+                text: text.into(),
+                turn
+            }
+        );
+    }
+
+    #[test]
+    fn a_click_while_idle_is_a_turn() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let turn = r.session.answered("Yes").expect("a turn");
+        assert_eq!(turn, 1);
+        expect_heard(&mut r, "Yes", 1);
+        r.expect_state(State::Thinking, false);
+        assert_eq!(r.session.turn(), 1);
+        // Its reply is taken like any other.
+        r.session.say(turn, "Done.", After::Rest);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Done.");
+    }
+
+    #[test]
+    fn a_click_while_listening_stops_listening_and_is_a_turn() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let spoken = r.hear();
+        r.session.say(spoken, "Which one?", After::FollowUp);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Which one?");
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Listening, true);
+        r.mic.send(SPEECH, 1); // a clip had begun; the click wins
+        let turn = r.session.answered("The second one").unwrap();
+        assert_eq!(turn, spoken + 1);
+        expect_heard(&mut r, "The second one", turn);
+        r.expect_state(State::Thinking, false);
+        assert!(!r.mic.is_open());
+        r.nothing_more();
+    }
+
+    #[test]
+    fn a_click_while_asking_is_the_answer() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.asking();
+        let turn = r.session.answered("No").unwrap();
+        assert_eq!(turn, 2);
+        expect_heard(&mut r, "No", 2);
+        r.expect_state(State::Thinking, false);
+        // A second question can be asked aloud after a clicked answer.
+        r.session.say(turn, "And the other one?", After::Ask);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("And the other one?");
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Asking, true);
+    }
+
+    #[test]
+    fn a_click_while_speaking_stops_the_speech_and_drops_the_old_reply() {
+        let mut r = rig(Opts {
+            wake: true,
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        r.speaking();
+        let old = r.session.turn();
+        let turn = r.session.answered("Stop").unwrap();
+        expect_heard(&mut r, "Stop", turn);
+        r.expect_state(State::Thinking, true);
+        assert!(r.sink.stops() >= 1);
+        r.session.say(old, "Old.", After::Rest);
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Thinking);
+    }
+
+    #[test]
+    fn a_click_after_shutdown_is_not_a_turn() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.session.shutdown();
+        r.expect_state(State::Off, false);
+        assert_eq!(r.session.answered("Yes"), None);
+        assert!(ends(&r.runtime, &mut r.events));
+    }
+
+    // ---- final fix round: a filler line, and the speaking limit -----------------------------------
+
+    #[test]
+    fn a_filler_is_spoken_while_thinking_and_the_reply_follows() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let turn = r.hear();
+        r.session.filler(turn, "One moment.");
+        r.expect_saying("One moment.");
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Thinking);
+        r.session.say_delta(turn, "Here it is. ");
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Here it is.");
+        r.session.end_of_reply(turn, After::Rest);
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Idle, false);
+        assert_eq!(r.speaker.said(), ["One moment.", "Here it is."]);
+    }
+
+    #[test]
+    fn an_empty_reply_waits_for_a_filler_still_sounding() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let turn = r.hear();
+        r.sink.sounding(true);
+        r.session.filler(turn, "One moment.");
+        r.expect_saying("One moment.");
+        r.session.end_of_reply(turn, After::FollowUp);
+        r.expect_state(State::Speaking, false); // not Listening while Dot still talks
+        r.clock.advance(250);
+        r.nothing_more();
+        r.sink.sounding(false);
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Listening, true);
+    }
+
+    #[test]
+    fn a_filler_keeps_the_think_limit_and_a_stale_filler_is_dropped() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let turn = r.hear();
+        r.session.filler(turn + 1, "Wrong turn.");
+        r.clock.advance(100_000);
+        r.session.filler(turn, "Still working.");
+        r.expect_saying("Still working.");
+        r.clock.advance(19_999);
+        r.nothing_more();
+        r.clock.advance(1);
+        assert_eq!(
+            r.next(),
+            SessionEvent::Trouble {
+                message: NO_REPLY.into()
+            }
+        );
+        r.expect_state(State::Idle, false);
+        r.session.filler(turn, "Too late.");
+        r.nothing_more();
+        assert_eq!(r.speaker.said(), ["Still working."]);
+    }
+
+    #[test]
+    fn a_long_streamed_reply_is_not_cut_while_text_still_arrives() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let turn = r.hear();
+        r.sink.sounding(true);
+        r.session.say_delta(turn, "First part. ");
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("First part.");
+        for _ in 0..3 {
+            r.clock.advance(50_000);
+            r.session.say_delta(turn, "and more"); // no sentence end: no Saying to re-arm it
+            r.nothing_more();
+        }
+        r.clock.advance(50_000);
+        r.session.end_of_reply(turn, After::Rest);
+        r.expect_saying("and moreand moreand more");
+        r.clock.advance(59_999);
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Speaking);
+        r.clock.advance(1);
+        assert_eq!(
+            r.next(),
+            SessionEvent::Trouble {
+                message: VOICE_STUCK.into()
+            }
+        );
+        r.expect_state(State::Idle, false);
     }
 }
