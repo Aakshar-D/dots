@@ -14,6 +14,9 @@ export const sample = {
   rules: T.RuleCandidate.array().parse(contract.RuleCandidate),
   status: T.Status.parse(contract.Status),
   settings: T.Settings.parse(contract.Settings),
+  /// Voice off, nothing downloaded; and voice on, listening.
+  voiceOff: T.VoiceStatus.parse(contract.VoiceStatus[0]),
+  voiceReady: T.VoiceStatus.parse(contract.VoiceStatus[1]),
   overview: T.DotOverview.parse(contract.DotOverview),
   /// A stdio server with a changed tool list and a missing variable; a plugin's HTTP server; a
   /// skill with a problem; a plugin with every part.
@@ -146,6 +149,9 @@ export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
   backend.on("update_note", () => ({ state: "none" }));
+  // Open Dot's voice: off, nothing downloaded, no devices.
+  backend.on("voice_status", () => sample.voiceOff);
+  backend.on("voice_devices", () => ({ microphones: [], speakers: [] }));
   backend.on("update_status", () => ({
     version: "0.3.0",
     checks_on: true,

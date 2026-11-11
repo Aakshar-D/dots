@@ -4,9 +4,13 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { z } from "zod";
 
 import * as T from "./types";
-import type { RuntimeEvent, Status, UpdateNote } from "./types";
+import type { RuntimeEvent, Status, UpdateNote, VoiceEvent } from "./types";
 
-const Typed = z.object({ type: z.string() });
+// Runtime events are tagged by `type`, voice events by `kind`.
+const Typed = z.union([
+  z.object({ type: z.string() }).transform((t) => t.type),
+  z.object({ kind: z.string() }).transform((t) => t.kind),
+]);
 
 function parse<S extends z.ZodType>(event: string, schema: S, payload: unknown) {
   const parsed = schema.safeParse(payload);
@@ -14,7 +18,7 @@ function parse<S extends z.ZodType>(event: string, schema: S, payload: unknown) 
   // The log names the type that arrived, when the payload has one: a newer core can send a
   // type this UI has no schema for, and the issues alone do not say which.
   const typed = Typed.safeParse(payload);
-  const of = typed.success ? ` of type "${typed.data.type}"` : "";
+  const of = typed.success ? ` of type "${typed.data}"` : "";
   console.error(`event "${event}"${of} in a shape this UI does not know`, parsed.error.issues);
   return undefined;
 }
@@ -52,6 +56,19 @@ export function onStatus(handler: (status: Status) => void): Promise<UnlistenFn>
   return listen("status", (e) => {
     const status = parse("status", T.Status, e.payload);
     if (status) handler(status);
+  });
+}
+
+/// Everything Open Dot's voice tells the UI (apps/dots-app/src/voice). `onInvalid` is called
+/// for an event in a shape this UI does not know: the caller should read `voice_status` again.
+export function onVoice(
+  handler: (event: VoiceEvent) => void,
+  onInvalid: () => void,
+): Promise<UnlistenFn> {
+  return listen("voice", (e) => {
+    const event = parse("voice", T.VoiceEvent, e.payload);
+    if (event) handler(event);
+    else onInvalid();
   });
 }
 

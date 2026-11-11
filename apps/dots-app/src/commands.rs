@@ -69,6 +69,9 @@ use crate::state::{AppState, StartupError};
 use crate::tray::Tray;
 use crate::update::{Next, UpdateNote};
 use crate::update_service;
+use crate::voice::events::{VoiceDevices, VoiceStatus};
+use crate::voice::VoiceHandle;
+use dots_core::open_dot::picture::View;
 
 type Res<T> = Result<T, CmdError>;
 
@@ -203,6 +206,7 @@ pub async fn update_settings(
     app: AppHandle,
     state: State<'_, AppState>,
     phone: State<'_, PhoneHandle>,
+    voice: State<'_, VoiceHandle>,
     settings: Settings,
 ) -> Res<SettingsSaved> {
     let rt = state.rt()?;
@@ -222,6 +226,8 @@ pub async fn update_settings(
     }
     // "Answer from my phone" applies at once: on starts the listener, off closes it.
     phone.get()?.apply(&saved.settings).await;
+    // So does voice: off lets go of the microphone, a new device rebuilds the session.
+    voice.get()?.apply(&saved.settings).await;
     Ok(saved)
 }
 
@@ -243,7 +249,9 @@ pub async fn set_schedules_paused(
 /// start at login included, so a mark in the data folder tells the new process to show its
 /// window: the person who clicked is waiting for it.
 #[tauri::command]
-pub fn restart_app(app: AppHandle, state: State<'_, AppState>) {
+pub fn restart_app(app: AppHandle, state: State<'_, AppState>, voice: State<'_, VoiceHandle>) {
+    // The microphone and speaker are let go before the new process wants them.
+    voice.shutdown();
     if let Ok(rt) = state.rt() {
         rt.shutdown();
     }
@@ -2767,4 +2775,83 @@ pub async fn graph_reveal(
     app.opener()
         .reveal_item_in_dir(&path)
         .map_err(|e| CmdError::internal(format!("could not show {}: {e}", path.display())))
+}
+
+// ---- Open Dot's voice (Open Dot design spec, step 3) ----------------------------------------
+
+/// Where voice stands: on, the speech files, the download, the session's state.
+#[tauri::command]
+pub async fn voice_status(voice: State<'_, VoiceHandle>) -> Res<VoiceStatus> {
+    Ok(voice.get()?.status().await)
+}
+
+/// Turns voice on (downloading the speech files first when they are missing, then building
+/// the session) or off (the microphone is let go). Stored in the settings.
+#[tauri::command]
+pub async fn voice_enable(voice: State<'_, VoiceHandle>, on: bool) -> Res<VoiceStatus> {
+    voice.get()?.enable(on).await
+}
+
+/// Stops the speech files' download; what came so far is kept for the next try.
+#[tauri::command]
+pub fn voice_download_cancel(voice: State<'_, VoiceHandle>) -> Res<()> {
+    voice.get()?.download_cancel();
+    Ok(())
+}
+
+/// Turns voice off and deletes the speech files.
+#[tauri::command]
+pub async fn voice_remove(voice: State<'_, VoiceHandle>) -> Res<VoiceStatus> {
+    voice.get()?.remove().await
+}
+
+/// Listen (the rail, the tray). Not ready: a `voice` trouble event says why.
+#[tauri::command]
+pub fn voice_open(voice: State<'_, VoiceHandle>) -> Res<()> {
+    voice.get()?.open();
+    Ok(())
+}
+
+/// Esc: stop everything and forget the conversation.
+#[tauri::command]
+pub fn voice_close(voice: State<'_, VoiceHandle>) -> Res<()> {
+    voice.get()?.close();
+    Ok(())
+}
+
+/// Stop speaking and listen.
+#[tauri::command]
+pub fn voice_stop(voice: State<'_, VoiceHandle>) -> Res<()> {
+    voice.get()?.stop();
+    Ok(())
+}
+
+/// A click on an option of the question showing (0-based): it reaches the mind as a pick,
+/// never as words.
+#[tauri::command]
+pub fn voice_pick(voice: State<'_, VoiceHandle>, index: u32) -> Res<()> {
+    voice.get()?.pick(index as usize);
+    Ok(())
+}
+
+/// The account, workspace, screen and conversation the person is looking at.
+#[tauri::command]
+pub fn voice_view(voice: State<'_, VoiceHandle>, view: View) -> Res<()> {
+    voice.get()?.set_view(view);
+    Ok(())
+}
+
+/// Says "Hi, I'm Dot." in `voice` at `speed`, then goes back to the saved voice.
+#[tauri::command]
+pub async fn voice_preview(handle: State<'_, VoiceHandle>, voice: u8, speed: f32) -> Res<()> {
+    handle.get()?.preview(voice, speed).await
+}
+
+/// The microphones and speakers to choose from.
+#[tauri::command]
+pub async fn voice_devices(voice: State<'_, VoiceHandle>) -> Res<VoiceDevices> {
+    let service = voice.get()?;
+    tauri::async_runtime::spawn_blocking(move || service.devices())
+        .await
+        .map_err(|_| CmdError::internal("the devices could not be listed"))
 }

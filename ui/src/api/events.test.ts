@@ -11,7 +11,9 @@ vi.mock("@tauri-apps/api/event", () => ({
   },
 }));
 
-const { onLagged, onNavigate, onRuntimeEvent, onStatus, onUpdate } = await import("./events");
+const { onLagged, onNavigate, onRuntimeEvent, onStatus, onUpdate, onVoice } = await import(
+  "./events"
+);
 
 describe("events", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -32,6 +34,26 @@ describe("events", () => {
     handlers.get("status")!({ payload: fixture.Status });
     handlers.get("update")!({ payload: fixture.UpdateNote[1] });
     expect(seen).toEqual(["run_updated", "lagged", "/inbox", 47321, "ready"]);
+  });
+
+  it("hands every voice event to the voice listener, and asks again for one it does not know", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const seen: unknown[] = [];
+    await onVoice(
+      (e) => seen.push(e.kind),
+      () => seen.push("reread"),
+    );
+    for (const payload of fixture.VoiceEvent) handlers.get("voice")!({ payload });
+    const kinds = new Set(fixture.VoiceEvent.map((e) => e.kind));
+    expect([...new Set(seen)]).toEqual([...kinds]);
+    expect(kinds.size).toBe(13);
+    seen.length = 0;
+    handlers.get("voice")!({ payload: { kind: "from_a_newer_core" } });
+    handlers.get("voice")!({ payload: { kind: "state", state: "dozing", mic_open: false } });
+    expect(seen).toEqual(["reread", "reread"]);
+    expect(logged.mock.calls[0][0]).toBe(
+      'event "voice" of type "from_a_newer_core" in a shape this UI does not know',
+    );
   });
 
   it("hands an org's change to the runtime listener", async () => {

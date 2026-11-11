@@ -3015,3 +3015,111 @@ export type ConnectorState = z.infer<typeof ConnectorState>;
 export type ConnectorEntry = z.infer<typeof ConnectorEntry>;
 export type KeyField = z.infer<typeof KeyField>;
 export type RuntimeCheck = z.infer<typeof RuntimeCheck>;
+
+// Open Dot's voice (Open Dot design spec, step 3): the `voice` event and the voice commands
+// (apps/dots-app/src/voice/events.rs).
+export const VoiceState = z.enum(["off", "idle", "listening", "thinking", "speaking", "asking"]);
+// What Open Dot would do, read from the real records (dots-core open_dot/act.rs).
+export const Deed = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("approve"),
+    approval_id: z.string(),
+    dot_name: z.string(),
+    tool: z.string(),
+    target: z.string(),
+  }),
+  z.strictObject({
+    kind: z.literal("deny"),
+    approval_id: z.string(),
+    dot_name: z.string(),
+    tool: z.string(),
+    target: z.string(),
+  }),
+  z.strictObject({ kind: z.literal("run"), dot_id: z.string(), dot_name: z.string() }),
+  z.strictObject({
+    kind: z.literal("answer"),
+    message_id: z.string(),
+    dot_name: z.string(),
+    text: z.string(),
+  }),
+  z.strictObject({
+    kind: z.literal("send"),
+    dot_id: z.string(),
+    dot_name: z.string(),
+    text: z.string(),
+    topic_root: nullable(z.string()),
+  }),
+]);
+// Where Open Dot takes the person.
+export const OpenTarget = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("dot"), dot_id: z.string() }),
+  z.strictObject({ kind: z.literal("approval"), approval_id: z.string() }),
+  z.strictObject({ kind: z.literal("inbox") }),
+  z.strictObject({ kind: z.literal("settings") }),
+  z.strictObject({ kind: z.literal("usage") }),
+  z.strictObject({ kind: z.literal("home") }),
+]);
+// What Open Dot shows beside its words.
+export const OpenDotCard = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("proposal"), proposal: SetupProposal }),
+  z.strictObject({ kind: z.literal("confirm"), deed: Deed }),
+  z.strictObject({ kind: z.literal("list"), title: z.string(), lines: z.array(z.string()) }),
+]);
+export const VoiceStatus = z.strictObject({
+  enabled: z.boolean(),
+  installed: z.boolean(),
+  downloading: z.boolean(),
+  // The session is built and running.
+  ready: z.boolean(),
+  state: VoiceState,
+  mic_open: z.boolean(),
+  // The speech files' size in all.
+  download_bytes: z.number().int(),
+  hotkey_error: nullable(z.string()),
+  trouble: nullable(z.string()),
+});
+export const VoiceEvent = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("state"), state: VoiceState, mic_open: z.boolean() }),
+  z.strictObject({ kind: z.literal("level"), mic: z.number(), voice: z.number() }),
+  z.strictObject({ kind: z.literal("hearing"), text: z.string() }),
+  z.strictObject({ kind: z.literal("heard"), text: z.string() }),
+  z.strictObject({ kind: z.literal("saying"), text: z.string() }),
+  z.strictObject({ kind: z.literal("ask"), question: z.string(), options: z.array(z.string()) }),
+  z.strictObject({ kind: z.literal("card"), card: OpenDotCard }),
+  z.strictObject({ kind: z.literal("open"), target: OpenTarget }),
+  z.strictObject({ kind: z.literal("cleared") }),
+  z.strictObject({ kind: z.literal("woke") }),
+  z.strictObject({ kind: z.literal("trouble"), message: z.string() }),
+  z.strictObject({
+    kind: z.literal("download"),
+    done_bytes: z.number().int(),
+    total_bytes: z.number().int(),
+  }),
+  z.strictObject({ kind: z.literal("status"), status: VoiceStatus }),
+]);
+export const VoiceDevice = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  default: z.boolean(),
+});
+export const VoiceDevices = z.strictObject({
+  microphones: z.array(VoiceDevice),
+  speakers: z.array(VoiceDevice),
+});
+// What the person is looking at, for Open Dot (dots-core open_dot/picture.rs).
+export const View = z.strictObject({
+  account: z.string(),
+  workspace: z.string(),
+  screen: z.string(),
+  dot_id: nullable(z.string()),
+  topic_root: nullable(z.string()),
+});
+export type VoiceState = z.infer<typeof VoiceState>;
+export type Deed = z.infer<typeof Deed>;
+export type OpenTarget = z.infer<typeof OpenTarget>;
+export type OpenDotCard = z.infer<typeof OpenDotCard>;
+export type VoiceStatus = z.infer<typeof VoiceStatus>;
+export type VoiceEvent = z.infer<typeof VoiceEvent>;
+export type VoiceDevice = z.infer<typeof VoiceDevice>;
+export type VoiceDevices = z.infer<typeof VoiceDevices>;
+export type View = z.infer<typeof View>;

@@ -232,6 +232,10 @@ fn on_menu(app: &AppHandle, id: &str) {
             });
         }
         "quit" => {
+            // The microphone and speaker are let go before the process ends.
+            if let Some(voice) = app.try_state::<crate::voice::VoiceHandle>() {
+                voice.shutdown();
+            }
             if let Some(rt) = rt {
                 rt.shutdown();
             }

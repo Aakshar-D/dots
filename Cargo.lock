@@ -1639,11 +1639,14 @@ name = "dots-app"
 version = "0.4.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "dots-core",
  "dots-voice",
+ "futures-util",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tauri",
  "tauri-build",
  "tauri-plugin-autostart",

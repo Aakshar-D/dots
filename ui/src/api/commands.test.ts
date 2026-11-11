@@ -500,6 +500,45 @@ describe("commands", () => {
     ]);
   });
 
+  it("sends the voice commands as the core names them, a click as an index", async () => {
+    reply = async () => fixture.VoiceStatus[1];
+    expect((await commands.voiceStatus()).state).toBe("listening");
+    await commands.voiceEnable(true);
+    await commands.voiceRemove();
+    reply = async () => null;
+    await commands.voiceDownloadCancel();
+    await commands.voiceOpen();
+    await commands.voiceClose();
+    await commands.voiceStop();
+    await commands.voicePick(1);
+    const view = T.View.parse(fixture.View[1]);
+    await commands.voiceView(view);
+    await commands.voicePreview(3, 1.2);
+    reply = async () => fixture.VoiceDevices[1];
+    expect((await commands.voiceDevices()).microphones[0].default).toBe(true);
+    expect(calls).toEqual([
+      ["voice_status", undefined],
+      ["voice_enable", { on: true }],
+      ["voice_remove", undefined],
+      ["voice_download_cancel", undefined],
+      ["voice_open", undefined],
+      ["voice_close", undefined],
+      ["voice_stop", undefined],
+      ["voice_pick", { index: 1 }],
+      ["voice_view", { view }],
+      ["voice_preview", { voice: 3, speed: 1.2 }],
+      ["voice_devices", undefined],
+    ]);
+    // A cancelled download comes back as its kind, with the sentence.
+    reply = async () => {
+      throw { kind: "cancelled", message: "The download was cancelled." };
+    };
+    expect(await failure(commands.voiceEnable(true))).toEqual({
+      kind: "cancelled",
+      message: "The download was cancelled.",
+    });
+  });
+
   it("invokes exactly the commands the app registers", async () => {
     // A wrapper calls `invoke` before it first waits, so calling each one without arguments
     // lists the names with no backend. Their answers, mostly rejections here, do not matter.

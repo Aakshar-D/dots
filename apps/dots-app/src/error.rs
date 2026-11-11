@@ -51,6 +51,20 @@ impl CmdError {
             message: message.into(),
         }
     }
+
+    pub fn invalid(message: impl Into<String>) -> Self {
+        Self {
+            kind: CmdErrorKind::Invalid,
+            message: message.into(),
+        }
+    }
+
+    pub fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            kind: CmdErrorKind::Conflict,
+            message: message.into(),
+        }
+    }
 }
 
 impl From<dots_core::Error> for CmdError {

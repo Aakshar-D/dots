@@ -75,6 +75,21 @@ pub struct VoiceStatus {
     pub trouble: Option<String>,
 }
 
+/// A microphone or a speaker the person can choose.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VoiceDevice {
+    pub id: String,
+    pub name: String,
+    /// The system's default.
+    pub default: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+pub struct VoiceDevices {
+    pub microphones: Vec<VoiceDevice>,
+    pub speakers: Vec<VoiceDevice>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

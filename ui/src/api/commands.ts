@@ -761,4 +761,29 @@ export const commands = {
   workflowAllowSendBack: (id: string) => call(T.WorkflowRun, "workflow_allow_send_back", { id }),
   workflowRetryStep: (id: string) => call(T.WorkflowRun, "workflow_retry_step", { id }),
   workflowStop: (id: string) => call(T.WorkflowRun, "workflow_stop", { id }),
+
+  // Open Dot's voice (Open Dot design spec, step 3). What the session does arrives on the
+  // `voice` event (`onVoice`).
+  voiceStatus: () => call(T.VoiceStatus, "voice_status"),
+  /// On: downloads the speech files when they are missing (rejects with kind `cancelled` when
+  /// the download is cancelled, `internal` with a sentence when it fails), then starts. Off:
+  /// stops, and the microphone is let go. Stored in the settings.
+  voiceEnable: (on: boolean) => call(T.VoiceStatus, "voice_enable", { on }),
+  voiceDownloadCancel: () => call(nothing, "voice_download_cancel"),
+  /// Turns voice off and deletes the speech files.
+  voiceRemove: () => call(T.VoiceStatus, "voice_remove"),
+  /// Listen. When Open Dot is not ready, a `trouble` voice event says why.
+  voiceOpen: () => call(nothing, "voice_open"),
+  /// Esc: stop everything and forget the conversation.
+  voiceClose: () => call(nothing, "voice_close"),
+  /// Stop speaking and listen.
+  voiceStop: () => call(nothing, "voice_stop"),
+  /// A click on option `index` (0-based) of the question showing.
+  voicePick: (index: number) => call(nothing, "voice_pick", { index }),
+  /// What the person is looking at, for the next things they say.
+  voiceView: (view: T.View) => call(nothing, "voice_view", { view }),
+  /// Says "Hi, I'm Dot." in that voice, then goes back to the saved one. Rejects with kind
+  /// `invalid` when Open Dot is not ready.
+  voicePreview: (voice: number, speed: number) => call(nothing, "voice_preview", { voice, speed }),
+  voiceDevices: () => call(T.VoiceDevices, "voice_devices"),
 };
