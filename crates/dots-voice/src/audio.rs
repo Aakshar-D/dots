@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{
     channel, sync_channel, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError,
 };
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -24,6 +24,8 @@ const FADE_MS: usize = 5;
 /// How much of the latest playback `level` looks at.
 const LEVEL_MS: usize = 30;
 /// How often a stream-owning thread looks for a stop request or a lost stream.
+/// The longest the speaker's queue may grow, in seconds of audio.
+const MAX_QUEUED_SECONDS: usize = 60;
 const WATCH: Duration = Duration::from_millis(50);
 
 // ---------------------------------------------------------------------------------------
@@ -253,32 +255,41 @@ impl Drop for CpalMic {
     }
 }
 
-type Lost = Arc<Mutex<Option<String>>>;
+/// The first fatal stream error, kept until the watching thread collects it.
+#[derive(Default)]
+struct LostSlot(Mutex<Option<String>>);
 
-fn mic_thread(
-    id: Option<String>,
-    tx: SyncSender<MicFrame>,
-    init: Sender<Result<(), EngineError>>,
-    stop: Receiver<()>,
+impl LostSlot {
+    /// Remembers the error unless it is harmless or an earlier one is already waiting.
+    fn report(&self, e: &cpal::Error) {
+        if !harmless(e) {
+            locked(&self.0).get_or_insert_with(|| e.to_string());
+        }
+    }
+
+    fn take(&self) -> Option<String> {
+        locked(&self.0).take()
+    }
+}
+
+type Lost = Arc<LostSlot>;
+
+/// Waits for a stop request or a fatal error. On an error it calls `release` (which lets go of
+/// the device), sends exactly one `MicFrame::Lost`, and ends. A closed `stop` channel or a
+/// consumer that has gone ends it too, without blocking.
+fn watch_mic(
+    stop: &Receiver<()>,
+    tx: &SyncSender<MicFrame>,
+    lost: &LostSlot,
+    wait: Duration,
+    release: impl FnOnce(),
 ) {
-    let lost: Lost = Arc::new(Mutex::new(None));
-    let stream = match open_input(id.as_deref(), tx.clone(), lost.clone()) {
-        Ok(stream) => {
-            let _ = init.send(Ok(()));
-            stream
-        }
-        Err(e) => {
-            let _ = init.send(Err(e));
-            return;
-        }
-    };
     loop {
-        if !matches!(stop.recv_timeout(WATCH), Err(RecvTimeoutError::Timeout)) {
-            return; // asked to stop; the stream is dropped on the way out
+        if !matches!(stop.recv_timeout(wait), Err(RecvTimeoutError::Timeout)) {
+            return; // asked to stop; `release` is dropped unused
         }
-        let message = locked(&lost).take();
-        if let Some(message) = message {
-            drop(stream);
+        if let Some(message) = lost.take() {
+            release();
             let mut pending = Some(MicFrame::Lost(message));
             while let Some(frame) = pending.take() {
                 if let Err(TrySendError::Full(frame)) = tx.try_send(frame) {
@@ -294,6 +305,26 @@ fn mic_thread(
             return;
         }
     }
+}
+
+fn mic_thread(
+    id: Option<String>,
+    tx: SyncSender<MicFrame>,
+    init: Sender<Result<(), EngineError>>,
+    stop: Receiver<()>,
+) {
+    let lost: Lost = Arc::new(LostSlot::default());
+    let stream = match open_input(id.as_deref(), tx.clone(), lost.clone()) {
+        Ok(stream) => {
+            let _ = init.send(Ok(()));
+            stream
+        }
+        Err(e) => {
+            let _ = init.send(Err(e));
+            return;
+        }
+    };
+    watch_mic(&stop, &tx, &lost, WATCH, move || drop(stream));
 }
 
 fn open_input(
@@ -340,9 +371,7 @@ where
             }
         },
         move |e: cpal::Error| {
-            if !harmless(&e) {
-                locked(&lost).get_or_insert_with(|| e.to_string());
-            }
+            lost.report(&e);
         },
         None,
     )
@@ -435,17 +464,74 @@ impl Window {
     }
 }
 
+/// What is waiting to be played, and whether the speaker still works. Every decision about
+/// the queue lives here so it can be tested without a device.
 struct Playback {
     queue: VecDeque<f32>,
     fade: FadeState,
+    /// The most the queue may hold: `MAX_QUEUED_SECONDS` at the device rate.
+    max: usize,
+    failed: bool,
+}
+
+impl Playback {
+    fn new(rate: u32) -> Self {
+        let max = rate as usize * MAX_QUEUED_SECONDS;
+        Self {
+            // Reserved once, so appending under the lock never reallocates.
+            queue: VecDeque::with_capacity(max),
+            fade: FadeState::new(rate),
+            max,
+            failed: false,
+        }
+    }
+
+    /// Appends the samples. Refused (false) after a failure, or when it would take the queue
+    /// past its limit; the clip is then dropped.
+    fn push(&mut self, samples: &[f32]) -> bool {
+        if self.failed || self.queue.len() + samples.len() > self.max {
+            return false;
+        }
+        self.queue.extend(samples.iter().copied());
+        true
+    }
+
+    /// The speaker broke: nothing is queued, and nothing more is accepted.
+    fn fail(&mut self) {
+        self.failed = true;
+        self.queue.clear();
+        self.fade.reset();
+    }
+
+    fn stop(&mut self) {
+        let Self { queue, fade, .. } = self;
+        fade.begin(queue);
+    }
+
+    fn is_idle(&self) -> bool {
+        self.queue.is_empty()
+    }
+}
+
+/// The output callback's step. If `play` or `stop` holds the lock right now, writes silence
+/// and leaves the queue alone (so it is not mistaken for idle) rather than waiting.
+fn fill_if_free(playback: &Mutex<Playback>, out: &mut [f32], channels: u16) {
+    let mut guard = match playback.try_lock() {
+        Ok(g) => g,
+        Err(TryLockError::Poisoned(e)) => e.into_inner(),
+        Err(TryLockError::WouldBlock) => {
+            out.fill(0.0);
+            return;
+        }
+    };
+    let Playback { queue, fade, .. } = &mut *guard;
+    fill(out, channels, queue, fade);
 }
 
 struct SinkShared {
     playback: Mutex<Playback>,
     /// `f32` bits of the last level the output callback worked out.
     level: AtomicU32,
-    /// The output stream could not be opened or broke; clips are dropped.
-    failed: AtomicBool,
 }
 
 /// The speaker. The output stream opens on the first `play` and stays open until the sink is
@@ -488,26 +574,25 @@ impl CpalSink {
 
 impl Sink for CpalSink {
     fn play(&self, clip: Clip) {
-        if clip.samples.is_empty() || self.shared.failed.load(Ordering::Relaxed) {
+        if clip.samples.is_empty() {
             return;
         }
-        let clip = resample(&clip, self.rate);
+        let clip = resample(&clip, self.rate); // outside the lock
         if !self.started.swap(true, Ordering::SeqCst) {
             if let Some(start) = &self.start {
                 let _ = start.send(());
             }
         }
-        locked(&self.shared.playback).queue.extend(clip.samples);
+        // The lock is held for the append only; a refused clip is dropped.
+        locked(&self.shared.playback).push(&clip.samples);
     }
 
     fn stop(&self) {
-        let mut p = locked(&self.shared.playback);
-        let Playback { queue, fade } = &mut *p;
-        fade.begin(queue);
+        locked(&self.shared.playback).stop();
     }
 
     fn idle(&self) -> bool {
-        locked(&self.shared.playback).queue.is_empty()
+        locked(&self.shared.playback).is_idle()
     }
 
     fn level(&self) -> f32 {
@@ -544,12 +629,8 @@ fn sink_thread(id: Option<String>, init: Sender<SinkInit>, start: Receiver<()>) 
     };
     let rate = supported.sample_rate();
     let shared = Arc::new(SinkShared {
-        playback: Mutex::new(Playback {
-            queue: VecDeque::new(),
-            fade: FadeState::new(rate),
-        }),
+        playback: Mutex::new(Playback::new(rate)),
         level: AtomicU32::new(0f32.to_bits()),
-        failed: AtomicBool::new(false),
     });
     let _ = init.send(Ok((shared.clone(), rate)));
     if start.recv().is_err() {
@@ -565,8 +646,7 @@ fn sink_thread(id: Option<String>, init: Sender<SinkInit>, start: Receiver<()>) 
 }
 
 fn fail(shared: &SinkShared) {
-    shared.failed.store(true, Ordering::Relaxed);
-    locked(&shared.playback).queue.clear();
+    locked(&shared.playback).fail();
 }
 
 fn open_output(
@@ -606,11 +686,7 @@ where
         config,
         move |data: &mut [T], _| {
             scratch.resize(data.len(), 0.0); // grows once, to the device's buffer size
-            {
-                let mut p = locked(&shared.playback);
-                let Playback { queue, fade } = &mut *p;
-                fill(&mut scratch, channels, queue, fade);
-            }
+            fill_if_free(&shared.playback, &mut scratch, channels);
             window.push_all(scratch.iter().step_by(ch));
             shared
                 .level
@@ -784,5 +860,158 @@ mod tests {
         assert!(w.level() > 0.8);
         w.push_all(std::iter::repeat_n(&0.0f32, 100));
         assert_eq!(w.level(), 0.0);
+    }
+
+    fn broken() -> cpal::Error {
+        cpal::Error::from(ErrorKind::BackendError)
+    }
+
+    fn watch_in_thread(
+        stop: Receiver<()>,
+        tx: SyncSender<MicFrame>,
+        slot: Arc<LostSlot>,
+    ) -> (std::thread::JoinHandle<()>, Arc<AtomicBool>) {
+        let released = Arc::new(AtomicBool::new(false));
+        let flag = released.clone();
+        let handle = std::thread::spawn(move || {
+            watch_mic(&stop, &tx, &slot, Duration::from_millis(5), move || {
+                flag.store(true, Ordering::SeqCst)
+            })
+        });
+        (handle, released)
+    }
+
+    fn ends_within_two_seconds(handle: std::thread::JoinHandle<()>) -> bool {
+        let (done_tx, done_rx) = channel();
+        std::thread::spawn(move || {
+            handle.join().unwrap();
+            let _ = done_tx.send(());
+        });
+        done_rx.recv_timeout(Duration::from_secs(2)).is_ok()
+    }
+
+    #[test]
+    fn a_stream_error_gives_one_lost_then_a_clean_end() {
+        let (tx, rx) = sync_channel(MIC_QUEUE);
+        let (_keep_open, stop) = channel::<()>();
+        let slot = Arc::new(LostSlot::default());
+        slot.report(&broken());
+        slot.report(&broken()); // a second error before it was collected adds nothing
+        let (handle, released) = watch_in_thread(stop, tx, slot.clone());
+        assert!(ends_within_two_seconds(handle));
+        assert!(
+            released.load(Ordering::SeqCst),
+            "the device is let go first"
+        );
+        assert!(matches!(rx.try_recv(), Ok(MicFrame::Lost(_))));
+        slot.report(&broken()); // errors after the end send nothing
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn harmless_errors_do_not_end_the_microphone() {
+        let slot = Arc::new(LostSlot::default());
+        for kind in [
+            ErrorKind::DeviceChanged,
+            ErrorKind::Xrun,
+            ErrorKind::RealtimeDenied,
+        ] {
+            slot.report(&cpal::Error::from(kind));
+        }
+        assert!(slot.take().is_none());
+        let (tx, rx) = sync_channel(MIC_QUEUE);
+        let (stop_tx, stop) = channel::<()>();
+        let (handle, released) = watch_in_thread(stop, tx, slot);
+        std::thread::sleep(Duration::from_millis(30));
+        drop(stop_tx);
+        assert!(ends_within_two_seconds(handle));
+        assert!(!released.load(Ordering::SeqCst));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_dropped_receiver_ends_the_watch_without_blocking() {
+        let (tx, rx) = sync_channel(MIC_QUEUE);
+        drop(rx);
+        let (_keep_open, stop) = channel::<()>();
+        let slot = Arc::new(LostSlot::default());
+        slot.report(&broken());
+        let (handle, _) = watch_in_thread(stop, tx, slot);
+        assert!(ends_within_two_seconds(handle));
+    }
+
+    #[test]
+    fn a_full_queue_does_not_keep_the_watch_alive_past_a_stop() {
+        let (tx, _rx) = sync_channel(1);
+        tx.try_send(MicFrame::Audio(Vec::new())).unwrap(); // now full
+        let (stop_tx, stop) = channel::<()>();
+        let slot = Arc::new(LostSlot::default());
+        slot.report(&broken());
+        let (handle, _) = watch_in_thread(stop, tx, slot);
+        std::thread::sleep(Duration::from_millis(30));
+        drop(stop_tx);
+        assert!(ends_within_two_seconds(handle));
+    }
+
+    #[test]
+    fn a_push_after_a_failure_is_refused_and_leaves_it_idle() {
+        let mut p = Playback::new(1_000);
+        p.fail();
+        assert!(!p.push(&[0.1, 0.2]));
+        assert!(p.is_idle());
+    }
+
+    #[test]
+    fn a_failure_after_a_push_empties_the_queue_and_leaves_it_idle() {
+        let mut p = Playback::new(1_000);
+        assert!(p.push(&[0.1, 0.2]));
+        assert!(!p.is_idle());
+        p.fail();
+        assert!(p.is_idle());
+    }
+
+    #[test]
+    fn the_queue_holds_at_most_sixty_seconds() {
+        let mut p = Playback::new(100); // 6 000 samples
+        assert!(p.push(&vec![0.1; 5_000]));
+        assert!(!p.push(&vec![0.1; 1_001]), "would pass the limit: dropped");
+        assert_eq!(p.queue.len(), 5_000);
+        assert!(p.push(&vec![0.1; 1_000]), "exactly the limit fits");
+        assert_eq!(p.queue.len(), 6_000);
+    }
+
+    #[test]
+    fn a_busy_lock_gives_silence_and_does_not_look_idle() {
+        let playback = Mutex::new(Playback::new(1_000));
+        locked(&playback).push(&[0.5; 10]);
+        let mut out = [9.0; 4];
+        {
+            let _held = locked(&playback); // `play` is appending right now
+            fill_if_free(&playback, &mut out, 1);
+        }
+        assert_eq!(out, [0.0; 4]);
+        let p = locked(&playback);
+        assert_eq!(p.queue.len(), 10, "nothing was consumed");
+        assert!(!p.is_idle());
+        drop(p);
+        fill_if_free(&playback, &mut out, 1);
+        assert_eq!(out, [0.5; 4]);
+    }
+
+    #[test]
+    fn an_awkward_buffer_size_still_gives_the_right_amount_of_audio() {
+        let buffer: Vec<f32> = (0..512).map(|i| (i as f32 * 0.05).sin()).collect();
+        let mut carry = Vec::new();
+        let mut total = 0;
+        for _ in 0..94 {
+            // 94 x 512 samples at 48 kHz is a little over one second
+            total += frames_from(&buffer, 48_000, 1, &mut carry).len() * FRAME;
+        }
+        total += carry.len();
+        let expected = 94.0 * 512.0 / 3.0;
+        assert!(
+            (total as f32 - expected).abs() < expected * 0.01,
+            "{total} samples against {expected}"
+        );
     }
 }

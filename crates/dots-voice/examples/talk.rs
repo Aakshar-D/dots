@@ -5,7 +5,7 @@
 
 use dots_voice::{
     CpalMic, CpalSink, EarEvent, EarSettings, Ears, Mic, MicFrame, ModelPaths, Recognizer,
-    SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake, Sink, Speaker, Voice,
+    SherpaDetector, SherpaRecognizer, SherpaSpeaker, Sink, Speaker, Voice,
 };
 use std::sync::Arc;
 
@@ -18,11 +18,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let speaker: Arc<dyn Speaker> = Arc::new(SherpaSpeaker::load(&paths, 2)?);
     let recognizer: Arc<dyn Recognizer> = Arc::new(SherpaRecognizer::load(&paths)?);
     let detector = SherpaDetector::load(&paths)?;
-    let _wake = SherpaWake::load(&paths)?; // loaded to check it works; this example does not use it
 
     let mut mic = CpalMic::open(None)?;
     let sink = Arc::new(CpalSink::open(None)?);
-    let (events, _events_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (events, mut events_rx) = tokio::sync::mpsc::unbounded_channel();
+    // Nothing here needs the voice events; read them so the channel does not fill up.
+    std::thread::spawn(move || while events_rx.blocking_recv().is_some() {});
     let voice = Voice::new(speaker, sink.clone() as Arc<dyn Sink>, events);
     let mut ears = Ears::new(Box::new(detector), recognizer, EarSettings::default());
 
