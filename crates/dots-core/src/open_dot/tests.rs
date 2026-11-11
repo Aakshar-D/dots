@@ -700,11 +700,11 @@ async fn reset_and_idle_say_what_they_dropped() {
     assert!(t.mind.reset());
     assert!(!t.mind.pending());
     assert!(!t.mind.reset());
-    t.mind.idle_forget = Duration::from_millis(50);
+    t.mind.idle_forget = Duration::from_millis(500);
     t.fake.push(approve_a1());
     t.hear("approve the research one").await;
     assert!(t.mind.pending());
-    tokio::time::sleep(Duration::from_millis(120)).await;
+    tokio::time::sleep(Duration::from_millis(800)).await;
     let got = t.hear("yes").await;
     assert_eq!(got.first(), Some(&MindEvent::Cleared));
     assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
@@ -894,13 +894,13 @@ async fn cap_reached_skips_the_model_but_quick_answers_work() {
 #[tokio::test]
 async fn idle_forgets_turns() {
     let mut t = T::start().await;
-    // the idle period, made short
-    t.mind.idle_forget = Duration::from_millis(100);
+    // the idle period, made short (but longer than a turn here takes)
+    t.mind.idle_forget = Duration::from_secs(1);
     t.fake.push(says("First answer."));
     t.hear("first question").await;
     t.hear("second question").await;
     assert!(t.fake.last_prompt().contains("Person: first question"));
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    tokio::time::sleep(Duration::from_millis(1500)).await;
     t.hear("third question").await;
     let p = t.fake.last_prompt();
     assert!(!p.contains("Earlier in this conversation"), "{p}");
@@ -1141,17 +1141,138 @@ async fn send_to_a_named_dot_goes_straight() {
 }
 
 #[tokio::test]
-async fn answer_to_the_only_question_goes_straight() {
+async fn answer_to_the_only_question_asks_unless_named() {
     let t = T::start().await;
     let dot = t.dot("Release helper").await;
     let q = t.question(&dot, "Which branch?").await;
-    t.fake.push(says(
-        "DO {\"act\":\"answer\",\"q\":\"q1\",\"text\":\"main\"}",
-    ));
+    let answer_main = || says("DO {\"act\":\"answer\",\"q\":\"q1\",\"text\":\"main\"}");
+    // the only question waiting, never heard: Dots asks first
+    t.fake.push(answer_main());
     let got = t.hear("say main").await;
+    assert_eq!(
+        asks(&got),
+        Some(("Answer Release helper with: main?".into(), yes_no()))
+    );
+    t.hear("no").await;
+    let waits = t.rt.store().get_message(&q.id).await.unwrap();
+    assert!(waits.answered_at.is_none());
+    // named: straight
+    t.fake.push(answer_main());
+    let got = t.hear("tell the release helper main").await;
     assert_eq!(said(&got), "Answered Release helper.");
     let answered = t.rt.store().get_message(&q.id).await.unwrap();
     assert!(answered.answered_at.is_some());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn read_aloud_counts_only_for_the_turn_after() {
+    let t = T::start().await;
+    let dot = t.dot("Release helper").await;
+    t.question(&dot, "Which branch?").await;
+    let read = || says("DO {\"act\":\"read_question\",\"q\":\"q1\"}");
+    let answer_main = || says("DO {\"act\":\"answer\",\"q\":\"q1\",\"text\":\"main\"}");
+    // read, then "stop": the reading is two turns back
+    t.fake.push(read());
+    t.hear("what does it ask").await;
+    t.hear("stop").await;
+    t.fake.push(answer_main());
+    let got = t.hear("say main").await;
+    assert!(asks(&got).is_some(), "{got:?}");
+    t.hear("no").await;
+    // read, then read again by "say that again": the turn before read it
+    t.fake.push(read());
+    t.hear("what does it ask").await;
+    let again = t.hear("say that again").await;
+    assert_eq!(said(&again), "Release helper asks: Which branch?");
+    t.fake.push(answer_main());
+    let got = t.hear("say main").await;
+    assert_eq!(said(&got), "Answered Release helper.");
+    t.rt.shutdown();
+}
+
+/// The handle of the dot named `name` in the picture of now.
+async fn handle_of(t: &T, name: &str) -> String {
+    let p = Picture::take(&t.rt, &home()).await.unwrap();
+    p.dots
+        .iter()
+        .find(|d| d.name == name)
+        .map(|d| d.handle.clone())
+        .expect(name)
+}
+
+fn send_to(handle: &str) -> Scripted {
+    says(&format!(
+        "DO {{\"act\":\"send\",\"d\":\"{handle}\",\"text\":\"look at it\"}}"
+    ))
+}
+
+#[tokio::test]
+async fn common_words_do_not_name_a_dot() {
+    let t = T::start().await;
+    for name in [
+        "The helper",
+        "Yes please",
+        "Deploy watcher",
+        "Deploy checker",
+    ] {
+        t.dot(name).await;
+    }
+    let cases = [
+        ("The helper", "send the message to it", false),
+        ("The helper", "tell the dot to look at it please", false),
+        ("Yes please", "yes please tell it to look", false),
+        ("Yes please", "ok yes please ask it", false),
+        // "deploy" is in two dots' names: it names neither
+        ("Deploy watcher", "tell deploy to look at it", false),
+        ("Deploy watcher", "tell the watcher to look at it", true),
+        ("The helper", "tell the helper to look at it", true),
+    ];
+    for (name, words, straight) in cases {
+        let handle = handle_of(&t, name).await;
+        t.fake.push(send_to(&handle));
+        let got = t.hear(words).await;
+        if straight {
+            assert_eq!(said(&got), format!("Sent to {name}."), "{words}");
+            assert!(asks(&got).is_none(), "{words}");
+        } else {
+            assert_eq!(
+                asks(&got).map(|a| a.0),
+                Some(format!("Send to {name}: look at it?")),
+                "{words}"
+            );
+            t.hear("no").await;
+        }
+    }
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_clicked_model_option_names_nothing() {
+    let t = T::start().await;
+    let dot = t.dot("Research").await;
+    let ask = || {
+        says("DO {\"act\":\"ask\",\"question\":\"Which one?\",\"options\":[\"Research\",\"Something else\"]}")
+    };
+    t.fake.push(ask());
+    t.hear("send a note").await;
+    assert!(t.mind.pending());
+    // the option's words were written by the model: a click on it names nothing
+    t.fake.push(send_to("d1"));
+    let got = t.pick(0).await;
+    assert_eq!(
+        asks(&got),
+        Some(("Send to Research: look at it?".into(), yes_no()))
+    );
+    assert_eq!(t.runs(&dot).await, 0);
+    t.hear("no").await;
+    // the person saying it does
+    t.fake.push(ask());
+    t.hear("send a note").await;
+    t.fake.push(send_to("d1"));
+    let got = t.hear("research").await;
+    assert_eq!(said(&got), "Sent to Research.");
+    assert_eq!(t.runs(&dot).await, 1);
     t.rt.shutdown();
 }
 

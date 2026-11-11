@@ -36,7 +36,7 @@ use act::{
 };
 use picture::{clean, Picture, View, NAME_BYTES};
 use prompt::{prompt, Turn, INSTRUCTIONS};
-use quick::{firm_yes, quick, words_of, Quick};
+use quick::{common_word, firm_yes, quick, words_of, Quick};
 use reply::{read_reply, SpeechGate, Wish};
 use think::{cap_hit, Thinker};
 
@@ -288,7 +288,10 @@ struct Out<'a> {
     /// The words said this turn, for "say that again".
     words: Mutex<String>,
     spoke: AtomicBool,
+    /// Questions read aloud this turn, and in the turn before (only that one: a turn that
+    /// leaves no record, such as "stop", ends what the turn before read).
     read_aloud: Mutex<Vec<String>>,
+    read_before: Vec<String>,
     /// A deed was carried out: its outcome is said even if the turn was ended meanwhile.
     done: AtomicBool,
 }
@@ -452,9 +455,9 @@ impl Mind {
     }
 
     /// Starts a turn: forgets after the idle period, ends the turn before, and returns this
-    /// turn's number, what cancels its requests (a child of the runtime's shutdown), and
-    /// whether forgetting dropped a step that waited.
-    fn begin(&self, rt: &Runtime) -> (u64, CancellationToken, bool) {
+    /// turn's number, what cancels its requests (a child of the runtime's shutdown), whether
+    /// forgetting dropped a step that waited, and what the turn before read aloud.
+    fn begin(&self, rt: &Runtime) -> (u64, CancellationToken, bool, Vec<String>) {
         let mut s = lock(&self.state);
         let now = Instant::now();
         let forgot = s
@@ -468,7 +471,8 @@ impl Mind {
         }
         let cancel = rt.shutdown_token().child_token();
         s.cancel = Some(cancel.clone());
-        (s.turn, cancel, forgot)
+        let read_before = std::mem::take(&mut s.read_aloud);
+        (s.turn, cancel, forgot, read_before)
     }
 
     /// Whether the input is no turn at all: a click on an option that is not offered (it ends
@@ -508,7 +512,7 @@ impl Mind {
         if self.no_turn(&input, arrived, false) {
             return Ok(());
         }
-        let (turn, cancel, forgot) = self.begin(rt);
+        let (turn, cancel, forgot, read_before) = self.begin(rt);
         let o = Out {
             mind: self,
             tx,
@@ -517,6 +521,7 @@ impl Mind {
             words: Mutex::new(String::new()),
             spoke: AtomicBool::new(false),
             read_aloud: Mutex::new(Vec::new()),
+            read_before,
             done: AtomicBool::new(false),
         };
         if forgot {
@@ -744,6 +749,13 @@ impl Mind {
                     (s.last_said.clone(), s.last_then)
                 };
                 o.say(if said.is_empty() { NOTHING_SAID } else { &said });
+                // What was read aloud is read again: it still counts for the next turn.
+                {
+                    let mut s = lock(&self.state);
+                    if s.turn == o.turn {
+                        s.read_aloud = o.read_before.clone();
+                    }
+                }
                 match &waiting {
                     Some(w) => {
                         let (question, options) = w.kind.asked();
@@ -805,9 +817,17 @@ impl Mind {
         // No deed of a step that waited: a deed of this turn takes the gate again.
         drop(gate);
 
-        // What goes to the model, and the person's own words, when it does.
+        // What goes to the model, and the person's own words, when it does: a click brings
+        // none (the option may be the model's).
         let mut to_model = heard.clone();
-        let own = heard.clone();
+        let own = Own {
+            words: if clicked {
+                String::new()
+            } else {
+                heard.clone()
+            },
+            dot_id: None,
+        };
         match waiting.map(|w| w.kind) {
             // answered above
             Some(Waiting::Confirm { .. }) | Some(Waiting::Create { .. }) => {}
@@ -892,7 +912,7 @@ impl Mind {
         &self,
         rt: &Runtime,
         heard: &str,
-        own: &str,
+        own: &Own,
         view: &View,
         o: &Out<'_>,
         cancel: &CancellationToken,
@@ -1037,7 +1057,7 @@ impl Mind {
         step: Step,
         picture: &Picture,
         heard: &str,
-        own: &str,
+        own: &Own,
         view: &View,
         o: &Out<'_>,
         cancel: &CancellationToken,
@@ -1053,7 +1073,7 @@ impl Mind {
                     self.finish(o, heard, DIDNT_CATCH, Then::Rest);
                     return "refused";
                 }
-                if !points_at(&deed, own, view, picture, &self.read_aloud_before()) {
+                if !points_at(&deed, own, view, picture, &o.read_before) {
                     let question = check_question(&deed);
                     self.confirm(o, deed, question, false, heard, view);
                     return "confirm";
@@ -1129,10 +1149,6 @@ impl Mind {
         }
     }
 
-    fn read_aloud_before(&self) -> Vec<String> {
-        lock(&self.state).read_aloud.clone()
-    }
-
     /// Shows the deed's card and asks Dots' own question; the deed waits for a yes.
     fn confirm(
         &self,
@@ -1200,14 +1216,11 @@ impl Mind {
             other => other,
         };
         let step = plan(&wish, &picture, view);
-        // Choosing the dot by name is pointing at it.
-        let own = picture
-            .dot(&match &wish {
-                Wish::Run { d } | Wish::Send { d, .. } => d.clone(),
-                _ => String::new(),
-            })
-            .map(|d| d.name.clone())
-            .unwrap_or_default();
+        // Choosing the dot from Dots' own "Which dot?" options is pointing at it.
+        let own = Own {
+            words: String::new(),
+            dot_id: Some(dot_id.to_string()),
+        };
         self.act(rt, step, &picture, heard, &own, view, o, cancel)
             .await
     }
@@ -1352,40 +1365,60 @@ async fn create(
     }
 }
 
-/// Whether the person's own words this turn point at the deed's target: a word of 3 or more
-/// letters of the dot's name, the dot on screen, or, for an answer, a question read aloud in the
-/// turn before or the only one waiting. Otherwise Dots asks before sending.
+/// What the person pointed at this turn: their own words (none for a click, whose option may
+/// be the model's), or a dot they chose from Dots' own "Which dot?" options.
+#[derive(Debug, Default)]
+struct Own {
+    words: String,
+    dot_id: Option<String>,
+}
+
+/// Whether the person pointed at the deed's target this turn: they chose the dot, or their
+/// own words name it, or the dot is on screen, or, for an answer, the question was read aloud
+/// in the turn before. Otherwise Dots asks before sending.
 fn points_at(
     deed: &Deed,
-    own: &str,
+    own: &Own,
     view: &View,
     picture: &Picture,
     read_aloud: &[String],
 ) -> bool {
-    let heard = words_of(own);
-    let named = |name: &str| {
-        words_of(name)
-            .iter()
-            .any(|w| w.chars().count() >= 3 && heard.contains(w))
-    };
     let on_screen = |dot_id: &str| view.dot_id.as_deref() == Some(dot_id);
+    let pointed =
+        |dot_id: &str| own.dot_id.as_deref() == Some(dot_id) || names(&own.words, dot_id, picture);
     match deed {
-        Deed::Send {
-            dot_id, dot_name, ..
-        } => named(dot_name) || on_screen(dot_id),
-        Deed::Answer {
-            message_id,
-            dot_name,
-            ..
-        } => {
-            let question = picture.questions.iter().find(|q| &q.id == message_id);
-            named(dot_name)
-                || question.is_some_and(|q| on_screen(&q.dot_id))
-                || read_aloud.contains(message_id)
-                || (picture.questions.len() == 1 && picture.more_questions == 0)
-        }
+        Deed::Send { dot_id, .. } => pointed(dot_id) || on_screen(dot_id),
+        Deed::Answer { message_id, .. } => picture
+            .questions
+            .iter()
+            .find(|q| &q.id == message_id)
+            .is_some_and(|q| {
+                pointed(&q.dot_id) || on_screen(&q.dot_id) || read_aloud.contains(message_id)
+            }),
         _ => false,
     }
+}
+
+/// Whether `words` name the dot `dot_id` of the picture: they hold a word of 3 or more letters
+/// of its name that is not a common word (`quick::common_word`) and is in no other listed
+/// dot's name.
+fn names(words: &str, dot_id: &str, picture: &Picture) -> bool {
+    let heard = words_of(words);
+    let Some(dot) = picture.dots.iter().find(|d| d.id == dot_id) else {
+        return false;
+    };
+    let others: Vec<Vec<String>> = picture
+        .dots
+        .iter()
+        .filter(|d| d.id != dot_id)
+        .map(|d| words_of(&d.name))
+        .collect();
+    words_of(&dot.name).iter().any(|w| {
+        w.chars().count() >= 3
+            && !common_word(w)
+            && !others.iter().any(|o| o.contains(w))
+            && heard.contains(w)
+    })
 }
 
 /// Dots' own question before a send or answer the person did not point at.

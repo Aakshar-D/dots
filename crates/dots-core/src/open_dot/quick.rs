@@ -200,6 +200,36 @@ pub fn firm_yes(heard: &str) -> bool {
     !w.is_empty() && FIRM_YES.contains(&w.join(" ").as_str())
 }
 
+/// Words too common to name a dot: articles, pronouns, common verbs and the words of asking a
+/// dot something. With `FILLER_WORDS`, the quick tables and the position words, they never
+/// point at a dot by its name.
+const COMMON_WORDS: &[&str] = &[
+    "a", "an", "the", "this", "that", "these", "those", "some", "any", "all", "every", "each",
+    "no", "not", "and", "or", "but", "if", "then", "so", "of", "to", "in", "on", "at", "for",
+    "from", "with", "by", "about", "into", "up", "out", "over", "off", "as", "i", "me", "my",
+    "mine", "you", "your", "yours", "he", "him", "his", "she", "her", "hers", "it", "its", "we",
+    "us", "our", "ours", "they", "them", "their", "theirs", "one", "ones", "be", "is", "am", "are",
+    "was", "were", "been", "being", "do", "does", "did", "done", "have", "has", "had", "get",
+    "got", "go", "goes", "make", "makes", "made", "let", "lets", "can", "could", "will", "would",
+    "shall", "should", "may", "might", "must", "want", "need", "say", "says", "said", "tell",
+    "tells", "told", "ask", "asks", "asked", "send", "sends", "sent", "give", "take", "put", "use",
+    "run", "now", "just", "also", "too", "very", "really", "here", "there", "what", "which", "who",
+    "how", "when", "where", "why", "dot", "dots", "please", "message", "answer", "reply", "thanks",
+    "hey", "hi", "hello", "um", "uh",
+];
+
+/// Whether `word` (as `words_of` gives it) is too common to name a dot.
+pub(crate) fn common_word(word: &str) -> bool {
+    COMMON_WORDS.contains(&word)
+        || FILLER_WORDS.contains(&word)
+        || CARDINALS.contains(&word)
+        || ORDINALS.contains(&word)
+        || [STOP, CANCEL, REPEAT, YES, FIRM_YES, NO]
+            .iter()
+            .flat_map(|table| table.iter())
+            .any(|phrase| phrase.split(' ').any(|p| p == word))
+}
+
 /// `options`: the options currently offered (empty when none).
 pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
     let w = trimmed(words_of(heard));
