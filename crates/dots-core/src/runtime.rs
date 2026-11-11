@@ -814,6 +814,7 @@ impl Runtime {
         // As the store keeps it, so the live copy reads the same as the stored one.
         next.default_model = next.default_model.trim().to_string();
         next.checker_model = next.checker_model.trim().to_string();
+        next.open_dot_model = next.open_dot_model.trim().to_string();
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
         self.watchers.set_paused(next.schedules_paused);
@@ -4048,7 +4049,7 @@ impl Runtime {
         ))
     }
 
-    /// The Usage page: each dot's runs started in the period.
+    /// The Usage page: each dot's runs started in the period, and Open Dot's requests.
     pub async fn usage_summary(
         &self,
         period: crate::model::UsagePeriod,
@@ -4057,6 +4058,7 @@ impl Runtime {
         Ok(crate::model::UsageSummary {
             period,
             rows: self.store.usage_rows(&since).await?,
+            open_dot: self.store.open_dot_usage_since(Some(&since)).await?,
             since,
         })
     }

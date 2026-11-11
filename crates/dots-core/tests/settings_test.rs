@@ -23,6 +23,7 @@ async fn an_empty_table_gives_the_defaults() {
     assert_eq!(s.auto_archive_days, 30);
     assert_eq!(s.default_model, "sonnet");
     assert_eq!(s.checker_model, "haiku");
+    assert_eq!(s.open_dot_model, "haiku");
 }
 
 #[tokio::test]
@@ -51,6 +52,7 @@ async fn settings_round_trip() {
         phone_port: 50001,
         check_results: false,
         checker_model: "sonnet".into(),
+        open_dot_model: "sonnet".into(),
         spend_daily_usd: Some(12.5),
         spend_daily_tokens: Some(500_000),
         spend_monthly_usd: Some(100.0),
@@ -107,6 +109,7 @@ async fn bad_and_unknown_rows_are_ignored_one_by_one() {
         ("tested_claude_version", "\"\""),
         ("default_model", "\"\""),
         ("checker_model", "\"\""),
+        ("open_dot_model", "\"  \""),
     ] {
         sqlx::query("INSERT INTO settings (key, value) VALUES (?, ?)")
             .bind(k)
@@ -123,6 +126,16 @@ async fn bad_and_unknown_rows_are_ignored_one_by_one() {
     assert_eq!(s.claude_path, None);
     assert_eq!(s.tested_claude_version, TESTED_CLAUDE_VERSION);
     assert_eq!(s.default_model, "sonnet");
+    assert_eq!(s.open_dot_model, "haiku");
+}
+
+#[test]
+fn the_open_dot_model_must_not_be_empty() {
+    let s = Settings {
+        open_dot_model: " ".into(),
+        ..Settings::default()
+    };
+    assert!(s.validate().is_err());
 }
 
 #[tokio::test]

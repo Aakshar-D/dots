@@ -40,7 +40,7 @@ use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
-use dots_core::store::{HistoryRow, HistoryState, PhoneAction, PhoneDevice};
+use dots_core::store::{HistoryRow, HistoryState, OpenDotUsage, PhoneAction, PhoneDevice};
 use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::audit::{AuditView, Event as AuditEvent, SendState};
 use dots_core::vault::org::{
@@ -843,7 +843,7 @@ fn claude_usage() -> Vec<ClaudeUsage> {
     ]
 }
 
-/// The Usage page's week: a Claude dot and a local one.
+/// The Usage page's week: a Claude dot and a local one, and Open Dot's requests.
 fn usage_summary() -> UsageSummary {
     UsageSummary {
         period: UsagePeriod::Week,
@@ -888,6 +888,12 @@ fn usage_summary() -> UsageSummary {
                 }],
             },
         ],
+        open_dot: Some(OpenDotUsage {
+            requests: 38,
+            tokens_in: 152_000,
+            tokens_out: 4_100,
+            cost_usd: 0.21,
+        }),
     }
 }
 

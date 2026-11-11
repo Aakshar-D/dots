@@ -7437,6 +7437,7 @@
     ],
     "max_concurrent_runs": 2,
     "notify_on_notes": true,
+    "open_dot_model": "haiku",
     "phone_enabled": false,
     "phone_port": 47323,
     "port": 47321,
@@ -7478,6 +7479,7 @@
       ],
       "max_concurrent_runs": 2,
       "notify_on_notes": true,
+      "open_dot_model": "haiku",
       "phone_enabled": false,
       "phone_port": 47323,
       "port": 47321,
@@ -8384,6 +8386,12 @@
     }
   ],
   "UsageSummary": {
+    "open_dot": {
+      "cost_usd": 0.21,
+      "requests": 38,
+      "tokens_in": 152000,
+      "tokens_out": 4100
+    },
     "period": "week",
     "rows": [
       {

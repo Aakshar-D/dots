@@ -363,10 +363,18 @@ export const UsageRow = z.strictObject({
   cost_usd: nullable(z.number()),
   heaviest: z.array(UsageRun),
 });
+// Open Dot's requests in the period, summed; null when it made none.
+export const OpenDotUsage = z.strictObject({
+  requests: z.number().int(),
+  tokens_in: z.number().int(),
+  tokens_out: z.number().int(),
+  cost_usd: z.number(),
+});
 export const UsageSummary = z.strictObject({
   period: UsagePeriod,
   since: z.string(),
   rows: z.array(UsageRow),
+  open_dot: nullable(OpenDotUsage).optional(),
 });
 // All Claude use from Claude Code's own transcripts (usage tab spec section 7). Tokens on the
 // page are input + cache creation + output; cache reads are shown on their own.
@@ -1095,6 +1103,8 @@ export const Settings = z.strictObject({
   check_results: z.boolean(),
   // The Claude model the result check uses.
   checker_model: z.string(),
+  // The Claude model Open Dot, the voice assistant, thinks with.
+  open_dot_model: z.string(),
   // When sessions are compacted or started fresh, unless a dot has its own rules.
   context_rules: ContextRules,
 });
@@ -2693,6 +2703,7 @@ export type LimitsState = z.infer<typeof LimitsState>;
 export type HoldChange = z.infer<typeof HoldChange>;
 export type UsagePeriod = z.infer<typeof UsagePeriod>;
 export type UsageSummary = z.infer<typeof UsageSummary>;
+export type OpenDotUsage = z.infer<typeof OpenDotUsage>;
 export type UsageRow = z.infer<typeof UsageRow>;
 export type UsageRun = z.infer<typeof UsageRun>;
 export type ClaudeTotals = z.infer<typeof ClaudeTotals>;

@@ -1081,6 +1081,9 @@ pub struct UsageSummary {
     pub period: UsagePeriod,
     pub since: String,
     pub rows: Vec<UsageRow>,
+    /// Open Dot's requests since `since`; `None` when it made none.
+    #[serde(default)]
+    pub open_dot: Option<crate::store::OpenDotUsage>,
 }
 
 /// One dot's runs in the period, by tokens (in + out), heaviest dot first.

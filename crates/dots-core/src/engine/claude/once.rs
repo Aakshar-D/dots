@@ -210,9 +210,69 @@ pub async fn ask_once_with_usage(
     req: &Once<'_>,
     cancel: &CancellationToken,
 ) -> Result<OnceAnswer, OnceFailure> {
+    run_once(req, cancel, &[], None).await
+}
+
+/// The flag that makes the CLI write each piece of text as it is made (`stream_event` lines).
+const PARTIAL_MESSAGES: &str = "--include-partial-messages";
+
+/// `ask_once_with_usage` with the answer's text streamed: `on_text` gets each piece of text as
+/// the CLI writes it, while it still runs, in order. When the CLI wrote no piece, `on_text`
+/// gets the whole answer once at the end (unless it is empty), so a caller always sees the
+/// reply through `on_text`. Same command line as `once_args`, plus
+/// `--include-partial-messages`.
+pub async fn ask_once_streamed(
+    req: &Once<'_>,
+    cancel: &CancellationToken,
+    on_text: &mut (dyn FnMut(&str) + Send),
+) -> Result<OnceAnswer, OnceFailure> {
+    let mut streamed = false;
+    let mut each = |text: &str| {
+        streamed = true;
+        on_text(text);
+    };
+    let answer = run_once(req, cancel, &[PARTIAL_MESSAGES], Some(&mut each)).await?;
+    if !streamed && !answer.text.is_empty() {
+        on_text(&answer.text);
+    }
+    Ok(answer)
+}
+
+/// The text of a partial-message line: a `stream_event` whose event is a
+/// `content_block_delta` with a `text_delta`. Nothing else (thinking or tool input deltas,
+/// message starts and stops, other lines) and no empty text.
+pub fn partial_text(line: &str) -> Option<String> {
+    if !line.contains("stream_event") {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    if v.get("type")?.as_str()? != "stream_event" {
+        return None;
+    }
+    let event = v.get("event")?;
+    if event.get("type")?.as_str()? != "content_block_delta" {
+        return None;
+    }
+    let delta = event.get("delta")?;
+    if delta.get("type")?.as_str()? != "text_delta" {
+        return None;
+    }
+    let text = delta.get("text")?.as_str()?;
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// Runs a request: `once_args` plus `extra`. With `on_text`, each partial text the output
+/// carries (`partial_text`) is handed to it as it is read, while the CLI runs.
+async fn run_once(
+    req: &Once<'_>,
+    cancel: &CancellationToken,
+    extra: &[&str],
+    mut on_text: Option<&mut (dyn FnMut(&str) + Send + '_)>,
+) -> Result<OnceAnswer, OnceFailure> {
     let mut cmd = Command::new(req.program);
     crate::vault::child_env::start_clean(&mut cmd, crate::vault::child_env::Child::Cli);
     cmd.args(once_args(req.model, req.system_prompt))
+        .args(extra)
         .current_dir(req.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -239,6 +299,9 @@ pub async fn ask_once_with_usage(
         }
         drop(stdin);
     });
+    // Partial texts go from the reader to `on_text` over this channel, in order.
+    let (partials, mut partial_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let streaming = on_text.is_some();
     let mut reading = tokio::spawn(async move {
         let mut reader = BufReader::new(stdout);
         let mut buf: Vec<u8> = Vec::new();
@@ -250,7 +313,14 @@ pub async fn ask_once_with_usage(
                 Ok(_) => {}
             }
             let text = String::from_utf8_lossy(&buf);
-            for ev in parse::parse_line(text.trim_end_matches(['\r', '\n'])) {
+            let line = text.trim_end_matches(['\r', '\n']);
+            if streaming {
+                if let Some(piece) = partial_text(line) {
+                    let _ = partials.send(piece);
+                    continue;
+                }
+            }
+            for ev in parse::parse_line(line) {
                 match ev {
                     EngineEvent::Finished { summary } => read.answer = Some(summary),
                     EngineEvent::Failed { error } => read.failure = Some(error),
@@ -276,10 +346,21 @@ pub async fn ask_once_with_usage(
     });
     let mut stderr_task = tokio::spawn(crate::proc::read_scrubbed_tail(stderr, STDERR_TAIL));
 
-    let end = tokio::select! {
-        s = child.wait() => End::Exited(s.ok()),
-        _ = cancel.cancelled() => End::Cancelled,
-        _ = tokio::time::sleep(req.limit) => End::TimedOut,
+    let deadline = tokio::time::sleep(req.limit);
+    tokio::pin!(deadline);
+    let end = loop {
+        // A cancel (also from `on_text`) or the time limit wins over more text.
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => break End::Cancelled,
+            _ = &mut deadline => break End::TimedOut,
+            Some(piece) = partial_rx.recv() => {
+                if let Some(on_text) = on_text.as_mut() {
+                    on_text(&piece);
+                }
+            }
+            s = child.wait() => break End::Exited(s.ok()),
+        }
     };
     if !matches!(end, End::Exited(_)) {
         job.terminate().await;
@@ -308,6 +389,12 @@ pub async fn ask_once_with_usage(
         End::TimedOut => return Err(OnceFailure::TimedOut),
         End::Exited(status) => status,
     };
+    // The text read after the CLI exited, in order: the reader is done, so all of it is here.
+    if let Some(on_text) = on_text.as_mut() {
+        while let Ok(piece) = partial_rx.try_recv() {
+            on_text(&piece);
+        }
+    }
     if let Some(error) = read.failure {
         return Err(OnceFailure::Failed(error));
     }
@@ -327,5 +414,38 @@ pub async fn ask_once_with_usage(
                 format!("claude exited with code {code}: {}", tail.trim())
             }))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_text_reads_text_deltas_only() {
+        let text = r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}},"session_id":"s","uuid":"u"}"#;
+        assert_eq!(partial_text(text), Some("Hel".to_string()));
+        let minimal = r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"lo there"}}}"#;
+        assert_eq!(partial_text(minimal), Some("lo there".to_string()));
+        for line in [
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"a\""}}}"#,
+            r#"{"type":"stream_event","event":{"type":"message_start","message":{}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"x"}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":""}}}"#,
+            r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":3}}}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"stream_event"}]}}"#,
+            r#"{"type":"result","subtype":"success","result":"text_delta stream_event"}"#,
+            r#"{"type":"stream_event""#,
+            "stream_event",
+            "",
+        ] {
+            assert_eq!(partial_text(line), None, "{line}");
+        }
+    }
+
+    #[test]
+    fn plain_requests_do_not_ask_for_partials() {
+        assert!(!once_args("haiku", "sys").contains(&PARTIAL_MESSAGES.to_string()));
     }
 }

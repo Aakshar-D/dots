@@ -69,6 +69,8 @@ pub struct Settings {
     pub check_results: bool,
     /// The Claude model the result check uses: the cheapest by default.
     pub checker_model: String,
+    /// The Claude model Open Dot, the voice assistant, thinks with: a fast one by default.
+    pub open_dot_model: String,
     /// The most every dot together may spend in a local day, in estimated API USD (spend caps
     /// design); `None` is no cap.
     pub spend_daily_usd: Option<f64>,
@@ -108,6 +110,7 @@ impl Default for Settings {
             phone_port: crate::phone::DEFAULT_PORT,
             check_results: true,
             checker_model: crate::result_check::DEFAULT_CHECKER_MODEL.to_string(),
+            open_dot_model: crate::open_dot::think::DEFAULT_MODEL.to_string(),
             spend_daily_usd: None,
             spend_daily_tokens: None,
             spend_monthly_usd: None,
@@ -171,6 +174,9 @@ impl Settings {
         }
         if self.checker_model.trim().is_empty() {
             return invalid("checker_model must not be empty");
+        }
+        if self.open_dot_model.trim().is_empty() {
+            return invalid("open_dot_model must not be empty");
         }
         crate::spend::GlobalCaps::from(self).validate()?;
         self.auto_models.validate()?;
