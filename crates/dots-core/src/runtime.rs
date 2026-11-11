@@ -240,6 +240,14 @@ pub async fn default_folder(root: &Path, name: &str, used: &[PathBuf]) -> Result
     )))
 }
 
+/// `chat`'s refusal of a follow-up while a run of the thread waits for an approval.
+pub const CHAT_AWAITS_APPROVAL: &str =
+    "this chat is waiting for an approval; answer it, then send your message again";
+/// `chat`'s refusal of a follow-up while a run of the thread is still working.
+pub const CHAT_STILL_WORKING: &str =
+    "the dot is still working on this chat; wait until it has finished, then send your message \
+     again";
+
 pub struct Runtime {
     store: Store,
     bus: Bus,
@@ -2764,14 +2772,8 @@ impl Runtime {
             if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
                 return Err(Error::Conflict(
                     match active.status {
-                        RunStatus::AwaitingApproval => {
-                            "this chat is waiting for an approval; answer it, then send your \
-                             message again"
-                        }
-                        _ => {
-                            "the dot is still working on this chat; wait until it has \
-                             finished, then send your message again"
-                        }
+                        RunStatus::AwaitingApproval => CHAT_AWAITS_APPROVAL,
+                        _ => CHAT_STILL_WORKING,
                     }
                     .into(),
                 ));

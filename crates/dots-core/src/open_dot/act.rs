@@ -97,6 +97,8 @@ const GONE: &str = "I can't find that one. It may already be handled.";
 const HANDLED: &str = "That one is already handled.";
 const WHICH_DOT: &str = "Which dot did you mean?";
 const NO_DOT: &str = "I can't find that dot.";
+/// Said when the runtime no longer finds a dot that was in the picture.
+pub const DOT_GONE: &str = "I can't find that dot anymore.";
 const CANT_OPEN: &str = "I can't open that.";
 /// Longest spoken approval target, question in the needs report, and error message, in bytes.
 const SPOKEN_TARGET_BYTES: usize = 120;
@@ -364,7 +366,7 @@ pub async fn carry_out(rt: &Runtime, deed: &Deed) -> String {
         }
         Deed::Run { dot_id, dot_name } => match rt.run_now(dot_id).await {
             Ok(_) => format!("{} is running.", name(dot_name)),
-            Err(e) => said_for(e, dot_name),
+            Err(e) => run_refused(e, dot_name),
         },
         Deed::Answer {
             message_id,
@@ -384,8 +386,37 @@ pub async fn carry_out(rt: &Runtime, deed: &Deed) -> String {
             topic_root,
         } => match send(rt, dot_id, text, topic_root.as_deref()).await {
             Ok(()) => format!("Sent to {}.", name(dot_name)),
-            Err(e) => said_for(e, dot_name),
+            Err(e) => send_refused(e, dot_name),
         },
+    }
+}
+
+/// The sentence for a run the runtime refused: a dot that is gone is said so.
+fn run_refused(e: Error, dot_name: &str) -> String {
+    match e {
+        Error::NotFound(_) => DOT_GONE.into(),
+        e => said_for(e, dot_name),
+    }
+}
+
+/// The sentence for a message the runtime refused. Only a thread with a run still working is
+/// "still working"; any other refusal is the runtime's own sentence, which is written for a
+/// person.
+fn send_refused(e: Error, dot_name: &str) -> String {
+    match e {
+        Error::Conflict(m) if m == crate::runtime::CHAT_STILL_WORKING => {
+            said_for(Error::Conflict(m), dot_name)
+        }
+        Error::Conflict(m) => {
+            let m = plain_error(&m);
+            let mut chars = m.chars();
+            match chars.next() {
+                None => "That didn't work.".into(),
+                Some(first) => sentence(&format!("{}{}", first.to_uppercase(), chars.as_str())),
+            }
+        }
+        Error::NotFound(_) => DOT_GONE.into(),
+        e => said_for(e, dot_name),
     }
 }
 
@@ -1068,6 +1099,47 @@ mod tests {
             needs_report(&mixed),
             "Two things need you. Backup wants approval to use Bash. \
              One private approval needs you."
+        );
+    }
+
+    #[test]
+    fn a_refused_send_says_why() {
+        use crate::runtime::{CHAT_AWAITS_APPROVAL, CHAT_STILL_WORKING};
+        let conflict = |m: &str| Error::Conflict(m.into());
+        assert_eq!(
+            send_refused(conflict(CHAT_STILL_WORKING), "Research"),
+            "Research is still working on that. Try again when it finishes."
+        );
+        // any other refusal is the runtime's own sentence, said as one
+        assert_eq!(
+            send_refused(conflict(CHAT_AWAITS_APPROVAL), "Research"),
+            "This chat is waiting for an approval; answer it, then send your message again."
+        );
+        assert_eq!(
+            send_refused(conflict(crate::checkins::DECIDING), "Research"),
+            "Dots is still adding the app you accepted in this chat; send your message again \
+             in a moment."
+        );
+        assert_eq!(
+            send_refused(
+                conflict("run 01KA2B3C4D5E6F7G8H9J0K1M2N has a newer message"),
+                "Research"
+            ),
+            "Run has a newer message."
+        );
+        let long = send_refused(conflict(&"ü".repeat(200)), "Research");
+        assert!(long.len() <= 161, "{}", long.len());
+        assert_eq!(
+            send_refused(Error::NotFound("dot x".into()), "Research"),
+            "I can't find that dot anymore."
+        );
+        assert_eq!(
+            run_refused(Error::NotFound("dot x".into()), "Research"),
+            "I can't find that dot anymore."
+        );
+        assert_eq!(
+            run_refused(Error::Conflict("busy".into()), "Research"),
+            "Research is still working on that. Try again when it finishes."
         );
     }
 

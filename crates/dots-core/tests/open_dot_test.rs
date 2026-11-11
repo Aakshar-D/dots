@@ -538,6 +538,56 @@ async fn send_into_a_busy_topic_says_so() {
 }
 
 #[tokio::test]
+async fn send_into_a_topic_waiting_for_approval_says_the_runtimes_words() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    t.script(json!([
+        init(),
+        {"approve": {"tool_name": "Bash", "input": {"command": "npm test"}}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "ok",
+                  "usage": {"input_tokens": 1, "output_tokens": 1}}}
+    ]));
+    let first = t.rt.chat(&dot.id, "first", None).await.unwrap();
+    wait_status(t.rt.store(), &first.id, RunStatus::AwaitingApproval, 15).await;
+    let deed = Deed::Send {
+        dot_id: dot.id.clone(),
+        dot_name: "Research".into(),
+        text: "and more".into(),
+        topic_root: Some(first.id.clone()),
+    };
+    assert_eq!(
+        carry_out(&t.rt, &deed).await,
+        "This chat is waiting for an approval; answer it, then send your message again."
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn send_or_run_to_a_dot_that_is_gone() {
+    let t = Rt::start().await;
+    let gone = "01KNOTADOT00000000000000000";
+    let send = Deed::Send {
+        dot_id: gone.into(),
+        dot_name: "Research".into(),
+        text: "hello".into(),
+        topic_root: None,
+    };
+    assert_eq!(
+        carry_out(&t.rt, &send).await,
+        "I can't find that dot anymore."
+    );
+    let run = Deed::Run {
+        dot_id: gone.into(),
+        dot_name: "Research".into(),
+    };
+    assert_eq!(
+        carry_out(&t.rt, &run).await,
+        "I can't find that dot anymore."
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
 async fn answer_replies_to_the_question() {
     let t = Rt::start().await;
     let dot = t.make_dot("Release helper", None, "default").await;
