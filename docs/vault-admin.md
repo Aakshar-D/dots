@@ -974,6 +974,68 @@ must not be in a team ("<dot> is in the team <team>. Take it out of the team fir
 must all be in its account and workspace. A team with a stray dot shows it under **Needs attention**
 in the Inbox ("<dot> is in another workspace than the <team> team.").
 
+### Guardrails
+
+Guardrails mark what is critical in a workspace, so that a Member's dot can't touch it and an
+Admin's dot always asks first. They are part of the workspace's entry in the signed member list,
+so setting them is a signed edit like any other. A workspace without `guardrails` has none: every
+list signed before guardrails keeps working as before.
+
+**Update every Dots first.** Dots 0.4.0 and older refuse a member list with `guardrails` in it, as
+they refuse any field they don't know. Such a PC keeps the last list it accepted, or shows the
+account as **Waiting** if it has none. `dots-admin` warns when it writes or signs a list with
+guardrails, and Dots shows the same note on the **Guardrails** tab before it signs.
+
+With `dots-admin`:
+
+```bash
+dots-admin roster workspace guard roster.json payments --defaults
+dots-admin roster workspace guard roster.json payments
+dots-admin roster workspace guard roster.json payments --command "make deploy" --command "rm -rf"
+dots-admin roster workspace guard roster.json payments --member-max read-only
+dots-admin roster workspace guard roster.json payments --off
+dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.json
+```
+
+- `--defaults` writes the defaults below. With no option, `guard` shows the workspace's guardrails.
+- `--path`, `--git` and `--command` can be given more than once; each replaces its whole list.
+  `--member-max` sets the ceiling. Without `--defaults` they start from the workspace's guardrails,
+  or from the defaults when it has none.
+- `--off` removes them.
+- An Admin whose Dots ID is in `admins` can do the same in Dots, on the account's **Guardrails**
+  tab.
+
+The fields, and the defaults:
+
+| Field | Default | Means |
+| --- | --- | --- |
+| `protected_paths` | `.github/**`, `**/migrations/**`, `infra/**`, `**/*.env*`, `**/Cargo.lock`, `**/package-lock.json`, `**/bun.lock`, `**/yarn.lock`, `**/pnpm-lock.yaml` | Files a dot may not write. Globs relative to the dot's folder: `*` within a folder, `**` across folders. Case is ignored. |
+| `protected_git` | all of `push_main`, `force_push`, `delete_branch`, `tags`, `merge_pr`, `release` | Pushing to `main` or `master` (and a `git push` that doesn't name its branch), force pushing, deleting a branch, making or pushing tags, `gh pr merge`, and publishing a GitHub release. |
+| `protected_commands` | `rm -rf`, `terraform apply`, `terraform destroy`, `kubectl apply`, `kubectl delete`, `helm install`, `helm upgrade`, `helm uninstall`, `docker push`, `npm publish`, `cargo publish`, `vercel --prod`, `netlify deploy`, `fly deploy`, `wrangler deploy`, `firebase deploy` | A command and the words it must have, in any order: `kubectl apply` also matches `kubectl -n prod apply -f x.yaml`. `rm -rf` covers `rm -fr`, `rm -r -f` and PowerShell's `Remove-Item -Recurse -Force`. |
+| `member_max_preset` | `sandboxed` | The highest tool policy a Member's dot may use: `read-only`, `sandboxed` or `trusted`. |
+
+Every field is required when `guardrails` is there. A path must be relative, without `..`; a
+command may only hold letters, digits, spaces and `-_./=:@+`. Each list holds at most 100 entries.
+A list that breaks a rule is refused whole.
+
+**What they do.** The role that counts is the PC's role in the dot's workspace:
+
+| Role there | A protected call | Tool policy |
+| --- | --- | --- |
+| Owner, Admin | Always asks, even where the policy allows it. No rule can be saved for it. | Any. |
+| Member (also with a workspace entry `admin`) | Refused: "This needs an Admin: <what> is protected in the <workspace> workspace." It can't be approved. | Up to `member_max_preset`. A dot above it can't be saved or run by hand, and its other runs wait in the Inbox until it is lowered. |
+| Viewer | Its dots don't run. | |
+
+Above Sandboxed means: Trusted, a default that allows more than Sandboxed's, "Always ask before
+sending or deleting" off, a missing `.git` or `.claude` deny rule, or an allow rule for a whole
+tool (`Bash`, `Write`, `*`, `mcp__*`), an absolute path or a command that runs other commands
+(`bash`, `sudo`). An allow rule for one command (`Bash(npm test:*)`), a path in the dot's folder or
+one MCP tool stays within Sandboxed.
+
+**What it can't see.** Guardrails read each call as written. A script the dot writes and then runs,
+or a program that pushes on its own (`npm run release`), is not read. Like roles, guardrails stop
+mistakes and honest use, not a person who changes their own Dots (see below).
+
 ### Moving a legacy org to a member list
 
 Do it in this order so nobody is locked out by surprise:
