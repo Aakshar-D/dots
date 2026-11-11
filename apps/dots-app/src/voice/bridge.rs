@@ -223,6 +223,13 @@ impl Bridge {
         }
     }
 
+    /// No turn is live and no question or card shows: with the session Idle, the stage is
+    /// closed and a notice may be said.
+    pub fn at_rest(&self) -> bool {
+        let s = self.lock();
+        s.live.is_none() && !s.showing && !s.asking
+    }
+
     /// The account, workspace and screen the next turns see.
     pub fn set_view(&self, view: View) {
         self.lock().view = view;

@@ -451,7 +451,8 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
     app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
     app.manage(publishing::Publisher::default());
     phone::manage(app, runtime.as_ref().ok().map(|(rt, _)| rt.clone()));
-    // Open Dot's voice: with voice off nothing is built.
+    // Open Dot's voice, and the listener for its spoken notices (it subscribes to the runtime
+    // here, after the tray): with voice off nothing is built and nothing is said.
     voice::manage(
         app,
         runtime.as_ref().ok().map(|(rt, _)| rt.clone()),

@@ -26,6 +26,7 @@ use tokio_util::sync::CancellationToken;
 use super::bridge::{Bridge, MindPort, SessionPort};
 use super::download;
 use super::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceStatus};
+use super::notices::{Needs, Notices};
 use crate::error::CmdError;
 
 /// Said once after the first install, and by the voice preview.
@@ -100,6 +101,9 @@ pub trait Host: Send + Sync + 'static {
     /// Stores the settings; what was stored.
     async fn save(&self, settings: Settings) -> Result<Settings, CmdError>;
     fn mind(&self) -> Arc<dyn MindPort>;
+    /// Everything in the Inbox now, and how many of its approvals are private; `None` when
+    /// it could not be read (nothing is said then, and what waits keeps waiting).
+    async fn waiting(&self) -> Option<(usize, usize)>;
 }
 
 /// The global hotkey: the plugin in the app (`hotkey::PluginHotkey`), a fake in tests.
@@ -225,6 +229,20 @@ pub struct Service {
     told: Mutex<(bool, bool)>,
     /// Whether a build (or a rebuild) is under way, to wait on.
     building_tx: watch::Sender<bool>,
+    /// Spoken notices: what waits to be said, and when one was said last.
+    notices: Mutex<Notices>,
+    /// A wake-up is set for when what waits may be said.
+    notice_timer: Mutex<bool>,
+}
+
+/// Where the session stands for a notice.
+enum Rest {
+    /// Notices off, or voice off or not ready: nothing waits.
+    Off,
+    /// The person speaks, Dot thinks or speaks, or a question or card shows.
+    Busy,
+    /// Idle with nothing showing: a notice may be said through this session.
+    Resting(Arc<dyn SessionControl>),
 }
 
 /// The longest a `View` field may be, in bytes.
@@ -282,6 +300,8 @@ impl Service {
             listener: Mutex::new(None),
             told: Mutex::new((false, false)),
             building_tx: watch::channel(false).0,
+            notices: Mutex::new(Notices::new()),
+            notice_timer: Mutex::new(false),
         })
     }
 
@@ -746,6 +766,10 @@ impl Service {
                 if state.is_some() {
                     if let Some(me) = me.upgrade() {
                         me.changed();
+                        // At rest again, after the bridge saw it: what waits may be said.
+                        if matches!(state, Some((State::Idle, _))) {
+                            me.kick_notices();
+                        }
                     }
                 }
             }
@@ -794,18 +818,24 @@ impl Service {
             s.state = State::Off;
             s.mic_open = false;
         }
+        self.clear_notices();
         self.saw_state(State::Off);
         self.changed();
     }
 
     /// Takes the running session out; nothing built before this is kept.
     fn take_live(&self) -> Option<Live> {
-        let mut s = self.lock();
-        s.gen += 1;
-        s.state = State::Off;
-        s.mic_open = false;
-        self.saw_state(State::Off);
-        s.live.take()
+        let live = {
+            let mut s = self.lock();
+            s.gen += 1;
+            s.state = State::Off;
+            s.mic_open = false;
+            self.saw_state(State::Off);
+            s.live.take()
+        };
+        // Not ready: nothing waits to be said.
+        self.clear_notices();
+        live
     }
 
     /// Closes the stage and shuts the session down; what tells when it has ended.
@@ -924,6 +954,8 @@ impl Service {
     pub fn close(&self) {
         if let Some(b) = self.bridge() {
             b.close();
+            // The stage closed: what waits may be said.
+            self.kick_notices();
         }
     }
 
@@ -1053,6 +1085,9 @@ impl Service {
             if !settings.voice_enabled {
                 s.trouble = None;
             }
+            if !settings.voice_enabled || !settings.voice_notices {
+                self.clear_notices();
+            }
             let wanted = self.spec_of(settings);
             if let Some(l) = s.live.as_mut().filter(|l| same_devices(&l.spec, &wanted)) {
                 if l.spec.voice != wanted.voice || l.spec.speed != wanted.speed {
@@ -1124,6 +1159,147 @@ impl Service {
             }
         }
     }
+
+    // ---- spoken notices -------------------------------------------------------------------
+
+    fn notices(&self) -> MutexGuard<'_, Notices> {
+        self.notices.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn notices_on(s: &Inner) -> bool {
+        s.settings.voice_enabled && s.settings.voice_notices && s.live.is_some() && !s.shutting_down
+    }
+
+    /// Notices are on and voice is ready: only then is anything looked up, kept or said.
+    pub fn notices_wanted(&self) -> bool {
+        Self::notices_on(&self.lock())
+    }
+
+    /// Nothing waits to be said.
+    pub fn clear_notices(&self) {
+        self.notices().clear();
+    }
+
+    /// Where the session stands for a notice. Resting is the session Idle with the stage
+    /// closed: no turn live and no question or card showing.
+    fn rest(&self) -> Rest {
+        let (session, bridge) = {
+            let s = self.lock();
+            let Some(live) = s.live.as_ref().filter(|_| Self::notices_on(&s)) else {
+                return Rest::Off;
+            };
+            if s.state != State::Idle {
+                return Rest::Busy;
+            }
+            (live.session.clone(), live.bridge.clone())
+        };
+        if bridge.at_rest() && session.state() == State::Idle {
+            Rest::Resting(session)
+        } else {
+            Rest::Busy
+        }
+    }
+
+    /// Something new needs the person (the notices listener): said now when the session
+    /// rests and none was said in the last 30 seconds, else kept for the next rest. With
+    /// notices off, or voice off or not ready, it is dropped and nothing waits.
+    pub async fn need(&self, need: Needs) {
+        let session = match self.rest() {
+            Rest::Off => return self.clear_notices(),
+            Rest::Busy => None,
+            Rest::Resting(session) => Some(session),
+        };
+        let said = {
+            let mut n = self.notices();
+            n.arrived(need, session.is_some(), Instant::now())
+                .map(|line| (line, n.kind()))
+        };
+        match (said, session) {
+            (Some((line, kind)), Some(session)) => say_notice(session.as_ref(), &line, kind),
+            // More waits, or the gap has not passed: counted at rest, or later.
+            _ => self.notices_at_rest().await,
+        }
+    }
+
+    /// Events were missed: what waits is counted again from the Inbox.
+    pub async fn missed_notices(&self) {
+        if !self.notices_wanted() {
+            return self.clear_notices();
+        }
+        self.notices().missed();
+        self.notices_at_rest().await;
+    }
+
+    /// Checks for what waits, in the background, when something does.
+    fn kick_notices(&self) {
+        if !self.notices().pending() {
+            return;
+        }
+        let me = self.me.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(me) = me.upgrade() {
+                me.notices_at_rest().await;
+            }
+        });
+    }
+
+    /// The session rests (or a notice's gap has passed): says what still waits, counted from
+    /// the Inbox, once 30 seconds have passed since the last notice; before that, a wake-up is
+    /// set for then. Busy, it waits for the next rest.
+    async fn notices_at_rest(&self) {
+        match self.rest() {
+            Rest::Off => return self.clear_notices(),
+            Rest::Busy => return,
+            Rest::Resting(_) => {}
+        }
+        match self.notices().wait_for(Instant::now()) {
+            None => return,
+            Some(wait) if !wait.is_zero() => return self.notice_wake_up(wait),
+            Some(_) => {}
+        }
+        let Some((count, private)) = self.host.waiting().await else {
+            return;
+        };
+        // Things may have moved while the Inbox was read.
+        let session = match self.rest() {
+            Rest::Off => return self.clear_notices(),
+            Rest::Busy => return,
+            Rest::Resting(session) => session,
+        };
+        let said = {
+            let mut n = self.notices();
+            n.rested(count, private, Instant::now())
+                .map(|line| (line, n.kind()))
+        };
+        if let Some((line, kind)) = said {
+            say_notice(session.as_ref(), &line, kind);
+        }
+    }
+
+    /// One wake-up at a time, `wait` from now, to say what waits once its gap has passed.
+    fn notice_wake_up(&self, wait: Duration) {
+        {
+            let mut set = self.notice_timer.lock().unwrap_or_else(|e| e.into_inner());
+            if *set {
+                return;
+            }
+            *set = true;
+        }
+        let me = self.me.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(wait).await;
+            if let Some(me) = me.upgrade() {
+                *me.notice_timer.lock().unwrap_or_else(|e| e.into_inner()) = false;
+                me.notices_at_rest().await;
+            }
+        });
+    }
+}
+
+/// Says a notice; the log names only its kind.
+fn say_notice(session: &dyn SessionControl, line: &str, kind: &str) {
+    session.notice(line);
+    tracing::info!("voice: a notice was spoken ({kind})");
 }
 
 /// A download error's state name, for the log.
@@ -1265,6 +1441,23 @@ impl Host for RuntimeHost {
     }
     fn mind(&self) -> Arc<dyn MindPort> {
         Arc::new(RuntimeMind(self.0.clone()))
+    }
+    async fn waiting(&self) -> Option<(usize, usize)> {
+        let count = self.0.inbox_count().await.ok()?;
+        let inbox = self.0.inbox().await.ok()?;
+        let mut private = 0;
+        for pending in &inbox.approvals {
+            // An error counts as private.
+            if self
+                .0
+                .approval_touches_private(&pending.approval.id)
+                .await
+                .unwrap_or(true)
+            {
+                private += 1;
+            }
+        }
+        Some((count, private))
     }
 }
 

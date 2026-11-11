@@ -3,12 +3,13 @@
 //!
 //! `service` owns the session and the speech files' `download`; `bridge` joins the session
 //! to Open Dot's mind; `events` is what the UI receives on the `voice` event; `hotkey` is
-//! the global shortcut that opens it.
+//! the global shortcut that opens it; `notices` says aloud when something needs the person.
 
 pub mod bridge;
 pub mod download;
 pub mod events;
 pub mod hotkey;
+pub mod notices;
 pub mod service;
 
 use std::path::PathBuf;
@@ -73,6 +74,8 @@ pub fn manage(app: &AppHandle, rt: Option<Arc<Runtime>>, data_dir: Option<PathBu
             spawn_forwarder(app.clone(), rx);
             service.set_hotkey_port(Arc::new(hotkey::PluginHotkey::new(app.clone())));
             service.set_listener(Arc::new(tray_listener(app.clone())));
+            // Spoken notices: it looks nothing up and keeps nothing while they are off.
+            notices::spawn(rt.clone(), service.clone());
             let started = service.clone();
             tauri::async_runtime::spawn(async move {
                 started.start(&rt.settings().await).await;

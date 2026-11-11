@@ -297,6 +297,8 @@ impl MindPort for QuietMind {
 struct FakeHost {
     settings: Mutex<Settings>,
     mind: Arc<QuietMind>,
+    /// What `waiting` answers: (in the Inbox, private approvals among it).
+    waiting: Mutex<Option<(usize, usize)>>,
 }
 
 #[async_trait]
@@ -310,6 +312,9 @@ impl Host for FakeHost {
     }
     fn mind(&self) -> Arc<dyn MindPort> {
         self.mind.clone()
+    }
+    async fn waiting(&self) -> Option<(usize, usize)> {
+        *self.waiting.lock().unwrap()
     }
 }
 
@@ -737,6 +742,102 @@ async fn talking_over_dot_applies_without_a_rebuild() {
         session.calls().last().map(String::as_str),
         Some("settings wake=false talk=false")
     );
+}
+
+// ---- spoken notices (step 5) ----------------------------------------------------------------
+
+fn research() -> Needs {
+    Needs::Approval {
+        dot_name: "Research".into(),
+        private: false,
+    }
+}
+
+const RESEARCH_LINE: &str = "notice Research needs your approval.";
+
+fn noticed(session: &FakeSession) -> Vec<String> {
+    session
+        .calls()
+        .into_iter()
+        .filter(|c| c.starts_with("notice ") && *c != format!("notice {GREETING}"))
+        .collect()
+}
+
+/// Puts the fake session in `state`, as the real one reports it, and waits for the status.
+async fn session_in(r: &Rig, state: State) {
+    let session = r.factory.session(0);
+    *session.state.lock().unwrap() = Some(state);
+    session.emit(SessionEvent::State {
+        state,
+        mic_open: false,
+    });
+    let svc = r.svc.clone();
+    until("the state", || svc.status_now().state == state).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_notice_reaches_the_session_only_when_ready_idle_and_on() {
+    let r = rig(Mode::Normal).await;
+    *r.host.waiting.lock().unwrap() = Some((1, 0));
+    // Voice off, not ready: nothing is said and nothing waits.
+    r.svc.need(research()).await;
+    assert!(!r.svc.notices().pending());
+    // Ready and resting, notices off: the same.
+    r.svc.enable(true).await.unwrap();
+    session_in(&r, State::Idle).await;
+    assert!(!r.svc.notices_wanted());
+    r.svc.need(research()).await;
+    assert!(!r.svc.notices().pending());
+    let session = r.factory.session(0);
+    assert!(noticed(&session).is_empty());
+    // On, while Dot speaks: kept, not said.
+    let notices_on = Settings {
+        voice_notices: true,
+        ..on()
+    };
+    save(&r, notices_on.clone()).await;
+    session_in(&r, State::Speaking).await;
+    r.svc.need(research()).await;
+    assert!(noticed(&session).is_empty());
+    assert!(r.svc.notices().pending());
+    // At rest again: said once, from the Inbox count.
+    session_in(&r, State::Idle).await;
+    let s = session.clone();
+    until("the notice", || !noticed(&s).is_empty()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(noticed(&session), [RESEARCH_LINE]);
+    assert!(!r.svc.notices().pending());
+    // Within the gap, while busy: kept. Notices turned off: it is dropped.
+    session_in(&r, State::Thinking).await;
+    r.svc.need(research()).await;
+    assert!(r.svc.notices().pending());
+    save(&r, on()).await;
+    assert!(!r.svc.notices().pending());
+    // Voice turned off drops what waits too.
+    save(&r, notices_on).await;
+    r.svc.need(research()).await;
+    assert!(r.svc.notices().pending());
+    r.svc.enable(false).await.unwrap();
+    assert!(!r.svc.notices().pending());
+    assert_eq!(noticed(&session), [RESEARCH_LINE]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_notice_is_said_at_once_when_resting() {
+    let r = rig(Mode::Normal).await;
+    *r.host.waiting.lock().unwrap() = Some((1, 0));
+    r.svc.enable(true).await.unwrap();
+    save(
+        &r,
+        Settings {
+            voice_notices: true,
+            ..on()
+        },
+    )
+    .await;
+    session_in(&r, State::Idle).await;
+    r.svc.need(research()).await;
+    assert_eq!(noticed(&r.factory.session(0)), [RESEARCH_LINE]);
 }
 
 // ---- the hotkey and the listener ------------------------------------------------------------
