@@ -7467,6 +7467,7 @@
     "voice_notices": false,
     "voice_speaker": null,
     "voice_speed": 1.0,
+    "voice_tone": true,
     "voice_wake_phrase": false
   },
   "SettingsSaved": {
@@ -7518,6 +7519,7 @@
       "voice_notices": false,
       "voice_speaker": null,
       "voice_speed": 1.0,
+      "voice_tone": true,
       "voice_wake_phrase": false
     }
   },

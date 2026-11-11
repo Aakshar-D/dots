@@ -92,6 +92,9 @@ pub struct Settings {
     pub voice_wake_phrase: bool,
     /// Talking over Open Dot stops it speaking.
     pub voice_interrupt_by_talking: bool,
+    /// A soft tone plays when Open Dot starts listening from rest (hotkey, click, tray or
+    /// "Hey Dot"); not on a follow-up or after an interruption.
+    pub voice_tone: bool,
     /// The microphone's device id; `None` is the system's default.
     pub voice_mic: Option<String>,
     /// The speaker's device id; `None` is the system's default.
@@ -144,6 +147,7 @@ impl Default for Settings {
             voice_hotkey: DEFAULT_VOICE_HOTKEY.to_string(),
             voice_wake_phrase: false,
             voice_interrupt_by_talking: false,
+            voice_tone: true,
             voice_mic: None,
             voice_speaker: None,
             voice_notices: false,

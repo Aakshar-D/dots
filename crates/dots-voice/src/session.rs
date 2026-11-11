@@ -15,6 +15,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::audio::{Mic, MicFrame};
 use crate::ears::{level, EarEvent, Ears};
 use crate::engine::{EngineError, WakeSpotter, WakeWord};
+use crate::tone::{listen_tone, TONE_RATE};
 use crate::voice::{Sink, Voice, VoiceEvent};
 
 /// The longest the worker waits for a command before it looks at the microphone, the voice
@@ -34,6 +35,9 @@ const VOICE_LIMIT: Duration = Duration::from_secs(60);
 const FRAMES_PER_PASS: usize = 8;
 /// How often a lost microphone is tried again while only the wake phrase wants it.
 const MIC_RETRY: Duration = Duration::from_secs(5);
+/// The longest the ears wait for the listening tone to finish sounding (it is 155 ms long);
+/// a sink still not quiet by then is stopped.
+const TONE_LIMIT: Duration = Duration::from_secs(2);
 
 const NO_REPLY: &str = "No reply came back.";
 const VOICE_STUCK: &str = "The voice stopped responding.";
@@ -119,6 +123,11 @@ pub struct SessionSettings {
     pub follow_up_secs: u32,
     /// How long after speech ends before the ears hear again, so Dot's own echo is not heard.
     pub reopen_after_ms: u32,
+    /// Play a soft tone when listening starts from rest (`open` while `Idle`, or "Hey Dot").
+    /// Not on a follow-up, an ask, an interruption or a click. The ears open only once the
+    /// tone has finished sounding and `reopen_after_ms` has passed, so it is never heard as
+    /// speech; with no working speaker there is no tone and the ears open at once.
+    pub tone: bool,
 }
 
 impl Default for SessionSettings {
@@ -128,6 +137,7 @@ impl Default for SessionSettings {
             interrupt_by_talking: false,
             follow_up_secs: 6,
             reopen_after_ms: 250,
+            tone: true,
         }
     }
 }
@@ -493,6 +503,9 @@ struct Worker {
     /// After speech was interrupted (not by talking), the ears hear nothing until then:
     /// frames from before it hold Dot's own voice. The wake spotter still hears them.
     deaf_until: Option<Instant>,
+    /// The listening tone is sounding: the ears hear nothing until the sink is quiet (then
+    /// `deaf_until` takes over for the tail), or until this limit, when it is stopped.
+    tone_until: Option<Instant>,
     /// Stop handling frames for the rest of this pass.
     halt_frames: bool,
     /// Frames were left waiting at the end of the last pass.
@@ -556,6 +569,7 @@ impl Worker {
             in_speech: false,
             clip_started: now,
             deaf_until: None,
+            tone_until: None,
             halt_frames: false,
             frames_left: false,
             voice_heard_at: now,
@@ -635,7 +649,7 @@ impl Worker {
             Command::Open => {
                 self.mic_broken = false;
                 match self.state {
-                    State::Idle => self.listen(LISTEN_AFTER_OPEN),
+                    State::Idle => self.listen_from_rest(),
                     State::Thinking | State::Speaking => self.interrupt(),
                     _ => {}
                 }
@@ -844,10 +858,30 @@ impl Worker {
 
     // ---- states --------------------------------------------------------------------------
 
+    /// Listening starts from rest (`open` while `Idle`, or "Hey Dot"): with the tone on, it
+    /// sounds first and the ears wait for it to end.
+    fn listen_from_rest(&mut self) {
+        self.listen(LISTEN_AFTER_OPEN);
+        self.play_tone();
+    }
+
+    /// Plays the listening tone through the sink speech uses, and keeps the ears deaf while it
+    /// sounds. Nothing when the tone is off, the session did not reach `Listening` (no
+    /// microphone), or the sink has failed or refuses it: the ears are open at once then.
+    fn play_tone(&mut self) {
+        if !self.settings.tone || self.state != State::Listening || self.sink.failed() {
+            return;
+        }
+        if self.sink.play(listen_tone(TONE_RATE)) {
+            self.tone_until = Some(self.clock.now() + TONE_LIMIT);
+        }
+    }
+
     fn listen(&mut self, limit: Duration) {
         self.ears.reset();
         self.in_speech = false;
         self.deaf_until = None;
+        self.tone_until = None;
         self.quiet_since = self.clock.now();
         self.listen_limit = limit;
         self.enter(State::Listening);
@@ -857,6 +891,7 @@ impl Worker {
         self.short_ears.reset();
         self.in_speech = false;
         self.deaf_until = None;
+        self.tone_until = None;
         self.quiet_since = self.clock.now();
         self.listen_limit = ASK_LIMIT;
         self.enter(State::Asking);
@@ -877,6 +912,9 @@ impl Worker {
                 self.short_ears.reset();
                 self.in_speech = false;
                 self.deaf_until = None;
+                if self.tone_until.take().is_some() {
+                    self.sink.stop(); // closed while the tone sounds
+                }
             }
             if new == State::Thinking {
                 self.thinking_since = self.clock.now();
@@ -1007,9 +1045,24 @@ impl Worker {
         self.frames_left = true;
     }
 
-    /// Once the tail after an interruption has passed, the frames still waiting (captured
-    /// before its end) are thrown away and the ears start clean.
+    /// Once the listening tone has stopped sounding, its tail begins. Once the tail after an
+    /// interruption (or the tone) has passed, the frames still waiting (captured before its
+    /// end) are thrown away and the ears start clean.
     fn end_deafness(&mut self) {
+        if let Some(limit) = self.tone_until {
+            let now = self.clock.now();
+            let quiet = self.sink.idle();
+            if quiet || now >= limit {
+                if !quiet {
+                    self.sink.stop();
+                }
+                // The tone has stopped sounding: the tail after it is waited out as after
+                // speech, and then the frames captured meanwhile are thrown away.
+                self.tone_until = None;
+                let tail = Duration::from_millis(u64::from(self.settings.reopen_after_ms));
+                self.deaf_until = Some(now + tail);
+            }
+        }
         if self.deaf_until.is_some_and(|at| self.clock.now() >= at) {
             self.deaf_until = None;
             if self.discard_backlog() {
@@ -1076,7 +1129,7 @@ impl Worker {
             State::Idle => {
                 if word == Some(WakeWord::HeyDot) {
                     self.send(SessionEvent::Woke);
-                    self.listen(LISTEN_AFTER_OPEN);
+                    self.listen_from_rest();
                 }
             }
             State::Thinking => {
@@ -1106,8 +1159,8 @@ impl Worker {
                     self.close();
                     return;
                 }
-                if self.deaf_until.is_some() {
-                    return; // still the tail of Dot's own voice
+                if self.deaf_until.is_some() || self.tone_until.is_some() {
+                    return; // the tone, or still the tail of Dot's own voice
                 }
                 let events = if self.state == State::Asking {
                     self.short_ears.push(frame)
@@ -1406,6 +1459,9 @@ mod tests {
         stops: AtomicUsize,
         plays: AtomicUsize,
         failed: AtomicBool,
+        /// The next clip played keeps the sink sounding until `sounding(false)`.
+        hold_next: AtomicBool,
+        clips: Mutex<Vec<Clip>>,
     }
 
     impl FakeSink {
@@ -1416,7 +1472,19 @@ mod tests {
                 stops: AtomicUsize::new(0),
                 plays: AtomicUsize::new(0),
                 failed: AtomicBool::new(false),
+                hold_next: AtomicBool::new(false),
+                clips: Mutex::default(),
             })
+        }
+        /// How many times the listening tone was played.
+        fn tones(&self) -> usize {
+            let tone = crate::tone::listen_tone(crate::tone::TONE_RATE);
+            self.clips
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|c| **c == tone)
+                .count()
         }
         fn sounding(&self, on: bool) {
             self.idle.store(!on, Ordering::SeqCst);
@@ -1435,11 +1503,15 @@ mod tests {
     }
 
     impl Sink for FakeSink {
-        fn play(&self, _clip: Clip) -> bool {
+        fn play(&self, clip: Clip) -> bool {
             if self.failed.load(Ordering::SeqCst) {
                 return false;
             }
             self.plays.fetch_add(1, Ordering::SeqCst);
+            self.clips.lock().unwrap().push(clip);
+            if self.hold_next.swap(false, Ordering::SeqCst) {
+                self.idle.store(false, Ordering::SeqCst);
+            }
             true
         }
         fn failed(&self) -> bool {
@@ -1556,6 +1628,8 @@ mod tests {
     struct Opts {
         wake: bool,
         talk: bool,
+        /// Off unless a test is about the tone: the others listen at once.
+        tone: bool,
         ears: EarSettings,
         recognizer: Option<Arc<FakeRecognizer>>,
         /// Holds the sentence ears' first detector call.
@@ -1567,6 +1641,7 @@ mod tests {
             Self {
                 wake: false,
                 talk: false,
+                tone: false,
                 ears: test_ears(),
                 recognizer: None,
                 detector_gate: None,
@@ -1644,6 +1719,7 @@ mod tests {
         let settings = SessionSettings {
             wake_phrase: opts.wake,
             interrupt_by_talking: opts.talk,
+            tone: opts.tone,
             ..SessionSettings::default()
         };
         let (tx, events) = unbounded_channel();
@@ -1832,6 +1908,175 @@ mod tests {
         // "Dot, stop" while listening is a close.
         r.mic.send(DOT_STOP, 1);
         r.expect_state(State::Idle, true);
+    }
+
+    // ---- the listening tone ------------------------------------------------------------------
+
+    fn toned(wake: bool) -> Rig {
+        rig(Opts {
+            wake,
+            tone: true,
+            ..Opts::default()
+        })
+    }
+
+    /// The tone is playing (and holds the sink); the ears hear nothing, however loud.
+    fn deaf_during_the_tone(r: &mut Rig) {
+        r.sync(); // `Listening` is published just before the tone is played
+        assert_eq!(r.sink.tones(), 1);
+        let seen = r.seen();
+        r.sentence();
+        r.mic.send(SPEECH, 6);
+        r.nothing_more();
+        assert_eq!(r.seen(), seen, "the ears heard the tone");
+    }
+
+    #[test]
+    fn tone_on_open_then_ears_after_it() {
+        let mut r = toned(false);
+        r.expect_state(State::Idle, false);
+        r.sink.hold_next.store(true, Ordering::SeqCst);
+        r.session.open();
+        r.expect_state(State::Listening, true); // shown at once
+        deaf_during_the_tone(&mut r);
+        // However long it takes to sound, the ears wait for the sink to go quiet.
+        r.clock.advance(1_000);
+        r.mic.send(SPEECH, 6);
+        r.nothing_more();
+        assert_eq!(r.seen(), 0);
+        // The tone has finished: the usual tail after Dot's own sound is waited out too.
+        r.sink.sounding(false);
+        r.sync();
+        r.clock.advance(249);
+        r.mic.send(SPEECH, 6);
+        r.nothing_more();
+        assert_eq!(r.seen(), 0, "a tail frame reached the ears");
+        r.clock.advance(1);
+        r.sync();
+        // Then the ears hear, starting clean.
+        r.hear_sentence();
+        assert_eq!(r.sink.tones(), 1);
+    }
+
+    #[test]
+    fn a_tone_that_never_ends_is_stopped_and_the_ears_open() {
+        let mut r = toned(false);
+        r.expect_state(State::Idle, false);
+        r.sink.hold_next.store(true, Ordering::SeqCst);
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        deaf_during_the_tone(&mut r);
+        let stops = r.sink.stops();
+        r.clock.advance(2_000);
+        r.sync();
+        assert!(r.sink.stops() > stops, "the stuck tone was not stopped");
+        r.past_tail();
+        r.hear_sentence();
+    }
+
+    #[test]
+    fn woke_plays_the_tone() {
+        let mut r = toned(true);
+        r.expect_state(State::Idle, true);
+        r.sink.hold_next.store(true, Ordering::SeqCst);
+        r.mic.send(HEY_DOT, 1);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        deaf_during_the_tone(&mut r);
+        r.sink.sounding(false);
+        r.sync();
+        r.past_tail();
+        r.hear_sentence();
+    }
+
+    #[test]
+    fn tone_off_opens_ears_at_once() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.hear();
+        assert_eq!(r.sink.tones(), 0);
+        assert_eq!(r.sink.plays(), 0);
+    }
+
+    #[test]
+    fn failed_sink_skips_the_tone() {
+        let mut r = toned(false);
+        r.expect_state(State::Idle, false);
+        r.sink.fail();
+        r.sink_fails.store(true, Ordering::SeqCst);
+        r.hear();
+        assert_eq!(r.sink.tones(), 0);
+        // No speaker was opened (or reported) just for the tone.
+        assert!(r.reopened.lock().unwrap().is_empty());
+    }
+
+    /// A toned rig past its first tone, with the turn of a sentence heard after it.
+    fn heard_after_the_tone(r: &mut Rig) -> u64 {
+        r.expect_state(State::Idle, r.wake);
+        r.sink.hold_next.store(true, Ordering::SeqCst);
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        r.sync(); // the tone is played
+        r.sink.sounding(false);
+        r.sync();
+        r.past_tail();
+        let turn = r.hear_sentence();
+        assert_eq!(r.sink.tones(), 1);
+        turn
+    }
+
+    #[test]
+    fn no_tone_on_follow_up() {
+        let mut r = toned(false);
+        let turn = heard_after_the_tone(&mut r);
+        r.session.say(turn, "Sure.", After::FollowUp);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Sure.");
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Listening, true);
+        // The ears hear at once, and no tone was played.
+        let turn = r.hear_sentence();
+        assert_eq!(r.sink.tones(), 1);
+        // Nor when a reply asks.
+        r.session.say(turn, "Shall I?", After::Ask);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Shall I?");
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Asking, true);
+        assert_eq!(r.sink.tones(), 1);
+    }
+
+    #[test]
+    fn no_tone_after_interrupt() {
+        let mut r = toned(true);
+        let turn = heard_after_the_tone(&mut r);
+        // Interrupted while thinking.
+        r.session.interrupt();
+        r.expect_state(State::Listening, true);
+        assert!(r.hear_sentence() > turn);
+        // Interrupted while speaking: by the call, by `open`, and by "Dot, stop".
+        for how in 0..3 {
+            let turn = r.session.turn();
+            r.sink.sounding(true);
+            r.session.say(turn, "A long answer.", After::Rest);
+            r.expect_state(State::Speaking, true);
+            r.expect_saying("A long answer.");
+            match how {
+                0 => r.session.interrupt(),
+                1 => r.session.open(),
+                _ => r.mic.send(DOT_STOP, 1),
+            }
+            r.expect_state(State::Listening, true);
+            r.past_tail();
+            r.hear_sentence();
+        }
+        // A click answers without listening: no tone either.
+        r.session.answered("Yes");
+        assert!(matches!(r.next(), SessionEvent::Heard { .. }));
+        r.nothing_more();
+        assert_eq!(r.sink.tones(), 1);
     }
 
     // ---- rule 2: Listening -----------------------------------------------------------------
@@ -2806,6 +3051,7 @@ mod tests {
         let s = SessionSettings::default();
         assert_eq!((s.follow_up_secs, s.reopen_after_ms), (6, 250));
         assert!(!s.interrupt_by_talking);
+        assert!(s.tone);
     }
 
     // ---- final fix round: a failed speaker -----------------------------------------------------

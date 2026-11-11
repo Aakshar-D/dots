@@ -31,6 +31,8 @@ async fn an_empty_table_gives_the_defaults() {
     assert_eq!(s.voice_hotkey, "CmdOrCtrl+Shift+Space");
     assert!(!s.voice_wake_phrase);
     assert!(!s.voice_interrupt_by_talking);
+    // The listening tone is on by default (it sounds only once voice is on).
+    assert!(s.voice_tone);
     assert_eq!(s.voice_mic, None);
     assert_eq!(s.voice_speaker, None);
     assert!(!s.voice_notices);
@@ -69,6 +71,7 @@ async fn settings_round_trip() {
         voice_hotkey: "Alt+F9".into(),
         voice_wake_phrase: true,
         voice_interrupt_by_talking: true,
+        voice_tone: false,
         voice_mic: Some("{0.0.1.00000000}.{mic-id}".into()),
         voice_speaker: Some("{0.0.0.00000000}.{speaker-id}".into()),
         voice_notices: true,
@@ -608,6 +611,7 @@ fn voice_settings_need_no_restart() {
         voice_hotkey: String::new(),
         voice_wake_phrase: true,
         voice_interrupt_by_talking: true,
+        voice_tone: false,
         voice_mic: Some("mic".into()),
         voice_speaker: Some("speaker".into()),
         voice_notices: true,

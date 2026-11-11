@@ -179,8 +179,8 @@ impl SessionPort for FakeSession {
 impl SessionControl for FakeSession {
     fn settings(&self, s: SessionSettings) {
         self.push(format!(
-            "settings wake={} talk={}",
-            s.wake_phrase, s.interrupt_by_talking
+            "settings wake={} talk={} tone={}",
+            s.wake_phrase, s.interrupt_by_talking, s.tone
         ));
         // As the real session does: resting, the microphone is open only for the wake phrase.
         if self.state() == State::Idle {
@@ -571,7 +571,7 @@ async fn voice_change_does_not_rebuild() {
     let calls = r.factory.session(0).calls();
     assert!(calls.contains(&"voice 3 1.2".to_string()), "{calls:?}");
     assert!(
-        calls.contains(&"settings wake=true talk=false".to_string()),
+        calls.contains(&"settings wake=true talk=false tone=true".to_string()),
         "{calls:?}"
     );
     // Turned off: the session goes and the microphone with it.
@@ -699,7 +699,7 @@ async fn the_wake_phrase_applies_without_a_rebuild_and_the_status_shows_the_open
     assert!(
         session
             .calls()
-            .contains(&"settings wake=true talk=false".to_string()),
+            .contains(&"settings wake=true talk=false tone=true".to_string()),
         "{:?}",
         session.calls()
     );
@@ -711,7 +711,7 @@ async fn the_wake_phrase_applies_without_a_rebuild_and_the_status_shows_the_open
     assert_eq!(r.factory.builds(), 1);
     assert!(session
         .calls()
-        .contains(&"settings wake=false talk=false".to_string()));
+        .contains(&"settings wake=false talk=false tone=true".to_string()));
     until("mic closed", || !svc.status_now().mic_open).await;
 }
 
@@ -729,7 +729,7 @@ async fn talking_over_dot_applies_without_a_rebuild() {
     assert!(
         session
             .calls()
-            .contains(&"settings wake=false talk=true".to_string()),
+            .contains(&"settings wake=false talk=true tone=true".to_string()),
         "{:?}",
         session.calls()
     );
@@ -740,7 +740,30 @@ async fn talking_over_dot_applies_without_a_rebuild() {
     assert_eq!(r.factory.builds(), 1);
     assert_eq!(
         session.calls().last().map(String::as_str),
-        Some("settings wake=false talk=false")
+        Some("settings wake=false talk=false tone=true")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_tone_applies_without_a_rebuild() {
+    let r = rig(Mode::Normal).await;
+    r.svc.enable(true).await.unwrap();
+    let quiet = Settings {
+        voice_tone: false,
+        ..on()
+    };
+    save(&r, quiet).await;
+    assert_eq!(r.factory.builds(), 1, "no rebuild");
+    let session = r.factory.session(0);
+    assert_eq!(
+        session.calls().last().map(String::as_str),
+        Some("settings wake=false talk=false tone=false")
+    );
+    save(&r, on()).await;
+    assert_eq!(r.factory.builds(), 1);
+    assert_eq!(
+        session.calls().last().map(String::as_str),
+        Some("settings wake=false talk=false tone=true")
     );
 }
 

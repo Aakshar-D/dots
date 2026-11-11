@@ -1115,6 +1115,7 @@ export const Settings = z.strictObject({
   voice_hotkey: z.string(),
   voice_wake_phrase: z.boolean(),
   voice_interrupt_by_talking: z.boolean(),
+  voice_tone: z.boolean(),
   // Device ids; null is the system's default.
   voice_mic: nullable(z.string()),
   voice_speaker: nullable(z.string()),

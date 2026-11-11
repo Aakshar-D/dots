@@ -123,13 +123,15 @@ pub trait Listener: Send + Sync + 'static {
     fn ready(&self, ready: bool);
 }
 
-/// The session's wake phrase and interruption settings, from Dots' settings.
+/// The session's wake phrase, interruption and listening tone settings, from Dots' settings.
+/// A change reaches a running session without a rebuild.
 pub fn session_settings(s: &Settings) -> SessionSettings {
     SessionSettings {
         wake_phrase: s.voice_wake_phrase,
         interrupt_by_talking: s.voice_interrupt_by_talking,
         follow_up_secs: 6,
         reopen_after_ms: 250,
+        tone: s.voice_tone,
     }
 }
 

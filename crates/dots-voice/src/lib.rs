@@ -9,6 +9,7 @@ mod models;
 mod session;
 mod sherpa;
 mod text;
+mod tone;
 mod voice;
 
 pub use audio::{frames_from, microphones, speakers, CpalMic, CpalSink, Device, Mic, MicFrame};
@@ -26,4 +27,5 @@ pub use session::{
 };
 pub use sherpa::{SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake};
 pub use text::{speakable, trim_spoken, SentenceStream, MAX_SPOKEN_CHARS};
+pub use tone::{listen_tone, TONE_RATE};
 pub use voice::{Sink, Voice, VoiceEvent};

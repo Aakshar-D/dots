@@ -260,12 +260,13 @@ fn an_empty_clip_hears_nothing() {
 // ---- the real session, fed by a fake microphone ---------------------------------------------
 
 /// The session's settings for these tests. Built field by field on purpose: anything added
-/// later (a start tone) stays at its default unless set here, and a tone that sounds must be
-/// set off here, so these tests never depend on it.
+/// later stays at its default unless set here. The listening tone is off, so the ears open
+/// as soon as listening starts and these tests measure what they measured before it.
 fn session_settings(wake_phrase: bool, interrupt_by_talking: bool) -> SessionSettings {
     SessionSettings {
         wake_phrase,
         interrupt_by_talking,
+        tone: false,
         ..SessionSettings::default()
     }
 }

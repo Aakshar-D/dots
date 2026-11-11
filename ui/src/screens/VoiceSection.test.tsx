@@ -126,6 +126,21 @@ describe("Settings > Voice", () => {
     expect(saved.voice_wake_phrase).toBe(true);
   });
 
+  it("turns the listening tone off through the form", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true, voice_tone: true });
+    const { user } = renderApp("/settings/voice");
+    const tone = await screen.findByRole("switch", { name: "Play a tone when Dot starts listening" });
+    expect(tone).toBeChecked();
+    expect(tone).toBeEnabled();
+    await user.click(tone);
+    expect(tone).not.toBeChecked();
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.callsTo("update_settings")).toHaveLength(1));
+    const saved = backend.callsTo("update_settings")[0].settings as Settings;
+    expect(saved.voice_tone).toBe(false);
+  });
+
   it("shows the controls when ready, and plays a voice at the chosen speed", async () => {
     voice(ready, { ...sample.settings, voice_enabled: true });
     const { user } = renderApp("/settings/voice");

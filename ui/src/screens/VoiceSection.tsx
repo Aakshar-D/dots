@@ -373,6 +373,14 @@ export function VoiceSection({
           <Label htmlFor="settings-voice-interrupt">Interrupt by just talking</Label>
         </div>
         <p className="text-xs text-muted-foreground">Best with headphones.</p>
+        <div className="flex items-center gap-2">
+          <Switch
+            id="settings-voice-tone"
+            checked={draft.voice_tone}
+            onCheckedChange={(voice_tone) => set({ voice_tone })}
+          />
+          <Label htmlFor="settings-voice-tone">Play a tone when Dot starts listening</Label>
+        </div>
       </Section>
 
       <Section title="Devices">
