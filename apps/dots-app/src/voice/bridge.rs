@@ -260,6 +260,10 @@ impl Bridge {
     /// while the session and the UI are told, so a newer `Heard` cannot come between.
     fn apply(&self, turn: u64, ev: MindEvent) {
         let mut s = self.lock();
+        if let MindEvent::Did { said } = ev {
+            self.did(&mut s, turn, said);
+            return;
+        }
         if s.live != Some(turn) {
             return;
         }
@@ -300,7 +304,22 @@ impl Bridge {
                 s.forget();
                 self.send(VoiceEvent::Cleared);
             }
+            MindEvent::Did { .. } => {}
         }
+    }
+
+    /// A deed of `turn` was carried out. For the live turn its outcome is spoken through
+    /// `Say`. A stale turn's outcome would be lost with the turn: it is spoken on the live
+    /// turn, or, with none, shown only.
+    fn did(&self, s: &mut Inner, turn: u64, said: String) {
+        if s.live == Some(turn) || said.is_empty() {
+            return;
+        }
+        if let Some(live) = s.live {
+            self.session.say_delta(live, &format!("{said} "));
+            s.gap = false;
+        }
+        self.send(VoiceEvent::Saying { text: said });
     }
 
     /// Ends the live turn at the session. A question still showing whose step the mind no
@@ -1035,6 +1054,98 @@ mod tests {
         new.notify_one();
         settle().await;
         assert_eq!(r.ui(), vec![VoiceEvent::Cleared]);
+    }
+
+    #[tokio::test]
+    async fn a_stale_deeds_outcome_is_spoken_on_the_live_turn() {
+        let mut r = rig();
+        let gate = Arc::new(Notify::new());
+        // Turn 1 carries out a deed while turn 2 is heard; the mind begins turn 2 after it.
+        r.mind.script(vec![
+            Step::Wait(gate.clone()),
+            Step::Send(MindEvent::Did {
+                said: "Approved.".into(),
+            }),
+            say("Approved."),
+            end(Then::FollowUp),
+        ]);
+        r.mind.script(vec![
+            Step::Wait(gate.clone()),
+            say("Nothing else waits."),
+            end(Then::Rest),
+        ]);
+        r.heard("yes", 1);
+        settle().await;
+        r.heard("yes", 2);
+        settle().await;
+        gate.notify_one();
+        settle().await;
+        gate.notify_one();
+        settle().await;
+        assert_eq!(
+            r.session.calls(),
+            vec![
+                Call::Thinking,
+                Call::Thinking,
+                Call::Delta(2, "Approved. ".into()),
+                Call::Delta(2, "Nothing else waits.".into()),
+                Call::End(2, After::Rest),
+            ]
+        );
+        assert_eq!(
+            r.ui(),
+            vec![
+                heard_ev("yes"),
+                heard_ev("yes"),
+                VoiceEvent::Saying {
+                    text: "Approved.".into()
+                },
+            ]
+        );
+        // The live turn's own `Did` is not spoken twice.
+        r.mind.script(vec![
+            Step::Send(MindEvent::Did {
+                said: "Denied.".into(),
+            }),
+            say("Denied."),
+            end(Then::Rest),
+        ]);
+        r.heard("deny it", 3);
+        settle().await;
+        assert_eq!(
+            &r.session.calls()[5..],
+            &[
+                Call::Thinking,
+                Call::Delta(3, "Denied.".into()),
+                Call::End(3, After::Rest),
+            ]
+        );
+        assert_eq!(r.ui(), vec![heard_ev("deny it")]);
+        // With no live turn and the session resting, it is only shown.
+        let gate = Arc::new(Notify::new());
+        r.mind.script(vec![
+            Step::Wait(gate.clone()),
+            Step::Send(MindEvent::Did {
+                said: "Sent to Research.".into(),
+            }),
+            end(Then::Rest),
+        ]);
+        r.heard("send it", 4);
+        settle().await;
+        r.bridge.close();
+        let before = r.session.calls().len();
+        gate.notify_one();
+        settle().await;
+        assert_eq!(r.session.calls().len(), before);
+        assert_eq!(
+            r.ui(),
+            vec![
+                heard_ev("send it"),
+                VoiceEvent::Saying {
+                    text: "Sent to Research.".into()
+                },
+            ]
+        );
     }
 
     #[tokio::test]

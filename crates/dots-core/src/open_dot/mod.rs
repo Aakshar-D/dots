@@ -62,6 +62,11 @@ use think::{cap_hit, Thinker};
 /// exception: its outcome and `SayEnd` are always sent, and a newer turn begins only after
 /// them. A click on an option that is not offered, or a second yes or click for a step a yes
 /// already took, is no turn and sends nothing.
+///
+/// `Did` is sent once right after a deed (approve, deny, run, send, answer, create) was
+/// carried out, before the `Say` of its outcome, whether or not the turn is still the
+/// current one. It carries the outcome sentence, also said through `Say`: a stage that
+/// dropped the turn (a newer one began) still tells the person what was done.
 // Sent once each, by value: not boxed, so the stage matches on it plainly.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -91,6 +96,10 @@ pub enum MindEvent {
     },
     /// The step that waited was dropped: the stage clears its options and card.
     Cleared,
+    /// A deed was carried out; `said` is its outcome sentence (also said through `Say`).
+    Did {
+        said: String,
+    },
 }
 
 /// What the stage does after a turn's words.
@@ -363,8 +372,14 @@ impl<'a> Out<'a> {
 
     /// From now on, the turn's events go out whatever ends it: a deed was carried out. The
     /// deed gate keeps any newer turn from beginning until they are out.
-    fn deed_done(&self) {
+    /// `Did` goes out at once, whether or not the turn is still the current one.
+    fn deed_done(&self, said: &str) {
         self.done.store(true, Ordering::SeqCst);
+        if !self.ended.load(Ordering::SeqCst) {
+            let _ = self.tx.send(MindEvent::Did {
+                said: said.trim().to_string(),
+            });
+        }
     }
 
     /// Sends while the turn is the current one (or its deed is done). The check and the send
@@ -733,7 +748,7 @@ impl Mind {
                     o.end(Then::Rest);
                     return "ended before the deed";
                 };
-                o.deed_done();
+                o.deed_done(&done.said);
                 let then = if done.done {
                     Then::FollowUp
                 } else {
@@ -748,7 +763,7 @@ impl Mind {
                     return "ended before the deed";
                 }
                 let (said, opened, then) = create(rt, proposal, view).await;
-                o.deed_done();
+                o.deed_done(&said);
                 o.say(&said);
                 if let Some(target) = opened {
                     o.send(MindEvent::Open { target });
@@ -1218,7 +1233,7 @@ impl Mind {
                     return "ended before the deed";
                 }
                 let done = outcome(rt, &deed).await;
-                o.deed_done();
+                o.deed_done(&done.said);
                 let then = if done.done {
                     Then::FollowUp
                 } else {

@@ -295,6 +295,80 @@ fn ended(events: &[MindEvent]) -> Option<Then> {
     }
 }
 
+/// The outcomes of the deeds carried out (`Did`), in order.
+fn dids(events: &[MindEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            MindEvent::Did { said } => Some(said.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn did_follows_every_deed() {
+    // approve and deny, each after its confirmation
+    let t = T::start().await;
+    asking_to_approve(&t).await;
+    let got = t.hear("yes").await;
+    assert_eq!(dids(&got), vec!["Approved.".to_string()], "{got:?}");
+    assert_eq!(said(&got), "Approved.");
+    assert!(matches!(got.last(), Some(MindEvent::SayEnd { .. })));
+    t.rt.shutdown();
+    let t = T::start().await;
+    asking_to_deny(&t).await;
+    assert_eq!(dids(&t.hear("yes").await), vec!["Denied.".to_string()]);
+    t.rt.shutdown();
+    // run, after its confirmation
+    let t = T::start().await;
+    t.dot("Deploy watcher").await;
+    t.fake.push(says("DO {\"act\":\"run\",\"d\":\"d1\"}"));
+    let asked = t.hear("run the deploy watcher").await;
+    assert!(dids(&asked).is_empty(), "nothing is done by asking");
+    assert_eq!(
+        dids(&t.hear("yes").await),
+        vec!["Deploy watcher is running.".to_string()]
+    );
+    t.rt.shutdown();
+    // send and answer, straight: only the outcome, not the words before it
+    let t = T::start().await;
+    t.dot("Research").await;
+    t.fake.push(says(
+        "Sending.\nDO {\"act\":\"send\",\"d\":\"d1\",\"text\":\"look at the build\"}",
+    ));
+    let got = t.hear("tell research to look at the build").await;
+    assert_eq!(said(&got), "Sending. Sent to Research.");
+    assert_eq!(dids(&got), vec!["Sent to Research.".to_string()]);
+    t.rt.shutdown();
+    let t = T::start().await;
+    let dot = t.dot("Release helper").await;
+    t.question(&dot, "Which branch?").await;
+    t.fake.push(says(
+        "DO {\"act\":\"answer\",\"q\":\"q1\",\"text\":\"main\"}",
+    ));
+    let got = t.hear("tell the release helper main").await;
+    assert_eq!(dids(&got), vec!["Answered Release helper.".to_string()]);
+    t.rt.shutdown();
+    // create
+    let t = T::start().await;
+    let p = a_proposal();
+    let question = create_question(&p);
+    waiting_on(
+        &t,
+        Waiting::Create {
+            proposal: p,
+            question,
+        },
+    );
+    let got = t.hear("yes").await;
+    assert_eq!(dids(&got), vec!["Created Downloads digest.".to_string()]);
+    // a no does nothing, and says no `Did`
+    asking_to_approve(&t).await;
+    assert!(dids(&t.hear("no").await).is_empty());
+    t.rt.shutdown();
+}
+
 fn approve_a1() -> Scripted {
     says("Approving now.\nDO {\"act\":\"approve\",\"a\":\"a1\"}")
 }
