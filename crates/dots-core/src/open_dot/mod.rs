@@ -1498,7 +1498,7 @@ async fn confirmed(
     rt: &Runtime,
     deed: &Deed,
     view: &View,
-    may_act: &dyn Fn() -> bool,
+    may_act: &(dyn Fn() -> bool + Sync),
 ) -> Option<Outcome> {
     let Ok(picture) = Picture::take(rt, view).await else {
         return Some(Outcome::refused(WENT_WRONG));
