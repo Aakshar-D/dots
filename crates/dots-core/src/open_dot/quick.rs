@@ -65,6 +65,25 @@ const YES: &[&str] = &[
     "okay",
     "ok",
 ];
+/// The yes that passes a confirmation: approving, denying, running, creating, and a send or
+/// answer Dots read back. "Okay", "sure", "right" and "correct" are not in it: they are what
+/// speech-to-text makes of noise, and what a person says while still thinking.
+const FIRM_YES: &[&str] = &[
+    "yes",
+    "yeah",
+    "yep",
+    "yup",
+    "yes please",
+    "yes do it",
+    "do it",
+    "go ahead",
+    "go for it",
+    "please do",
+    "approve",
+    "approve it",
+    "confirm",
+    "absolutely",
+];
 const NO: &[&str] = &[
     "no",
     "nope",
@@ -171,6 +190,14 @@ fn is_run(option: &[String], heard: &[String]) -> bool {
     !heard.is_empty()
         && heard.len() <= option.len()
         && option.windows(heard.len()).any(|win| win == heard)
+}
+
+/// Whether the whole utterance is a firm yes (`FIRM_YES`, with the same filler trimmed as
+/// `quick`). Only this, or a click on Yes, passes a confirmation; a spoken position word never
+/// does.
+pub fn firm_yes(heard: &str) -> bool {
+    let w = trimmed(words_of(heard));
+    !w.is_empty() && FIRM_YES.contains(&w.join(" ").as_str())
 }
 
 /// `options`: the options currently offered (empty when none).
@@ -292,6 +319,38 @@ mod tests {
             );
         }
         assert_eq!(phrases.len(), 7 + 7 + 9 + 20 + 12 + 4);
+    }
+
+    #[test]
+    fn firm_yes_is_strict() {
+        for p in FIRM_YES {
+            assert!(firm_yes(p), "{p}");
+            assert!(firm_yes(&format!("Hey Dot, {p}, please.")), "{p}");
+            assert!(firm_yes(&format!("okay, {p} thanks")), "{p}");
+        }
+        assert!(firm_yes("Yes!"));
+        assert!(firm_yes("  YES, please "));
+        for weak in [
+            "okay",
+            "ok",
+            "OK.",
+            "sure",
+            "right",
+            "correct",
+            "that's right",
+            "thats right",
+            "one",
+            "first",
+            "the first one",
+            "yes but wait",
+            "",
+            "no",
+        ] {
+            assert!(!firm_yes(weak), "{weak}");
+            // the weak ones are still a yes where no confirmation waits
+        }
+        assert_eq!(quick("okay", &[]), Some(Quick::Yes));
+        assert_eq!(quick("sure", &[]), Some(Quick::Yes));
     }
 
     #[test]

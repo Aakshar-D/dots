@@ -425,34 +425,60 @@ pub fn needs_report(picture: &Picture) -> String {
     out.join(" ")
 }
 
+/// What carrying out a deed came to: the sentence to say, and whether the deed was done (a
+/// refusal or failure was not).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Outcome {
+    pub said: String,
+    pub done: bool,
+}
+
+impl Outcome {
+    fn done(said: String) -> Outcome {
+        Outcome { said, done: true }
+    }
+
+    pub fn refused(said: impl Into<String>) -> Outcome {
+        Outcome {
+            said: said.into(),
+            done: false,
+        }
+    }
+}
+
 /// Carries out `deed` through the runtime, which checks it again, and returns the sentence to
 /// say. Every error becomes one plain sentence.
 pub async fn carry_out(rt: &Runtime, deed: &Deed) -> String {
+    outcome(rt, deed).await.said
+}
+
+/// `carry_out`, with whether the deed was done.
+pub async fn outcome(rt: &Runtime, deed: &Deed) -> Outcome {
     match deed {
         Deed::Approve { approval_id, .. } | Deed::Deny { approval_id, .. } => {
             let approved = matches!(deed, Deed::Approve { .. });
             match rt.decide_approval(approval_id, approved, None, None).await {
-                Ok(_) if approved => "Approved.".into(),
-                Ok(_) => "Denied.".into(),
+                Ok(_) if approved => Outcome::done("Approved.".into()),
+                Ok(_) => Outcome::done("Denied.".into()),
                 // decided already (`Conflict`) or gone (`NotFound`)
-                Err(Error::Conflict(_)) | Err(Error::NotFound(_)) => HANDLED.into(),
-                Err(e) => said_for(e, ""),
+                Err(Error::Conflict(_)) | Err(Error::NotFound(_)) => Outcome::refused(HANDLED),
+                Err(e) => Outcome::refused(said_for(e, "")),
             }
         }
         Deed::Run { dot_id, dot_name } => match rt.run_now(dot_id).await {
-            Ok(_) => format!("{} is running.", name(dot_name)),
-            Err(e) => run_refused(e, dot_name),
+            Ok(_) => Outcome::done(format!("{} is running.", name(dot_name))),
+            Err(e) => Outcome::refused(run_refused(e, dot_name)),
         },
         Deed::Answer {
             message_id,
             dot_name,
             text,
         } => match rt.reply(message_id, text).await {
-            Ok(_) => format!("Answered {}.", name(dot_name)),
+            Ok(_) => Outcome::done(format!("Answered {}.", name(dot_name))),
             Err(Error::Conflict(m)) if m == QUESTION_ANSWERED || m == QUESTION_DISMISSED => {
-                HANDLED.into()
+                Outcome::refused(HANDLED)
             }
-            Err(e) => said_for(e, dot_name),
+            Err(e) => Outcome::refused(said_for(e, dot_name)),
         },
         Deed::Send {
             dot_id,
@@ -460,8 +486,8 @@ pub async fn carry_out(rt: &Runtime, deed: &Deed) -> String {
             text,
             topic_root,
         } => match send(rt, dot_id, text, topic_root.as_deref()).await {
-            Ok(()) => format!("Sent to {}.", name(dot_name)),
-            Err(e) => send_refused(e, dot_name),
+            Ok(()) => Outcome::done(format!("Sent to {}.", name(dot_name))),
+            Err(e) => Outcome::refused(send_refused(e, dot_name)),
         },
     }
 }

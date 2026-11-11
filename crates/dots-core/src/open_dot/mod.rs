@@ -31,12 +31,12 @@ use crate::schedule::{Rule, Schedule};
 use crate::setup::{SetupAnswer, SetupProposal, SetupRequest, SetupRound};
 use crate::{Error, Result, Runtime};
 use act::{
-    carry_out, needs_confirmation, plain_error, plan, AskFor, Deed, OpenTarget, Step, DOT_GONE,
-    HANDLED,
+    needs_confirmation, outcome, plain_error, plan, AskFor, Deed, OpenTarget, Outcome, Step,
+    DOT_GONE, HANDLED,
 };
 use picture::{clean, Picture, View, NAME_BYTES};
 use prompt::{prompt, Turn, INSTRUCTIONS};
-use quick::{quick, words_of, Quick};
+use quick::{firm_yes, quick, words_of, Quick};
 use reply::{read_reply, SpeechGate, Wish};
 use think::{cap_hit, Thinker};
 
@@ -109,6 +109,7 @@ const WONT: &str = "Okay, I won't.";
 const NOT_SENT: &str = "Okay, not sent.";
 const NOT_CREATED: &str = "Okay, not created.";
 const NOTHING_WAITING: &str = "There's nothing waiting on a yes or no.";
+const CLEAR_YES: &str = "I need a clear yes for that. Say yes, or no.";
 const NOTHING_SAID: &str = "I haven't said anything yet.";
 const NO_CLI: &str =
     "I can't think right now: the Claude CLI isn't set up. Open Settings to fix it.";
@@ -165,6 +166,21 @@ struct Pending {
     kind: Waiting,
     account: String,
     workspace: String,
+    /// An unclear yes ("okay", "sure") was heard once and the person was asked for a clear one.
+    retried: bool,
+}
+
+/// How the person answered a step Dots asked a yes on.
+#[derive(Debug, PartialEq)]
+enum Answer {
+    Yes,
+    No,
+    /// "Okay", "sure", "right": asked once more for a clear yes.
+    Unclear,
+    /// A second unclear yes: dropped.
+    GiveUp,
+    /// Anything else: dropped, and the words are a new turn.
+    Other,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +227,20 @@ impl Waiting {
                 Vec::new(),
             ),
         }
+    }
+
+    /// Whether a deed waits on this step's yes: a confirmation, a proposed dot, or an answer
+    /// read back.
+    fn needs_yes(&self) -> bool {
+        matches!(
+            self,
+            Waiting::Confirm { .. }
+                | Waiting::Create { .. }
+                | Waiting::Ask {
+                    then: AskFor::AnswerCheck { .. },
+                    ..
+                }
+        )
     }
 
     fn setup_id(&self) -> Option<&str> {
@@ -417,7 +447,7 @@ impl Mind {
     }
 
     /// The pending step, dropped first when the view moved to another account or workspace.
-    fn waiting(&self, view: &View, o: &Out<'_>) -> Option<Waiting> {
+    fn waiting(&self, view: &View, o: &Out<'_>) -> Option<Pending> {
         let (kind, dropped) = {
             let mut s = lock(&self.state);
             let moved = s
@@ -427,7 +457,7 @@ impl Mind {
             if moved {
                 s.pending = None;
             }
-            (s.pending.as_ref().map(|p| p.kind.clone()), moved)
+            (s.pending.clone(), moved)
         };
         if dropped {
             o.send(MindEvent::Cleared);
@@ -452,7 +482,61 @@ impl Mind {
                 kind,
                 account: view.account.clone(),
                 workspace: view.workspace.clone(),
+                retried: false,
             });
+        }
+    }
+
+    /// Marks the step that waits as asked once more for a clear yes.
+    fn retry(&self, o: &Out<'_>) {
+        let mut s = lock(&self.state);
+        if s.turn == o.turn {
+            if let Some(p) = s.pending.as_mut() {
+                p.retried = true;
+            }
+        }
+    }
+
+    /// The person said yes to a step that waited on it (already taken away): its deed is done
+    /// once a fresh picture shows its record still there.
+    async fn yes(
+        &self,
+        rt: &Runtime,
+        kind: Waiting,
+        heard: &str,
+        view: &View,
+        o: &Out<'_>,
+    ) -> &'static str {
+        match kind {
+            Waiting::Confirm { deed, .. }
+            | Waiting::Ask {
+                then: AskFor::AnswerCheck { deed },
+                ..
+            } => {
+                let done = confirmed(rt, &deed, view).await;
+                let then = if done.done {
+                    Then::FollowUp
+                } else {
+                    Then::Rest
+                };
+                self.finish(o, heard, &done.said, then);
+                "confirmed"
+            }
+            Waiting::Create { proposal, .. } => {
+                let (said, opened, then) = create(rt, proposal, view).await;
+                o.say(&said);
+                if let Some(target) = opened {
+                    o.send(MindEvent::Open { target });
+                }
+                o.end(then);
+                self.record(o, heard, then);
+                "created"
+            }
+            // `needs_yes` holds only the kinds above
+            Waiting::Ask { .. } | Waiting::SetupQuestion { .. } => {
+                o.end(Then::Rest);
+                "nothing to do"
+            }
         }
     }
 
@@ -494,7 +578,11 @@ impl Mind {
         cancel: &CancellationToken,
     ) -> &'static str {
         let waiting = self.waiting(view, o);
-        let options = waiting.as_ref().map(|w| w.asked().1).unwrap_or_default();
+        let options = waiting
+            .as_ref()
+            .map(|w| w.kind.asked().1)
+            .unwrap_or_default();
+        let clicked = matches!(input, Input::Pick(_));
         let (heard, quick) = match input {
             Input::Heard(h) => (h.trim().to_string(), quick(h, &options)),
             Input::Pick(i) => match options.get(i) {
@@ -505,18 +593,12 @@ impl Mind {
                 }
             },
         };
-        // A pick of a Yes or No option is that answer.
-        let quick = match quick {
-            Some(Quick::Pick(i)) if is_yes(&options[i]) => Some(Quick::Yes),
-            Some(Quick::Pick(i)) if is_no(&options[i]) => Some(Quick::No),
-            other => other,
-        };
 
         match quick {
             Some(Quick::Stop) | Some(Quick::Cancel) => {
                 let setup = waiting
                     .as_ref()
-                    .and_then(|w| w.setup_id().map(str::to_string));
+                    .and_then(|w| w.kind.setup_id().map(str::to_string));
                 if let Some(id) = setup {
                     rt.setup_cancel(&id);
                 }
@@ -542,7 +624,7 @@ impl Mind {
                 o.say(if said.is_empty() { NOTHING_SAID } else { &said });
                 match &waiting {
                     Some(w) => {
-                        let (question, options) = w.asked();
+                        let (question, options) = w.kind.asked();
                         o.ask(&question, options);
                         o.end(Then::Ask);
                     }
@@ -553,44 +635,51 @@ impl Mind {
             _ => {}
         }
 
+        // A step Dots asked a yes on passes only on a click on Yes or a firm spoken yes. A
+        // spoken position word ("one", "first", "last") is neither yes nor no there.
+        if let Some(w) = waiting.as_ref().filter(|w| w.kind.needs_yes()) {
+            let answer = match (clicked, quick.clone()) {
+                (true, Some(Quick::Pick(0))) => Answer::Yes,
+                (true, Some(Quick::Pick(_))) => Answer::No,
+                (false, _) if firm_yes(&heard) => Answer::Yes,
+                (false, Some(Quick::No)) => Answer::No,
+                (false, Some(Quick::Yes)) if !w.retried => Answer::Unclear,
+                (false, Some(Quick::Yes)) => Answer::GiveUp,
+                _ => Answer::Other,
+            };
+            match answer {
+                Answer::Yes => {
+                    self.drop_pending(o);
+                    return self.yes(rt, w.kind.clone(), &heard, view, o).await;
+                }
+                Answer::No | Answer::GiveUp => {
+                    self.drop_pending(o);
+                    let said = match (&answer, &w.kind) {
+                        (Answer::GiveUp, _) => WONT,
+                        (_, Waiting::Create { .. }) => NOT_CREATED,
+                        (_, Waiting::Ask { .. }) => NOT_SENT,
+                        _ => WONT,
+                    };
+                    self.finish(o, &heard, said, Then::Rest);
+                    return "declined";
+                }
+                // Asked once more; a second unclear yes drops the step.
+                Answer::Unclear => {
+                    self.retry(o);
+                    self.finish(o, &heard, CLEAR_YES, Then::Ask);
+                    return "unclear yes";
+                }
+                // Anything else drops the step; the words go on as a new turn.
+                Answer::Other => self.drop_pending(o),
+            }
+        }
+
         // What goes to the model, and the person's own words, when it does.
         let mut to_model = heard.clone();
         let own = heard.clone();
-        match waiting {
-            Some(Waiting::Confirm { deed, .. }) => match quick {
-                Some(Quick::Yes) => {
-                    self.drop_pending(o);
-                    let said = confirmed(rt, &deed, view).await;
-                    self.finish(o, &heard, &said, Then::FollowUp);
-                    return "confirmed";
-                }
-                Some(Quick::No) => {
-                    self.drop_pending(o);
-                    self.finish(o, &heard, WONT, Then::Rest);
-                    return "declined";
-                }
-                // Anything else drops the confirmation; the words go on.
-                _ => self.drop_pending(o),
-            },
-            Some(Waiting::Create { proposal, .. }) => match quick {
-                Some(Quick::Yes) => {
-                    self.drop_pending(o);
-                    let (said, opened, then) = create(rt, proposal, view).await;
-                    o.say(&said);
-                    if let Some(target) = opened {
-                        o.send(MindEvent::Open { target });
-                    }
-                    o.end(then);
-                    self.record(o, &heard, then);
-                    return "created";
-                }
-                Some(Quick::No) => {
-                    self.drop_pending(o);
-                    self.finish(o, &heard, NOT_CREATED, Then::Rest);
-                    return "declined";
-                }
-                _ => self.drop_pending(o),
-            },
+        match waiting.map(|w| w.kind) {
+            // answered above
+            Some(Waiting::Confirm { .. }) | Some(Waiting::Create { .. }) => {}
             Some(Waiting::Ask {
                 options,
                 then,
@@ -611,15 +700,8 @@ impl Mind {
                                 .chosen_dot(rt, &wish, &dot_ids[i], &heard, view, o, cancel)
                                 .await;
                         }
-                        AskFor::AnswerCheck { deed } => {
-                            if is_yes(&options[i]) {
-                                let said = confirmed(rt, &deed, view).await;
-                                self.finish(o, &heard, &said, Then::FollowUp);
-                                return "answered";
-                            }
-                            self.finish(o, &heard, NOT_SENT, Then::Rest);
-                            return "declined";
-                        }
+                        // answered above
+                        AskFor::AnswerCheck { .. } => {}
                         // The model asked: its next turn reads the answer.
                         AskFor::Model => to_model = format!("The person chose: {}", options[i]),
                     }
@@ -845,8 +927,13 @@ impl Mind {
                     self.confirm(o, deed, question, false, heard, view);
                     return "confirm";
                 }
-                let said = carry_out(rt, &deed).await;
-                self.finish(o, heard, &said, Then::FollowUp);
+                let done = outcome(rt, &deed).await;
+                let then = if done.done {
+                    Then::FollowUp
+                } else {
+                    Then::Rest
+                };
+                self.finish(o, heard, &done.said, then);
                 "do"
             }
             Step::Confirm {
@@ -1054,9 +1141,9 @@ impl Mind {
 /// Carries out a deed the person said yes to, once a fresh picture shows its record is still
 /// there: the approval still waits and is not private, the dot is still in this workspace, the
 /// question still waits.
-async fn confirmed(rt: &Runtime, deed: &Deed, view: &View) -> String {
+async fn confirmed(rt: &Runtime, deed: &Deed, view: &View) -> Outcome {
     let Ok(picture) = Picture::take(rt, view).await else {
-        return WENT_WRONG.into();
+        return Outcome::refused(WENT_WRONG);
     };
     let still = match deed {
         Deed::Approve { approval_id, .. } | Deed::Deny { approval_id, .. } => {
@@ -1068,12 +1155,12 @@ async fn confirmed(rt: &Runtime, deed: &Deed, view: &View) -> String {
         Deed::Answer { message_id, .. } => picture.questions.iter().any(|q| &q.id == message_id),
     };
     if !still {
-        return match deed {
-            Deed::Run { .. } | Deed::Send { .. } => DOT_GONE.into(),
-            _ => HANDLED.into(),
-        };
+        return Outcome::refused(match deed {
+            Deed::Run { .. } | Deed::Send { .. } => DOT_GONE,
+            _ => HANDLED,
+        });
     }
-    carry_out(rt, deed).await
+    outcome(rt, deed).await
 }
 
 /// Creates the proposed dot in the account and workspace in view; the sentence, the screen to

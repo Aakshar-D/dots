@@ -21,6 +21,8 @@ struct Scripted {
     usage: Option<OnceUsage>,
     delay: Duration,
     fail: Option<OnceFailure>,
+    /// Answers after its delay even when cancelled: a reply that lands late.
+    stubborn: bool,
 }
 
 /// A reply of `text`, streamed in pieces of 4 bytes or so, with usage.
@@ -47,6 +49,16 @@ fn says(text: &str) -> Scripted {
         }),
         delay: Duration::ZERO,
         fail: None,
+        stubborn: false,
+    }
+}
+
+/// `s`, landing after `delay` whatever cancels it.
+fn late(s: Scripted, delay: Duration) -> Scripted {
+    Scripted {
+        delay,
+        stubborn: true,
+        ..s
     }
 }
 
@@ -100,13 +112,15 @@ impl Thinker for Fake {
         let s = lock(&self.queue)
             .pop_front()
             .unwrap_or_else(|| says("Okay."));
-        if !s.delay.is_zero() {
+        if s.stubborn {
+            tokio::time::sleep(s.delay).await;
+        } else if !s.delay.is_zero() {
             tokio::select! {
                 _ = tokio::time::sleep(s.delay) => {}
                 _ = cancel.cancelled() => return Err(OnceFailure::Cancelled),
             }
         }
-        if cancel.is_cancelled() {
+        if cancel.is_cancelled() && !s.stubborn {
             return Err(OnceFailure::Cancelled);
         }
         if let Some(f) = s.fail {
@@ -400,9 +414,121 @@ async fn model_cannot_pass_a_confirmation() {
         asks(&got).map(|a| a.0),
         Some("Research wants to use Bash on ls -la. Approve it?".into())
     );
+    // a spoken position is not a yes: it is a new turn for the model
+    for words in ["one", "first"] {
+        t.fake.push(says("Hm."));
+        let got = t.hear(words).await;
+        assert_eq!(got.first(), Some(&MindEvent::Cleared), "{words}");
+        assert!(!t.mind.pending(), "{words}");
+        assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+        t.fake.push(approve_a1());
+        t.hear("approve the research one").await;
+    }
+    // "okay" is not a clear yes
+    let got = t.hear("okay").await;
+    assert_eq!(said(&got), "I need a clear yes for that. Say yes, or no.");
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    assert_eq!(said(&t.hear("okay").await), "Okay, I won't.");
+    assert!(!t.mind.pending());
+    // a model reply landing after a newer turn asks nothing and leaves nothing waiting
+    t.fake.push(late(approve_a1(), Duration::from_millis(300)));
+    t.fake.push(says("It is noon."));
+    let (tx1, mut rx1) = mpsc::unbounded_channel();
+    let (tx2, mut rx2) = mpsc::unbounded_channel();
+    let view = home();
+    let calls = t.fake.calls();
+    let first = t.mind.hear(&t.rt, "approve the research one", &view, &tx1);
+    let second = async {
+        while t.fake.calls() == calls {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        t.mind.hear(&t.rt, "what time is it", &view, &tx2).await
+    };
+    let _ = tokio::join!(first, second);
+    let one = drain(&mut rx1);
+    assert!(asks(&one).is_none(), "{one:?}");
+    assert_eq!(said(&drain(&mut rx2)), "It is noon.");
+    assert!(!t.mind.pending());
+    let got = t.hear("yes").await;
+    assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    t.fake.push(approve_a1());
+    t.hear("approve the research one").await;
     let got = t.hear("yes").await;
     assert_eq!(said(&got), "Approved.");
     assert_eq!(ended(&got), Some(Then::FollowUp));
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Approved);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn position_words_do_not_pass_a_confirmation() {
+    let t = T::start().await;
+    let approval = asking_to_approve(&t).await;
+    for words in ["one", "first", "the first one", "number 1", "last", "two"] {
+        t.fake.push(says("Hm."));
+        let calls = t.fake.calls();
+        let got = t.hear(words).await;
+        assert_eq!(got.first(), Some(&MindEvent::Cleared), "{words}");
+        // the words went on to the model as a new turn
+        assert_eq!(t.fake.calls(), calls + 1, "{words}");
+        assert!(!t.mind.pending(), "{words}");
+        assert_eq!(
+            t.status(&approval).await,
+            ApprovalStatus::Pending,
+            "{words}"
+        );
+        t.fake.push(approve_a1());
+        t.hear("approve the research one").await;
+    }
+    // a click on Yes is a yes
+    let got = t.pick(0).await;
+    assert_eq!(said(&got), "Approved.");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn position_words_do_not_send_an_unsure_answer() {
+    let t = T::start().await;
+    let dot = t.dot("Release helper").await;
+    let q = t.question(&dot, "Which branch?").await;
+    t.fake.push(says(
+        "DO {\"act\":\"answer\",\"q\":\"q1\",\"text\":\"main\",\"unsure\":true}",
+    ));
+    t.hear("mmm main I guess").await;
+    assert!(t.mind.pending());
+    t.hear("first").await;
+    assert!(!t.mind.pending());
+    let m = t.rt.store().get_message(&q.id).await.unwrap();
+    assert!(m.answered_at.is_none());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_weak_yes_asks_for_a_clear_one() {
+    let t = T::start().await;
+    let approval = asking_to_approve(&t).await;
+    let got = t.hear("okay").await;
+    assert_eq!(said(&got), "I need a clear yes for that. Say yes, or no.");
+    assert_eq!(ended(&got), Some(Then::Ask));
+    assert!(!got.contains(&MindEvent::Cleared));
+    assert!(t.mind.pending());
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    // a second weak one drops it
+    let got = t.hear("sure").await;
+    assert_eq!(got.first(), Some(&MindEvent::Cleared));
+    assert_eq!(said(&got), "Okay, I won't.");
+    assert_eq!(ended(&got), Some(Then::Rest));
+    assert!(!t.mind.pending());
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    // a weak one, then a firm one
+    t.fake.push(approve_a1());
+    t.hear("approve the research one").await;
+    assert_eq!(
+        said(&t.hear("right").await),
+        "I need a clear yes for that. Say yes, or no."
+    );
+    assert_eq!(said(&t.hear("yes please").await), "Approved.");
     assert_eq!(t.status(&approval).await, ApprovalStatus::Approved);
     t.rt.shutdown();
 }
@@ -752,6 +878,8 @@ async fn a_handled_approval_is_not_decided_at_yes() {
         .unwrap();
     let got = t.hear("yes").await;
     assert_eq!(said(&got), "That one is already handled.");
+    // a deed that did not happen ends the conversation
+    assert_eq!(ended(&got), Some(Then::Rest));
     assert_eq!(t.status(&approval).await, ApprovalStatus::Denied);
     t.rt.shutdown();
 }
@@ -766,6 +894,7 @@ async fn a_dot_gone_at_yes_is_not_run() {
     t.rt.delete_dot(&dot.id).await.unwrap();
     let got = t.hear("yes").await;
     assert_eq!(said(&got), "I can't find that dot anymore.");
+    assert_eq!(ended(&got), Some(Then::Rest));
     t.rt.shutdown();
 }
 
