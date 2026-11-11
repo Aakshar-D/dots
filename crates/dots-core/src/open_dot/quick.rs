@@ -156,6 +156,17 @@ fn position(joined: &str) -> Option<usize> {
     None
 }
 
+/// Whether a heard word can pick an option by part of its name: 3 or more letters, and not a
+/// filler word or a word of the stop, cancel, repeat, yes or no phrases.
+fn names_something(word: &str) -> bool {
+    word.chars().count() >= 3
+        && !FILLER_WORDS.contains(&word)
+        && ![STOP, CANCEL, REPEAT, YES, NO]
+            .iter()
+            .flat_map(|table| table.iter())
+            .any(|phrase| phrase.split(' ').any(|p| p == word))
+}
+
 fn is_run(option: &[String], heard: &[String]) -> bool {
     !heard.is_empty()
         && heard.len() <= option.len()
@@ -183,19 +194,8 @@ pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
     if options.is_empty() {
         return None;
     }
-    if let Some(n) = position(&joined) {
-        return if n == usize::MAX {
-            Some(Quick::Pick(options.len() - 1))
-        } else if n <= options.len() {
-            Some(Quick::Pick(n - 1))
-        } else {
-            None
-        };
-    }
-    if w.iter().all(|x| FILLER_WORDS.contains(&x.as_str())) {
-        return None;
-    }
-    // An option whose whole text is what was said wins; two the same is no pick.
+    // An option whose whole text is what was said wins, even over a position word; two the
+    // same is no pick.
     let mut exact = options
         .iter()
         .enumerate()
@@ -205,6 +205,18 @@ pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
         (Some(i), None) => return Some(Quick::Pick(i)),
         (Some(_), Some(_)) => return None,
         _ => {}
+    }
+    if let Some(n) = position(&joined) {
+        return if n == usize::MAX {
+            Some(Quick::Pick(options.len() - 1))
+        } else if n <= options.len() {
+            Some(Quick::Pick(n - 1))
+        } else {
+            None
+        };
+    }
+    if !w.iter().any(|x| names_something(x)) {
+        return None;
     }
     // Else every option the words are a whole-word run of; one match or nothing.
     let mut found = options
@@ -363,5 +375,41 @@ mod tests {
         let o = opts(&["Staging", "staging!", "Staging server"]);
         assert_eq!(quick("staging", &o), None);
         assert_eq!(quick("nothing like it", &o), None);
+    }
+
+    #[test]
+    fn exact_name_wins_over_position_words() {
+        let o = opts(&["Second", "First"]);
+        assert_eq!(quick("first", &o), Some(Quick::Pick(1)));
+        assert_eq!(quick("second", &o), Some(Quick::Pick(0)));
+        // a position word that names no option still counts as a position
+        assert_eq!(quick("the first one", &o), Some(Quick::Pick(0)));
+        let o = opts(&["Last resort", "One"]);
+        assert_eq!(quick("one", &o), Some(Quick::Pick(1)));
+        // "last" is the last position: "Last resort" is only a run of it
+        assert_eq!(quick("last", &o), Some(Quick::Pick(1)));
+        let o = opts(&["Last", "Other"]);
+        assert_eq!(quick("last", &o), Some(Quick::Pick(0)));
+    }
+
+    #[test]
+    fn short_or_phrase_words_pick_nothing() {
+        let o = opts(&["Do not deploy", "Ship it"]);
+        assert_eq!(quick("do", &o), None);
+        assert_eq!(quick("not", &o), None);
+        assert_eq!(quick("it", &o), None);
+        assert_eq!(quick("deploy", &o), Some(Quick::Pick(0)));
+        assert_eq!(quick("not deploy", &o), Some(Quick::Pick(0)));
+        assert_eq!(quick("ship", &o), Some(Quick::Pick(1)));
+        // the whole name still picks, however short its words
+        assert_eq!(quick("do not deploy", &o), Some(Quick::Pick(0)));
+        // yes, no, stop, cancel and repeat come before any name
+        let o = opts(&["No deploy", "Deploy"]);
+        assert_eq!(quick("no", &o), Some(Quick::No));
+        let o = opts(&["Stop", "Go"]);
+        assert_eq!(quick("stop", &o), Some(Quick::Stop));
+        let o = opts(&["Go ahead now", "Wait"]);
+        assert_eq!(quick("go ahead", &o), Some(Quick::Yes));
+        assert_eq!(quick("go", &o), None);
     }
 }

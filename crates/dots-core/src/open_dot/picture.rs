@@ -73,8 +73,9 @@ pub struct QuestionLine {
 }
 
 /// What Dots shows now. Handles (`d1`, `a1`, `q1` ...) follow the listing order and hold for
-/// this picture only. Every item in view is kept; `text` lists the first ones and counts the
-/// rest.
+/// this picture only. Only the items `text` lists are kept (at most `MAX_DOTS`,
+/// `MAX_APPROVALS` and `MAX_QUESTIONS`), so a handle the model never saw does not resolve;
+/// the rest are only counted.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Picture {
     /// Those that need the person first, then the most recently active.
@@ -83,6 +84,10 @@ pub struct Picture {
     pub approvals: Vec<ApprovalLine>,
     /// Newest first.
     pub questions: Vec<QuestionLine>,
+    /// Dots, approvals and questions in view past the caps, not listed.
+    pub more_dots: usize,
+    pub more_approvals: usize,
+    pub more_questions: usize,
     /// Approvals left out because they touch a private folder (or could not be checked).
     pub private_approvals: u32,
     /// The handle of the dot on screen, when it is in the picture.
@@ -228,8 +233,11 @@ impl Picture {
             None => quoted(name, NAME_BYTES),
         };
 
-        line(format!("Dots in view: {}", count(self.dots.len())));
-        for d in self.dots.iter().take(MAX_DOTS) {
+        line(format!(
+            "Dots in view: {}",
+            count(self.dots.len() + self.more_dots)
+        ));
+        for d in &self.dots {
             let mut s = format!(
                 "{} {}: {}",
                 d.handle,
@@ -241,8 +249,8 @@ impl Picture {
             }
             line(s);
         }
-        if let Some(rest) = left_out(self.dots.len(), MAX_DOTS) {
-            line(format!("and {rest} more dots not listed"));
+        if self.more_dots > 0 {
+            line(format!("and {} more dots not listed", self.more_dots));
         }
         if let Some(d) = self.viewing_dot.as_deref().and_then(|h| self.dot(h)) {
             line(format!(
@@ -254,9 +262,9 @@ impl Picture {
 
         line(format!(
             "Approvals waiting: {}",
-            count(self.approvals.len())
+            count(self.approvals.len() + self.more_approvals)
         ));
-        for a in self.approvals.iter().take(MAX_APPROVALS) {
+        for a in &self.approvals {
             let mut s = format!(
                 "{} for {}: {}",
                 a.handle,
@@ -269,8 +277,11 @@ impl Picture {
             }
             line(s);
         }
-        if let Some(rest) = left_out(self.approvals.len(), MAX_APPROVALS) {
-            line(format!("and {rest} more approvals not listed"));
+        if self.more_approvals > 0 {
+            line(format!(
+                "and {} more approvals not listed",
+                self.more_approvals
+            ));
         }
         if self.private_approvals > 0 {
             let n = self.private_approvals;
@@ -286,9 +297,9 @@ impl Picture {
 
         line(format!(
             "Questions waiting: {}",
-            count(self.questions.len())
+            count(self.questions.len() + self.more_questions)
         ));
-        for q in self.questions.iter().take(MAX_QUESTIONS) {
+        for q in &self.questions {
             let mut s = format!(
                 "{} from {}: {}",
                 q.handle,
@@ -306,8 +317,11 @@ impl Picture {
             }
             line(s);
         }
-        if let Some(rest) = left_out(self.questions.len(), MAX_QUESTIONS) {
-            line(format!("and {rest} more questions not listed"));
+        if self.more_questions > 0 {
+            line(format!(
+                "and {} more questions not listed",
+                self.more_questions
+            ));
         }
         out
     }
@@ -395,9 +409,10 @@ fn dot_lines(mut rows: Vec<Row>) -> Vec<DotLine> {
         .collect()
 }
 
-/// The picture of these dots, approvals (in Inbox order) and questions (newest first).
+/// The picture of these dots, approvals (in Inbox order) and questions (newest first), each
+/// cut to its cap.
 fn assemble(
-    dots: Vec<DotLine>,
+    mut dots: Vec<DotLine>,
     asked: Vec<Asked>,
     questions: Vec<Message>,
     viewing: Option<&str>,
@@ -419,7 +434,9 @@ fn assemble(
             tool: clean(&a.tool, NAME_BYTES),
         });
     }
-    let questions = questions
+    let more_dots = cap(&mut dots, MAX_DOTS);
+    let more_approvals = cap(&mut approvals, MAX_APPROVALS);
+    let mut questions: Vec<QuestionLine> = questions
         .into_iter()
         .enumerate()
         .map(|(i, m)| QuestionLine {
@@ -437,12 +454,16 @@ fn assemble(
                 .collect(),
         })
         .collect();
+    let more_questions = cap(&mut questions, MAX_QUESTIONS);
     let viewing_dot =
         viewing.and_then(|id| dots.iter().find(|d| d.id == id).map(|d| d.handle.clone()));
     Picture {
         dots,
         approvals,
         questions,
+        more_dots,
+        more_approvals,
+        more_questions,
         private_approvals,
         viewing_dot,
         now,
@@ -526,8 +547,11 @@ fn count(n: usize) -> String {
     }
 }
 
-fn left_out(total: usize, max: usize) -> Option<usize> {
-    (total > max).then(|| total - max)
+/// Keeps the first `max` of `items` and returns how many were left out.
+fn cap<T>(items: &mut Vec<T>, max: usize) -> usize {
+    let more = items.len().saturating_sub(max);
+    items.truncate(max);
+    more
 }
 
 /// Levenshtein distance by chars.
@@ -755,9 +779,9 @@ mod tests {
             None,
             "2026-11-11T09:00:00.000Z".into(),
         );
-        assert_eq!(p.dots.len(), 46);
-        assert_eq!(p.approvals.len(), 12);
-        assert_eq!(p.questions.len(), 12);
+        assert_eq!((p.dots.len(), p.more_dots), (MAX_DOTS, 6));
+        assert_eq!((p.approvals.len(), p.more_approvals), (MAX_APPROVALS, 2));
+        assert_eq!((p.questions.len(), p.more_questions), (MAX_QUESTIONS, 2));
 
         let text = p.text();
         let lines: Vec<&str> = text.lines().collect();
@@ -804,6 +828,54 @@ mod tests {
         assert_eq!(big.len(), TARGET_BYTES);
         assert_eq!(clean(&"日本".repeat(100), TARGET_BYTES).len(), 120);
         assert_eq!(clean(&"日本".repeat(100), 119).len(), 117);
+    }
+
+    #[test]
+    fn unlisted_handles_do_not_resolve() {
+        let mut rows: Vec<Row> = (0..44)
+            .map(|i| row(&format!("Dot {i:02}"), 0, "2026-11-01T00:00:00.000Z"))
+            .collect();
+        // the least recently active, so it lists last
+        rows.push(row("Zebra feeder", 0, "2026-10-01T00:00:00.000Z"));
+        let dots = dot_lines(rows);
+        let asked: Vec<Asked> = (0..12)
+            .map(|i| {
+                asked(
+                    &format!("ap-{i}"),
+                    "Dot 00",
+                    "Bash",
+                    json!({"command": "ls"}),
+                    false,
+                )
+            })
+            .collect();
+        let questions: Vec<Message> = (0..12)
+            .map(|i| question(&format!("m-{i}"), "Dot 00", "Which?", None))
+            .collect();
+        // the dot on screen is past the cap
+        let p = assemble(
+            dots,
+            asked,
+            questions,
+            Some("id-Zebra feeder"),
+            "2026-11-11T09:00:00.000Z".into(),
+        );
+        assert!(p.dot("d40").is_some());
+        assert_eq!(p.dot("d41"), None);
+        assert_eq!(p.dot("d45"), None);
+        assert!(p.approval("a10").is_some());
+        assert_eq!(p.approval("a11"), None);
+        assert!(p.question("q10").is_some());
+        assert_eq!(p.question("q11"), None);
+        assert_eq!(p.viewing_dot, None);
+        // an unlisted dot is never offered as a close name
+        assert!(p.dots_like("zebra").is_empty());
+        assert!(p.dots_like("Zebra feeder").is_empty());
+        let text = p.text();
+        assert!(text.contains("Dots in view: 45"), "{text}");
+        assert!(text.contains("Approvals waiting: 12"), "{text}");
+        assert!(text.contains("Questions waiting: 12"), "{text}");
+        assert!(text.contains("and 5 more dots not listed"), "{text}");
     }
 
     #[test]

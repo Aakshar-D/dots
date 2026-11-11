@@ -615,6 +615,13 @@ mod tests {
             format!("{long}\nDO {{\"act\":\"needs\"}}"),
             "word ".repeat(200),
             format!("{} 3.14159 {}", "a".repeat(595), "b".repeat(50)),
+            // CRLF line ends
+            "Two things need you.\r\nDO {\"act\":\"needs\"}\r\n".to_string(),
+            "Opening it.\r\n```\r\nDO {\"act\":\"open\",\"target\":\"usage\"}\r\n```\r\n".to_string(),
+            "First.\r\nAnd second.\r\n".to_string(),
+            // an indented block line
+            "Sure thing.\n    DO {\"act\":\"needs\"}".to_string(),
+            "Sure thing.\r\n\t DO {\"act\":\"run\",\"d\":\"d1\"}\r\n".to_string(),
         ];
         for reply in &replies {
             let want = read_reply(reply).0.words;
@@ -632,6 +639,14 @@ mod tests {
                     .map(|(i, c)| &reply[i..i + c.len_utf8()])
                     .collect(),
             );
+            // a char at a time with empty deltas between, before and after
+            let mut with_empty: Vec<&str> = vec![""];
+            for (i, c) in reply.char_indices() {
+                with_empty.push(&reply[i..i + c.len_utf8()]);
+                with_empty.push("");
+            }
+            splits.push(with_empty);
+            splits.push(vec!["", "", reply.as_str(), ""]);
             for chunks in splits {
                 let (live, tail) = gate_all(&chunks);
                 assert!(live.len() <= MAX_SPOKEN_BYTES, "cap: {reply:?}");
