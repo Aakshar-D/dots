@@ -81,7 +81,7 @@ describe("the dot editor under a workspace's guardrails", () => {
     expect(await screen.findByText("Saved")).toBeVisible();
   });
 
-  it("holds Save for a policy past the ceiling, shows why its runs wait, and lets it be lowered", async () => {
+  it("holds Save for a change that keeps a policy past the ceiling, shows why its runs wait, and lets it be lowered", async () => {
     const over: Dot = { ...inPlatform, policy: trusted };
     stored(over);
     backend.on("dot_ceiling", () => ({ ...memberCeiling(trusted), held: heldText }));
@@ -90,9 +90,14 @@ describe("the dot editor under a workspace's guardrails", () => {
     expect(await screen.findByText(heldText)).toBeVisible();
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(refusal);
-    const save = screen.getByRole("button", { name: "Save" });
-    expect(save).toBeDisabled();
-    expect(save).toHaveAttribute("title", refusal);
+    // A change to the policy that stays past the ceiling can't be saved.
+    const askSendDelete = screen.getByRole("switch", {
+      name: "Always ask before sending or deleting",
+    });
+    await user.click(askSendDelete);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeDisabled());
+    expect(screen.getByRole("button", { name: "Save" })).toHaveAttribute("title", refusal);
+    await user.click(askSendDelete);
     // Lowered to Sandboxed, the core takes it.
     await user.selectOptions(screen.getByLabelText("Preset"), "sandboxed");
     await waitFor(() => expect(screen.getByRole("button", { name: "Save" })).toBeEnabled());
@@ -102,6 +107,28 @@ describe("the dot editor under a workspace's guardrails", () => {
     expect(backend.callsTo("update_dot")[0]).toEqual({
       id: over.id,
       spec: { ...specOf(over), policy: sample.dot.policy },
+    });
+  });
+
+  it("still saves a held dot whose policy stays as it is, so it can be renamed or switched off", async () => {
+    const over: Dot = { ...inPlatform, policy: trusted };
+    stored(over);
+    backend.on("dot_ceiling", () => ({ ...memberCeiling(trusted), held: heldText }));
+    const { user } = renderApp(`/dots/${over.id}`);
+    expect(await screen.findByText(heldText)).toBeVisible();
+    // The refusal still says why the policy is past the ceiling, but Save goes: the core takes
+    // a save that keeps the policy (guardrails spec section 4.3).
+    expect(await screen.findByRole("alert")).toHaveTextContent(refusal);
+    const name = screen.getByLabelText("Name");
+    await user.clear(name);
+    await user.type(name, "Renamed");
+    const save = screen.getByRole("button", { name: "Save" });
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() => expect(backend.callsTo("update_dot")).toHaveLength(1));
+    expect(backend.callsTo("update_dot")[0]).toEqual({
+      id: over.id,
+      spec: { ...specOf(over), name: "Renamed" },
     });
   });
 
