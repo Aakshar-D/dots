@@ -3,12 +3,17 @@
 //!
 //! Every name, question and target comes from dots and their tools, so it is data: newlines and
 //! control characters are taken out and each value is cut, so that no value can forge a line of
-//! the picture or a `DO` line. An approval that touches a private folder is only counted.
+//! the picture or a `DO` line. An approval that touches a private folder is only counted,
+//! whatever its tool, and secrets the vault knows are scrubbed from targets.
+//!
+//! Approvals and questions come as the Inbox shows them: items snoozed or marked done are
+//! neither listed nor counted. A question's text is shown as the Inbox shows it; it was written
+//! by the dot.
 
 use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::accounts::{DEFAULT_WORKSPACE, PERSONAL};
 use crate::model::{DotOverview, Message, MessageKind, RunStatus};
@@ -25,8 +30,10 @@ pub const NAME_BYTES: usize = 80;
 pub const CHOICE_BYTES: usize = 80;
 /// Most dots `dots_like` offers.
 const MAX_LIKE: usize = 4;
-/// Largest edit distance `dots_like` takes for a close name.
+/// Largest edit distance `dots_like` takes for a close name; 1 for a query of
+/// `SHORT_QUERY` characters or fewer.
 const MAX_DISTANCE: usize = 2;
+const SHORT_QUERY: usize = 4;
 
 /// Where the person is in the app.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -92,6 +99,8 @@ pub struct Picture {
     pub private_approvals: u32,
     /// The handle of the dot on screen, when it is in the picture.
     pub viewing_dot: Option<String>,
+    /// A conversation of the dot on screen is open (only with `viewing_dot`).
+    pub viewing_topic: bool,
     pub now: String,
 }
 
@@ -134,8 +143,10 @@ impl Picture {
         let dots = dot_lines(rows);
         let shown: HashSet<&str> = dots.iter().map(|d| d.id.as_str()).collect();
 
+        // The Inbox as the person sees it: snoozed and done items are left out.
+        let inbox = rt.inbox().await?;
         let mut asked = Vec::new();
-        for p in rt.inbox().await?.approvals {
+        for p in inbox.approvals {
             if !shown.contains(p.dot_id.as_str()) {
                 continue;
             }
@@ -159,16 +170,21 @@ impl Picture {
             .await?
             .into_iter()
             .filter(|m| {
-                m.kind == MessageKind::Question && m.waits() && shown.contains(m.dot_id.as_str())
+                m.kind == MessageKind::Question
+                    && m.waits()
+                    && !inbox.hidden_messages.contains(&m.id)
+                    && shown.contains(m.dot_id.as_str())
             })
             .collect();
-        Ok(assemble(
+        let mut picture = assemble(
             dots,
             asked,
             questions,
             view.dot_id.as_deref(),
             crate::util::now(),
-        ))
+        );
+        picture.viewing_topic = picture.viewing_dot.is_some() && view.topic_root.is_some();
+        Ok(picture)
     }
 
     pub fn dot(&self, handle: &str) -> Option<&DotLine> {
@@ -191,6 +207,11 @@ impl Picture {
         if want.is_empty() {
             return Vec::new();
         }
+        let max_distance = if want.chars().count() <= SHORT_QUERY {
+            1
+        } else {
+            MAX_DISTANCE
+        };
         let mut found: Vec<&DotLine> = self
             .dots
             .iter()
@@ -206,7 +227,7 @@ impl Picture {
                     .chain(lower.split_whitespace())
                     .map(|part| edit_distance(part, &want))
                     .min()?;
-                (distance <= MAX_DISTANCE).then_some((distance, d))
+                (distance <= max_distance).then_some((distance, d))
             })
             .collect();
         close.sort_by_key(|(distance, _)| *distance);
@@ -253,8 +274,13 @@ impl Picture {
             line(format!("and {} more dots not listed", self.more_dots));
         }
         if let Some(d) = self.viewing_dot.as_deref().and_then(|h| self.dot(h)) {
+            let topic = if self.viewing_topic {
+                ", a conversation is open"
+            } else {
+                ""
+            };
             line(format!(
-                "On screen: {} {}",
+                "On screen: {} {}{topic}",
                 d.handle,
                 quoted(&d.name, NAME_BYTES)
             ));
@@ -421,7 +447,7 @@ fn assemble(
     let mut private_approvals = 0u32;
     let mut approvals = Vec::new();
     for a in asked {
-        if a.private {
+        if a.private || fields_touch_private(&a.input) {
             private_approvals += 1;
             continue;
         }
@@ -466,47 +492,84 @@ fn assemble(
         more_questions,
         private_approvals,
         viewing_dot,
+        viewing_topic: false,
         now,
     }
 }
 
+/// The input fields a target is described from.
+const TARGET_FIELDS: [&str; 3] = ["command", "file_path", "url"];
+
+/// Whether a field a target may be described from names a private place, whatever the tool:
+/// each is judged as a shell command's text, and `file_path` also as a file tool's path. The
+/// private check judges only command and file tools, so a tool from an MCP server holding
+/// `~/.ssh/id_rsa` would otherwise be described.
+fn fields_touch_private(input: &Value) -> bool {
+    use crate::policy::touches_private;
+    TARGET_FIELDS.iter().any(|key| {
+        input.get(*key).and_then(Value::as_str).is_some_and(|raw| {
+            touches_private("Bash", &json!({ "command": raw }), None)
+                || (*key == "file_path"
+                    && touches_private("Read", &json!({ "file_path": raw }), None))
+        })
+    })
+}
+
 /// What an approval's call does: the send-and-delete guard's summary when it gives one, else
-/// its command, file or address; cleaned and cut to `TARGET_BYTES`.
+/// its command, file or address; with known secrets scrubbed, cleaned and cut to
+/// `TARGET_BYTES`.
 fn target(tool: &str, input: &Value) -> String {
     let summary = crate::policy::guard::classify(tool, input)
         .map(|g| g.summary)
         .filter(|s| !s.trim().is_empty());
     let raw = summary.or_else(|| {
-        ["command", "file_path", "url"]
+        TARGET_FIELDS
             .iter()
             .find_map(|key| input.get(*key).and_then(Value::as_str))
             .map(str::to_string)
     });
-    clean(raw.as_deref().unwrap_or_default(), TARGET_BYTES)
+    let raw = raw.unwrap_or_default();
+    clean(&crate::vault::redact::global().scrub(&raw), TARGET_BYTES)
 }
 
-/// Characters that are not seen but can change how text reads: line and paragraph
-/// separators, zero-width and direction marks.
+/// Characters that are not seen but can change how text reads: controls, line and paragraph
+/// separators, and format characters (zero-width and direction marks, the soft hyphen,
+/// interlinear annotation marks, and the tag characters that can spell hidden text).
 fn is_hidden(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
-            '\u{200B}'..='\u{200F}'
+            '\u{00AD}'
+                | '\u{034F}'
+                | '\u{061C}'
+                | '\u{115F}'..='\u{1160}'
+                | '\u{17B4}'..='\u{17B5}'
+                | '\u{180B}'..='\u{180F}'
+                | '\u{200B}'..='\u{200F}'
                 | '\u{2028}'..='\u{202E}'
-                | '\u{2060}'..='\u{2064}'
-                | '\u{2066}'..='\u{2069}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{3164}'
+                | '\u{FE00}'..='\u{FE0F}'
                 | '\u{FEFF}'
+                | '\u{FFA0}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0000}'..='\u{E007F}'
+                | '\u{E0100}'..='\u{E01EF}'
         )
 }
 
-/// `s` on one line: control and hidden characters and runs of white space become one space,
-/// trimmed, then cut to at most `max` bytes on a char boundary.
+/// `s` on one line: control characters and runs of white space become one space, other hidden
+/// characters are dropped, trimmed, then cut to at most `max` bytes on a char boundary.
 pub(crate) fn clean(s: &str, max: usize) -> String {
     let mut out = String::with_capacity(s.len().min(max + 4));
     let mut gap = false;
     for c in s.chars() {
-        if c.is_whitespace() || is_hidden(c) {
-            gap = !out.is_empty();
+        if c.is_whitespace() || c.is_control() {
+            gap = gap || !out.is_empty();
+            continue;
+        }
+        if is_hidden(c) {
             continue;
         }
         if gap {
@@ -729,7 +792,7 @@ mod tests {
         );
         // a word of the name, misheard
         assert_eq!(names("sortr"), vec!["Inbox sorter"]);
-        assert_eq!(names("mial"), vec!["Mail"]);
+        assert_eq!(names("mal"), vec!["Mail"]);
         // the whole name, two edits off
         assert_eq!(names("inbox sorterzz"), vec!["Inbox sorter"]);
         assert!(names("calendar").is_empty());
@@ -828,6 +891,121 @@ mod tests {
         assert_eq!(big.len(), TARGET_BYTES);
         assert_eq!(clean(&"日本".repeat(100), TARGET_BYTES).len(), 120);
         assert_eq!(clean(&"日本".repeat(100), 119).len(), 117);
+    }
+
+    #[test]
+    fn private_targets_of_any_tool_are_only_counted() {
+        let dots = dot_lines(vec![row("Helper", 0, "2026-11-01T00:00:00.000Z")]);
+        // a tool the private check does not judge, so the approval came in as not private
+        let p = assemble(
+            dots,
+            vec![
+                asked(
+                    "ap-1",
+                    "Helper",
+                    "mcp__x__read",
+                    json!({"file_path": "~/.ssh/id_rsa"}),
+                    false,
+                ),
+                asked(
+                    "ap-2",
+                    "Helper",
+                    "mcp__x__run",
+                    json!({"command": "cat ~/.aws/credentials"}),
+                    false,
+                ),
+                asked(
+                    "ap-3",
+                    "Helper",
+                    "mcp__x__read",
+                    json!({"file_path": "notes/today.md"}),
+                    false,
+                ),
+            ],
+            vec![],
+            None,
+            String::new(),
+        );
+        assert_eq!(p.private_approvals, 2);
+        assert_eq!(p.approvals.len(), 1);
+        assert_eq!(p.approval("a1").unwrap().id, "ap-3");
+        let text = p.text();
+        assert!(!text.contains("ssh") && !text.contains("aws"), "{text}");
+        assert!(text.contains("2 private approvals waiting"), "{text}");
+    }
+
+    #[test]
+    fn secrets_in_targets_are_scrubbed() {
+        let secret = "open-dot-picture-secret-7f3a9c";
+        crate::vault::redact::global().add("PICTURE_TOKEN", secret);
+        let t = target(
+            "mcp__x__call",
+            &json!({"url": format!("https://example.com/?token={secret}")}),
+        );
+        assert!(!t.contains(secret), "{t}");
+        assert!(t.contains("[secret:PICTURE_TOKEN]"), "{t}");
+    }
+
+    #[test]
+    fn hidden_and_format_characters_are_taken_out() {
+        let sly = "a\u{E0041}\u{E007F}b\u{FFF9}\u{FFFA}\u{FFFB}c\u{00AD}d\u{180E}e\u{034F}f\
+                   \u{200B}g\u{202A}h\u{202E}i\u{2060}j\u{2064}k\u{FEFF}l\u{061C}m\u{2066}n";
+        assert_eq!(clean(sly, 200), "abcdefghijklmn");
+        for c in [
+            '\u{E0000}',
+            '\u{E0020}',
+            '\u{E007F}',
+            '\u{FFF9}',
+            '\u{FFFB}',
+            '\u{00AD}',
+            '\u{180E}',
+            '\u{034F}',
+            '\u{200B}',
+            '\u{200F}',
+            '\u{202A}',
+            '\u{202E}',
+            '\u{2060}',
+            '\u{2064}',
+            '\u{FEFF}',
+        ] {
+            assert!(is_hidden(c), "{:04X}", c as u32);
+        }
+        // plain letters, accents and other scripts stay
+        assert_eq!(clean("café 日本 ü", 200), "café 日本 ü");
+    }
+
+    #[test]
+    fn short_queries_take_one_edit_only() {
+        let dots = dot_lines(vec![
+            row("Dot", 0, "2026-11-02T00:00:00.000Z"),
+            row("Mail", 0, "2026-11-01T00:00:00.000Z"),
+        ]);
+        let p = assemble(dots, vec![], vec![], None, String::new());
+        let names = |q: &str| -> Vec<String> {
+            p.dots_like(q).into_iter().map(|d| d.name.clone()).collect()
+        };
+        assert!(names("go").is_empty());
+        assert_eq!(names("mal"), vec!["Mail"]);
+        assert!(names("mial").is_empty());
+        assert_eq!(names("dog"), vec!["Dot"]);
+    }
+
+    #[test]
+    fn an_open_conversation_is_said_on_screen() {
+        let mut p = sample();
+        assert!(!p.viewing_topic);
+        assert!(
+            p.text().contains("On screen: d2 \"Fresh\"\n"),
+            "{}",
+            p.text()
+        );
+        p.viewing_topic = true;
+        assert!(
+            p.text()
+                .contains("On screen: d2 \"Fresh\", a conversation is open\n"),
+            "{}",
+            p.text()
+        );
     }
 
     #[test]

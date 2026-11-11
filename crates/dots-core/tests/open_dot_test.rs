@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use common::{spec, wait_status};
+use dots_core::inbox::{InboxKey, InboxKind};
 use dots_core::model::{Approval, Dot, DotSpec, Message, RunStatus, WorkspaceMode};
 use dots_core::open_dot::picture::{Picture, View};
 use dots_core::open_dot::prompt::{prompt, Turn};
@@ -259,5 +260,57 @@ async fn questions_are_listed_with_choices() {
     t.rt.store().dismiss_question(&open.id).await.unwrap();
     let p = t.picture("default").await;
     assert!(p.questions.is_empty());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn snoozed_and_done_questions_are_neither_listed_nor_counted() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Release helper", None, "default").await;
+    let snoozed = t.post_question(&dot, "Snoozed one?", &[]).await;
+    let done = t.post_question(&dot, "Done one?", &[]).await;
+    let open = t.post_question(&dot, "Still open?", &[]).await;
+    let key = |id: &str| InboxKey::new(InboxKind::Message, id);
+    t.rt.inbox_snooze(
+        &[key(&snoozed.id)],
+        chrono::Utc::now() + chrono::Duration::hours(2),
+    )
+    .await
+    .unwrap();
+    t.rt.inbox_done(&key(&done.id)).await.unwrap();
+
+    let p = t.picture("default").await;
+    let ids: Vec<&str> = p.questions.iter().map(|q| q.id.as_str()).collect();
+    assert_eq!(ids, vec![open.id.as_str()]);
+    let text = p.text();
+    assert!(text.contains("Questions waiting: 1"), "{text}");
+    assert!(
+        !text.contains("Snoozed one") && !text.contains("Done one"),
+        "{text}"
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn an_open_conversation_shows_on_screen() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    let mut v = view("personal", "default");
+    v.dot_id = Some(dot.id.clone());
+    let p = Picture::take(&t.rt, &v).await.unwrap();
+    assert!(!p.viewing_topic);
+    assert!(p.text().contains("On screen: d1 \"Research\"\n"));
+    v.topic_root = Some("some-root".into());
+    let p = Picture::take(&t.rt, &v).await.unwrap();
+    assert!(p.viewing_topic);
+    assert!(p
+        .text()
+        .contains("On screen: d1 \"Research\", a conversation is open"));
+    // a conversation of a dot not in the picture is not said
+    let mut v = view("personal", "default");
+    v.dot_id = Some("not-a-dot".into());
+    v.topic_root = Some("some-root".into());
+    let p = Picture::take(&t.rt, &v).await.unwrap();
+    assert!(!p.viewing_topic);
     t.rt.shutdown();
 }
