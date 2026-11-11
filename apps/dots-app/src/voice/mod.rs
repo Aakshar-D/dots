@@ -63,7 +63,7 @@ pub fn manage(app: &AppHandle, rt: Option<Arc<Runtime>>, data_dir: Option<PathBu
             service.set_listener(Arc::new(tray_listener(app.clone())));
             let started = service.clone();
             tauri::async_runtime::spawn(async move {
-                started.apply(&rt.settings().await).await;
+                started.start(&rt.settings().await).await;
             });
             Some(service)
         }

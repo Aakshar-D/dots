@@ -30,21 +30,51 @@ enum Mode {
 
 struct Server {
     data: Vec<u8>,
-    mode: Mode,
+    mode: Mutex<Mode>,
     gate: Notify,
     requests: AtomicUsize,
+    /// The `Range` header of each request.
+    ranges: Mutex<Vec<Option<String>>>,
 }
 
-async fn serve(AxState(s): AxState<Arc<Server>>, AxPath(_name): AxPath<String>) -> Response {
+impl Server {
+    fn mode(&self) -> Mode {
+        *self.mode.lock().unwrap()
+    }
+}
+
+async fn serve(
+    AxState(s): AxState<Arc<Server>>,
+    AxPath(_name): AxPath<String>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     s.requests.fetch_add(1, Ordering::SeqCst);
-    if s.mode == Mode::Gated {
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    s.ranges.lock().unwrap().push(range.clone());
+    if s.mode() == Mode::Gated {
         s.gate.notified().await;
     }
-    let all = Bytes::copy_from_slice(&s.data);
-    let builder = Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_LENGTH, all.len());
-    if s.mode == Mode::Hold {
+    let start = range
+        .as_deref()
+        .and_then(|r| r.strip_prefix("bytes="))
+        .and_then(|r| r.strip_suffix('-'))
+        .and_then(|n| n.parse::<usize>().ok())
+        .unwrap_or(0);
+    let total = s.data.len();
+    let all = Bytes::copy_from_slice(&s.data[start..]);
+    let mut builder = Response::builder().header(header::CONTENT_LENGTH, all.len());
+    builder = if start > 0 {
+        builder.status(StatusCode::PARTIAL_CONTENT).header(
+            header::CONTENT_RANGE,
+            format!("bytes {start}-{}/{total}", total - 1),
+        )
+    } else {
+        builder.status(StatusCode::OK)
+    };
+    if s.mode() == Mode::Hold {
         let half = all.slice(..all.len() / 2);
         let stream = futures_util::stream::once(async move { Ok::<_, std::io::Error>(half) })
             .chain(futures_util::stream::pending());
@@ -59,9 +89,10 @@ async fn server(mode: Mode) -> (Manifest, Arc<Server>) {
     let data: Vec<u8> = (0..50_000u32).map(|i| (i * 7 % 251) as u8).collect();
     let state = Arc::new(Server {
         data: data.clone(),
-        mode,
+        mode: Mutex::new(mode),
         gate: Notify::new(),
         requests: AtomicUsize::new(0),
+        ranges: Mutex::default(),
     });
     let app = Router::new()
         .route("/{name}", get(serve))
@@ -155,6 +186,11 @@ struct FakeFactory {
     sessions: Mutex<Vec<Arc<FakeSession>>>,
     /// Builds that fail before one succeeds.
     fail: AtomicUsize,
+    /// While true, a build waits (the models are loading).
+    held: Mutex<bool>,
+    let_go: std::sync::Condvar,
+    /// Builds that found they were no longer wanted, and started no session.
+    unwanted: AtomicUsize,
 }
 
 impl FakeFactory {
@@ -164,17 +200,34 @@ impl FakeFactory {
     fn session(&self, n: usize) -> Arc<FakeSession> {
         self.sessions.lock().unwrap()[n].clone()
     }
+    fn started(&self) -> usize {
+        self.sessions.lock().unwrap().len()
+    }
+    fn hold(&self) {
+        *self.held.lock().unwrap() = true;
+    }
+    fn release(&self) {
+        *self.held.lock().unwrap() = false;
+        self.let_go.notify_all();
+    }
 }
 
 impl SessionFactory for Arc<FakeFactory> {
-    fn build(&self, spec: &BuildSpec) -> Result<Built, String> {
+    fn build(&self, spec: &BuildSpec, wanted: &dyn Fn() -> bool) -> Result<Option<Built>, String> {
         self.specs.lock().unwrap().push(spec.clone());
+        let held = self.held.lock().unwrap();
+        drop(self.let_go.wait_while(held, |h| *h).unwrap());
         if self
             .fail
             .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| n.checked_sub(1))
             .is_ok()
         {
             return Err(NO_SPEAKER.into());
+        }
+        // As the real factory does just before the session starts.
+        if !wanted() {
+            self.unwanted.fetch_add(1, Ordering::SeqCst);
+            return Ok(None);
         }
         let (tx, events) = unbounded_channel();
         let session = Arc::new(FakeSession::default());
@@ -184,7 +237,7 @@ impl SessionFactory for Arc<FakeFactory> {
             mic_open: false,
         });
         self.sessions.lock().unwrap().push(session.clone());
-        Ok(Built { session, events })
+        Ok(Some(Built { session, events }))
     }
     fn microphones(&self) -> Vec<VoiceDevice> {
         vec![VoiceDevice {
@@ -198,11 +251,17 @@ impl SessionFactory for Arc<FakeFactory> {
     }
 }
 
-struct QuietMind;
+/// Says nothing; records the view each turn saw.
+#[derive(Default)]
+struct QuietMind {
+    views: Mutex<Vec<View>>,
+}
 
 #[async_trait]
 impl MindPort for QuietMind {
-    async fn hear(&self, _: &str, _: &View, _: &UnboundedSender<MindEvent>) {}
+    async fn hear(&self, _: &str, view: &View, _: &UnboundedSender<MindEvent>) {
+        self.views.lock().unwrap().push(view.clone());
+    }
     async fn pick(&self, _: usize, _: &View, _: &UnboundedSender<MindEvent>) {}
     fn lapse(&self, _: &UnboundedSender<MindEvent>) {}
     fn cancel(&self) {}
@@ -217,6 +276,7 @@ impl MindPort for QuietMind {
 #[derive(Default)]
 struct FakeHost {
     settings: Mutex<Settings>,
+    mind: Arc<QuietMind>,
 }
 
 #[async_trait]
@@ -229,7 +289,7 @@ impl Host for FakeHost {
         Ok(settings)
     }
     fn mind(&self) -> Arc<dyn MindPort> {
-        Arc::new(QuietMind)
+        self.mind.clone()
     }
 }
 
@@ -413,6 +473,14 @@ async fn cancel_leaves_a_resumable_part_and_status_off() {
     assert!(!r.stored().voice_enabled, "stored off");
     assert_eq!(std::fs::metadata(r.part()).unwrap().len(), 25_000);
     assert_eq!(r.factory.builds(), 0);
+    // Turned on again, it picks up where it left off rather than starting over.
+    *r.server.mode.lock().unwrap() = Mode::Normal;
+    let status = r.svc.enable(true).await.unwrap();
+    assert!(status.ready && status.installed, "{status:?}");
+    assert_eq!(
+        r.server.ranges.lock().unwrap().last().cloned().flatten(),
+        Some("bytes=25000-".to_string())
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -586,16 +654,22 @@ async fn preview_speaks_then_restores_the_saved_voice() {
 
 // ---- the hotkey and the listener ------------------------------------------------------------
 
-/// Records what was registered; refuses the shortcuts in `taken`.
+/// Records what was registered; refuses the shortcuts in `taken`. As the plugin one does, a
+/// registration takes the place of the shortcut before only when it succeeds.
 #[derive(Default)]
 struct FakeHotkey {
     calls: Mutex<Vec<String>>,
     taken: Mutex<Vec<String>>,
+    /// The shortcut that works now.
+    current: Mutex<Option<String>>,
 }
 
 impl FakeHotkey {
     fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
+    }
+    fn current(&self) -> Option<String> {
+        self.current.lock().unwrap().clone()
     }
 }
 
@@ -608,10 +682,12 @@ impl HotkeyPort for FakeHotkey {
         if self.taken.lock().unwrap().iter().any(|t| t == shortcut) {
             return Err(super::super::hotkey::TAKEN.to_string());
         }
+        *self.current.lock().unwrap() = Some(shortcut.to_string());
         Ok(())
     }
     fn unregister(&self) {
         self.calls.lock().unwrap().push("unregister".into());
+        *self.current.lock().unwrap() = None;
     }
 }
 
@@ -706,14 +782,12 @@ async fn changing_the_hotkey_reregisters() {
         },
     )
     .await;
+    // The new one is registered in place of the old: no unregister first.
     assert_eq!(
         keys.calls(),
-        [
-            "register CmdOrCtrl+Shift+Space",
-            "unregister",
-            "register Alt+F9"
-        ]
+        ["register CmdOrCtrl+Shift+Space", "register Alt+F9"]
     );
+    assert_eq!(keys.current().as_deref(), Some("Alt+F9"));
     // Cleared: unregistered, nothing in its place.
     save(
         &r,
@@ -724,7 +798,47 @@ async fn changing_the_hotkey_reregisters() {
     )
     .await;
     assert_eq!(keys.calls().last().map(String::as_str), Some("unregister"));
-    assert_eq!(keys.calls().len(), 4);
+    assert_eq!(keys.calls().len(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_taken_hotkey_keeps_the_old_one_working() {
+    let r = rig(Mode::Normal).await;
+    let keys = hotkey(&r);
+    keys.taken.lock().unwrap().push("Alt+F9".into());
+    r.svc.enable(true).await.unwrap();
+    save(
+        &r,
+        Settings {
+            voice_hotkey: "Alt+F9".into(),
+            ..on()
+        },
+    )
+    .await;
+    assert_eq!(
+        keys.current().as_deref(),
+        Some("CmdOrCtrl+Shift+Space"),
+        "{:?}",
+        keys.calls()
+    );
+    assert!(!keys.calls().contains(&"unregister".to_string()));
+    assert_eq!(
+        r.svc.status().await.hotkey_error.as_deref(),
+        Some(super::super::hotkey::TAKEN)
+    );
+    // Freed later, it is tried again on the next save.
+    keys.taken.lock().unwrap().clear();
+    save(
+        &r,
+        Settings {
+            voice_hotkey: "Alt+F9".into(),
+            voice_id: 1,
+            ..on()
+        },
+    )
+    .await;
+    assert_eq!(keys.current().as_deref(), Some("Alt+F9"));
+    assert_eq!(r.svc.status().await.hotkey_error, None);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -831,4 +945,335 @@ async fn devices_are_listed() {
     assert_eq!(d.microphones.len(), 1);
     assert_eq!(d.microphones[0].name, "Desk mic");
     assert!(d.speakers.is_empty());
+}
+
+// ---- the service ends where the settings ask ------------------------------------------------
+
+/// Downloads and builds once, then turns voice off: the files are in place, nothing runs.
+async fn installed_and_off(r: &Rig) {
+    r.svc.enable(true).await.unwrap();
+    r.svc.enable(false).await.unwrap();
+    assert_eq!(r.factory.builds(), 1);
+}
+
+/// Turns voice on in the background, and waits until the build is loading (held).
+async fn enabling_held(r: &Rig) -> tokio::task::JoinHandle<Result<VoiceStatus, CmdError>> {
+    r.factory.hold();
+    let enabling = {
+        let svc = r.svc.clone();
+        tokio::spawn(async move { svc.enable(true).await })
+    };
+    let f = r.factory.clone();
+    until("the build began", || f.builds() == 2).await;
+    enabling
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn off_then_on_during_a_build_ends_with_a_session() {
+    let r = rig(Mode::Normal).await;
+    installed_and_off(&r).await;
+    let enabling = enabling_held(&r).await;
+    r.svc.enable(false).await.unwrap();
+    r.svc.enable(true).await.unwrap();
+    r.factory.release();
+    enabling.await.unwrap().unwrap();
+    let svc = r.svc.clone();
+    until("ready", || svc.status_now().ready).await;
+    let status = r.svc.status().await;
+    assert!(status.enabled && status.ready, "{status:?}");
+    // The dropped build started no session; the one after it did.
+    assert_eq!(r.factory.unwanted.load(Ordering::SeqCst), 1);
+    assert_eq!(r.factory.started(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn device_change_during_a_build_ends_on_the_new_device() {
+    let r = rig(Mode::Normal).await;
+    installed_and_off(&r).await;
+    let enabling = enabling_held(&r).await;
+    let usb = Settings {
+        voice_mic: Some("usb".into()),
+        ..on()
+    };
+    save(&r, usb).await;
+    r.factory.release();
+    enabling.await.unwrap().unwrap();
+    let svc = r.svc.clone();
+    let f = r.factory.clone();
+    until("ready on usb", || {
+        svc.status_now().ready
+            && f.specs.lock().unwrap().last().unwrap().mic.as_deref() == Some("usb")
+    })
+    .await;
+    // The old device was never opened: that build found it was no longer wanted.
+    assert_eq!(r.factory.unwanted.load(Ordering::SeqCst), 1);
+    assert_eq!(r.factory.started(), 2);
+    let live_mic = r.svc.lock().live.as_ref().map(|l| l.spec.mic.clone());
+    assert_eq!(live_mic, Some(Some("usb".to_string())));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn off_during_a_build_leaves_nothing_running() {
+    let r = rig(Mode::Normal).await;
+    installed_and_off(&r).await;
+    let enabling = enabling_held(&r).await;
+    r.svc.enable(false).await.unwrap();
+    r.factory.release();
+    enabling.await.unwrap().unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let status = r.svc.status().await;
+    assert!(
+        !status.enabled && !status.ready && !status.mic_open,
+        "{status:?}"
+    );
+    // No session was started for it, so no microphone was opened.
+    assert_eq!(r.factory.started(), 1);
+    assert_eq!(r.factory.unwanted.load(Ordering::SeqCst), 1);
+    assert_eq!(r.factory.builds(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_build_that_fails_after_off_sets_no_trouble() {
+    let r = rig(Mode::Normal).await;
+    installed_and_off(&r).await;
+    r.factory.fail.store(1, Ordering::SeqCst);
+    let enabling = enabling_held(&r).await;
+    r.svc.enable(false).await.unwrap();
+    r.factory.release();
+    enabling.await.unwrap().unwrap();
+    let status = r.svc.status().await;
+    assert!(!status.enabled && !status.ready, "{status:?}");
+    assert_eq!(status.trouble, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remove_during_a_build_waits_for_it() {
+    let r = rig(Mode::Normal).await;
+    installed_and_off(&r).await;
+    let enabling = enabling_held(&r).await;
+    let removing = {
+        let svc = r.svc.clone();
+        tokio::spawn(async move { svc.remove().await })
+    };
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(!removing.is_finished(), "removed while the models load");
+    assert!(r.root.exists());
+    r.factory.release();
+    let status = removing.await.unwrap().unwrap();
+    enabling.await.unwrap().unwrap();
+    assert!(
+        !status.enabled && !status.installed && !status.ready,
+        "{status:?}"
+    );
+    assert!(!r.root.exists());
+    assert_eq!(r.factory.started(), 1, "no session for the dropped build");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quitting_mid_download_keeps_voice_on() {
+    let mut r = rig(Mode::Hold).await;
+    let enabling = {
+        let svc = r.svc.clone();
+        tokio::spawn(async move { svc.enable(true).await })
+    };
+    let part = r.part();
+    until("half the file", || {
+        std::fs::metadata(&part).is_ok_and(|m| m.len() >= 25_000)
+    })
+    .await;
+    r.ui();
+    let svc = r.svc.clone();
+    tokio::task::spawn_blocking(move || svc.shutdown())
+        .await
+        .unwrap();
+    // The download ends (cancelled) and its end is handled.
+    let _ = enabling.await.unwrap();
+    assert!(r.stored().voice_enabled, "still on for the next start");
+    assert_eq!(std::fs::metadata(r.part()).unwrap().len(), 25_000);
+    assert!(
+        !r.ui()
+            .iter()
+            .any(|e| matches!(e, VoiceEvent::Status { .. })),
+        "nothing is told while quitting"
+    );
+    assert_eq!(r.factory.builds(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_resumes_an_unfinished_download() {
+    let r = rig(Mode::Normal).await;
+    // A download that ended with Dots: half the file, voice stored on.
+    std::fs::create_dir_all(&r.root).unwrap();
+    std::fs::write(r.part(), &r.server.data[..25_000]).unwrap();
+    *r.host.settings.lock().unwrap() = on();
+    r.svc.start(&on()).await;
+    let svc = r.svc.clone();
+    until("ready", || svc.status_now().ready).await;
+    let status = r.svc.status().await;
+    assert!(status.enabled && status.installed, "{status:?}");
+    assert_eq!(
+        *r.server.ranges.lock().unwrap(),
+        [Some("bytes=25000-".to_string())]
+    );
+    // Greets once, as after any install.
+    assert!(r
+        .factory
+        .session(0)
+        .calls()
+        .contains(&format!("notice {GREETING}")));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_with_voice_off_downloads_nothing() {
+    let r = rig(Mode::Normal).await;
+    r.svc.start(&Settings::default()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(r.server.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(r.factory.builds(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn apply_on_with_files_missing_downloads_nothing() {
+    let r = rig(Mode::Normal).await;
+    save(&r, on()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let status = r.svc.status().await;
+    assert!(
+        status.enabled && !status.installed && !status.downloading && !status.ready,
+        "{status:?}"
+    );
+    assert_eq!(r.server.requests.load(Ordering::SeqCst), 0);
+    assert_eq!(r.factory.builds(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remove_during_a_download_cancels_it_and_deletes() {
+    let r = rig(Mode::Hold).await;
+    let enabling = {
+        let svc = r.svc.clone();
+        tokio::spawn(async move { svc.enable(true).await })
+    };
+    let part = r.part();
+    until("half the file", || {
+        std::fs::metadata(&part).is_ok_and(|m| m.len() >= 25_000)
+    })
+    .await;
+    let status = r.svc.remove().await.unwrap();
+    assert!(
+        !status.enabled && !status.installed && !status.downloading,
+        "{status:?}"
+    );
+    assert!(!r.root.exists(), "the part is gone too");
+    assert!(!r.stored().voice_enabled);
+    let err = enabling.await.unwrap().unwrap_err();
+    assert_eq!(err.kind, CmdErrorKind::Cancelled);
+    assert_eq!(r.factory.builds(), 0);
+}
+
+// ---- small corrections ----------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn saving_settings_never_changes_voice_enabled() {
+    // Off: a draft that says on does not turn it on.
+    let r = rig(Mode::Hold).await;
+    let draft = r.svc.settings_to_save(on()).await;
+    assert!(!draft.voice_enabled);
+    save(&r, draft).await;
+    assert!(!r.svc.status().await.enabled);
+    assert_eq!(r.server.requests.load(Ordering::SeqCst), 0);
+    // Turning on (still downloading): a stale draft that says off neither turns it off nor
+    // stops the download.
+    let enabling = {
+        let svc = r.svc.clone();
+        tokio::spawn(async move { svc.enable(true).await })
+    };
+    let part = r.part();
+    until("half the file", || {
+        std::fs::metadata(&part).is_ok_and(|m| m.len() >= 25_000)
+    })
+    .await;
+    let stale = Settings {
+        voice_id: 4,
+        ..Settings::default()
+    };
+    let draft = r.svc.settings_to_save(stale).await;
+    assert!(draft.voice_enabled && draft.voice_id == 4);
+    save(&r, draft).await;
+    let status = r.svc.status().await;
+    assert!(status.enabled && status.downloading, "{status:?}");
+    assert!(r.stored().voice_enabled);
+    assert!(!enabling.is_finished());
+    r.svc.download_cancel();
+    let _ = enabling.await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_view_is_kept_while_off_and_used_once_on() {
+    let r = rig(Mode::Normal).await;
+    let view = View {
+        account: "personal".into(),
+        workspace: "default".into(),
+        screen: "inbox".into(),
+        dot_id: None,
+        topic_root: None,
+    };
+    r.svc.set_view(view.clone()).unwrap();
+    assert_eq!(r.factory.builds(), 0, "nothing starts for a view");
+    r.svc.enable(true).await.unwrap();
+    r.factory.session(0).emit(SessionEvent::Heard {
+        text: "what needs me".into(),
+        turn: 1,
+    });
+    let mind = r.host.mind.clone();
+    until("the mind heard", || !mind.views.lock().unwrap().is_empty()).await;
+    assert_eq!(mind.views.lock().unwrap()[0], view);
+    // A field longer than 256 bytes is refused.
+    let long = View {
+        screen: "x".repeat(257),
+        ..view
+    };
+    let err = r.svc.set_view(long).unwrap_err();
+    assert_eq!(err.kind, CmdErrorKind::Invalid);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn preview_refuses_a_voice_or_speed_out_of_range() {
+    let r = rig(Mode::Normal).await;
+    r.svc.enable(true).await.unwrap();
+    for (voice, speed) in [
+        (10, 1.0),
+        (1, 0.7),
+        (1, 1.5),
+        (1, f32::NAN),
+        (1, f32::INFINITY),
+    ] {
+        let err = r.svc.preview(voice, speed).await.unwrap_err();
+        assert_eq!(err.kind, CmdErrorKind::Invalid, "{voice} {speed}");
+        assert_ne!(err.message, NOT_READY, "{voice} {speed}");
+    }
+    // An option index far out of range is ignored.
+    r.svc.pick(u32::MAX as usize);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_microphone_failure_stays_in_the_status_until_it_listens() {
+    let r = rig(Mode::Normal).await;
+    r.svc.enable(true).await.unwrap();
+    let session = r.factory.session(0);
+    session.emit(SessionEvent::Trouble {
+        message: "The microphone could not be opened: no microphone was found".into(),
+    });
+    let svc = r.svc.clone();
+    until("kept", || svc.status_now().trouble.is_some()).await;
+    session.emit(SessionEvent::State {
+        state: State::Listening,
+        mic_open: true,
+    });
+    until("cleared", || svc.status_now().trouble.is_none()).await;
+    // Other trouble is only told, not kept.
+    session.emit(SessionEvent::Trouble {
+        message: "No reply came back.".into(),
+    });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(r.svc.status().await.trouble, None);
 }

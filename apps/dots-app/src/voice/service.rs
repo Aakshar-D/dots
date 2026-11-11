@@ -85,8 +85,10 @@ pub struct Built {
 
 /// Makes sessions. The real one loads the models and opens the speaker; tests use a fake.
 pub trait SessionFactory: Send + Sync + 'static {
-    /// Blocking (models load, devices open). A failure is a sentence for people.
-    fn build(&self, spec: &BuildSpec) -> Result<Built, String>;
+    /// Blocking (models load, devices open). A failure is a sentence for people. `wanted` is
+    /// asked just before the session starts (and the microphone may open): `Ok(None)` when
+    /// it is no longer wanted (voice turned off, devices changed, Dots quitting).
+    fn build(&self, spec: &BuildSpec, wanted: &dyn Fn() -> bool) -> Result<Option<Built>, String>;
     fn microphones(&self) -> Vec<VoiceDevice>;
     fn speakers(&self) -> Vec<VoiceDevice>;
 }
@@ -102,7 +104,8 @@ pub trait Host: Send + Sync + 'static {
 
 /// The global hotkey: the plugin in the app (`hotkey::PluginHotkey`), a fake in tests.
 pub trait HotkeyPort: Send + Sync + 'static {
-    /// Registers `shortcut`; a failure is a sentence for people.
+    /// Registers `shortcut` in place of the one registered before, which is let go only once
+    /// the new one works: on a failure (a sentence for people) the one before still works.
     fn register(&self, shortcut: &str) -> Result<(), String>;
     /// Lets go of the shortcut registered last, if any.
     fn unregister(&self);
@@ -193,6 +196,11 @@ struct Inner {
     mic_open: bool,
     hotkey_error: Option<String>,
     last_sent: Option<VoiceStatus>,
+    /// Whether the speech files are in place: read at the start, after a download ends and
+    /// after a removal, not on every status.
+    installed: bool,
+    /// Dots is quitting or restarting: a download that ends now changes nothing.
+    shutting_down: bool,
 }
 
 pub struct Service {
@@ -211,6 +219,25 @@ pub struct Service {
     listener: Mutex<Option<Arc<dyn Listener>>>,
     /// What the listener was told last: (mic open, ready). Held while telling it.
     told: Mutex<(bool, bool)>,
+    /// Whether a build (or a rebuild) is under way, to wait on.
+    building_tx: watch::Sender<bool>,
+}
+
+/// The longest a `View` field may be, in bytes.
+const VIEW_FIELD_MAX: usize = 256;
+const VIEW_TOO_LONG: &str = "That view is too long.";
+const NO_SUCH_VOICE: &str = "Pick one of the ten voices.";
+const BAD_SPEED: &str = "Speaking speed must be between 0.8 and 1.4.";
+
+/// The same microphone and speaker: a session built for one serves the other.
+fn same_devices(a: &BuildSpec, b: &BuildSpec) -> bool {
+    a.mic == b.mic && a.speaker == b.speaker
+}
+
+/// A microphone or speaker failure the session reported: kept in the status until the
+/// microphone opens again.
+fn device_trouble(message: &str) -> bool {
+    message.starts_with("The microphone") || message.starts_with("The speaker")
 }
 
 impl Service {
@@ -222,6 +249,7 @@ impl Service {
         manifest: Manifest,
         ui: UnboundedSender<VoiceEvent>,
     ) -> Arc<Service> {
+        let installed = dots_voice::installed(&root, &manifest);
         Arc::new_cyclic(|me| Service {
             me: me.clone(),
             host,
@@ -241,12 +269,15 @@ impl Service {
                 mic_open: false,
                 hotkey_error: None,
                 last_sent: None,
+                installed,
+                shutting_down: false,
             }),
             state_tx: watch::channel((0, State::Off)).0,
             hotkey_port: Mutex::new(None),
             registered: Mutex::new(None),
             listener: Mutex::new(None),
             told: Mutex::new((false, false)),
+            building_tx: watch::channel(false).0,
         })
     }
 
@@ -285,10 +316,8 @@ impl Service {
             }
             return;
         }
-        if registered.take().is_some() {
-            port.unregister();
-        }
         let error = match &wanted {
+            // In place of the one before, which keeps working when this one fails.
             Some(key) => match port.register(key) {
                 Ok(()) => {
                     *registered = Some(key.clone());
@@ -296,7 +325,12 @@ impl Service {
                 }
                 Err(sentence) => Some(sentence),
             },
-            None => None,
+            None => {
+                if registered.take().is_some() {
+                    port.unregister();
+                }
+                None
+            }
         };
         drop(registered);
         self.set_hotkey_error(error);
@@ -334,14 +368,16 @@ impl Service {
         let _ = self.ui.send(event);
     }
 
-    fn installed(&self) -> bool {
-        dots_voice::installed(&self.root, &self.manifest)
+    /// Reads the disk again (outside the lock) for whether the speech files are in place.
+    fn refresh_installed(&self) {
+        let installed = dots_voice::installed(&self.root, &self.manifest);
+        self.lock().installed = installed;
     }
 
     fn status_of(&self, s: &Inner) -> VoiceStatus {
         VoiceStatus {
             enabled: s.settings.voice_enabled,
-            installed: self.installed(),
+            installed: s.installed,
             downloading: s.download.is_some(),
             ready: s.live.is_some(),
             state: s.state,
@@ -358,15 +394,15 @@ impl Service {
     }
 
     /// Sends `Status` when the status differs from the last one sent, and tells the listener.
+    /// Sent under the lock (the channel never blocks), so statuses arrive in order.
     fn changed(&self) {
-        let mut s = self.lock();
-        let status = self.status_of(&s);
-        if s.last_sent.as_ref() != Some(&status) {
-            s.last_sent = Some(status.clone());
-            drop(s);
-            self.send(VoiceEvent::Status { status });
-        } else {
-            drop(s);
+        {
+            let mut s = self.lock();
+            let status = self.status_of(&s);
+            if s.last_sent.as_ref() != Some(&status) {
+                s.last_sent = Some(status.clone());
+                self.send(VoiceEvent::Status { status });
+            }
         }
         self.tell();
     }
@@ -396,7 +432,7 @@ impl Service {
                 self.changed();
                 return Ok(self.status_now());
             }
-            (!self.installed()).then(|| self.start_download(&mut s))
+            (!s.installed).then(|| self.start_download(&mut s))
         };
         self.changed();
         match done {
@@ -408,7 +444,7 @@ impl Service {
                     .clone();
                 result.expect("waited for a result")?;
             }
-            None => self.build(false).await,
+            None => self.settle(false).await,
         }
         self.sync_hotkey();
         self.changed();
@@ -456,12 +492,21 @@ impl Service {
     }
 
     /// A failed or cancelled download turns voice off (a cut one resumes when turned on
-    /// again); a finished one builds the session, which greets.
+    /// again); a finished one builds the session, which greets. While Dots quits nothing is
+    /// saved or told: the part stays, and the next start resumes it.
     async fn download_ended(&self, result: &Result<(), CmdError>) {
+        {
+            let mut s = self.lock();
+            if s.shutting_down {
+                s.download = None;
+                return;
+            }
+        }
+        self.refresh_installed();
         match result {
             Ok(()) => {
                 self.lock().download = None;
-                self.build(true).await;
+                self.settle(true).await;
             }
             Err(e) => {
                 let mut settings = self.host.settings().await;
@@ -483,57 +528,155 @@ impl Service {
         self.changed();
     }
 
-    /// Builds the session when voice is on, the files are in place and none runs.
-    async fn build(&self, greet: bool) {
-        let (spec, gen) = {
-            let mut s = self.lock();
-            if !s.settings.voice_enabled || s.live.is_some() || s.building || !self.installed() {
-                return;
-            }
-            s.building = true;
-            s.trouble = None;
-            (self.spec_of(&s.settings), s.gen)
-        };
-        self.changed();
-        let began = Instant::now();
-        let factory = self.factory.clone();
-        let wanted = spec.clone();
-        let built = tauri::async_runtime::spawn_blocking(move || factory.build(&wanted))
-            .await
-            .unwrap_or_else(|_| Err(MODELS_BROKEN.to_string()));
+    fn set_building(&self, s: &mut Inner, building: bool) {
+        s.building = building;
+        self.building_tx.send_replace(building);
+    }
+
+    /// Whether a session for `spec`, built from generation `gen`, is what the settings ask
+    /// for now.
+    fn wanted_now(&self, s: &Inner, gen: u64, spec: &BuildSpec) -> bool {
+        s.gen == gen
+            && s.settings.voice_enabled
+            && !s.shutting_down
+            && same_devices(&self.spec_of(&s.settings), spec)
+    }
+
+    /// Brings what runs in line with the settings: builds the session when voice is on, the
+    /// files are in place and none runs; rebuilds it on another microphone or speaker; sets a
+    /// new voice, speed or wake phrase on it. Loops until what runs is what the settings ask
+    /// for, so a change made while a build was under way is never lost. One caller does this
+    /// at a time; another returns at once, and the one at work sees its change. A build that
+    /// failed is not tried again for the same devices here (`open` and `enable` try again).
+    async fn settle(&self, greet: bool) {
+        enum Step {
+            Done,
+            Build(BuildSpec, u64),
+            Rebuild,
+        }
+        let mut greet = greet;
+        let mut failed: Option<BuildSpec> = None;
         {
             let mut s = self.lock();
-            s.building = false;
-            match built {
-                Ok(built) if s.gen == gen && s.settings.voice_enabled => {
-                    tracing::info!("voice: session built in {} ms", began.elapsed().as_millis());
-                    let bridge =
-                        Bridge::new(built.session.clone(), self.host.mind(), self.ui.clone());
-                    bridge.set_view(s.view.clone());
-                    let ended = Ended::new();
-                    s.state = built.session.state();
-                    self.saw_state(s.state);
-                    if greet {
-                        built.session.notice(GREETING);
+            if s.building {
+                return;
+            }
+            self.set_building(&mut s, true);
+        }
+        loop {
+            let step = {
+                let mut s = self.lock();
+                let wanted = self.spec_of(&s.settings);
+                let on = s.settings.voice_enabled
+                    && !s.shutting_down
+                    && s.download.is_none()
+                    && s.installed;
+                let step = if !on {
+                    Step::Done
+                } else {
+                    match s.live.as_mut() {
+                        Some(l) if same_devices(&l.spec, &wanted) => {
+                            if l.spec.voice != wanted.voice || l.spec.speed != wanted.speed {
+                                l.session.set_voice(wanted.voice, wanted.speed);
+                            }
+                            if l.spec.settings != wanted.settings {
+                                l.session.settings(wanted.settings);
+                            }
+                            l.spec = wanted;
+                            Step::Done
+                        }
+                        Some(_) => Step::Rebuild,
+                        None if failed.as_ref().is_some_and(|f| same_devices(f, &wanted)) => {
+                            Step::Done
+                        }
+                        None => {
+                            s.trouble = None;
+                            Step::Build(wanted, s.gen)
+                        }
                     }
-                    self.listen(gen, bridge.clone(), built.events, ended.clone());
-                    s.live = Some(Live {
-                        gen,
-                        spec,
-                        session: built.session,
-                        bridge,
-                        ended,
-                    });
+                };
+                // Decided under the same lock that ends the work: a caller that found this
+                // one at work changed the settings before this look.
+                if matches!(step, Step::Done) {
+                    self.set_building(&mut s, false);
                 }
-                // Turned off, or torn down, while it was being built.
-                Ok(built) => built.session.shutdown(),
-                Err(sentence) => {
-                    tracing::warn!("voice: the session could not be built");
-                    s.trouble = Some(sentence);
+                step
+            };
+            match step {
+                Step::Done => break,
+                Step::Rebuild => {
+                    if let Some(live) = self.take_live() {
+                        Self::stop_live(live).ended(END_WAIT).await;
+                    }
+                    self.changed();
+                }
+                Step::Build(spec, gen) => {
+                    self.changed();
+                    match self.build_one(&spec, gen, greet).await {
+                        Ok(true) => greet = false,
+                        Ok(false) => {}
+                        Err(()) => failed = Some(spec),
+                    }
                 }
             }
         }
         self.changed();
+    }
+
+    /// Builds one session for `spec`. `Ok(true)`: it runs; `Ok(false)`: it was no longer
+    /// wanted (nothing runs for it, and no microphone opened unless the settings moved on
+    /// after the last check, in which case it is shut down at once); `Err`: it failed while
+    /// still wanted, and `trouble` says why.
+    async fn build_one(&self, spec: &BuildSpec, gen: u64, greet: bool) -> Result<bool, ()> {
+        let began = Instant::now();
+        let factory = self.factory.clone();
+        let me = self.me.clone();
+        let (wanted, asked) = (spec.clone(), spec.clone());
+        let built = tauri::async_runtime::spawn_blocking(move || {
+            let still = move || {
+                me.upgrade()
+                    .is_some_and(|me| me.wanted_now(&me.lock(), gen, &asked))
+            };
+            factory.build(&wanted, &still)
+        })
+        .await
+        .unwrap_or_else(|_| Err(MODELS_BROKEN.to_string()));
+        let mut s = self.lock();
+        let still = self.wanted_now(&s, gen, spec);
+        match built {
+            Ok(Some(built)) if still => {
+                tracing::info!("voice: session built in {} ms", began.elapsed().as_millis());
+                let bridge = Bridge::new(built.session.clone(), self.host.mind(), self.ui.clone());
+                bridge.set_view(s.view.clone());
+                let ended = Ended::new();
+                s.state = built.session.state();
+                self.saw_state(s.state);
+                if greet {
+                    built.session.notice(GREETING);
+                }
+                self.listen(gen, bridge.clone(), built.events, ended.clone());
+                s.live = Some(Live {
+                    gen,
+                    spec: spec.clone(),
+                    session: built.session,
+                    bridge,
+                    ended,
+                });
+                Ok(true)
+            }
+            // Turned off, torn down or moved to other devices while it was being built.
+            Ok(Some(built)) => {
+                built.session.shutdown();
+                Ok(false)
+            }
+            Ok(None) => Ok(false),
+            Err(sentence) if still => {
+                tracing::warn!("voice: the session could not be built");
+                s.trouble = Some(sentence);
+                Err(())
+            }
+            Err(_) => Ok(false),
+        }
     }
 
     fn spec_of(&self, s: &Settings) -> BuildSpec {
@@ -566,7 +709,16 @@ impl Service {
                 if let (Some((state, mic_open)), Some(me)) = (state, me.upgrade()) {
                     me.session_state(gen, state, mic_open);
                 }
+                let trouble = match &ev {
+                    SessionEvent::Trouble { message } if device_trouble(message) => {
+                        Some(message.clone())
+                    }
+                    _ => None,
+                };
                 bridge.on_session(ev);
+                if let (Some(message), Some(me)) = (trouble, me.upgrade()) {
+                    me.session_trouble(gen, message);
+                }
                 if state.is_some() {
                     if let Some(me) = me.upgrade() {
                         me.changed();
@@ -586,7 +738,24 @@ impl Service {
             s.state = state;
             s.mic_open = mic_open;
             self.saw_state(state);
+            // It listens: a device failure kept in the status is over.
+            if mic_open && matches!(state, State::Listening | State::Asking) {
+                s.trouble = None;
+            }
         }
+    }
+
+    /// The running session could not use the microphone or the speaker: the status keeps
+    /// the sentence until it listens again.
+    fn session_trouble(&self, gen: u64, message: String) {
+        {
+            let mut s = self.lock();
+            if !s.live.as_ref().is_some_and(|l| l.gen == gen) {
+                return;
+            }
+            s.trouble = Some(message);
+        }
+        self.changed();
     }
 
     /// The session ended by itself (a failure): it is built again on the next `open`.
@@ -651,8 +820,13 @@ impl Service {
         if let Some(live) = self.take_live() {
             Self::stop_live(live).ended(END_WAIT).await;
         }
+        // A build under way is loading the files: it ends (finding it is no longer wanted)
+        // before they are deleted.
+        let mut building = self.building_tx.subscribe();
+        let _ = tokio::time::timeout(END_WAIT, building.wait_for(|b| !*b)).await;
         let root = self.root.clone();
         let removed = tauri::async_runtime::spawn_blocking(move || dots_voice::remove(&root)).await;
+        self.refresh_installed();
         self.lock().trouble = None;
         self.sync_hotkey();
         self.changed();
@@ -676,7 +850,7 @@ impl Service {
     /// Listen (hotkey, rail, tray). Not ready: a sentence says why; a session that failed to
     /// build (or ended) is built again first.
     pub fn open(&self) {
-        let (enabled, busy) = {
+        let (enabled, busy, installed) = {
             let s = self.lock();
             if let Some(live) = &s.live {
                 let bridge = live.bridge.clone();
@@ -684,7 +858,11 @@ impl Service {
                 bridge.open();
                 return;
             }
-            (s.settings.voice_enabled, s.download.is_some() || s.building)
+            (
+                s.settings.voice_enabled,
+                s.download.is_some() || s.building,
+                s.installed,
+            )
         };
         if !enabled {
             self.trouble(OFF);
@@ -694,7 +872,7 @@ impl Service {
             self.trouble(GETTING_READY);
             return;
         }
-        if !self.installed() {
+        if !installed {
             // A download that ended with Dots: it resumes.
             self.trouble(GETTING_READY);
             let mut s = self.lock();
@@ -708,7 +886,7 @@ impl Service {
         let me = self.me.clone();
         tauri::async_runtime::spawn(async move {
             let Some(me) = me.upgrade() else { return };
-            me.build(false).await;
+            me.settle(false).await;
             if let Some(bridge) = me.bridge() {
                 bridge.open();
             }
@@ -734,7 +912,24 @@ impl Service {
         }
     }
 
-    pub fn set_view(&self, view: View) {
+    /// The account, workspace and screen the person looks at. Cheap, and fine with voice off:
+    /// it is only kept, and the next session's turns see it. A field longer than 256 bytes is
+    /// refused.
+    pub fn set_view(&self, view: View) -> Result<(), CmdError> {
+        let fields = [
+            Some(&view.account),
+            Some(&view.workspace),
+            Some(&view.screen),
+            view.dot_id.as_ref(),
+            view.topic_root.as_ref(),
+        ];
+        if fields
+            .into_iter()
+            .flatten()
+            .any(|f| f.len() > VIEW_FIELD_MAX)
+        {
+            return Err(CmdError::invalid(VIEW_TOO_LONG));
+        }
         let bridge = {
             let mut s = self.lock();
             s.view = view.clone();
@@ -743,6 +938,7 @@ impl Service {
         if let Some(b) = bridge {
             b.set_view(view);
         }
+        Ok(())
     }
 
     /// The session's state moved on (or the service set it).
@@ -756,6 +952,12 @@ impl Service {
     /// Says the greeting in `voice` at `speed`, then puts the saved voice back once the
     /// session rests again (or after five seconds).
     pub async fn preview(&self, voice: u8, speed: f32) -> Result<(), CmdError> {
+        if voice > 9 {
+            return Err(CmdError::invalid(NO_SUCH_VOICE));
+        }
+        if !(speed.is_finite() && (0.8..=1.4).contains(&speed)) {
+            return Err(CmdError::invalid(BAD_SPEED));
+        }
         let session = {
             let s = self.lock();
             match &s.live {
@@ -796,54 +998,91 @@ impl Service {
     /// interruption are set on the running session; a new hotkey is registered in place of
     /// the old (a failure only sets `hotkey_error`).
     pub async fn apply(&self, settings: &Settings) {
-        let live = {
+        let ended = self.apply_now(settings);
+        self.apply_rest(ended).await;
+    }
+
+    /// `apply` for a settings save: the quick part now, the session (re)build in the
+    /// background, so the save never waits on a model load. Its outcome reaches the UI in
+    /// `Status` events; it cannot fail the save.
+    pub fn apply_in_background(&self, settings: &Settings) {
+        let ended = self.apply_now(settings);
+        let me = self.me.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Some(me) = me.upgrade() {
+                me.apply_rest(ended).await;
+            }
+        });
+    }
+
+    /// The quick part of `apply`: keeps the settings, (un)registers the hotkey, sets voice,
+    /// speed and wake phrase on the running session; off also cancels the download and shuts
+    /// the session down, without waiting for it (what tells when it ended is returned).
+    fn apply_now(&self, settings: &Settings) -> Option<Arc<Ended>> {
+        {
             let mut s = self.lock();
             s.settings = settings.clone();
             if !settings.voice_enabled {
                 s.trouble = None;
             }
-            s.live.as_ref().map(|l| (l.spec.clone(), l.session.clone()))
-        };
-        if !settings.voice_enabled {
-            self.sync_hotkey();
-            self.cancel_download();
-            if let Some(live) = self.take_live() {
-                Self::stop_live(live).ended(SHUTDOWN_WAIT).await;
-                tracing::info!("voice: off");
+            let wanted = self.spec_of(settings);
+            if let Some(l) = s.live.as_mut().filter(|l| same_devices(&l.spec, &wanted)) {
+                if l.spec.voice != wanted.voice || l.spec.speed != wanted.speed {
+                    l.session.set_voice(wanted.voice, wanted.speed);
+                }
+                if l.spec.settings != wanted.settings {
+                    l.session.settings(wanted.settings);
+                }
+                l.spec = wanted;
             }
-            self.changed();
-            return;
         }
         // The hotkey before the session: a slow build does not hold it back.
         self.sync_hotkey();
-        let wanted = self.spec_of(settings);
-        match live {
-            Some((had, _)) if had.mic != wanted.mic || had.speaker != wanted.speaker => {
-                if let Some(live) = self.take_live() {
-                    Self::stop_live(live).ended(END_WAIT).await;
-                }
-                self.build(false).await;
-            }
-            Some((had, session)) => {
-                if had.voice != wanted.voice || had.speed != wanted.speed {
-                    session.set_voice(wanted.voice, wanted.speed);
-                }
-                if had.settings != wanted.settings {
-                    session.settings(wanted.settings);
-                }
-                let mut s = self.lock();
-                if let Some(l) = s.live.as_mut() {
-                    l.spec = wanted;
-                }
-            }
-            None => {
-                let downloading = self.lock().download.is_some();
-                if !downloading && self.installed() {
-                    self.build(false).await;
-                }
+        if settings.voice_enabled {
+            self.changed();
+            return None;
+        }
+        self.cancel_download();
+        let ended = self.take_live().map(|live| {
+            tracing::info!("voice: off");
+            Self::stop_live(live)
+        });
+        self.changed();
+        ended
+    }
+
+    /// The slow part of `apply`: waits for a session turned off to let go of its devices,
+    /// and builds or rebuilds the session the settings ask for.
+    async fn apply_rest(&self, ended: Option<Arc<Ended>>) {
+        if let Some(ended) = ended {
+            ended.ended(SHUTDOWN_WAIT).await;
+        }
+        self.settle(false).await;
+        self.changed();
+    }
+
+    /// At start: applies the stored settings, and resumes a download that ended with Dots
+    /// (voice on, files missing). With voice off nothing is downloaded or built.
+    pub async fn start(&self, settings: &Settings) {
+        self.refresh_installed();
+        self.apply(settings).await;
+        {
+            let mut s = self.lock();
+            if s.settings.voice_enabled && !s.installed && s.download.is_none() && !s.shutting_down
+            {
+                tracing::info!("voice: resuming the speech files' download");
+                self.start_download(&mut s);
             }
         }
         self.changed();
+    }
+
+    /// What a settings save stores: everything sent, except `voice_enabled`, which only the
+    /// Voice switch (`enable`) changes. A draft kept while voice was being turned on (or off)
+    /// cannot undo it.
+    pub async fn settings_to_save(&self, mut sent: Settings) -> Settings {
+        sent.voice_enabled = self.host.settings().await.voice_enabled;
+        sent
     }
 
     /// The hotkey could not be registered (or now could): shown in the status.
@@ -855,6 +1094,8 @@ impl Service {
     /// On exit, tray quit and restart: stops the download and the session, and waits up to
     /// 500 ms for the session to let go of its devices. Blocks.
     pub fn shutdown(&self) {
+        // First: the download cancelled below then ends without turning voice off.
+        self.lock().shutting_down = true;
         self.cancel_download();
         if let Some(live) = self.take_live() {
             let ended = Self::stop_live(live);
@@ -891,7 +1132,7 @@ fn device(d: dots_voice::Device) -> VoiceDevice {
 }
 
 impl SessionFactory for RealFactory {
-    fn build(&self, spec: &BuildSpec) -> Result<Built, String> {
+    fn build(&self, spec: &BuildSpec, wanted: &dyn Fn() -> bool) -> Result<Option<Built>, String> {
         let broken = |_| MODELS_BROKEN.to_string();
         let paths = ModelPaths {
             root: spec.root.clone(),
@@ -933,13 +1174,16 @@ impl SessionFactory for RealFactory {
                 CpalMic::open(mic.as_deref()).map(|m| Box::new(m) as Box<dyn Mic>)
             }),
         };
+        if !wanted() {
+            return Ok(None);
+        }
         let (events_tx, events) = unbounded_channel();
         let session = Session::start(parts, spec.settings, events_tx);
         session.set_voice(spec.voice, spec.speed);
-        Ok(Built {
+        Ok(Some(Built {
             session: Arc::new(session),
             events,
-        })
+        }))
     }
 
     fn microphones(&self) -> Vec<VoiceDevice> {

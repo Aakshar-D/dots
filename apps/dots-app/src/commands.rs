@@ -210,6 +210,10 @@ pub async fn update_settings(
     settings: Settings,
 ) -> Res<SettingsSaved> {
     let rt = state.rt()?;
+    let voice = voice.get()?;
+    // Only the Voice switch (`voice_enable`) turns voice on or off: a save keeps what is
+    // stored, so a draft cannot undo a turn-on still downloading.
+    let settings = voice.settings_to_save(settings).await;
     // Pointing Dots at another program needs the user's own yes, in a dialog the webview
     // cannot answer.
     let saved = confirm::save_settings_confirmed(&rt, settings, |title, message| {
@@ -226,8 +230,9 @@ pub async fn update_settings(
     }
     // "Answer from my phone" applies at once: on starts the listener, off closes it.
     phone.get()?.apply(&saved.settings).await;
-    // So does voice: off lets go of the microphone, a new device rebuilds the session.
-    voice.get()?.apply(&saved.settings).await;
+    // So does voice: a new voice or hotkey at once; a new device rebuilds the session in the
+    // background (its outcome comes as `Status` events), so the save does not wait for it.
+    voice.apply_in_background(&saved.settings);
     Ok(saved)
 }
 
@@ -2834,14 +2839,15 @@ pub fn voice_pick(voice: State<'_, VoiceHandle>, index: u32) -> Res<()> {
     Ok(())
 }
 
-/// The account, workspace, screen and conversation the person is looking at.
+/// The account, workspace, screen and conversation the person is looking at. Cheap, also
+/// with voice off (it is only kept); a field over 256 bytes is refused.
 #[tauri::command]
 pub fn voice_view(voice: State<'_, VoiceHandle>, view: View) -> Res<()> {
-    voice.get()?.set_view(view);
-    Ok(())
+    voice.get()?.set_view(view)
 }
 
-/// Says "Hi, I'm Dot." in `voice` at `speed`, then goes back to the saved voice.
+/// Says "Hi, I'm Dot." in `voice` (0 to 9) at `speed` (0.8 to 1.4), then goes back to the
+/// saved voice.
 #[tauri::command]
 pub async fn voice_preview(handle: State<'_, VoiceHandle>, voice: u8, speed: f32) -> Res<()> {
     handle.get()?.preview(voice, speed).await

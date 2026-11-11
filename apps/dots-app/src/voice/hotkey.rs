@@ -62,10 +62,17 @@ impl PluginHotkey {
 }
 
 impl HotkeyPort for PluginHotkey {
+    /// The new shortcut is registered first; the old one is let go only once it works, so a
+    /// shortcut another app holds leaves the old one working.
     fn register(&self, shortcut: &str) -> Result<(), String> {
-        let wanted = parse_hotkey(shortcut)?;
-        self.unregister();
-        let Some(wanted) = wanted else { return Ok(()) };
+        let Some(wanted) = parse_hotkey(shortcut)? else {
+            self.unregister();
+            return Ok(());
+        };
+        let mut current = self.current.lock().unwrap_or_else(PoisonError::into_inner);
+        if *current == Some(wanted) {
+            return Ok(());
+        }
         let Some(plugin) = self.plugin() else {
             tracing::warn!("voice: the global shortcut plugin is not there");
             return Err(TAKEN.to_string());
@@ -80,7 +87,11 @@ impl HotkeyPort for PluginHotkey {
                 tracing::warn!("voice: the hotkey could not be registered: {e}");
                 TAKEN.to_string()
             })?;
-        *self.current.lock().unwrap_or_else(PoisonError::into_inner) = Some(wanted);
+        if let Some(old) = current.replace(wanted) {
+            if let Err(e) = plugin.unregister(old) {
+                tracing::warn!("voice: the old hotkey could not be unregistered: {e}");
+            }
+        }
         Ok(())
     }
 
