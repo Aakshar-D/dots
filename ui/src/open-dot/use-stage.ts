@@ -14,10 +14,12 @@ export const LINGER_MS = 2500;
 const BUSY: ReadonlySet<VoiceState> = new Set(["listening", "thinking", "speaking", "asking"]);
 
 /// The commands the stage and the rail mark call; the demo page passes its own.
-export type StageCommands = Pick<
-  typeof commands,
-  "voiceOpen" | "voiceClose" | "voiceStop" | "voicePick"
->;
+export type StageCommands = {
+  voiceOpen: () => Promise<unknown>;
+  voiceClose: () => Promise<unknown>;
+  voiceStop: () => Promise<unknown>;
+  voicePick: (index: number) => Promise<unknown>;
+};
 
 /// Whether Open Dot is doing something the stage shows: busy, or a question or a card showing.
 export function useOpenDotBusy(): boolean {

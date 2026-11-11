@@ -29,6 +29,8 @@ import { keys } from "@/lib/query";
 import { useRuntimeEvents } from "@/lib/runtime-events";
 import { useActivity } from "@/lib/use-activity";
 import { useVoice } from "@/lib/use-voice";
+import { OpenDotStage } from "@/open-dot/OpenDotStage";
+import { RailMark } from "@/open-dot/RailMark";
 
 const LINKS = [
   { to: "/home", label: "Home", icon: House },
@@ -131,7 +133,11 @@ export function Layout() {
             </NavLink>
           );
         })}
-        <LimitsMeter />
+        {/* The bottom of the rail: Open Dot's mark above the usage meter. */}
+        <div className="mt-auto flex flex-col items-center gap-1">
+          <RailMark />
+          <LimitsMeter />
+        </div>
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
         <Banners />
@@ -139,6 +145,8 @@ export function Layout() {
           <Outlet />
         </main>
       </div>
+      {/* After the screen, so it floats above every one. */}
+      <OpenDotStage />
       <SearchDialog open={searching} onOpenChange={setSearching} />
       <Toaster />
     </div>

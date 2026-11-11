@@ -22,8 +22,30 @@ import { UsageScreen } from "@/screens/UsageScreen";
 
 // The Graph screen and its graph library load when it is first opened.
 const GraphScreen = lazy(() => import("@/screens/graph/GraphScreen"));
+// The Open Dot demo page, for development only: in a production build this is `null` and the
+// page is not bundled at all.
+const OpenDotDemo = import.meta.env.DEV ? lazy(() => import("@/open-dot/Demo")) : null;
 
-export const routes: RouteObject[] = [
+/// The app's routes; `dev` adds the Open Dot demo page. It sits outside `Root`, which needs the
+/// backend, so it opens in a plain browser under `bun run dev`.
+export function buildRoutes(dev: boolean): RouteObject[] {
+  const demo: RouteObject[] =
+    dev && OpenDotDemo
+      ? [
+          {
+            path: "/__open-dot",
+            element: (
+              <Suspense fallback={null}>
+                <OpenDotDemo />
+              </Suspense>
+            ),
+          },
+        ]
+      : [];
+  return [...demo, ...app];
+}
+
+const app: RouteObject[] = [
   {
     path: "/",
     element: <Root />,
@@ -67,3 +89,5 @@ export const routes: RouteObject[] = [
     ],
   },
 ];
+
+export const routes: RouteObject[] = buildRoutes(import.meta.env.DEV);
