@@ -202,7 +202,7 @@ describe("Settings, Accounts, Guardrails", () => {
     expect(within(section).queryByRole("button", { name: "Save" })).toBeNull();
     expect(within(section).queryByRole("textbox")).toBeNull();
     const git = within(section).getByRole("list", { name: "Protected git actions" });
-    expect(within(git).getByText("pushing to main or master")).toBeVisible();
+    expect(within(git).getByText("Pushing to main or master")).toBeVisible();
     const paths = within(section).getByRole("list", { name: "Protected paths" });
     expect(within(paths).getAllByRole("listitem")).toHaveLength(defaults.protected_paths.length);
     expect(section).toHaveTextContent("Member max: Sandboxed");

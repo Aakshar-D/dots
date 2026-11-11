@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import { Textarea } from "@/components/ui/textarea";
-import { lines, MAX_PRESETS, PRESET_NAMES } from "@/lib/guardrails";
+import { capitalized, lines, MAX_PRESETS, PRESET_NAMES } from "@/lib/guardrails";
 import { keys } from "@/lib/query";
 
 import { BUSY, DRAFT_WAITING, DraftBanner, rosterBlockers, useRosterEdits } from "./AccountMembers";
@@ -131,8 +131,9 @@ function appliesText(view: GuardrailsView): string {
 function GuardrailsSummary({ view }: { view: GuardrailsView }) {
   const g = view.guardrails;
   if (g === null) return null;
+  // Capitalised as the form's checkboxes are.
   const label = (action: GitAction) =>
-    view.git_actions.find((a) => a.action === action)?.label ?? action;
+    capitalized(view.git_actions.find((a) => a.action === action)?.label ?? action);
   return (
     <div className="flex flex-col gap-2 text-sm">
       <ReadList title="Protected paths" items={g.protected_paths} mono />
@@ -268,7 +269,7 @@ function GuardrailsForm(props: {
                     })
                   }
                 />
-                {label.charAt(0).toUpperCase() + label.slice(1)}
+                {capitalized(label)}
               </label>
             ))}
           </fieldset>

@@ -22,6 +22,11 @@ export const GIT_LABELS: Record<GitAction, string> = {
   release: "publishing a GitHub release",
 };
 
+/// "Pushing to main or master": a git action's label as a list item or checkbox shows it.
+export function capitalized(label: string): string {
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 /// The ceiling in a sentence for the dot editor, or null when none applies: "Members' dots in
 /// Payments can go up to Sandboxed." for a Member, and the always-ask rule for an Admin.
 export function ceilingLine(ceiling: PolicyCeiling): string | null {
