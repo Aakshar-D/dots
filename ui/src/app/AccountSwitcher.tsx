@@ -69,6 +69,8 @@ export function AccountSwitcher() {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // Taken here: whatever else listens for Esc (the Open Dot stage) leaves it alone.
+        e.preventDefault();
         setOpen(false);
         trigger.current?.focus();
       }

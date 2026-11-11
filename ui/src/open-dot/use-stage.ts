@@ -11,6 +11,9 @@ import { DONE_MS } from "./breath-model";
 /// can be read.
 export const LINGER_MS = 2500;
 
+/// How long the stage takes to fade away once closed, before it is gone.
+export const LEAVE_MS = 200;
+
 const BUSY: ReadonlySet<VoiceState> = new Set(["listening", "thinking", "speaking", "asking"]);
 
 /// The commands the stage and the rail mark call; the demo page passes its own.
@@ -20,6 +23,17 @@ export type StageCommands = {
   voiceStop: () => Promise<unknown>;
   voicePick: (index: number) => Promise<unknown>;
 };
+
+/// Whether a click on the dots interrupts Dot (`voice_stop` acts only while it thinks or
+/// speaks) rather than starts it listening (`voice_open`, which keeps a waiting question).
+export function interrupts(state: VoiceState): boolean {
+  return state === "thinking" || state === "speaking";
+}
+
+/// What a click on the dots does: interrupt Dot and listen, or start listening.
+export function talk(act: StageCommands, state: VoiceState): Promise<unknown> {
+  return interrupts(state) ? act.voiceStop() : act.voiceOpen();
+}
 
 /// Whether Open Dot is doing something the stage shows: busy, or a question or a card showing.
 export function useOpenDotBusy(): boolean {

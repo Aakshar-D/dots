@@ -15,6 +15,13 @@ import type { StageCommands } from "./use-stage";
 
 const set = (change: Partial<VoiceLive>) => voiceStore.set(change);
 
+/// Reply lines with running numbers, as the store keeps them.
+let lastLine = 0;
+const reply = (...texts: string[]) => texts.map((text) => ({ n: ++lastLine, text }));
+/// One more line of the reply, the oldest dropped past three, as a `saying` event does.
+const say = (text: string) =>
+  set({ saying: text, said: [...voiceStore.get().said, ...reply(text)].slice(-3), hearing: "", heard: false });
+
 const STATUS: VoiceStatus = {
   enabled: true,
   installed: true,
@@ -192,7 +199,7 @@ export default function Demo() {
       said("voice_close");
       stopScript();
       setTalking(false);
-      set({ state: "idle", micOpen: false, hearing: "", saying: "", said: [], ask: null, card: null });
+      set({ state: "idle", micOpen: false, hearing: "", heard: false, saying: "", said: [], ask: null, card: null });
     },
     voiceStop: async () => {
       said("voice_stop");
@@ -201,7 +208,7 @@ export default function Demo() {
     voicePick: async (index) => {
       said(`voice_pick(${index})`);
       later(500, () => set({ state: "thinking", micOpen: false, ask: null, card: null }));
-      later(1500, () => set({ state: "speaking", said: ["Done."] }));
+      later(1500, () => set({ state: "speaking", said: reply("Done.") }));
       later(2500, () => set({ state: "idle" }));
     },
   };
@@ -211,32 +218,34 @@ export default function Demo() {
 
   const playTurn = () => {
     stopScript();
-    set({ hearing: "", saying: "", said: [], ask: null, card: null, trouble: null });
+    set({ hearing: "", heard: false, saying: "", said: [], ask: null, card: null, trouble: null });
     state("listening");
     setTalking(true);
     const words = ["what's", "what's waiting", "what's waiting for", "what's waiting for me"];
-    words.forEach((w, i) => later(300 + i * 450, () => set({ hearing: w })));
+    words.forEach((w, i) => later(300 + i * 450, () => set({ hearing: w, heard: false })));
     later(2200, () => {
       setTalking(false);
-      set({ state: "thinking", micOpen: false, hearing: "what's waiting for me?", said: [] });
+      set({ state: "thinking", micOpen: false, hearing: "what's waiting for me?", heard: true, said: [] });
     });
     later(3600, () => {
-      set({ state: "speaking", saying: "", said: ["Triage wants to push a branch."], hearing: "" });
+      set({ state: "speaking" });
+      say("Triage wants to push a branch.");
       setTalking(true);
     });
-    later(5800, () => set({ said: ["Triage wants to push a branch.", "It is the open dot branch, to origin."] }));
+    later(5800, () => say("It is the open dot branch, to origin."));
     later(8000, () => {
       setTalking(false);
+      // The question is spoken as a reply line too: the stage prints it once, above the options.
+      say("Allow triage to push?");
       set({
         state: "asking",
         micOpen: true,
         ask: { question: "Allow triage to push?", options: ["Allow", "Deny", "Not now"] },
         card: CARDS[2]![1],
-        said: ["Triage wants to push a branch.", "It is the open dot branch, to origin.", "Shall I allow it?"],
       });
     });
     later(11500, () => set({ state: "thinking", micOpen: false, ask: null, card: null }));
-    later(12500, () => set({ state: "speaking", said: ["Allowed. It is pushing now."] }));
+    later(12500, () => set({ state: "speaking", said: reply("Allowed. It is pushing now.") }));
     later(14000, () => set({ state: "idle", micOpen: false }));
   };
 
@@ -309,12 +318,13 @@ export default function Demo() {
               </B>
             </Group>
             <Group title="Words">
-              <B onClick={() => set({ hearing: "what is waiting for me today" })}>Hearing</B>
-              <B onClick={() => set({ said: [...live.said, `Reply line ${live.said.length + 1}.`].slice(-3), hearing: "" })}>
-                Reply line
+              <B onClick={() => set({ hearing: "what is waiting for me", heard: false })}>Hearing</B>
+              <B onClick={() => set({ hearing: "what is waiting for me today?", heard: true })}>Heard</B>
+              <B onClick={() => say(`Reply line ${lastLine + 1}.`)}>Reply line</B>
+              <B onClick={() => say(LONG.repeat(3))}>Long reply line</B>
+              <B onClick={() => set({ hearing: "", heard: false, saying: "", said: [], ask: null, card: null })}>
+                Cleared
               </B>
-              <B onClick={() => set({ said: [...live.said, LONG.repeat(3)].slice(-3), hearing: "" })}>Long reply line</B>
-              <B onClick={() => set({ hearing: "", saying: "", said: [], ask: null, card: null })}>Cleared</B>
             </Group>
             <Group title="Ask">
               {[2, 3, 4, 6].map((n) => (
@@ -323,6 +333,15 @@ export default function Demo() {
                 </B>
               ))}
               <B onClick={() => set({ ask: { question: "Long options", options: [LONG, LONG.slice(0, 80)] } })}>Long options</B>
+              <B
+                onClick={() => {
+                  say("What should the new dot be called?");
+                  set({ state: "asking", micOpen: true, ask: { question: "What should the new dot be called?", options: [] } });
+                }}
+              >
+                Open question
+              </B>
+              <B onClick={() => set({ ask: { question: LONG.repeat(2).trim() + "?", options: ASKS[3]! } })}>Long question</B>
             </Group>
             <Group title="Card">
               {CARDS.map(([name, card]) => (

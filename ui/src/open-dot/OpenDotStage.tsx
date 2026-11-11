@@ -3,12 +3,13 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 import { commands } from "@/api/commands";
 import { notifyError } from "@/lib/notify";
-import { useVoiceLive, type VoiceLive } from "@/lib/use-voice";
+import { useVoiceLive, useVoiceStatus, type VoiceLive } from "@/lib/use-voice";
 
 import { Breath } from "./Breath";
 import { breathStateOf } from "./breath-model";
 import { Card } from "./cards";
-import { useStage, type StageCommands } from "./use-stage";
+import { useVoiceHotkey } from "./RailMark";
+import { interrupts, LEAVE_MS, talk, useStage, type StageCommands } from "./use-stage";
 
 /// Options past this many show without a key hint; keys 1 to 4 pick.
 const KEYED = 4;
@@ -37,7 +38,8 @@ function typing(target: EventTarget | null): boolean {
   );
 }
 
-/// Whether something else on screen owns `Esc` now: a dialog, a menu or a list box.
+/// Whether something else on screen owns the keys now: a dialog (the search box is one), a
+/// menu or a list box.
 function somethingElseIsOpen(): boolean {
   return document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]') !== null;
 }
@@ -48,6 +50,8 @@ function micLine(live: {
   micOpen: boolean;
   trouble: string | null;
   showing: boolean;
+  options: boolean;
+  shortcut: boolean;
 }): string | null {
   if (live.micOpen) return null;
   if (live.trouble) return live.trouble;
@@ -55,41 +59,83 @@ function micLine(live: {
     case "thinking":
       return "Thinking…";
     case "speaking":
-      return "Speaking. Click the dots or press the shortcut to interrupt.";
+      return live.shortcut
+        ? "Speaking. Click the dots or press the shortcut to interrupt."
+        : "Speaking. Click the dots to interrupt.";
     default:
-      return live.showing ? "Not listening. Click the dots to answer by voice, or pick an option." : null;
+      if (!live.showing) return null;
+      return live.options
+        ? "Not listening. Click the dots to answer by voice, or pick an option."
+        : "Not listening. Click the dots to answer by voice.";
   }
 }
 
 /// What it hears while listening, then the reply: two lines at most, the newest strongest.
-function Words() {
+/// Only finished things are read out: the reply's lines and the sentence once heard. Words
+/// still coming are shown but kept out of the live region. A newest reply line that only
+/// repeats the question printed below it is left out.
+function Words({ question }: { question: string | null }) {
   const state = useVoiceLive((live) => live.state);
   const hearing = useVoiceLive((live) => live.hearing);
+  const heard = useVoiceLive((live) => live.heard);
   const said = useVoiceLive((live) => live.said);
-  const reply = state === "listening" ? [] : said.slice(-2);
+  const newest = said.at(-1);
+  const shown =
+    question !== null && newest !== undefined && newest.text.trim() === question.trim()
+      ? said.slice(0, -1)
+      : said;
+  const reply = state === "listening" ? [] : shown.slice(-2);
+  const finished = reply.length === 0 && hearing !== "" && heard;
+  const coming = reply.length === 0 && hearing !== "" && !heard;
   return (
-    <div aria-live="polite" className="flex w-full shrink-0 flex-col items-center gap-1 text-center">
-      {reply.length > 0
-        ? reply.map((line, i) => {
-            const newest = i === reply.length - 1;
-            return (
-              <p
-                key={`${said.length - reply.length + i}`}
-                title={line}
-                className={cn(
-                  "max-w-full wrap-anywhere",
-                  newest ? "line-clamp-2 text-sm text-foreground" : "line-clamp-1 text-xs text-muted-foreground",
-                )}
-              >
-                {line}
-              </p>
-            );
-          })
-        : hearing !== "" && (
-            <p title={hearing} className="line-clamp-2 max-w-full text-sm text-muted-foreground wrap-anywhere">
-              {hearing}
+    <div className="flex w-full shrink-0 flex-col items-center gap-1 text-center">
+      <div aria-live="polite" className="flex w-full flex-col items-center gap-1 empty:hidden">
+        {reply.map((line, i) => {
+          const last = i === reply.length - 1;
+          return (
+            <p
+              key={line.n}
+              title={line.text}
+              className={cn(
+                "max-w-full wrap-anywhere",
+                last ? "line-clamp-2 text-sm text-foreground" : "line-clamp-1 text-xs text-muted-foreground",
+              )}
+            >
+              {line.text}
             </p>
-          )}
+          );
+        })}
+        {finished && (
+          <p title={hearing} className="line-clamp-2 max-w-full text-sm text-muted-foreground wrap-anywhere">
+            {hearing}
+          </p>
+        )}
+      </div>
+      {coming && (
+        <p
+          aria-live="off"
+          title={hearing}
+          className="line-clamp-2 max-w-full text-sm text-muted-foreground wrap-anywhere"
+        >
+          {hearing}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/// The question, printed above its options; an open question says how to answer it.
+function Question({ ask }: { ask: NonNullable<VoiceLive["ask"]> }) {
+  return (
+    <div className="flex w-full shrink-0 flex-col items-center gap-0.5 text-center">
+      <p
+        data-question=""
+        title={ask.question}
+        className="line-clamp-2 max-w-full text-sm font-medium text-foreground wrap-anywhere"
+      >
+        {ask.question}
+      </p>
+      {ask.options.length === 0 && <p className="text-xs text-muted-foreground">Say your answer.</p>}
     </div>
   );
 }
@@ -135,67 +181,115 @@ function Options(props: {
 }
 
 /// The stage: what a person sees while talking to Dot. It floats above whatever screen shows,
-/// at the bottom in the middle, with The Breath, the live words, the options and a card. It
-/// renders nothing while closed, so The Breath inside it stops with it.
+/// at the bottom in the middle, with The Breath, the live words, the question, its options and
+/// a card. Once closed it fades away for `LEAVE_MS`, out of reach of the keyboard, the mouse
+/// and a screen reader, and then renders nothing, so The Breath inside it stops with it.
 export function OpenDotStage({ act = commands }: { act?: StageCommands } = {}) {
   const stage = useStage(act);
-  if (!stage.open) return null;
-  return <Panel act={act} close={stage.close} justFinished={stage.justFinished} />;
+  // Whether the panel is drawn: while open, and for `LEAVE_MS` after. Adjusted while
+  // rendering, so it never misses a frame between open and leaving.
+  const [drawn, setDrawn] = useState(stage.open);
+  if (stage.open && !drawn) setDrawn(true);
+  const leaving = drawn && !stage.open;
+  useEffect(() => {
+    if (!leaving) return;
+    const gone = setTimeout(() => setDrawn(false), LEAVE_MS);
+    return () => clearTimeout(gone);
+  }, [leaving]);
+  if (!drawn) return null;
+  return <Panel act={act} close={stage.close} justFinished={stage.justFinished} leaving={leaving} />;
 }
 
-function Panel(props: { act: StageCommands; close: () => void; justFinished: boolean }) {
-  const { act, close, justFinished } = props;
+function Panel(props: { act: StageCommands; close: () => void; justFinished: boolean; leaving: boolean }) {
+  const { act, close, justFinished, leaving } = props;
   const state = useVoiceLive((live) => live.state);
   const micOpen = useVoiceLive((live) => live.micOpen);
   const trouble = useVoiceLive((live) => live.trouble);
   const ask = useVoiceLive((live) => live.ask);
   const card = useVoiceLive((live) => live.card);
+  const status = useVoiceStatus().data;
+  const hotkey = useVoiceHotkey();
   const reduced = useReducedMotion();
 
-  // The question a pick was sent for, and which option: none until the next question.
+  // The question a pick was sent for, and which option: none until the next question, or
+  // until the pick fails, so the options can be tried again.
   const [pickedFor, setPickedFor] = useState<{ ask: VoiceLive["ask"]; index: number } | null>(null);
   const picked = ask !== null && pickedFor?.ask === ask ? pickedFor.index : null;
   const pick = (index: number) => {
     if (ask === null || picked !== null || index < 0 || index >= ask.options.length) return;
-    setPickedFor({ ask, index });
-    act.voicePick(index).catch(notifyError);
+    const sent = { ask, index };
+    setPickedFor(sent);
+    act.voicePick(index).catch((e: unknown) => {
+      setPickedFor((p) => (p === sent ? null : p));
+      notifyError(e);
+    });
   };
 
-  // One key listener while the stage shows; it reads the latest of what it needs.
-  const latest = useRef({ close, pick, ask });
-  latest.current = { close, pick, ask };
+  // One pair of key listeners while the stage shows; they read the latest of what they need.
+  // Whether something else owns the keys is decided as the key goes down, in the capture
+  // phase before any handler runs: a menu that closes on this very `Esc` is gone by the time
+  // the key bubbles up to the window.
+  const latest = useRef({ close, pick, ask, leaving });
+  latest.current = { close, pick, ask, leaving };
   useEffect(() => {
+    let decided: { event: KeyboardEvent; elsewhere: boolean } | null = null;
+    const onCapture = (e: KeyboardEvent) => {
+      decided = { event: e, elsewhere: somethingElseIsOpen() };
+    };
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
+      const elsewhere = decided?.event === e ? decided.elsewhere : somethingElseIsOpen();
+      decided = null;
       const now = latest.current;
+      if (now.leaving || elsewhere) return;
+      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
       if (e.key === "Escape") {
-        if (somethingElseIsOpen()) return;
         e.preventDefault();
         now.close();
         return;
       }
-      if (!/^[1-4]$/.test(e.key) || now.ask === null || typing(e.target)) return;
+      // The digit keys, and the number pad's (its key is the digit while Num Lock is on).
+      if (e.repeat || !/^[1-4]$/.test(e.key) || now.ask === null || typing(e.target)) return;
       const index = Number(e.key) - 1;
       if (index >= now.ask.options.length) return;
       e.preventDefault();
       now.pick(index);
     };
+    window.addEventListener("keydown", onCapture, true);
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onCapture, true);
+      window.removeEventListener("keydown", onKey);
+    };
   }, []);
 
+  // Until the voice status is known, or while voice cannot listen, the dots do nothing.
+  const ready = status?.enabled === true && status.ready;
   const breath = breathStateOf({ state, trouble, ask }, justFinished);
-  const line = micLine({ state, micOpen, trouble, showing: ask !== null || card !== null });
+  const options = ask !== null && ask.options.length > 0;
+  const line = micLine({
+    state,
+    micOpen,
+    trouble,
+    showing: ask !== null || card !== null,
+    options,
+    shortcut: hotkey !== "",
+  });
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pr-4 pb-4 pl-[calc(46px+1rem)]">
+    <div
+      aria-hidden={leaving || undefined}
+      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pr-4 pb-4 pl-[calc(46px+1rem)]"
+    >
       <section
         role="region"
         aria-label="Open Dot"
+        inert={leaving}
         className={cn(
-          "pointer-events-auto flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col items-center gap-3 rounded-xl bg-popover px-6 pt-5 pb-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10",
-          "animate-in duration-250 ease-out fade-in-0",
-          !reduced && "slide-in-from-bottom-4",
+          "flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col items-center gap-3 rounded-xl bg-popover px-6 pt-5 pb-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10",
+          leaving
+            ? "pointer-events-none animate-out duration-200 ease-in fill-mode-forwards fade-out-0"
+            : "pointer-events-auto animate-in duration-250 ease-out fade-in-0",
+          !reduced && (leaving ? "slide-out-to-bottom-4" : "slide-in-from-bottom-4"),
         )}
       >
         <div data-breath-state={breath} className="shrink-0 p-3">
@@ -203,11 +297,15 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
             size={132}
             state={breath}
             options={ask?.options.length ?? 3}
-            onClick={() => act.voiceStop().catch(notifyError)}
+            label={interrupts(state) ? "Stop and listen" : "Listen"}
+            onClick={() => {
+              if (ready) talk(act, state).catch(notifyError);
+            }}
           />
         </div>
-        <Words />
-        {ask !== null && ask.options.length > 0 && <Options ask={ask} picked={picked} pick={pick} />}
+        <Words question={ask?.question ?? null} />
+        {ask !== null && <Question ask={ask} />}
+        {options && <Options ask={ask} picked={picked} pick={pick} />}
         {card !== null && (
           <div
             data-card=""

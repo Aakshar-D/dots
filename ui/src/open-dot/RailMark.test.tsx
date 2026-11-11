@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { VoiceStatus } from "@/api/types";
 import { createQueryClient } from "@/lib/query";
-import { voiceStore } from "@/lib/use-voice";
+import { voiceStore, type VoiceLive } from "@/lib/use-voice";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
@@ -14,8 +14,8 @@ import { RailMark } from "./RailMark";
 const ready: VoiceStatus = { ...sample.voiceReady, trouble: null, mic_open: false, state: "idle" };
 
 /// The mark at /home, with a settings page to go to.
-function mount(status: VoiceStatus) {
-  backend.on("voice_status", () => status);
+function mount(status: VoiceStatus | "never") {
+  backend.on("voice_status", () => (status === "never" ? new Promise(() => {}) : status));
   const router = createMemoryRouter(
     [
       { path: "/home", element: <RailMark /> },
@@ -31,7 +31,7 @@ function mount(status: VoiceStatus) {
   return router;
 }
 
-const mark = () => screen.getByRole("button", { name: /^Talk to Dot/ });
+const mark = () => screen.getByRole("button", { name: /^(Talk to Dot|Set up voice)$/ });
 
 beforeEach(() => {
   voiceStore.reset();
@@ -41,22 +41,49 @@ beforeEach(() => {
 afterEach(() => voiceStore.reset());
 
 describe("the rail mark", () => {
-  it("listens when voice is ready, and names the shortcut", async () => {
+  it("listens when voice is ready, and gives the shortcut apart from its name", async () => {
+    backend.on("get_settings", () => ({ ...sample.settings, voice_hotkey: "CmdOrCtrl+Shift+Space" }));
     mount(ready);
-    await waitFor(() => expect(mark()).toHaveAccessibleName("Talk to Dot (Ctrl+Shift+Space)"));
+    await waitFor(() => expect(mark()).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Space"));
+    expect(mark()).toHaveAccessibleName("Talk to Dot");
+    expect(mark()).toHaveAttribute("title", "Talk to Dot (Ctrl+Shift+Space)");
     fireEvent.click(mark());
     expect(backend.callsTo("voice_open")).toEqual([{}]);
   });
 
-  it("stops and listens while Open Dot is busy, as the shortcut does", async () => {
+  it("names no shortcut when none is set", async () => {
+    backend.on("get_settings", () => ({ ...sample.settings, voice_hotkey: "" }));
+    mount(ready);
+    await waitFor(() => expect(backend.callsTo("get_settings")).toHaveLength(1));
+    await act(async () => {});
+    expect(mark()).not.toHaveAttribute("aria-keyshortcuts");
+    expect(mark()).toHaveAttribute("title", "Talk to Dot");
+  });
+
+  it.each<[string, Partial<VoiceLive>, string]>([
+    ["thinking", { state: "thinking" }, "voice_stop"],
+    ["speaking", { state: "speaking" }, "voice_stop"],
+    ["listening", { state: "listening", micOpen: true }, "voice_open"],
+    ["idle with a question waiting", { state: "idle", ask: { question: "Run it?", options: ["Yes", "No"] } }, "voice_open"],
+    ["idle with a card showing", { state: "idle", card: { kind: "list", title: "Waiting", lines: [] } }, "voice_open"],
+  ])("while Open Dot is %s, a click calls %s", async (_, live, command) => {
     mount(ready);
     await waitFor(() => expect(backend.callsTo("voice_status")).toHaveLength(1));
-    act(() => voiceStore.set({ state: "speaking" }));
-    await waitFor(() => {
-      fireEvent.click(mark());
-      expect(backend.callsTo("voice_stop")).toHaveLength(1);
-    });
+    await act(async () => {});
+    act(() => voiceStore.set(live));
+    fireEvent.click(mark());
+    expect(backend.callsTo(command)).toEqual([{}]);
+    expect(backend.callsTo(command === "voice_stop" ? "voice_open" : "voice_stop")).toEqual([]);
+  });
+
+  it("does nothing while the voice status is still on its way", async () => {
+    const router = mount("never");
+    await waitFor(() => expect(backend.callsTo("voice_status")).toHaveLength(1));
+    fireEvent.click(mark());
+    await act(async () => {});
+    expect(router.state.location.pathname).toBe("/home");
     expect(backend.callsTo("voice_open")).toEqual([]);
+    expect(backend.callsTo("voice_stop")).toEqual([]);
   });
 
   it.each<[string, VoiceStatus]>([
@@ -67,6 +94,7 @@ describe("the rail mark", () => {
     const router = mount(status);
     await waitFor(() => expect(backend.callsTo("voice_status")).toHaveLength(1));
     await act(async () => {});
+    expect(mark()).toHaveAccessibleName("Set up voice");
     fireEvent.click(mark());
     expect(await screen.findByText("Settings page")).toBeVisible();
     expect(router.state.location.pathname).toBe("/settings/voice");

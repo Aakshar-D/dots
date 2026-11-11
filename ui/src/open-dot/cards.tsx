@@ -20,26 +20,41 @@ function joined(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
+/// "Every week", "Every 2 days", "Every hour", "Every 90 minutes": the largest unit that
+/// divides the interval exactly.
+function everyWords(minutes: number): string {
+  const units: [number, string][] = [
+    [7 * 24 * 60, "week"],
+    [24 * 60, "day"],
+    [60, "hour"],
+  ];
+  for (const [size, unit] of units) {
+    if (minutes >= size && minutes % size === 0) {
+      const n = minutes / size;
+      return n === 1 ? `Every ${unit}` : `Every ${n} ${unit}s`;
+    }
+  }
+  return minutes === 1 ? "Every minute" : `Every ${minutes} minutes`;
+}
+
 /// A schedule in a few plain words: "Weekdays at 09:00", "Every 2 hours", "Once, 12 Nov 2026,
 /// 09:00". The app had no such sentence (its screens edit a schedule in fields), so it starts
-/// here. A cron expression is shown as written.
+/// here. A cron expression is shown as written, as a custom schedule.
 export function scheduleWords(schedule: Schedule): string {
   const rule = schedule.rule;
   let words: string;
   switch (rule.kind) {
     case "once":
       return `Once, ${localDateTime(rule.at)}`;
-    case "every": {
-      const m = rule.minutes;
-      if (m % 60 === 0) words = m === 60 ? "Every hour" : `Every ${m / 60} hours`;
-      else words = m === 1 ? "Every minute" : `Every ${m} minutes`;
+    case "every":
+      words = everyWords(rule.minutes);
       break;
-    }
     case "daily":
       words = `Every day at ${rule.time}`;
       break;
     case "weekly": {
       const days = WEEK.filter((d) => rule.days.includes(d));
+      if (days.length === 0) return "No days chosen";
       const key = days.join(",");
       const when =
         key === "mon,tue,wed,thu,fri"
@@ -53,12 +68,12 @@ export function scheduleWords(schedule: Schedule): string {
       break;
     }
     case "cron":
-      words = `On the schedule ${rule.expr}`;
+      words = `On a custom schedule (${rule.expr})`;
       break;
   }
   const until = schedule.until;
   if (until && "count" in until) words += `, ${until.count} ${until.count === 1 ? "time" : "times"}`;
-  else if (until && "date" in until) words += `, until ${until.date}`;
+  else if (until && "date" in until) words += `, until ${localDateTime(until.date)}`;
   return words;
 }
 
@@ -112,27 +127,30 @@ function ProposalCard({ proposal }: { proposal: SetupProposal }) {
   );
 }
 
-/// What each deed is called on its card.
-const DEED_TITLE: Record<Deed["kind"], string> = {
-  approve: "Allow",
-  deny: "Deny",
-  run: "Run now",
-  send: "Send",
-  answer: "Answer",
-};
+/// The deed as the card's heading: "Approve for triage: Bash", "Run backup now".
+function deedTitle(deed: Deed): string {
+  switch (deed.kind) {
+    case "approve":
+      return `Approve for ${deed.dot_name}: ${deed.tool}`;
+    case "deny":
+      return `Deny for ${deed.dot_name}: ${deed.tool}`;
+    case "run":
+      return `Run ${deed.dot_name} now`;
+    case "send":
+      return `Send to ${deed.dot_name}`;
+    case "answer":
+      return `Answer ${deed.dot_name}`;
+  }
+}
 
 function ConfirmCard({ deed }: { deed: Deed }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <p className="text-xs text-muted-foreground">{DEED_TITLE[deed.kind]}</p>
-      <p className="text-sm font-medium">{deed.dot_name}</p>
-      {(deed.kind === "approve" || deed.kind === "deny") && (
-        <>
-          <p>{deed.tool}</p>
-          <code className="block rounded-md bg-background/60 px-2 py-1 font-mono text-xs whitespace-pre-wrap wrap-anywhere">
-            {deed.target}
-          </code>
-        </>
+      <p className="text-sm font-medium text-foreground">{deedTitle(deed)}</p>
+      {(deed.kind === "approve" || deed.kind === "deny") && deed.target.trim() !== "" && (
+        <code className="block rounded-md bg-background/60 px-2 py-1 font-mono text-xs whitespace-pre-wrap wrap-anywhere">
+          {deed.target}
+        </code>
       )}
       {(deed.kind === "send" || deed.kind === "answer") && (
         <p className="whitespace-pre-wrap">{deed.text}</p>
@@ -144,7 +162,7 @@ function ConfirmCard({ deed }: { deed: Deed }) {
 function ListCard({ title, lines }: { title: string; lines: string[] }) {
   return (
     <div className="flex flex-col gap-1.5">
-      <p className="text-sm font-medium">{title}</p>
+      <p className="text-sm font-medium text-foreground">{title}</p>
       <ul className="flex flex-col gap-1">
         {lines.map((line, i) => (
           <li key={i}>{line}</li>

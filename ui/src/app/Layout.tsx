@@ -90,51 +90,59 @@ export function Layout() {
         aria-label="Main"
         className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"
       >
-        <AccountSwitcher />
-        <button
-          type="button"
-          aria-label="Search (Ctrl+K)"
-          title="Search (Ctrl+K)"
-          aria-haspopup="dialog"
-          onClick={() => setSearching(true)}
-          className="flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+        {/* The rail keeps its top and bottom in a short window; the links between scroll. */}
+        <div data-rail="top" className="flex shrink-0 flex-col items-center gap-1">
+          <AccountSwitcher />
+          <button
+            type="button"
+            aria-label="Search (Ctrl+K)"
+            title="Search (Ctrl+K)"
+            aria-haspopup="dialog"
+            onClick={() => setSearching(true)}
+            className="flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground"
+          >
+            <Search className="size-5" aria-hidden />
+          </button>
+        </div>
+        <div
+          data-rail="links"
+          className="no-scrollbar flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto py-1"
         >
-          <Search className="size-5" aria-hidden />
-        </button>
-        {(isPublisher ? [...LINKS.slice(0, -1), RELEASES, LINKS.at(-1)!] : LINKS).map(({ to, label, icon: Icon }) => {
-          const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
-          // The name says the count too, and the tooltip shows it.
-          const name = count > 0 ? `${label}, ${count} ${to === "/home" ? "unread" : "waiting"}` : label;
-          return (
-            <NavLink
-              key={to}
-              to={to}
-              aria-label={name}
-              title={name}
-              className={({ isActive }) =>
-                cn(
-                  "relative flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
-                  isActive && "bg-sidebar-accent text-primary hover:text-primary",
-                )
-              }
-            >
-              <Icon className="size-5" aria-hidden />
-              {count > 0 && (
-                <Badge
-                  data-tone={needs ? "needs" : "muted"}
-                  className={cn(
-                    "absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px]",
-                    needs ? "bg-needs text-needs-foreground" : "bg-muted text-muted-foreground",
-                  )}
-                >
-                  {count > 99 ? "99+" : count}
-                </Badge>
-              )}
-            </NavLink>
-          );
-        })}
+          {(isPublisher ? [...LINKS.slice(0, -1), RELEASES, LINKS.at(-1)!] : LINKS).map(({ to, label, icon: Icon }) => {
+            const count = to === "/inbox" ? waiting : to === "/home" ? unread : 0;
+            // The name says the count too, and the tooltip shows it.
+            const name = count > 0 ? `${label}, ${count} ${to === "/home" ? "unread" : "waiting"}` : label;
+            return (
+              <NavLink
+                key={to}
+                to={to}
+                aria-label={name}
+                title={name}
+                className={({ isActive }) =>
+                  cn(
+                    "relative flex size-9 items-center justify-center rounded-lg text-muted-foreground hover:bg-sidebar-accent hover:text-foreground",
+                    isActive && "bg-sidebar-accent text-primary hover:text-primary",
+                  )
+                }
+              >
+                <Icon className="size-5" aria-hidden />
+                {count > 0 && (
+                  <Badge
+                    data-tone={needs ? "needs" : "muted"}
+                    className={cn(
+                      "absolute -top-1 -right-1 h-4 min-w-4 px-1 text-[10px]",
+                      needs ? "bg-needs text-needs-foreground" : "bg-muted text-muted-foreground",
+                    )}
+                  >
+                    {count > 99 ? "99+" : count}
+                  </Badge>
+                )}
+              </NavLink>
+            );
+          })}
+        </div>
         {/* The bottom of the rail: Open Dot's mark above the usage meter. */}
-        <div className="mt-auto flex flex-col items-center gap-1">
+        <div data-rail="bottom" className="flex shrink-0 flex-col items-center gap-1">
           <RailMark />
           <LimitsMeter />
         </div>

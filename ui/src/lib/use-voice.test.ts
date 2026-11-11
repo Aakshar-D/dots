@@ -158,22 +158,35 @@ describe("useVoice", () => {
     await hear({ kind: "hearing", text: "what is" }, () =>
       expect(voiceStore.get().hearing).toBe("what is"),
     );
+    // Still being heard: not finished.
+    expect(voiceStore.get().heard).toBe(false);
     act(() => backend.emit("voice", { kind: "heard", text: "what is waiting" }));
     expect(voiceStore.get().hearing).toBe("what is waiting");
+    expect(voiceStore.get().heard).toBe(true);
     act(() => backend.emit("voice", { kind: "saying", text: "One." }));
     // A reply starts: what was heard is done with.
     expect(voiceStore.get().hearing).toBe("");
-    expect(voiceStore.get().said).toEqual(["One."]);
+    expect(voiceStore.get().heard).toBe(false);
+    const texts = () => voiceStore.get().said.map((l) => l.text);
+    const numbers = () => voiceStore.get().said.map((l) => l.n);
+    expect(texts()).toEqual(["One."]);
     for (const line of ["Two.", "Three.", "Four."]) {
       act(() => backend.emit("voice", { kind: "saying", text: line }));
     }
-    expect(voiceStore.get().said).toEqual(["Two.", "Three.", "Four."]);
+    expect(texts()).toEqual(["Two.", "Three.", "Four."]);
+    // Each line keeps its own running number, so a held line is never named as another.
+    const [a, b, c] = numbers();
+    expect(b).toBe(a! + 1);
+    expect(c).toBe(b! + 1);
     expect(voiceStore.get().saying).toBe("Four.");
     act(() => backend.emit("voice", { kind: "heard", text: "and then" }));
     expect(voiceStore.get().said).toEqual([]);
     act(() => backend.emit("voice", { kind: "saying", text: "Then." }));
+    // The count runs on across replies.
+    expect(numbers()[0]).toBeGreaterThan(c!);
     act(() => backend.emit("voice", { kind: "cleared" }));
     expect(voiceStore.get().said).toEqual([]);
+    expect(voiceStore.get().heard).toBe(false);
   });
 
   it("keeps a status event when a screen's read of the status was on its way", async () => {

@@ -440,11 +440,32 @@ describe("the app frame", () => {
   it("has the Open Dot mark at the bottom of the rail, above the usage meter", async () => {
     renderApp("/home");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    const markButton = within(nav).getByRole("button", { name: /^Talk to Dot/ });
+    const markButton = within(nav).getByRole("button", { name: /^(Talk to Dot|Set up voice)$/ });
     const meter = await within(nav).findByRole("link", { name: /^Claude usage/i });
     expect(markButton.compareDocumentPosition(meter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const settings = within(nav).getByRole("link", { name: "Settings" });
     expect(settings.compareDocumentPosition(markButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the rail's top and bottom in place and scrolls its links in a short window", async () => {
+    renderApp("/home");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    const account = within(nav).getByRole("button", { name: /^Account:/ });
+    const search = within(nav).getByRole("button", { name: /^Search/ });
+    const home = within(nav).getByRole("link", { name: /^Home/ });
+    const markButton = within(nav).getByRole("button", { name: /^(Talk to Dot|Set up voice)$/ });
+    const meter = await within(nav).findByRole("link", { name: /^Claude usage/i });
+
+    const top = account.closest("[data-rail='top']")!;
+    const links = home.closest("[data-rail='links']")!;
+    const bottom = markButton.closest("[data-rail='bottom']")!;
+    expect(top).toContainElement(search);
+    expect(top).toHaveClass("shrink-0");
+    expect(bottom).toContainElement(meter);
+    expect(bottom).toHaveClass("shrink-0");
+    expect(links).toHaveClass("min-h-0", "flex-1", "overflow-y-auto", "no-scrollbar");
+    expect(links).toContainElement(within(nav).getByRole("link", { name: "Settings" }));
+    expect(links).not.toContainElement(markButton);
   });
 
   it("shows the Open Dot stage only while it is open", async () => {

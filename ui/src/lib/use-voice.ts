@@ -24,9 +24,12 @@ export type VoiceLive = {
   level: { mic: number; voice: number };
   /// What the person is saying, as it is heard; the whole of it once heard.
   hearing: string;
+  /// Whether `hearing` is the finished sentence (a `heard` event), not words still coming.
+  heard: boolean;
   saying: string;
-  /// The lines of the current reply, oldest first: the last `SAID_KEPT` of them.
-  said: string[];
+  /// The lines of the current reply, oldest first: the last `SAID_KEPT` of them. `n` is the
+  /// line's running number, never reused, so a line keeps its name as older ones drop off.
+  said: SaidLine[];
   ask: { question: string; options: string[] } | null;
   card: OpenDotCard | null;
   /// The speech files' download, while one runs.
@@ -34,11 +37,14 @@ export type VoiceLive = {
   trouble: string | null;
 };
 
+export type SaidLine = { n: number; text: string };
+
 const quiet: VoiceLive = {
   state: "off",
   micOpen: false,
   level: { mic: 0, voice: 0 },
   hearing: "",
+  heard: false,
   saying: "",
   said: [],
   ask: null,
@@ -78,6 +84,9 @@ export function useVoiceLive<T>(select: (live: VoiceLive) => T): T {
 
 /// How many lines of a reply the store keeps.
 const SAID_KEPT = 3;
+
+/// The running number of the last reply line taken, over the app's life.
+let lastLine = 0;
 
 /// How many times the voice status was set from something newer than a read (an event, or a
 /// command's answer), per query client. A read that began before such a change keeps the newer
@@ -179,19 +188,20 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       voiceStore.set({ level: { mic: event.mic, voice: event.voice } });
       return;
     case "hearing":
-      voiceStore.set({ hearing: event.text });
+      voiceStore.set({ hearing: event.text, heard: false });
       return;
     case "heard":
       // What the person said in full: the reply before it is done with.
-      voiceStore.set({ hearing: event.text, said: [] });
+      voiceStore.set({ hearing: event.text, heard: true, said: [] });
       return;
     case "saying": {
       // The first line of a reply: what was heard gives way to it.
       const { said } = voiceStore.get();
+      lastLine += 1;
       voiceStore.set({
         saying: event.text,
-        said: [...said, event.text].slice(-SAID_KEPT),
-        ...(said.length === 0 ? { hearing: "" } : {}),
+        said: [...said, { n: lastLine, text: event.text }].slice(-SAID_KEPT),
+        ...(said.length === 0 ? { hearing: "", heard: false } : {}),
       });
       return;
     }
@@ -205,7 +215,7 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       open(pathOf(event.target));
       return;
     case "cleared":
-      voiceStore.set({ hearing: "", saying: "", said: [], ask: null, card: null });
+      voiceStore.set({ hearing: "", heard: false, saying: "", said: [], ask: null, card: null });
       return;
     case "woke":
       return;

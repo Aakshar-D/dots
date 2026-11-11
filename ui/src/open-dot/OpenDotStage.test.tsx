@@ -1,19 +1,38 @@
-import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render as rtlRender, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { Profiler } from "react";
+import { Profiler, type ReactNode } from "react";
+import { toast } from "sonner";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { OpenDotCard, SetupProposal } from "@/api/types";
+import { createQueryClient, keys } from "@/lib/query";
 import { voiceStore, type VoiceLive } from "@/lib/use-voice";
 import { backend } from "@/test/backend";
+import { sample } from "@/test/fixtures";
 
 import { DONE_MS } from "./breath-model";
 import { OpenDotStage } from "./OpenDotStage";
-import { LINGER_MS } from "./use-stage";
+import { LEAVE_MS, LINGER_MS, type StageCommands } from "./use-stage";
+
+/// The stage reads the voice status and the shortcut from the query cache, as in the app.
+function render(ui: ReactNode, hotkey = "CmdOrCtrl+Shift+Space") {
+  const qc = createQueryClient();
+  qc.setQueryData(keys.voice, { ...sample.voiceReady, trouble: null, mic_open: false, state: "idle" });
+  qc.setQueryData(keys.settings, { ...sample.settings, voice_hotkey: hotkey });
+  return rtlRender(ui, {
+    wrapper: ({ children }) => <QueryClientProvider client={qc}>{children}</QueryClientProvider>,
+  });
+}
+
+/// Reply lines with running numbers, as the store keeps them.
+let line = 0;
+const lines = (...texts: string[]) => texts.map((text) => ({ n: ++line, text }));
 
 const show = (change: Partial<VoiceLive>) => act(() => voiceStore.set(change));
 const stage = () => screen.queryByRole("region", { name: "Open Dot" });
 const words = () => stage()!.querySelector<HTMLElement>("[aria-live='polite']")!;
+const question = () => stage()!.querySelector<HTMLElement>("[data-question]");
 /// What The Breath shows: its button names the state only through the image underneath, so
 /// the state is read from the mark's data attribute.
 const breathState = () => stage()!.querySelector("[data-breath-state]")?.getAttribute("data-breath-state");
@@ -69,15 +88,33 @@ describe("the Open Dot stage", () => {
     expect(container.querySelector("svg")).toBeNull();
   });
 
-  it("opens on listening and shows what it hears", () => {
+  it("opens on listening and shows what it hears, announcing it only once heard", () => {
     show({ state: "idle" });
     render(<OpenDotStage />);
     show({ state: "listening", micOpen: true, hearing: "what is waiting" });
     expect(stage()).toBeVisible();
-    expect(words()).toHaveTextContent("what is waiting");
-    expect(within(words()).getByText("what is waiting")).toHaveClass("text-muted-foreground");
+    const hearing = within(stage()!).getByText("what is waiting");
+    expect(hearing).toHaveClass("text-muted-foreground");
+    // Words still coming are shown but not read out.
+    expect(hearing.closest("[aria-live]")).toHaveAttribute("aria-live", "off");
+    expect(words()).not.toHaveTextContent("what is waiting");
+    // The finished sentence is.
+    show({ hearing: "what is waiting for me", heard: true });
+    expect(words()).toHaveTextContent("what is waiting for me");
     // Focus stays where it was.
     expect(document.activeElement).toBe(document.body);
+  });
+
+  it("keeps each reply line's node, so a held line is not read out again", () => {
+    render(<OpenDotStage />);
+    const [one, two, three, four] = lines("One.", "Two.", "Three.", "Four.");
+    show({ state: "speaking", said: [one!, two!, three!] });
+    const held = within(words()).getByText("Three.");
+    // The store holds three lines: a fourth drops the oldest, and the line still shown keeps
+    // its node (a reused node with new text would be read out as new).
+    show({ said: [two!, three!, four!] });
+    expect(within(words()).getByText("Three.")).toBe(held);
+    expect(held).toHaveTextContent(/^Three\.$/);
   });
 
   it("shows the reply's two newest lines, the newest strongest", () => {
@@ -86,7 +123,7 @@ describe("the Open Dot stage", () => {
       state: "speaking",
       micOpen: false,
       hearing: "",
-      said: ["First.", "Second.", "Third and newest."],
+      said: lines("First.", "Second.", "Third and newest."),
     });
     expect(words()).not.toHaveTextContent("First.");
     const older = within(words()).getByText("Second.");
@@ -133,6 +170,53 @@ describe("the Open Dot stage", () => {
     expect(backend.callsTo("voice_pick")).toEqual([{ index: 1 }]);
   });
 
+  it.each(["dialog", "alertdialog", "menu", "listbox"])(
+    "number keys do not pick while a %s is open",
+    (role) => {
+      render(<OpenDotStage />);
+      show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"] } });
+      const other = document.createElement("div");
+      other.setAttribute("role", role);
+      document.body.append(other);
+      fireEvent.keyDown(document.body, { key: "1" });
+      other.remove();
+      expect(backend.callsTo("voice_pick")).toEqual([]);
+    },
+  );
+
+  it("number keys ignore modifiers, composition and repeats, and take the number pad", () => {
+    render(<OpenDotStage />);
+    show({ state: "asking", micOpen: true, ask: { question: "Which?", options: ["A", "B"] } });
+    for (const held of [{ ctrlKey: true }, { altKey: true }, { metaKey: true }, { isComposing: true }, { repeat: true }]) {
+      fireEvent.keyDown(document.body, { key: "1", ...held });
+    }
+    expect(backend.callsTo("voice_pick")).toEqual([]);
+    fireEvent.keyDown(document.body, { key: "2", code: "Numpad2" });
+    expect(backend.callsTo("voice_pick")).toEqual([{ index: 1 }]);
+  });
+
+  it("Esc that closes a menu leaves the stage open, though the menu is gone by then", () => {
+    render(<OpenDotStage />);
+    show({ state: "speaking", said: lines("Hello.") });
+    // A menu that closes on Esc from `document`, without saying it handled the key: by the time
+    // the key reaches `window`, the menu is gone.
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    document.body.append(menu);
+    const closeMenu = (e: KeyboardEvent) => {
+      if (e.key === "Escape") menu.remove();
+    };
+    document.addEventListener("keydown", closeMenu);
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    document.removeEventListener("keydown", closeMenu);
+    expect(document.querySelector('[role="menu"]')).toBeNull();
+    expect(backend.callsTo("voice_close")).toEqual([]);
+    expect(stage()).not.toBeNull();
+    // The next Esc, with nothing else open, closes the stage.
+    fireEvent.keyDown(document.body, { key: "Escape" });
+    expect(backend.callsTo("voice_close")).toEqual([{}]);
+  });
+
   it("shows key hints for the first four of more options, and wraps the rest", () => {
     render(<OpenDotStage />);
     const options = ["One", "Two", "Three", "Four", "Five", "Six"];
@@ -148,7 +232,7 @@ describe("the Open Dot stage", () => {
 
   it("Esc closes and stops speech, unless a dialog or menu is open or it was handled", () => {
     render(<OpenDotStage />);
-    show({ state: "speaking", said: ["Hello."] });
+    show({ state: "speaking", said: lines("Hello.") });
 
     const dialog = document.createElement("div");
     dialog.setAttribute("role", "dialog");
@@ -177,11 +261,113 @@ describe("the Open Dot stage", () => {
     expect(stage()).toBeNull();
   });
 
-  it("clicking The Breath stops speech and listens", () => {
+  it.each<[string, Partial<VoiceLive>, string, string]>([
+    ["thinking", { state: "thinking" }, "Stop and listen", "voice_stop"],
+    ["speaking", { state: "speaking" }, "Stop and listen", "voice_stop"],
+    ["listening", { state: "listening", micOpen: true }, "Listen", "voice_open"],
+    [
+      "idle with a question waiting",
+      { state: "idle", ask: { question: "Run it?", options: ["Yes", "No"] } },
+      "Listen",
+      "voice_open",
+    ],
+  ])("clicking The Breath while %s", (_, live, name, command) => {
     render(<OpenDotStage />);
-    show({ state: "speaking", said: ["Hello."] });
-    fireEvent.click(screen.getByRole("button", { name: "Stop and listen" }));
-    expect(backend.callsTo("voice_stop")).toEqual([{}]);
+    show({ said: lines("Hello."), ...live });
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(backend.callsTo(command)).toEqual([{}]);
+    const other = command === "voice_stop" ? "voice_open" : "voice_stop";
+    expect(backend.callsTo(other)).toEqual([]);
+  });
+
+  it("prints the question above the options, once", () => {
+    render(<OpenDotStage />);
+    show({ state: "asking", micOpen: true, said: lines("Triage wants to push."), ask: { question: "Allow it?", options: ["Allow", "Deny"] } });
+    expect(question()).toHaveTextContent("Allow it?");
+    expect(question()).toHaveClass("text-foreground", "font-medium", "line-clamp-2");
+    // Above the options.
+    const group = screen.getByRole("group", { name: "Allow it?" });
+    expect(question()!.compareDocumentPosition(group) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // Spoken as the newest reply line too: shown once.
+    show({ said: lines("Triage wants to push.", "Allow it?") });
+    expect(within(stage()!).getAllByText("Allow it?")).toHaveLength(1);
+    expect(within(words()).getByText("Triage wants to push.")).toBeVisible();
+  });
+
+  it("asks an open question with no options", () => {
+    render(<OpenDotStage />);
+    show({ state: "idle", micOpen: false, ask: { question: "What should it be called?", options: [] } });
+    expect(question()).toHaveTextContent("What should it be called?");
+    expect(within(stage()!).getByText("Say your answer.")).toBeVisible();
+    expect(screen.queryByRole("group", { name: "What should it be called?" })).toBeNull();
+    const footer = stage()!.querySelector("[data-footer-line]");
+    expect(footer).toHaveTextContent("Not listening. Click the dots to answer by voice.");
+    expect(footer).not.toHaveTextContent(/pick an option/);
+  });
+
+  it("names the shortcut to interrupt only when one is set", () => {
+    render(<OpenDotStage />, "");
+    show({ state: "speaking", micOpen: false });
+    expect(stage()!.querySelector("[data-footer-line]")).toHaveTextContent(/^Speaking\. Click the dots to interrupt\.$/);
+  });
+
+  it("lets the options be tried again when a pick fails", async () => {
+    const failed = vi.spyOn(toast, "error").mockImplementation(() => "");
+    const act_: StageCommands = {
+      voiceOpen: async () => null,
+      voiceClose: async () => null,
+      voiceStop: async () => null,
+      voicePick: () => Promise.reject(new Error("Dot is not asking anything now.")),
+    };
+    render(<OpenDotStage act={act_} />);
+    show({ state: "asking", micOpen: true, ask: { question: "Q", options: ["A", "B"] } });
+    await act(async () => void fireEvent.click(screen.getByRole("button", { name: "A" })));
+    expect(failed).toHaveBeenCalledWith("Dot is not asking anything now.");
+    expect(screen.getByRole("button", { name: "A" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("button", { name: "A" })).not.toHaveAttribute("data-picked");
+    failed.mockRestore();
+  });
+
+  it("fades out when it closes, out of reach, and is gone after", () => {
+    vi.useFakeTimers();
+    reducedMotion(false);
+    const { container } = render(<OpenDotStage />);
+    show({ state: "listening", micOpen: true });
+    fireEvent.click(screen.getByRole("button", { name: /Close/ }));
+    // Still drawn while it leaves, but hidden from the keyboard, the mouse and the reader.
+    const leaving = container.querySelector<HTMLElement>("section")!;
+    expect(leaving).not.toBeNull();
+    expect(leaving.className).toMatch(/fade-out/);
+    expect(leaving.className).toMatch(/slide-out-to-bottom/);
+    expect(leaving).toHaveAttribute("inert");
+    expect(leaving.className).toMatch(/pointer-events-none/);
+    expect(stage()).toBeNull();
+    act(() => void vi.advanceTimersByTime(LEAVE_MS));
+    expect(container.querySelector("section")).toBeNull();
+    expect(container.querySelector("svg")).toBeNull();
+  });
+
+  it("only fades out with reduced motion", () => {
+    reducedMotion(true);
+    const { container } = render(<OpenDotStage />);
+    show({ state: "listening", micOpen: true });
+    fireEvent.click(screen.getByRole("button", { name: /Close/ }));
+    const leaving = container.querySelector<HTMLElement>("section")!;
+    expect(leaving.className).toMatch(/fade-out/);
+    expect(leaving.className).not.toMatch(/slide-out/);
+  });
+
+  it("comes back if it opens again while leaving", () => {
+    vi.useFakeTimers();
+    render(<OpenDotStage />);
+    show({ state: "speaking" });
+    fireEvent.click(screen.getByRole("button", { name: /Close/ }));
+    expect(stage()).toBeNull();
+    show({ state: "listening", micOpen: true });
+    expect(stage()).not.toBeNull();
+    act(() => void vi.advanceTimersByTime(LEAVE_MS * 2));
+    expect(stage()).not.toBeNull();
+    expect(stage()).not.toHaveAttribute("inert");
   });
 
   it("shows a proposal card", () => {
@@ -207,20 +393,20 @@ describe("the Open Dot stage", () => {
   it.each<[OpenDotCard, string[]]>([
     [
       { kind: "confirm", deed: { kind: "approve", approval_id: "a", dot_name: "triage", tool: "Bash", target: "rm -rf ./build" } },
-      ["Allow", "triage", "Bash", "rm -rf ./build"],
+      ["Approve for triage: Bash", "rm -rf ./build"],
     ],
     [
       { kind: "confirm", deed: { kind: "deny", approval_id: "a", dot_name: "triage", tool: "Write", target: "notes.md" } },
-      ["Deny", "triage", "Write", "notes.md"],
+      ["Deny for triage: Write", "notes.md"],
     ],
-    [{ kind: "confirm", deed: { kind: "run", dot_id: "d", dot_name: "digest" } }, ["Run now", "digest"]],
+    [{ kind: "confirm", deed: { kind: "run", dot_id: "d", dot_name: "backup" } }, ["Run backup now"]],
     [
-      { kind: "confirm", deed: { kind: "send", dot_id: "d", dot_name: "digest", text: "Add Friday.", topic_root: null } },
-      ["Send", "digest", "Add Friday."],
+      { kind: "confirm", deed: { kind: "send", dot_id: "d", dot_name: "research", text: "Add Friday.", topic_root: null } },
+      ["Send to research", "Add Friday."],
     ],
     [
-      { kind: "confirm", deed: { kind: "answer", message_id: "m", dot_name: "digest", text: "Yes, go ahead." } },
-      ["Answer", "digest", "Yes, go ahead."],
+      { kind: "confirm", deed: { kind: "answer", message_id: "m", dot_name: "research", text: "Yes, go ahead." } },
+      ["Answer research", "Yes, go ahead."],
     ],
     [{ kind: "list", title: "Waiting", lines: ["One approval", "Two notes"] }, ["Waiting", "One approval", "Two notes"]],
   ])("shows a %s card", (card, texts) => {
@@ -228,15 +414,28 @@ describe("the Open Dot stage", () => {
     show({ state: "asking", card });
     const area = stage()!.querySelector<HTMLElement>("[data-card]")!;
     for (const text of texts) expect(within(area).getByText(text)).toBeVisible();
+    // The deed is the heading, in the foreground's weight.
+    expect(within(area).getByText(texts[0]!)).toHaveClass("font-medium", "text-foreground");
     if (card.kind === "confirm" && (card.deed.kind === "approve" || card.deed.kind === "deny")) {
       expect(within(area).getByText(card.deed.target)).toHaveClass("font-mono", "wrap-anywhere");
     }
   });
 
+  it("shows an approval with no target as its dot and tool only", () => {
+    render(<OpenDotStage />);
+    show({
+      state: "asking",
+      card: { kind: "confirm", deed: { kind: "approve", approval_id: "a", dot_name: "triage", tool: "WebSearch", target: "" } },
+    });
+    const area = stage()!.querySelector<HTMLElement>("[data-card]")!;
+    expect(within(area).getByText("Approve for triage: WebSearch")).toBeVisible();
+    expect(area.querySelector("code")).toBeNull();
+  });
+
   it("lingers 2.5 s after going idle, done then resting, then closes", () => {
     vi.useFakeTimers();
     render(<OpenDotStage />);
-    show({ state: "speaking", said: ["All done."] });
+    show({ state: "speaking", said: lines("All done.") });
     expect(breathState()).toBe("speaking");
     show({ state: "idle" });
     expect(stage()).not.toBeNull();
@@ -277,7 +476,7 @@ describe("the Open Dot stage", () => {
         <OpenDotStage />
       </Profiler>,
     );
-    show({ state: "speaking", said: ["Hello."], ask: { question: "Q", options: ["A", "B"] } });
+    show({ state: "speaking", said: lines("Hello."), ask: { question: "Q", options: ["A", "B"] } });
     const before = renders;
     act(() => {
       for (let i = 0; i < 30; i++) voiceStore.set({ level: { mic: i / 30, voice: (30 - i) / 30 } });
@@ -290,7 +489,7 @@ describe("the Open Dot stage", () => {
     const long = "x".repeat(400);
     show({
       state: "asking",
-      said: [long],
+      said: lines(long),
       ask: { question: "Q", options: [long, "B"] },
       card: { kind: "list", title: long, lines: Array.from({ length: 40 }, (_, i) => `${long} ${i}`) },
     });
@@ -347,7 +546,7 @@ describe("the Open Dot stage", () => {
     show({ state: "asking", micOpen: true, ask: { question: "Q", options: ["A", "B"] } });
     screen.getByRole("button", { name: "Before" }).focus();
     const expected = [
-      screen.getByRole("button", { name: "Stop and listen" }),
+      screen.getByRole("button", { name: "Listen" }),
       screen.getByRole("button", { name: "A" }),
       screen.getByRole("button", { name: "B" }),
       screen.getByRole("button", { name: "Close" }),
