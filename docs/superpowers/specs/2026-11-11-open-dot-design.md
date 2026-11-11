@@ -252,6 +252,7 @@ One branch (`feat/open-dot`), one pull request per step where a step stands alon
 - Private approvals are counted but never described aloud or sent to the model.
 - Its model requests show in Usage and count against spend caps.
 - It works in the workspace the app is showing.
+- "Hey Dot" does not raise a hidden or minimised window (step 5, as built): the reply is spoken, and the tray shows "Dot is listening". Only the hotkey and the tray's "Talk to Dot" bring the window forward.
 
 ## 10. As built
 

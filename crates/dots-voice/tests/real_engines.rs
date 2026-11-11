@@ -1,14 +1,17 @@
 //! Runs the real engines against the real models. Ignored by default: set
 //! `DOTS_VOICE_MODELS` to a models folder in the manifest layout and run with `--ignored`.
 
-use std::sync::Arc;
-use std::time::Instant;
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use dots_voice::{
-    resample, Clip, EarEvent, EarSettings, Ears, ModelPaths, Recognizer, SherpaDetector,
-    SherpaRecognizer, SherpaSpeaker, SherpaWake, Speaker, SpeechDetector, WakeSpotter, WakeWord,
+    resample, After, Clip, EarEvent, EarSettings, Ears, Mic, MicFrame, ModelPaths, Parts,
+    Recognizer, Session, SessionEvent, SessionSettings, SherpaDetector, SherpaRecognizer,
+    SherpaSpeaker, SherpaWake, Sink, Speaker, SpeechDetector, State, Voice, WakeSpotter, WakeWord,
     EAR_RATE, FRAME,
 };
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 fn paths() -> ModelPaths {
     let root = std::env::var_os("DOTS_VOICE_MODELS")
@@ -252,4 +255,365 @@ fn an_empty_clip_hears_nothing() {
         rate: 16_000,
     };
     assert_eq!(recognizer.transcribe(&short).unwrap(), "");
+}
+
+// ---- the real session, fed by a fake microphone ---------------------------------------------
+
+/// The session's settings for these tests. Built field by field on purpose: anything added
+/// later (a start tone) stays at its default unless set here, and a tone that sounds must be
+/// set off here, so these tests never depend on it.
+fn session_settings(wake_phrase: bool, interrupt_by_talking: bool) -> SessionSettings {
+    SessionSettings {
+        wake_phrase,
+        interrupt_by_talking,
+        ..SessionSettings::default()
+    }
+}
+
+/// A microphone whose frames the test sends. Each open makes a new stream; the newest one's
+/// sender is kept in the slot, and frames sent while it is closed are lost, as on a real one.
+type MicSlot = Arc<Mutex<Option<Sender<MicFrame>>>>;
+
+struct FakeMic(Option<Receiver<MicFrame>>);
+
+impl Mic for FakeMic {
+    fn frames(&mut self) -> Receiver<MicFrame> {
+        self.0.take().unwrap_or_else(|| channel().1)
+    }
+}
+
+/// A speaker that plays nothing: a clip keeps it busy for as long as it would sound.
+#[derive(Default)]
+struct FakeSink {
+    busy_until: Mutex<Option<Instant>>,
+}
+
+impl Sink for FakeSink {
+    fn play(&self, clip: Clip) -> bool {
+        let length = Duration::from_secs_f64(clip.samples.len() as f64 / f64::from(clip.rate));
+        let mut busy = self.busy_until.lock().unwrap();
+        let from = busy
+            .filter(|t| *t > Instant::now())
+            .unwrap_or_else(Instant::now);
+        *busy = Some(from + length);
+        true
+    }
+    fn stop(&self) {
+        *self.busy_until.lock().unwrap() = None;
+    }
+    fn idle(&self) -> bool {
+        self.busy_until
+            .lock()
+            .unwrap()
+            .is_none_or(|t| Instant::now() >= t)
+    }
+    fn level(&self) -> f32 {
+        if self.idle() {
+            0.0
+        } else {
+            0.3
+        }
+    }
+    fn failed(&self) -> bool {
+        false
+    }
+}
+
+/// The engines loaded once and shared by every session.
+struct Engines {
+    paths: ModelPaths,
+    speaker: Arc<SherpaSpeaker>,
+    recognizer: Arc<dyn Recognizer>,
+}
+
+impl Engines {
+    fn load() -> Self {
+        let paths = paths();
+        Self {
+            speaker: Arc::new(SherpaSpeaker::load(&paths, 2).unwrap()),
+            recognizer: Arc::new(SherpaRecognizer::load(&paths).unwrap()),
+            paths,
+        }
+    }
+
+    /// `text` in `voice`, at the microphone's rate.
+    fn said(&self, text: &str, voice: u8) -> Vec<f32> {
+        ears(&self.speaker.speak(text, voice, 1.0).unwrap())
+    }
+
+    /// A real session on the real engines, with a fake microphone and a fake speaker.
+    fn session(&self, settings: SessionSettings) -> Live {
+        let paths = &self.paths;
+        let sink = Arc::new(FakeSink::default());
+        let (voice_tx, voice_events) = unbounded_channel();
+        let speaker: Arc<dyn Speaker> = self.speaker.clone();
+        let voice = Voice::new(speaker, sink.clone(), voice_tx);
+        let slot: MicSlot = Arc::default();
+        let opener = slot.clone();
+        let reopened = sink.clone();
+        let parts = Parts {
+            ears: Ears::new(
+                Box::new(SherpaDetector::load(paths).unwrap()),
+                self.recognizer.clone(),
+                EarSettings::default(),
+            ),
+            short_ears: Ears::new(
+                Box::new(SherpaDetector::load(paths).unwrap()),
+                self.recognizer.clone(),
+                EarSettings::short_answer(),
+            ),
+            voice,
+            voice_events,
+            sink: sink.clone(),
+            open_sink: Box::new(move || Ok(reopened.clone() as Arc<dyn Sink>)),
+            wake: Some(Box::new(SherpaWake::load(paths).unwrap())),
+            open_mic: Box::new(move || {
+                let (tx, rx) = channel();
+                *opener.lock().unwrap() = Some(tx);
+                Ok(Box::new(FakeMic(Some(rx))) as Box<dyn Mic>)
+            }),
+        };
+        let (events_tx, events) = unbounded_channel();
+        let session = Session::start(parts, settings, events_tx);
+        Live {
+            session,
+            events,
+            mic: slot,
+            sink,
+        }
+    }
+}
+
+struct Live {
+    session: Session,
+    events: UnboundedReceiver<SessionEvent>,
+    mic: MicSlot,
+    sink: Arc<FakeSink>,
+}
+
+impl Live {
+    /// The first event from now on matching `want`, waiting up to `limit`.
+    fn wait(
+        &mut self,
+        limit: Duration,
+        want: impl Fn(&SessionEvent) -> bool,
+    ) -> Option<SessionEvent> {
+        let end = Instant::now() + limit;
+        loop {
+            while let Ok(ev) = self.events.try_recv() {
+                if want(&ev) {
+                    return Some(ev);
+                }
+            }
+            if Instant::now() >= end {
+                return None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    fn wait_state(&mut self, limit: Duration, state: State) -> bool {
+        self.wait(
+            limit,
+            |ev| matches!(ev, SessionEvent::State { state: s, .. } if *s == state),
+        )
+        .is_some()
+    }
+
+    /// Feeds `samples` to the open microphone in frames, at the pace a microphone delivers
+    /// them, then `tail_ms` of silence.
+    fn feed(&mut self, samples: &[f32], tail_ms: u64) {
+        let tail = vec![0.0f32; (u64::from(EAR_RATE) * tail_ms / 1000) as usize];
+        let frame_time = Duration::from_secs_f64(FRAME as f64 / f64::from(EAR_RATE));
+        let started = Instant::now();
+        for (n, chunk) in samples.chunks(FRAME).chain(tail.chunks(FRAME)).enumerate() {
+            let mut frame = chunk.to_vec();
+            frame.resize(FRAME, 0.0);
+            if let Some(tx) = self.mic.lock().unwrap().as_ref() {
+                let _ = tx.send(MicFrame::Audio(frame));
+            }
+            let due = started + frame_time * (n as u32 + 1);
+            if let Some(wait) = due.checked_duration_since(Instant::now()) {
+                std::thread::sleep(wait);
+            }
+        }
+    }
+
+    /// Starts a turn by a click and speaks a long reply to it; true once Dot is well into it
+    /// with plenty still to say. (The fake speaker can be quiet for a moment between two
+    /// sentences while the next is made, so the session's state is what tells.)
+    fn speaking_a_long_reply(&mut self) -> bool {
+        let turn = self.session.answered("Tell me about the week.").unwrap();
+        if self
+            .wait(Duration::from_secs(5), |ev| {
+                matches!(ev, SessionEvent::Heard { .. })
+            })
+            .is_none()
+        {
+            return false;
+        }
+        self.session.say(turn, LONG_REPLY, After::Rest);
+        let speaking = self.wait_state(Duration::from_secs(10), State::Speaking);
+        std::thread::sleep(Duration::from_millis(800));
+        speaking && self.session.state() == State::Speaking
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        self.session.shutdown();
+    }
+}
+
+const LONG_REPLY: &str = "Here is your week, with everything your dots did for you from \
+     Monday to Friday. On Monday Research looked at three new papers \
+     about batteries and wrote a short summary for you. On Tuesday the mail dot sorted forty \
+     messages and found two that need an answer. On Wednesday the build dot ran the tests \
+     twice and both runs passed. On Thursday nothing new came in. On Friday Research asked \
+     whether it should keep watching the battery papers every morning.";
+
+/// Waits for the resting session to open its microphone for the wake phrase.
+fn resting_with_the_mic_open(live: &mut Live) -> bool {
+    live.wait(Duration::from_secs(10), |ev| {
+        matches!(
+            ev,
+            SessionEvent::State {
+                state: State::Idle,
+                mic_open: true
+            }
+        )
+    })
+    .is_some()
+}
+
+/// "Hey Dot." then a sentence, said to the real session: `Woke`, then `Heard` with that
+/// sentence and not the wake phrase. Prints the hit counts over the ten voices.
+#[test]
+#[ignore]
+fn hey_dot_then_a_sentence_wakes_the_session_and_is_heard() {
+    let engines = Engines::load();
+    let (mut woke, mut heard, mut misses) = (0, 0, Vec::new());
+    for voice in 0..engines.speaker.voices() {
+        let wake = engines.said("Hey Dot.", voice);
+        let sentence = engines.said("Please read me the first message.", voice);
+        let mut live = engines.session(session_settings(true, false));
+        assert!(
+            resting_with_the_mic_open(&mut live),
+            "voice {voice}: no mic"
+        );
+        live.feed(&[], 300);
+        live.feed(&wake, 600);
+        let got_woke = live
+            .wait(Duration::from_secs(2), |ev| *ev == SessionEvent::Woke)
+            .is_some();
+        if !got_woke {
+            misses.push(format!("voice {voice}: no Woke"));
+            continue;
+        }
+        woke += 1;
+        live.feed(&sentence, 1500);
+        let text = live.wait(Duration::from_secs(10), |ev| {
+            matches!(ev, SessionEvent::Heard { .. })
+        });
+        match text {
+            Some(SessionEvent::Heard { text, .. }) => {
+                let lower = text.to_lowercase();
+                if lower.contains("first message") && !lower.contains("hey") {
+                    heard += 1;
+                } else {
+                    misses.push(format!("voice {voice}: heard {text:?}"));
+                }
+            }
+            _ => misses.push(format!("voice {voice}: no Heard")),
+        }
+    }
+    let voices = engines.speaker.voices();
+    println!("woke {woke}/{voices}, then heard the sentence {heard}/{voices}");
+    for miss in &misses {
+        println!("  {miss}");
+    }
+    assert!(
+        heard > 0,
+        "the sentence after the wake phrase was never heard"
+    );
+}
+
+/// While a long reply is spoken, "Dot, stop." said to the microphone stops it: the session
+/// listens again and the speaker is quiet. Prints the hit count over the ten voices.
+#[test]
+#[ignore]
+fn dot_stop_stops_a_long_reply() {
+    let engines = Engines::load();
+    let (mut stopped, mut misses) = (0, Vec::new());
+    for voice in 0..engines.speaker.voices() {
+        let stop = engines.said("Dot, stop.", voice);
+        let mut live = engines.session(session_settings(true, false));
+        assert!(
+            resting_with_the_mic_open(&mut live),
+            "voice {voice}: no mic"
+        );
+        assert!(live.speaking_a_long_reply(), "voice {voice}: not speaking");
+        live.feed(&stop, 500);
+        if live.wait_state(Duration::from_secs(2), State::Listening) && live.sink.idle() {
+            stopped += 1;
+        } else {
+            misses.push(format!("voice {voice}: still speaking"));
+        }
+    }
+    let voices = engines.speaker.voices();
+    println!("\"Dot, stop.\" stopped the reply {stopped}/{voices}");
+    for miss in &misses {
+        println!("  {miss}");
+    }
+    assert!(stopped > 0, "\"Dot, stop.\" never stopped the reply");
+}
+
+/// With "Interrupt by just talking" on, any sentence stops a long reply; with it off (and the
+/// wake phrase on, so the microphone is open), a sentence that is not the stop phrase does
+/// not. Prints the hit counts over the ten voices; a stop with the setting off fails.
+#[test]
+#[ignore]
+fn talking_over_dot_stops_it_only_when_that_is_on() {
+    let engines = Engines::load();
+    let (mut stopped_on, mut kept_off, mut misses) = (0, 0, Vec::new());
+    for voice in 0..engines.speaker.voices() {
+        let sentence = engines.said("Please read me the first message.", voice);
+        // On: the microphone opens for speaking alone.
+        let mut live = engines.session(session_settings(false, true));
+        assert!(live.speaking_a_long_reply(), "voice {voice}: not speaking");
+        live.feed(&sentence, 500);
+        if live.wait_state(Duration::from_secs(2), State::Listening) {
+            stopped_on += 1;
+        } else {
+            misses.push(format!("voice {voice}, on: still speaking"));
+        }
+        drop(live);
+        // Off, with the wake phrase on.
+        let mut live = engines.session(session_settings(true, false));
+        assert!(
+            resting_with_the_mic_open(&mut live),
+            "voice {voice}: no mic"
+        );
+        assert!(live.speaking_a_long_reply(), "voice {voice}: not speaking");
+        live.feed(&sentence, 500);
+        let cut = live.wait_state(Duration::from_secs(1), State::Listening);
+        if !cut && live.session.state() == State::Speaking {
+            kept_off += 1;
+        } else {
+            misses.push(format!("voice {voice}, off: the reply stopped"));
+        }
+    }
+    let voices = engines.speaker.voices();
+    println!(
+        "talking over Dot, on: stopped {stopped_on}/{voices}; off: kept speaking {kept_off}/{voices}"
+    );
+    for miss in &misses {
+        println!("  {miss}");
+    }
+    assert_eq!(
+        kept_off,
+        usize::from(voices),
+        "a sentence stopped Dot with the setting off"
+    );
+    assert!(stopped_on > 0, "talking over Dot never stopped it");
 }

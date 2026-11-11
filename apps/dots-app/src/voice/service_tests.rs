@@ -132,6 +132,8 @@ async fn server(mode: Mode) -> (Manifest, Arc<Server>) {
 struct FakeSession {
     calls: Mutex<Vec<String>>,
     events: Mutex<Option<UnboundedSender<SessionEvent>>>,
+    /// What `state` answers; Idle when unset.
+    state: Mutex<Option<State>>,
 }
 
 impl FakeSession {
@@ -167,7 +169,7 @@ impl SessionPort for FakeSession {
         None
     }
     fn state(&self) -> State {
-        State::Idle
+        self.state.lock().unwrap().unwrap_or(State::Idle)
     }
     fn notice(&self, text: &str) {
         self.push(format!("notice {text}"));
@@ -176,7 +178,17 @@ impl SessionPort for FakeSession {
 
 impl SessionControl for FakeSession {
     fn settings(&self, s: SessionSettings) {
-        self.push(format!("settings wake={}", s.wake_phrase));
+        self.push(format!(
+            "settings wake={} talk={}",
+            s.wake_phrase, s.interrupt_by_talking
+        ));
+        // As the real session does: resting, the microphone is open only for the wake phrase.
+        if self.state() == State::Idle {
+            self.emit(SessionEvent::State {
+                state: State::Idle,
+                mic_open: s.wake_phrase,
+            });
+        }
     }
     fn set_voice(&self, voice: u8, speed: f32) {
         self.push(format!("voice {voice} {speed}"));
@@ -554,7 +566,7 @@ async fn voice_change_does_not_rebuild() {
     let calls = r.factory.session(0).calls();
     assert!(calls.contains(&"voice 3 1.2".to_string()), "{calls:?}");
     assert!(
-        calls.contains(&"settings wake=true".to_string()),
+        calls.contains(&"settings wake=true talk=false".to_string()),
         "{calls:?}"
     );
     // Turned off: the session goes and the microphone with it.
@@ -658,6 +670,73 @@ async fn preview_speaks_then_restores_the_saved_voice() {
     let calls = session.calls();
     let spoke = calls.iter().position(|c| c == "voice 5 1.3").unwrap();
     assert_eq!(calls[spoke + 1], format!("notice {GREETING}"));
+}
+
+// ---- the wake phrase and talking over Dot (step 5) ------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_wake_phrase_applies_without_a_rebuild_and_the_status_shows_the_open_mic() {
+    let r = rig(Mode::Normal).await;
+    r.svc.enable(true).await.unwrap();
+    let svc = r.svc.clone();
+    until("idle", || svc.status_now().state == State::Idle).await;
+    assert!(!r.svc.status().await.mic_open);
+    save(
+        &r,
+        Settings {
+            voice_wake_phrase: true,
+            ..on()
+        },
+    )
+    .await;
+    assert_eq!(r.factory.builds(), 1, "no rebuild");
+    let session = r.factory.session(0);
+    assert!(
+        session
+            .calls()
+            .contains(&"settings wake=true talk=false".to_string()),
+        "{:?}",
+        session.calls()
+    );
+    // The session reports the microphone open for the wake phrase.
+    until("mic open", || svc.status_now().mic_open).await;
+    assert_eq!(r.svc.status().await.state, State::Idle);
+    // Off again: resting, the microphone closes.
+    save(&r, on()).await;
+    assert_eq!(r.factory.builds(), 1);
+    assert!(session
+        .calls()
+        .contains(&"settings wake=false talk=false".to_string()));
+    until("mic closed", || !svc.status_now().mic_open).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn talking_over_dot_applies_without_a_rebuild() {
+    let r = rig(Mode::Normal).await;
+    r.svc.enable(true).await.unwrap();
+    let talk = Settings {
+        voice_interrupt_by_talking: true,
+        ..on()
+    };
+    save(&r, talk).await;
+    assert_eq!(r.factory.builds(), 1, "no rebuild");
+    let session = r.factory.session(0);
+    assert!(
+        session
+            .calls()
+            .contains(&"settings wake=false talk=true".to_string()),
+        "{:?}",
+        session.calls()
+    );
+    // Resting, talking over Dot needs no microphone.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!r.svc.status().await.mic_open);
+    save(&r, on()).await;
+    assert_eq!(r.factory.builds(), 1);
+    assert_eq!(
+        session.calls().last().map(String::as_str),
+        Some("settings wake=false talk=false")
+    );
 }
 
 // ---- the hotkey and the listener ------------------------------------------------------------

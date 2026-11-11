@@ -206,9 +206,17 @@ impl Bridge {
             }),
             SessionEvent::Hearing { text } => self.send(VoiceEvent::Hearing { text }),
             SessionEvent::Saying { text } => self.send(VoiceEvent::Saying { text }),
-            // The session is listening already.
+            // The session is listening already. A turn still live ("Hey Dot" said over Dot)
+            // is dropped, as `open` drops it. The window is not raised: the reply is spoken.
             SessionEvent::Woke => {
-                self.lock().closed = false;
+                {
+                    let mut s = self.lock();
+                    s.closed = false;
+                    if s.live.is_some() {
+                        self.mind.cancel();
+                        self.drop_live(&mut s);
+                    }
+                }
                 self.send(VoiceEvent::Woke);
             }
             SessionEvent::Trouble { message } => self.send(VoiceEvent::Trouble { message }),
@@ -1696,6 +1704,82 @@ mod tests {
             mic_open: true,
         });
         assert_eq!(r.mind.calls().len(), 3);
+    }
+
+    // ---- the wake phrase, the stop phrase and talking over Dot (step 5) ----------------------
+
+    #[tokio::test]
+    async fn a_wake_after_close_lets_the_next_heard_start_a_turn() {
+        let mut r = rig();
+        r.bridge.close();
+        r.ui();
+        r.bridge.on_session(SessionEvent::Woke);
+        assert_eq!(r.ui(), vec![VoiceEvent::Woke]);
+        r.mind.script(vec![say("Hi."), end(Then::Rest)]);
+        r.heard("what needs me", 1);
+        settle().await;
+        assert_eq!(
+            r.mind.calls().last(),
+            Some(&MindCall::Hear("what needs me".into()))
+        );
+        assert_eq!(r.session.calls().last(), Some(&Call::End(1, After::Rest)));
+        assert_eq!(r.ui(), vec![heard_ev("what needs me")]);
+    }
+
+    #[tokio::test]
+    async fn a_wake_during_a_live_turn_drops_it_as_open_does() {
+        let mut r = rig();
+        let gate = Arc::new(Notify::new());
+        deed_in_flight(&mut r, &gate).await;
+        // "Hey Dot" said over Dot speaking.
+        r.bridge.on_session(SessionEvent::Woke);
+        assert_eq!(&r.mind.calls()[1..], &[MindCall::Cancel, MindCall::Lapse]);
+        assert_eq!(r.ui(), vec![VoiceEvent::Cleared, VoiceEvent::Woke]);
+        finishes_unspoken(&mut r, &gate).await;
+        // With no turn live, a wake drops nothing.
+        r.bridge.on_session(SessionEvent::Woke);
+        assert_eq!(r.mind.calls().len(), 3);
+        assert_eq!(r.ui(), vec![VoiceEvent::Woke]);
+    }
+
+    #[tokio::test]
+    async fn listening_after_dot_stop_drops_the_live_turn_and_speaks_no_more_of_it() {
+        let mut r = rig();
+        let gate = Arc::new(Notify::new());
+        r.mind.script(vec![
+            say("Here is a long answer."),
+            Step::Wait(gate.clone()),
+            say(" And more of it."),
+            end(Then::FollowUp),
+        ]);
+        r.heard("tell me everything", 1);
+        settle().await;
+        r.ui();
+        let before = r.session.calls();
+        assert_eq!(
+            before.last(),
+            Some(&Call::Delta(1, "Here is a long answer.".into()))
+        );
+        // "Dot, stop": the session stops speaking and listens.
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Listening,
+            mic_open: true,
+        });
+        assert_eq!(&r.mind.calls()[1..], &[MindCall::Cancel, MindCall::Lapse]);
+        gate.notify_one();
+        settle().await;
+        assert_eq!(
+            r.session.calls(),
+            before,
+            "nothing more for the stopped turn"
+        );
+        assert_eq!(
+            r.ui(),
+            vec![VoiceEvent::State {
+                state: State::Listening,
+                mic_open: true
+            }]
+        );
     }
 
     /// The single worker is busy until the returned sender is used (or dropped): what is
