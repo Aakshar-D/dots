@@ -297,8 +297,8 @@ impl MindPort for QuietMind {
 struct FakeHost {
     settings: Mutex<Settings>,
     mind: Arc<QuietMind>,
-    /// What `waiting` answers: (in the Inbox, private approvals among it).
-    waiting: Mutex<Option<(usize, usize)>>,
+    /// What `waiting` answers: what in the Inbox waits on an answer.
+    waiting: Mutex<Option<Vec<Waiting>>>,
 }
 
 #[async_trait]
@@ -313,8 +313,8 @@ impl Host for FakeHost {
     fn mind(&self) -> Arc<dyn MindPort> {
         self.mind.clone()
     }
-    async fn waiting(&self) -> Option<(usize, usize)> {
-        *self.waiting.lock().unwrap()
+    async fn waiting(&self) -> Option<Vec<Waiting>> {
+        self.waiting.lock().unwrap().clone()
     }
 }
 
@@ -771,9 +771,18 @@ async fn the_tone_applies_without_a_rebuild() {
 
 fn research() -> Needs {
     Needs::Approval {
+        id: "a1".into(),
         dot_name: "Research".into(),
         private: false,
     }
+}
+
+/// The Inbox with `research()`'s approval waiting, alone.
+fn research_waits() -> Option<Vec<Waiting>> {
+    Some(vec![Waiting {
+        id: "a1".into(),
+        kind: WaitKind::Approval,
+    }])
 }
 
 const RESEARCH_LINE: &str = "notice Research needs your approval.";
@@ -801,7 +810,7 @@ async fn session_in(r: &Rig, state: State) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_notice_reaches_the_session_only_when_ready_idle_and_on() {
     let r = rig(Mode::Normal).await;
-    *r.host.waiting.lock().unwrap() = Some((1, 0));
+    *r.host.waiting.lock().unwrap() = research_waits();
     // Voice off, not ready: nothing is said and nothing waits.
     r.svc.need(research()).await;
     assert!(!r.svc.notices().pending());
@@ -848,7 +857,7 @@ async fn a_notice_reaches_the_session_only_when_ready_idle_and_on() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_notice_is_said_at_once_when_resting() {
     let r = rig(Mode::Normal).await;
-    *r.host.waiting.lock().unwrap() = Some((1, 0));
+    *r.host.waiting.lock().unwrap() = research_waits();
     r.svc.enable(true).await.unwrap();
     save(
         &r,
@@ -861,6 +870,57 @@ async fn a_notice_is_said_at_once_when_resting() {
     session_in(&r, State::Idle).await;
     r.svc.need(research()).await;
     assert_eq!(noticed(&r.factory.session(0)), [RESEARCH_LINE]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lag_recounts_only_what_it_has_not_said() {
+    let r = rig(Mode::Normal).await;
+    r.svc.enable(true).await.unwrap();
+    save(
+        &r,
+        Settings {
+            voice_notices: true,
+            ..on()
+        },
+    )
+    .await;
+    session_in(&r, State::Idle).await;
+    // Missed events, and an approval nobody announced waits (not research's): nameless.
+    *r.host.waiting.lock().unwrap() = Some(vec![Waiting {
+        id: "a9".into(),
+        kind: WaitKind::Approval,
+    }]);
+    r.svc.missed_notices().await;
+    let session = r.factory.session(0);
+    assert_eq!(
+        noticed(&session),
+        ["notice An approval is waiting for you."]
+    );
+    // The same count again, after the gap: nothing more is said, and nothing waits.
+    r.svc.notices().spoke_long_ago();
+    r.svc.missed_notices().await;
+    assert_eq!(noticed(&session).len(), 1);
+    assert!(!r.svc.notices().pending());
+    // One more waiting: said once.
+    r.host
+        .waiting
+        .lock()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .push(Waiting {
+            id: "q1".into(),
+            kind: WaitKind::Question,
+        });
+    r.svc.notices().spoke_long_ago();
+    r.svc.missed_notices().await;
+    assert_eq!(
+        noticed(&session),
+        [
+            "notice An approval is waiting for you.",
+            "notice Two things are waiting for you."
+        ]
+    );
 }
 
 // ---- the hotkey and the listener ------------------------------------------------------------

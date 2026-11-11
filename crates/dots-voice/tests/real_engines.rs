@@ -1,5 +1,10 @@
 //! Runs the real engines against the real models. Ignored by default: set
 //! `DOTS_VOICE_MODELS` to a models folder in the manifest layout and run with `--ignored`.
+//!
+//! The session tests feed a fake microphone and pace the audio in real time (a frame every
+//! 32 ms, as a microphone would), so they take minutes. Their hit rates over the ten voices
+//! have floors: the wake phrase and the sentence after it at least 9 of 10, "Dot, stop" at
+//! least 8 of 10, talking over Dot (when that is on) at least 9 of 10.
 
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -488,7 +493,8 @@ fn resting_with_the_mic_open(live: &mut Live) -> bool {
 }
 
 /// "Hey Dot." then a sentence, said to the real session: `Woke`, then `Heard` with that
-/// sentence and not the wake phrase. Prints the hit counts over the ten voices.
+/// sentence and not the wake phrase. Prints the hit counts over the ten voices; each must be
+/// at least 9 of 10. Paced in real time.
 #[test]
 #[ignore]
 fn hey_dot_then_a_sentence_wakes_the_session_and_is_heard() {
@@ -533,14 +539,17 @@ fn hey_dot_then_a_sentence_wakes_the_session_and_is_heard() {
     for miss in &misses {
         println!("  {miss}");
     }
+    let floor = usize::from(voices) * 9 / 10;
+    assert!(woke >= floor, "the wake phrase woke it {woke}/{voices}");
     assert!(
-        heard > 0,
-        "the sentence after the wake phrase was never heard"
+        heard >= floor,
+        "the sentence after the wake phrase was heard {heard}/{voices}"
     );
 }
 
 /// While a long reply is spoken, "Dot, stop." said to the microphone stops it: the session
-/// listens again and the speaker is quiet. Prints the hit count over the ten voices.
+/// listens again and the speaker is quiet. Prints the hit count over the ten voices, which
+/// must be at least 8 of 10. Paced in real time.
 #[test]
 #[ignore]
 fn dot_stop_stops_a_long_reply() {
@@ -566,12 +575,16 @@ fn dot_stop_stops_a_long_reply() {
     for miss in &misses {
         println!("  {miss}");
     }
-    assert!(stopped > 0, "\"Dot, stop.\" never stopped the reply");
+    assert!(
+        stopped >= usize::from(voices) * 8 / 10,
+        "\"Dot, stop.\" stopped the reply {stopped}/{voices}"
+    );
 }
 
 /// With "Interrupt by just talking" on, any sentence stops a long reply; with it off (and the
 /// wake phrase on, so the microphone is open), a sentence that is not the stop phrase does
-/// not. Prints the hit counts over the ten voices; a stop with the setting off fails.
+/// not. Prints the hit counts over the ten voices: on, at least 9 of 10 stop it; off, none
+/// may. Paced in real time.
 #[test]
 #[ignore]
 fn talking_over_dot_stops_it_only_when_that_is_on() {
@@ -616,5 +629,8 @@ fn talking_over_dot_stops_it_only_when_that_is_on() {
         usize::from(voices),
         "a sentence stopped Dot with the setting off"
     );
-    assert!(stopped_on > 0, "talking over Dot never stopped it");
+    assert!(
+        stopped_on >= usize::from(voices) * 9 / 10,
+        "talking over Dot stopped it {stopped_on}/{voices}"
+    );
 }

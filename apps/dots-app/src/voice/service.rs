@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use super::bridge::{Bridge, MindPort, SessionPort};
 use super::download;
 use super::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceStatus};
-use super::notices::{Needs, Notices};
+use super::notices::{Needs, Notices, WaitKind, Waiting};
 use crate::error::CmdError;
 
 /// Said once after the first install, and by the voice preview.
@@ -101,9 +101,10 @@ pub trait Host: Send + Sync + 'static {
     /// Stores the settings; what was stored.
     async fn save(&self, settings: Settings) -> Result<Settings, CmdError>;
     fn mind(&self) -> Arc<dyn MindPort>;
-    /// Everything in the Inbox now, and how many of its approvals are private; `None` when
+    /// What in the Inbox waits on an answer now: pending approvals (private ones marked) and
+    /// unanswered questions, leaving out those of the dot the person is viewing. `None` when
     /// it could not be read (nothing is said then, and what waits keeps waiting).
-    async fn waiting(&self) -> Option<(usize, usize)>;
+    async fn waiting(&self) -> Option<Vec<Waiting>>;
 }
 
 /// The global hotkey: the plugin in the app (`hotkey::PluginHotkey`), a fake in tests.
@@ -1260,7 +1261,7 @@ impl Service {
             Some(wait) if !wait.is_zero() => return self.notice_wake_up(wait),
             Some(_) => {}
         }
-        let Some((count, private)) = self.host.waiting().await else {
+        let Some(inbox) = self.host.waiting().await else {
             return;
         };
         // Things may have moved while the Inbox was read.
@@ -1271,7 +1272,7 @@ impl Service {
         };
         let said = {
             let mut n = self.notices();
-            n.rested(count, private, Instant::now())
+            n.rested(&inbox, Instant::now())
                 .map(|line| (line, n.kind()))
         };
         if let Some((line, kind)) = said {
@@ -1445,22 +1446,40 @@ impl Host for RuntimeHost {
     fn mind(&self) -> Arc<dyn MindPort> {
         Arc::new(RuntimeMind(self.0.clone()))
     }
-    async fn waiting(&self) -> Option<(usize, usize)> {
-        let count = self.0.inbox_count().await.ok()?;
+    async fn waiting(&self) -> Option<Vec<Waiting>> {
+        // The Inbox is read once: its approvals and the messages it hides (snoozed or done).
         let inbox = self.0.inbox().await.ok()?;
-        let mut private = 0;
-        for pending in &inbox.approvals {
+        let questions = self.0.store().waiting_messages().await.ok()?;
+        let viewing = self.0.viewing();
+        let viewed = |dot_id: &str| crate::events::quiet(Some(dot_id), viewing.as_deref());
+        let mut waiting = Vec::new();
+        for pending in inbox.approvals.iter().filter(|a| !viewed(&a.dot_id)) {
             // An error counts as private.
-            if self
+            let private = self
                 .0
                 .approval_touches_private(&pending.approval.id)
                 .await
-                .unwrap_or(true)
-            {
-                private += 1;
-            }
+                .unwrap_or(true);
+            waiting.push(Waiting {
+                id: pending.approval.id.clone(),
+                kind: if private {
+                    WaitKind::PrivateApproval
+                } else {
+                    WaitKind::Approval
+                },
+            });
         }
-        Some((count, private))
+        waiting.extend(
+            questions
+                .into_iter()
+                .filter(|m| m.kind == dots_core::model::MessageKind::Question)
+                .filter(|m| !inbox.hidden_messages.contains(&m.id) && !viewed(&m.dot_id))
+                .map(|m| Waiting {
+                    id: m.id,
+                    kind: WaitKind::Question,
+                }),
+        );
+        Some(waiting)
     }
 }
 
