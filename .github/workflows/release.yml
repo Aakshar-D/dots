@@ -17,6 +17,11 @@ jobs:
   # Nothing is built from code whose tests fail (updates UI spec section 5.4).
   test:
     runs-on: windows-latest
+    # The sherpa-onnx library is built against the static C runtime (/MT); everything else is
+    # linked the same way, or the linker warns of two runtimes (LNK4098). Job-wide, so clippy,
+    # the tests and the build all share one set of flags (tools/voice/README.md).
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -154,6 +159,9 @@ jobs:
     # Runs when the tests passed, whether or not the macOS build did.
     if: ${{ !cancelled() && needs.test.result == 'success' }}
     runs-on: windows-latest
+    # The static C runtime, as in the test job.
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
     steps:
       # The whole history, so that a release tag can be checked against master.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

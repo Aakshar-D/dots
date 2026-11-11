@@ -14,6 +14,22 @@ variable when its own cache (`<target dir>/sherpa-onnx-prebuilt`) already holds 
 an unpacked copy, so CI passes `--target-dir target` and the script fails on a cache entry that
 is not pinned. Local builds need none of this: without the variable the crate downloads as before.
 
+## Local Windows builds
+
+The Windows archives are built against the static C runtime (`static-MT`), so a Windows build
+links everything else statically as well; otherwise a binary that uses the library gets
+`LNK4098: defaultlib 'LIBCMT' conflicts with use of other libs`. CI sets
+`RUSTFLAGS=-C target-feature=+crt-static` on its Windows jobs. Locally, put these two lines in
+`.cargo/config.toml` (or set the same `RUSTFLAGS`):
+
+    [target.'cfg(all(windows, target_env = "msvc"))']
+    rustflags = ["-C", "target-feature=+crt-static"]
+
+Changing the flag rebuilds everything once, so a separate target directory keeps the old
+build. Without it, debug builds still work on the machines tried so far, with the warning.
+
+## Refreshing the pins
+
 To refresh the pins when the `sherpa-onnx` crate version changes: update `VERSION` and every
 `file` in `ARCHIVES` (the names come from `archive_name` in the new `sherpa-onnx-sys` build.rs,
 static mode), download each archive from the release page, and record its byte size and

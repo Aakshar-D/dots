@@ -15,6 +15,7 @@ pub mod update;
 pub mod update_record;
 pub mod update_service;
 pub mod viewing;
+mod voice;
 
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
