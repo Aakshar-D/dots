@@ -33,6 +33,14 @@ jobs:
       - name: Install the UI's packages
         run: bun install --frozen-lockfile
 
+      # The sherpa-onnx library the voice crate links is downloaded by its build script without
+      # any check. This fetches it first, verified against the hash pinned in the repository
+      # (tools/voice/README.md), and the build script then copies that archive and downloads
+      # nothing; the build's own cache must hold nothing else.
+      - name: Fetch the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs fetch --target x86_64-pc-windows-msvc --out "$RUNNER_TEMP/sherpa-onnx" --target-dir target >> "$GITHUB_ENV"
+
       - name: Check the formatting
         run: cargo fmt --all --check
 
@@ -43,11 +51,17 @@ jobs:
       - name: Run the core tests
         run: cargo test -p dots-core --locked -- --skip preview_schedule_lists_the_next_fire_times
 
+      - name: Run the voice tests
+        run: cargo test -p dots-voice --locked
+
       - name: Run the app tests
         run: cargo test -p dots-app --locked
 
       - name: Run the release script's tests
         run: node --test tools/release/release.test.mjs
+
+      - name: Run the sherpa-onnx fetch script's tests
+        run: node --test tools/voice/sherpa-lib.test.mjs
 
       - name: Check and test the UI
         working-directory: ui
@@ -82,6 +96,14 @@ jobs:
 
       - name: Install the UI's packages
         run: bun install --frozen-lockfile
+
+      # The sherpa-onnx library the voice crate links is downloaded by its build script without
+      # any check. This fetches it first, verified against the hash pinned in the repository
+      # (tools/voice/README.md), and the build script then copies that archive and downloads
+      # nothing; the build's own cache must hold nothing else.
+      - name: Fetch the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs fetch --target aarch64-apple-darwin --target x86_64-apple-darwin --out "$RUNNER_TEMP/sherpa-onnx" --target-dir target >> "$GITHUB_ENV"
 
       # Code signing and notarization only when the repository has the Apple secrets; an
       # empty one is unset, so Tauri does not try to sign with nothing.
@@ -176,6 +198,14 @@ jobs:
 
       - name: Install the UI's packages
         run: bun install --frozen-lockfile
+
+      # The sherpa-onnx library the voice crate links is downloaded by its build script without
+      # any check. This fetches it first, verified against the hash pinned in the repository
+      # (tools/voice/README.md), and the build script then copies that archive and downloads
+      # nothing; the build's own cache must hold nothing else.
+      - name: Fetch the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs fetch --target x86_64-pc-windows-msvc --out "$RUNNER_TEMP/sherpa-onnx" --target-dir target >> "$GITHUB_ENV"
 
       # No signing key here: the build runs the project's own scripts and packages, which have
       # no need of it. `tauri.conf.json` leaves the updater files off; the next step signs.

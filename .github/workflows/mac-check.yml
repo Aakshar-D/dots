@@ -12,6 +12,7 @@ on:
       - "Cargo.lock"
       - "crates/**"
       - "apps/dots-app/**"
+      - "tools/voice/**"
 
 permissions:
   contents: read
@@ -35,6 +36,14 @@ jobs:
       - name: Install the UI's packages
         run: bun install --frozen-lockfile
 
+      # The sherpa-onnx library the voice crate links is downloaded by its build script without
+      # any check. This fetches it first, verified against the hash pinned in the repository
+      # (tools/voice/README.md), and the build script then copies that archive and downloads
+      # nothing; the build's own cache must hold nothing else.
+      - name: Fetch the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs fetch --target aarch64-apple-darwin --out "$RUNNER_TEMP/sherpa-onnx" --target-dir target >> "$GITHUB_ENV"
+
       # The app embeds the built UI, so it is built before the app is compiled.
       - name: Build the UI
         run: bun run --cwd ui build
@@ -46,6 +55,9 @@ jobs:
       # failing test is listed, not only those of the first test file that fails.
       - name: Run the core tests
         run: cargo test -p dots-core --locked --no-fail-fast -- --skip preview_schedule_lists_the_next_fire_times
+
+      - name: Run the voice tests
+        run: cargo test -p dots-voice --locked --no-fail-fast
 
       - name: Run the app tests
         run: cargo test -p dots-app --locked --no-fail-fast
