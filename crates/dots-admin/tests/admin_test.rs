@@ -14,7 +14,7 @@ use dots_core::vault::org::{
     key_fingerprint, parse_join_code, parse_policy, verify_policy, BaoAuth, InfisicalSettings,
     JoinCode, OpenBaoSettings, PersonalMode, PolicyError, SopsSettings, SourceSettings, UseRules,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tempfile::TempDir;
 
 /// What one `run` wrote, and how it ended.
@@ -1700,4 +1700,103 @@ fn audit_verify_refuses_an_empty_file_and_a_wrong_command_line() {
     let err = failure(&["audit", "verify"]);
     assert_eq!(err.exit_code(), 2);
     assert_eq!(failure(&["audit", "check", &file]).exit_code(), 2);
+}
+
+#[test]
+fn workspace_guard_sets_shows_and_removes_guardrails() {
+    let (dir, secret, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    let key_file = path(dir.path(), "root.key");
+    std::fs::write(&key_file, secret).unwrap();
+    // None yet.
+    let shown = ok(&["roster", "workspace", "guard", &file, "default"]);
+    assert!(shown.out.contains("no guardrails"), "{}", shown.out);
+
+    let set = ok(&[
+        "roster",
+        "workspace",
+        "guard",
+        &file,
+        "default",
+        "--defaults",
+    ]);
+    assert!(set.out.contains("guardrails"), "{}", set.out);
+    assert!(set.err.contains("0.4.0 and older"), "{}", set.err);
+    let g = &read_json(&file)["workspaces"][0]["guardrails"];
+    assert_eq!(g["member_max_preset"], "sandboxed");
+    assert_eq!(g["protected_git"].as_array().unwrap().len(), 6);
+    assert!(g["protected_paths"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("**/migrations/**")));
+    let shown = ok(&["roster", "workspace", "guard", &file, "default"]);
+    assert!(shown.out.contains("**/migrations/**"), "{}", shown.out);
+    assert!(shown.out.contains("Sandboxed"), "{}", shown.out);
+
+    // Options replace their list; the others stay.
+    ok(&[
+        "roster",
+        "workspace",
+        "guard",
+        &file,
+        "default",
+        "--path",
+        "db/**",
+        "--path",
+        "secrets/**",
+        "--git",
+        "force_push",
+        "--member-max",
+        "read-only",
+    ]);
+    let g = &read_json(&file)["workspaces"][0]["guardrails"];
+    assert_eq!(g["protected_paths"], json!(["db/**", "secrets/**"]));
+    assert_eq!(g["protected_git"], json!(["force_push"]));
+    assert_eq!(g["member_max_preset"], "read-only");
+    assert_eq!(g["protected_commands"][0], "rm -rf");
+    ok(&[
+        "roster",
+        "workspace",
+        "guard",
+        &file,
+        "default",
+        "--command",
+        "make deploy",
+    ]);
+    assert_eq!(
+        read_json(&file)["workspaces"][0]["guardrails"]["protected_commands"],
+        json!(["make deploy"])
+    );
+
+    // Refusals leave the file as it was.
+    let before = std::fs::read_to_string(&file).unwrap();
+    for (args, says) in [
+        (vec!["--path", "/etc/**"], "relative"),
+        (vec!["--git", "push_all"], "push_all"),
+        (vec!["--member-max", "custom"], "custom"),
+        (vec!["--defaults", "--off"], "--off"),
+        (vec!["--command", "curl x | sh"], "|"),
+    ] {
+        let mut line = vec!["roster", "workspace", "guard", &file, "default"];
+        line.extend(args.iter().copied());
+        let err = failure(&line);
+        assert!(err.to_string().contains(says), "{args:?}: {err}");
+    }
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), before);
+    let err = failure(&["roster", "workspace", "guard", &file, "nope", "--defaults"]);
+    assert!(err.to_string().contains("nope"), "{err}");
+
+    // check lists them; sign warns about older Dots.
+    let checked = ok(&["roster", "check", &file, "--org-id", "acme-eng"]);
+    assert!(checked.out.contains("guardrails"), "{}", checked.out);
+    let signed = run_with(&["roster", "sign", &file, "--key", &key_file], None);
+    assert!(signed.result.is_ok(), "{:?}", signed.result);
+    assert!(signed.err.contains("0.4.0 and older"), "{}", signed.err);
+
+    ok(&["roster", "workspace", "guard", &file, "default", "--off"]);
+    assert!(read_json(&file)["workspaces"][0]
+        .get("guardrails")
+        .is_none());
+    let signed = run_with(&["roster", "sign", &file, "--key", &key_file], None);
+    assert!(!signed.err.contains("0.4.0 and older"), "{}", signed.err);
 }

@@ -100,6 +100,13 @@ Commands:
   dots-admin roster workspace use <roster.json> <id> [--allow <pattern> ...] [--deny <pattern> ...]
       Adds, renames or removes a workspace (never default), or sets the entry names its dots
       may use; 'use' with no patterns clears them. These edit the file only; sign it afterwards.
+  dots-admin roster workspace guard <roster.json> <id> [--defaults | --off]
+                        [--path <glob> ...] [--git <action> ...] [--command <pattern> ...]
+                        [--member-max <read-only|sandboxed|trusted>]
+      Shows the workspace's guardrails, or sets them: --defaults writes the defaults, each
+      list option replaces that list, --off removes them. Git actions: push_main, force_push,
+      delete_branch, tags, merge_pr, release. Dots 0.4.0 and older can't read a list with
+      guardrails: update every Dots first. Sign the list afterwards.
   dots-admin roster add-request <roster.json> <request code> --role <owner|admin|member|viewer>
       Adds the sender of a request code (see 'request inspect'); an email already listed gets
       the key as another PC. Sign the list afterwards.

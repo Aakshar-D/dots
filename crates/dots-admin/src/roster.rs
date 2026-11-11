@@ -11,10 +11,12 @@ use std::io::{Cursor, ErrorKind, Write};
 
 use chrono::{DateTime, Utc};
 use dots_core::accounts::edit::{default_workspace_role, edit_members, new_member_id, Change};
+use dots_core::accounts::guardrails::{preset_label, GitAction, Guardrails, COMPAT_NOTE};
 use dots_core::accounts::roster::{
     parse_roster, roster_envelope, verify_roster, Member, Role, Roster, RosterError, Workspace,
     WorkspaceRole, ROSTER_VERSION,
 };
+use dots_core::policy::Preset;
 use dots_core::vault::org::{check_org_id, key_fingerprint, UseRules};
 use minisign::PublicKey;
 use serde::Serialize;
@@ -129,6 +131,7 @@ pub fn new_roster(
             id: "default".into(),
             name: "Default".into(),
             use_rules: None,
+            guardrails: None,
         }],
         members: Vec::new(),
     };
@@ -293,7 +296,7 @@ fn set_workspaces_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
 fn workspace_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     let Some((sub, rest)) = args.split_first() else {
         return Err(usage(
-            "'roster workspace' needs one of: add, rename, remove, use",
+            "'roster workspace' needs one of: add, rename, remove, use, guard",
         ));
     };
     match sub.as_str() {
@@ -301,6 +304,7 @@ fn workspace_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
         "rename" => workspace_rename_command(rest, io),
         "remove" => workspace_remove_command(rest, io),
         "use" => workspace_use_command(rest, io),
+        "guard" => workspace_guard_command(rest, io),
         other => Err(usage(format!("unknown roster workspace command '{other}'"))),
     }
 }
@@ -381,6 +385,128 @@ fn workspace_use_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     };
     write_roster(path, &roster)?;
     say(io.out, &line)
+}
+
+/// `roster workspace guard <roster.json> <id> [--defaults | --off] [--path <glob> ...]
+/// [--git <action> ...] [--command <pattern> ...] [--member-max <preset>]` (guardrails spec
+/// §6): with no option, shows the workspace's guardrails. `--defaults` starts from the
+/// defaults; otherwise the options start from the workspace's guardrails, or the defaults when
+/// it has none. Each list option replaces that list. `--off` removes them.
+fn workspace_guard_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
+    let args = Args::parse_repeating(
+        args,
+        &["member-max"],
+        &["path", "git", "command"],
+        &["defaults", "off"],
+    )?;
+    let [path, id] = args.words(["the member list", "the workspace id"])?;
+    let mut roster = read_roster(path)?;
+    let Some(workspace) = roster.workspaces.iter_mut().find(|w| w.id == id) else {
+        return Err(failed(format!("no workspace '{id}' on the list")));
+    };
+    let lists = ["path", "git", "command"];
+    let changes = args.switch("defaults")
+        || args.value("member-max").is_some()
+        || lists.iter().any(|l| !args.all(l).is_empty());
+    if args.switch("off") {
+        if changes {
+            return Err(usage("--off takes no other option"));
+        }
+        workspace.guardrails = None;
+        let line = format!("the {} workspace has no guardrails", workspace.name);
+        write_roster(path, &roster)?;
+        return say(io.out, &line);
+    }
+    if !changes {
+        return show_guardrails(&workspace.name, workspace.guardrails.as_ref(), io);
+    }
+    let mut g = match (&workspace.guardrails, args.switch("defaults")) {
+        (Some(g), false) => g.clone(),
+        _ => Guardrails::defaults(),
+    };
+    if !args.all("path").is_empty() {
+        g.protected_paths = args.all("path").to_vec();
+    }
+    if !args.all("git").is_empty() {
+        g.protected_git = args
+            .all("git")
+            .iter()
+            .map(|a| {
+                GitAction::parse(a).map_err(|_| {
+                    failed(format!(
+                        "'{a}' is not a git action; use {}",
+                        GitAction::ALL
+                            .iter()
+                            .map(|a| a.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })
+            })
+            .collect::<Result<_>>()?;
+    }
+    if !args.all("command").is_empty() {
+        g.protected_commands = args.all("command").to_vec();
+    }
+    if let Some(max) = args.value("member-max") {
+        g.member_max_preset = match max {
+            "read-only" => Preset::ReadOnly,
+            "sandboxed" => Preset::Sandboxed,
+            "trusted" => Preset::Trusted,
+            other => {
+                return Err(failed(format!(
+                    "'{other}' is not a ceiling; use read-only, sandboxed or trusted (not custom)"
+                )))
+            }
+        };
+    }
+    g.check()
+        .map_err(|why| failed(format!("the guardrails of workspace '{id}': {why}")))?;
+    workspace.guardrails = Some(g);
+    let name = workspace.name.clone();
+    write_roster(path, &roster)?;
+    say(io.out, &format!("the {name} workspace has new guardrails"))?;
+    say(io.err, &format!("Note: {COMPAT_NOTE}"))
+}
+
+/// The guardrails of the workspace `name`, one field a line.
+fn show_guardrails(name: &str, g: Option<&Guardrails>, io: &mut Io<'_>) -> Result<()> {
+    let Some(g) = g else {
+        return say(io.out, &format!("the {name} workspace has no guardrails"));
+    };
+    say(io.out, &format!("the {name} workspace's guardrails:"))?;
+    for line in guardrail_lines(g) {
+        say(io.out, &format!("  {line}"))?;
+    }
+    Ok(())
+}
+
+/// The guardrails as lines for `guard`, `check` and `verify`.
+fn guardrail_lines(g: &Guardrails) -> Vec<String> {
+    let none = |v: Vec<String>| {
+        if v.is_empty() {
+            "none".to_string()
+        } else {
+            v.join(", ")
+        }
+    };
+    vec![
+        format!("protected paths: {}", none(g.protected_paths.clone())),
+        format!(
+            "protected git actions: {}",
+            none(
+                g.protected_git
+                    .iter()
+                    .map(|a| a.as_str().to_string())
+                    .collect()
+            )
+        ),
+        format!("protected commands: {}", none(g.protected_commands.clone())),
+        format!(
+            "highest policy of a Member's dot: {}",
+            preset_label(g.member_max_preset)
+        ),
+    ]
 }
 
 /// `roster remove <roster.json> <email> [--key <dots-id>]`: the member, or one of their keys.
@@ -512,6 +638,17 @@ fn summarize(roster: &Roster, io: &mut Io<'_>) -> Result<()> {
             roster.workspaces.len()
         ),
     )?;
+    for workspace in roster.workspaces.iter() {
+        if let Some(g) = &workspace.guardrails {
+            say(
+                io.out,
+                &format!("  the {} workspace has guardrails:", workspace.name),
+            )?;
+            for line in guardrail_lines(g) {
+                say(io.out, &format!("    {line}"))?;
+            }
+        }
+    }
     for member in &roster.members {
         say(
             io.out,
@@ -569,6 +706,9 @@ fn sign_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
         .map_err(|e| failed(format!("the signed member list does not verify: {e}")))?;
     write_file(path, &text, &[])?;
 
+    if roster.workspaces.iter().any(|w| w.guardrails.is_some()) {
+        say(io.err, &format!("Note: {COMPAT_NOTE}"))?;
+    }
     let note = format!(
         "signed member list #{} for org '{}', issued_at {}, with key {}; store the signed text as DOTS_ROSTER",
         roster.seq,
