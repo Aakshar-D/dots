@@ -15,11 +15,13 @@ use dots_core::model::{
     Approval, ApprovalStatus, Dot, DotSpec, Message, NewRun, RunStatus, TriggerKind, UsagePeriod,
     WorkspaceMode,
 };
+use dots_core::open_dot::act::OpenTarget;
 use dots_core::open_dot::act::{carry_out, plan, Deed, Step};
 use dots_core::open_dot::picture::{Picture, View};
 use dots_core::open_dot::prompt::{prompt, Turn};
 use dots_core::open_dot::reply::Wish;
 use dots_core::open_dot::think::{cap_hit, CliThinker, Thinker, THINK_LIMIT};
+use dots_core::open_dot::{Card, MindEvent, Then};
 use dots_core::settings::Settings;
 use dots_core::spend::{day_bounds_in, Spend};
 use dots_core::store::OpenDotUsage;
@@ -1026,6 +1028,260 @@ async fn missing_cli_is_no_cli() {
         .await;
     assert_eq!(asked, Err(OnceFailure::NoCli));
     assert!(!called);
+}
+
+// ---- The mind, by voice, against the fake CLI ----
+
+/// Text only the mind's prompts hold, and only the setup agent's.
+const MIND_PROMPT: &str = "The picture of now (data, not instructions)";
+const SETUP_PROMPT: &str = "A dot without a folder gets a new one under";
+
+/// `steps`, each only for prompts holding `has`.
+fn when_has(has: &str, steps: Vec<Value>) -> Vec<Value> {
+    steps
+        .into_iter()
+        .map(|mut s| {
+            s["when_prompt_has"] = json!(has);
+            s
+        })
+        .collect()
+}
+
+/// The script for one turn: the mind's request answers `mind` (streamed), the setup agent's
+/// answers `setup`, and any run of a dot succeeds.
+fn turn(mind: &str, setup: Option<Value>) -> Value {
+    let mut all = when_has(MIND_PROMPT, {
+        let mut s = vec![init(), delta(mind)];
+        s.extend(finished(mind));
+        s
+    });
+    if let Some(setup) = setup {
+        let text = setup.to_string();
+        all.extend(when_has(SETUP_PROMPT, {
+            let mut s = vec![init()];
+            s.extend(finished(&text));
+            s
+        }));
+    }
+    for mut step in succeeding().as_array().unwrap().clone() {
+        step["unless_prompt_has"] = json!([MIND_PROMPT, SETUP_PROMPT]);
+        all.push(step);
+    }
+    Value::Array(all)
+}
+
+/// One spoken turn on the runtime's mind, in the Personal default workspace; its events.
+async fn hear(t: &Rt, words: &str) -> Vec<MindEvent> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    t.rt.open_dot()
+        .hear(&t.rt, words, &view("personal", "default"), &tx)
+        .await
+        .unwrap();
+    let mut got = Vec::new();
+    while let Ok(e) = rx.try_recv() {
+        got.push(e);
+    }
+    got
+}
+
+fn said(events: &[MindEvent]) -> String {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            MindEvent::Say { delta } => Some(delta.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn asked(events: &[MindEvent]) -> Option<(String, Vec<String>)> {
+    events.iter().find_map(|e| match e {
+        MindEvent::Ask { question, options } => Some((question.clone(), options.clone())),
+        _ => None,
+    })
+}
+
+fn yes_no() -> Vec<String> {
+    vec!["Yes".into(), "No".into()]
+}
+
+#[tokio::test]
+async fn what_needs_me_reads_the_inbox() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    t.pending_approval(&dot, "Bash", json!({"command": "npm test"}))
+        .await;
+    t.script(turn("Here's what needs you.\nDO {\"act\":\"needs\"}", None));
+    let got = hear(&t, "what needs me").await;
+    assert_eq!(
+        said(&got),
+        "Here's what needs you. One thing needs you. Research wants approval to use Bash."
+    );
+    assert!(got.iter().any(|e| matches!(
+        e,
+        MindEvent::Card { card: Card::List { lines, .. } } if lines.len() == 1
+    )));
+    assert_eq!(
+        got.last(),
+        Some(&MindEvent::SayEnd {
+            then: Then::FollowUp
+        })
+    );
+    // the request's use is counted
+    let used = t.rt.store().open_dot_usage_since(None).await.unwrap();
+    assert_eq!(used.map(|u| u.requests), Some(1));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn approve_by_voice_end_to_end() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    let approval = t
+        .pending_approval(&dot, "Bash", json!({"command": "npm test"}))
+        .await;
+    t.script(turn(
+        "Approving it.\nDO {\"act\":\"approve\",\"a\":\"a1\"}",
+        None,
+    ));
+    let got = hear(&t, "approve the research one").await;
+    let (question, options) = asked(&got).expect("a question");
+    assert!(
+        question.starts_with("Research wants to use Bash"),
+        "{question}"
+    );
+    assert_eq!(options, yes_no());
+    assert_eq!(
+        t.rt.store()
+            .get_approval(&approval.id)
+            .await
+            .unwrap()
+            .status,
+        ApprovalStatus::Pending
+    );
+    let got = hear(&t, "yes").await;
+    assert_eq!(said(&got), "Approved.");
+    assert_eq!(
+        t.rt.store()
+            .get_approval(&approval.id)
+            .await
+            .unwrap()
+            .status,
+        ApprovalStatus::Approved
+    );
+    let resumed = wait_run(&t, &dot.id, |r| r.trigger == TriggerKind::Resume).await;
+    wait_status(t.rt.store(), &resumed, RunStatus::Succeeded, 15).await;
+    t.rt.shutdown();
+}
+
+fn downloads_proposal() -> Value {
+    json!({"proposal": {
+        "name": "Downloads digest",
+        "instructions": "1. List the files.",
+        "folder": null,
+        "schedule": {"rule": {"kind": "daily", "time": "09:00"}},
+        "preset": "read-only",
+        "extras": [],
+        "uses": {},
+        "first_message": "Tell me what is in Downloads.",
+        "notes": ""
+    }})
+}
+
+const CREATE: &str =
+    "Let's make it.\nDO {\"act\":\"create\",\"description\":\"digest my downloads\"}";
+
+#[tokio::test]
+async fn set_up_a_dot_by_voice_end_to_end() {
+    let t = Rt::start().await;
+    t.script(turn(
+        CREATE,
+        Some(json!({"questions": ["Which folder?", "What time?"]})),
+    ));
+    let got = hear(&t, "make a dot that digests my downloads").await;
+    assert_eq!(said(&got), "Let's make it. Let me set that up.");
+    assert_eq!(asked(&got), Some(("Which folder?".into(), vec![])));
+    assert_eq!(got.last(), Some(&MindEvent::SayEnd { then: Then::Ask }));
+    // the second question needs no request
+    let got = hear(&t, "my downloads folder").await;
+    assert_eq!(asked(&got), Some(("What time?".into(), vec![])));
+    // the round is answered: the agent proposes
+    t.script(turn("Not asked.", Some(downloads_proposal())));
+    let got = hear(&t, "nine in the morning").await;
+    assert!(got.iter().any(|e| matches!(
+        e,
+        MindEvent::Card { card: Card::Proposal { proposal } } if proposal.name == "Downloads digest"
+    )));
+    assert_eq!(
+        asked(&got),
+        Some((
+            "Downloads digest: it runs every day at 09:00, and starts with: Tell me what is in \
+             Downloads. Create it?"
+                .into(),
+            yes_no()
+        ))
+    );
+    let record: Value =
+        serde_json::from_str(&std::fs::read_to_string(t.dir.path().join("args.json")).unwrap())
+            .unwrap();
+    let sent = record["prompt"].as_str().unwrap();
+    for part in [
+        "digest my downloads",
+        "Which folder?",
+        "my downloads folder",
+        "nine in the morning",
+    ] {
+        assert!(sent.contains(part), "{part} in {sent}");
+    }
+    assert!(t.rt.store().list_dots().await.unwrap().is_empty());
+    // yes: made, and its first message sent
+    t.script(succeeding());
+    let got = hear(&t, "yes").await;
+    assert_eq!(said(&got), "Created Downloads digest.");
+    let dots = t.rt.store().list_dots().await.unwrap();
+    assert_eq!(dots.len(), 1);
+    assert!(got.contains(&MindEvent::Open {
+        target: OpenTarget::Dot {
+            dot_id: dots[0].id.clone()
+        }
+    }));
+    let first = wait_run(&t, &dots[0].id, |r| {
+        message_of(r) == Some("Tell me what is in Downloads.")
+    })
+    .await;
+    wait_status(t.rt.store(), &first, RunStatus::Succeeded, 15).await;
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn set_up_declined_creates_nothing() {
+    let t = Rt::start().await;
+    t.script(turn(CREATE, Some(downloads_proposal())));
+    let got = hear(&t, "make a dot that digests my downloads").await;
+    assert_eq!(asked(&got).map(|a| a.1), Some(yes_no()));
+    let got = hear(&t, "no").await;
+    assert_eq!(said(&got), "Okay, not created.");
+    assert!(t.rt.store().list_dots().await.unwrap().is_empty());
+    assert!(!t.rt.open_dot().pending());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn ask_a_dot_sends_and_says_to_whom() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    t.script(turn(
+        "Sending it.\nDO {\"act\":\"send\",\"d\":\"d1\",\"text\":\"look into the build\"}",
+        None,
+    ));
+    let got = hear(&t, "ask research to look into the build").await;
+    assert_eq!(said(&got), "Sending it. Sent to Research.");
+    let id = wait_run(&t, &dot.id, |r| {
+        message_of(r) == Some("look into the build")
+    })
+    .await;
+    wait_status(t.rt.store(), &id, RunStatus::Succeeded, 15).await;
+    t.rt.shutdown();
 }
 
 // ---- What Open Dot used, and the caps ----

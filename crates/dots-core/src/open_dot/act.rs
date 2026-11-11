@@ -99,7 +99,7 @@ pub enum AskFor {
 /// Said for an approval or question handle the picture does not hold.
 const GONE: &str = "I can't find that one. It may already be handled.";
 /// Said when the runtime finds the record decided or gone.
-const HANDLED: &str = "That one is already handled.";
+pub const HANDLED: &str = "That one is already handled.";
 const WHICH_DOT: &str = "Which dot did you mean?";
 const NO_DOT: &str = "I can't find that dot.";
 /// Said when the runtime no longer finds a dot that was in the picture.

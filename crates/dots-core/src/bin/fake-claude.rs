@@ -183,7 +183,18 @@ async fn main() {
 
     let mut stdout = std::io::stdout();
     for (i, step) in script.iter().enumerate() {
-        // A step for one prompt only (`when_prompt`), or for every other (`unless_prompt`).
+        // A step for one prompt only (`when_prompt`), or for every other (`unless_prompt`); for
+        // prompts holding a text (`when_prompt_has`), or holding none of some (`unless_prompt_has`).
+        let has_any = |key: &str| {
+            step.get(key).map(|v| match v {
+                Value::String(s) => prompt.contains(s.as_str()),
+                Value::Array(all) => all
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|s| prompt.contains(s)),
+                _ => false,
+            })
+        };
         if step
             .get("when_prompt")
             .and_then(Value::as_str)
@@ -192,6 +203,8 @@ async fn main() {
                 .get("unless_prompt")
                 .and_then(Value::as_str)
                 .is_some_and(|p| p == prompt)
+            || has_any("when_prompt_has") == Some(false)
+            || has_any("unless_prompt_has") == Some(true)
         {
             continue;
         }

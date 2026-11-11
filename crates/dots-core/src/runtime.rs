@@ -260,6 +260,8 @@ pub struct Runtime {
     skill_drafts: SkillDrafts,
     /// The setup agent's requests (setup agent spec §9).
     setup_drafts: SetupDrafts,
+    /// Open Dot's mind: one spoken turn in, words and one checked action out.
+    open_dot: crate::open_dot::Mind,
     /// Makes `setup_apply` check a name and create its dot in one step, so a second press of
     /// Run setup meets the first one's dot instead of making a second.
     setup_lock: Mutex<()>,
@@ -713,6 +715,14 @@ impl Runtime {
                 cfg.draft_limit,
                 shutdown.clone(),
             ),
+            open_dot: crate::open_dot::Mind::new(Arc::new(
+                crate::open_dot::think::CliThinker::new(
+                    claude_program.clone(),
+                    cfg.claude_env.clone(),
+                    cfg.data_dir.join(DRAFTS_DIR),
+                    crate::open_dot::think::THINK_LIMIT,
+                ),
+            )),
             setup_lock: Mutex::new(()),
             claude_program,
             claude_version,
@@ -1836,6 +1846,16 @@ impl Runtime {
     /// Cancels the setup's request, if one is being answered (`setup_cancel`).
     pub fn setup_cancel(&self, id: &str) {
         self.setup_drafts.cancel(id);
+    }
+
+    /// Open Dot's mind, which thinks through the CLI. Its `hear` and `pick` take this runtime.
+    pub fn open_dot(&self) -> &crate::open_dot::Mind {
+        &self.open_dot
+    }
+
+    /// Cancelled when the runtime shuts down; what Open Dot's requests are children of.
+    pub(crate) fn shutdown_token(&self) -> &CancellationToken {
+        &self.shutdown
     }
 
     /// Creates the proposed dot and starts its first chat (`setup_apply`, setup agent spec

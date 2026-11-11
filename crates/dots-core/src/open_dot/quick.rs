@@ -90,7 +90,7 @@ const ORDINALS: [&str; 9] = [
 const FILLER_WORDS: &[&str] = &["the", "a", "an", "of", "to", "and", "it", "that", "this"];
 
 /// Lowercase, apostrophes removed, other punctuation as a space, whitespace collapsed.
-fn words_of(text: &str) -> Vec<String> {
+pub(crate) fn words_of(text: &str) -> Vec<String> {
     let mut cleaned = String::with_capacity(text.len());
     for c in text.chars() {
         if c == '\'' || c == '\u{2019}' {
