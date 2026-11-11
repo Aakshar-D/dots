@@ -150,3 +150,19 @@ fn wake_hit_rates_over_all_voices() {
         }
     }
 }
+
+#[test]
+#[ignore]
+fn an_empty_clip_hears_nothing() {
+    let recognizer = SherpaRecognizer::load(&paths()).unwrap();
+    let empty = Clip {
+        samples: Vec::new(),
+        rate: 16_000,
+    };
+    assert_eq!(recognizer.transcribe(&empty).unwrap(), "");
+    let short = Clip {
+        samples: vec![0.0; 800],
+        rate: 16_000,
+    };
+    assert_eq!(recognizer.transcribe(&short).unwrap(), "");
+}
