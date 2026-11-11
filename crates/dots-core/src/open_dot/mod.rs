@@ -193,6 +193,9 @@ struct State {
     last_heard: Option<Instant>,
     /// The turn running now; a newer one makes an older one's events go nowhere.
     turn: u64,
+    /// How many times `lapse` or `reset` dropped what was in flight: a turn that arrived
+    /// before one and waited for a deed meanwhile does not begin.
+    drops: u64,
     cancel: Option<CancellationToken>,
     /// How many steps that waited were taken by a yes, and whether one's deed is being done:
     /// a second yes for the same step is that same answer, and does nothing.
@@ -499,6 +502,7 @@ impl Mind {
         let dropped = {
             let mut s = lock(&self.state);
             s.turn += 1;
+            s.drops += 1;
             if let Some(c) = s.cancel.take() {
                 c.cancel();
             }
@@ -528,6 +532,7 @@ impl Mind {
         let mut s = lock(&self.state);
         let dropped = s.forget();
         s.turn += 1;
+        s.drops += 1;
         if let Some(c) = s.cancel.take() {
             c.cancel();
         }
@@ -599,16 +604,18 @@ impl Mind {
         tx: &mpsc::UnboundedSender<MindEvent>,
     ) {
         let started = std::time::Instant::now();
-        let (arrived, busy) = {
+        let (arrived, busy, drops) = {
             let s = lock(&self.state);
-            (s.decided, s.deciding)
+            (s.decided, s.deciding, s.drops)
         };
         if busy && self.no_turn(&input, arrived, busy) {
             return;
         }
         // A deed in flight finishes and says its outcome before this turn begins.
         let gate = self.deeds.lock().await;
-        if self.no_turn(&input, arrived, false) {
+        // Dropped (the stage closed or rested) while it waited: it never begins.
+        let dropped = lock(&self.state).drops != drops;
+        if dropped || self.no_turn(&input, arrived, false) {
             return;
         }
         let (turn, cancel, forgot, read_before) = self.begin(rt);

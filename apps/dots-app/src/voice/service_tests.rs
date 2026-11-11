@@ -130,6 +130,9 @@ impl SessionPort for FakeSession {
     fn state(&self) -> State {
         State::Idle
     }
+    fn notice(&self, text: &str) {
+        self.push(format!("notice {text}"));
+    }
 }
 
 impl SessionControl for FakeSession {
@@ -138,9 +141,6 @@ impl SessionControl for FakeSession {
     }
     fn set_voice(&self, voice: u8, speed: f32) {
         self.push(format!("voice {voice} {speed}"));
-    }
-    fn notice(&self, text: &str) {
-        self.push(format!("notice {text}"));
     }
     fn shutdown(&self) {
         self.push("shutdown");

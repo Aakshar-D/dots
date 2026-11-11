@@ -50,7 +50,6 @@ const PREVIEW_LIMIT: Duration = Duration::from_secs(5);
 pub trait SessionControl: SessionPort {
     fn settings(&self, settings: SessionSettings);
     fn set_voice(&self, voice: u8, speed: f32);
-    fn notice(&self, text: &str);
     /// Returns at once; the session has ended when its event channel closes.
     fn shutdown(&self);
 }
@@ -61,9 +60,6 @@ impl SessionControl for Session {
     }
     fn set_voice(&self, voice: u8, speed: f32) {
         Session::set_voice(self, voice, speed);
-    }
-    fn notice(&self, text: &str) {
-        Session::notice(self, text);
     }
     fn shutdown(&self) {
         Session::shutdown(self);

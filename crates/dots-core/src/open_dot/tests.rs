@@ -2005,3 +2005,38 @@ async fn setup_rounds_stop_at_a_cap() {
     assert!(!t.mind.pending());
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn a_turn_waiting_behind_a_deed_does_not_begin_after_a_lapse_or_reset() {
+    for how in ["lapse", "reset"] {
+        let t = T::start().await;
+        // A deed is being carried out.
+        let deed = t.mind.deeds.lock().await;
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let view = home();
+        let mut turn = std::pin::pin!(t.mind.hear(&t.rt, "run the deploy watcher", &view, &tx));
+        // The turn arrived and waits for the deed.
+        std::future::poll_fn(|cx| {
+            let polled = std::future::Future::poll(turn.as_mut(), cx);
+            assert!(polled.is_pending(), "{how}");
+            std::task::Poll::Ready(())
+        })
+        .await;
+        // The stage closed (or rested) before the deed ended.
+        let (lapsed, _) = mpsc::unbounded_channel();
+        match how {
+            "lapse" => t.mind.lapse(&lapsed),
+            _ => {
+                t.mind.reset();
+            }
+        }
+        drop(deed);
+        turn.await;
+        assert!(drain(&mut rx).is_empty(), "{how}: the turn said something");
+        assert_eq!(t.fake.calls(), 0, "{how}: the model was asked");
+        assert!(!t.mind.pending(), "{how}");
+        // The next turn begins as ever.
+        assert!(!t.hear("hello").await.is_empty(), "{how}");
+        t.rt.shutdown();
+    }
+}

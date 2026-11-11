@@ -34,6 +34,8 @@ pub trait SessionPort: Send + Sync {
     /// A click on an option: the new turn's id, or `None` when the session is off.
     fn answered(&self, text: &str) -> Option<u64>;
     fn state(&self) -> State;
+    /// Something to say that answers no turn; spoken only while `Idle`, dropped otherwise.
+    fn notice(&self, text: &str);
 }
 
 impl SessionPort for Session {
@@ -66,6 +68,9 @@ impl SessionPort for Session {
     }
     fn state(&self) -> State {
         Session::state(self)
+    }
+    fn notice(&self, text: &str) {
+        Session::notice(self, text);
     }
 }
 
@@ -144,6 +149,15 @@ pub struct Bridge {
 /// Said when a mind call breaks.
 const WENT_WRONG: &str = "Something went wrong. Try again.";
 
+/// A level the UI can read: anything not finite is 0.
+fn finite(level: f32) -> f32 {
+    if level.is_finite() {
+        level
+    } else {
+        0.0
+    }
+}
+
 impl Bridge {
     pub fn new(
         session: Arc<dyn SessionPort>,
@@ -177,11 +191,19 @@ impl Bridge {
             SessionEvent::Heard { text, turn } => self.heard(text, turn),
             SessionEvent::State { state, mic_open } => {
                 self.send(VoiceEvent::State { state, mic_open });
-                if matches!(state, State::Idle | State::Off) {
-                    self.rested(state == State::Off);
+                match state {
+                    State::Idle | State::Off => self.rested(state == State::Off),
+                    // `end` clears the live turn before the session can listen again by
+                    // itself: a live turn here was cut (the person talked over Dot).
+                    State::Listening => self.cut(),
+                    _ => {}
                 }
             }
-            SessionEvent::Level { mic, voice } => self.send(VoiceEvent::Level { mic, voice }),
+            // A level that is not a number would reach the UI as `null`.
+            SessionEvent::Level { mic, voice } => self.send(VoiceEvent::Level {
+                mic: finite(mic),
+                voice: finite(voice),
+            }),
             SessionEvent::Hearing { text } => self.send(VoiceEvent::Hearing { text }),
             SessionEvent::Saying { text } => self.send(VoiceEvent::Saying { text }),
             // The session is listening already.
@@ -198,10 +220,26 @@ impl Bridge {
         self.lock().view = view;
     }
 
-    /// Hotkey, rail, tray: listen.
+    /// Hotkey, rail, tray: listen. While Dot thinks or speaks the session takes this as
+    /// interrupt, so a turn in flight is dropped first, as `stop` drops it.
     pub fn open(&self) {
-        self.lock().closed = false;
+        let mut s = self.lock();
+        s.closed = false;
+        if s.live.is_some() {
+            self.mind.cancel();
+            self.drop_live(&mut s);
+        }
         self.session.open();
+    }
+
+    /// The session listens again while a turn is live: it cut that turn. The turn is dropped
+    /// with what it showed; a deed already started still finishes and says its outcome.
+    fn cut(&self) {
+        let mut s = self.lock();
+        if s.live.is_some() {
+            self.mind.cancel();
+            self.drop_live(&mut s);
+        }
     }
 
     /// Esc: stop everything, drop what waits, forget the conversation. A sentence the session
@@ -377,7 +415,9 @@ impl Bridge {
 
     /// A deed of `turn` was carried out. For the live turn its outcome is spoken through
     /// `Say`. A stale turn's outcome would be lost with the turn: it is spoken on the live
-    /// turn, or, with none, shown only.
+    /// turn; with none, it is said as a notice while the session rests, and only written
+    /// otherwise. The session shows what it speaks (`Saying`), so the bridge writes it only
+    /// when nothing will speak it.
     fn did(&self, s: &mut Inner, turn: u64, said: String) {
         if s.live == Some(turn) || said.is_empty() {
             return;
@@ -385,8 +425,11 @@ impl Bridge {
         if let Some(live) = s.live {
             self.session.say_delta(live, &format!("{said} "));
             s.gap = false;
+        } else if self.session.state() == State::Idle {
+            self.session.notice(&said);
+        } else {
+            self.send(VoiceEvent::Saying { text: said });
         }
-        self.send(VoiceEvent::Saying { text: said });
     }
 
     /// Ends the live turn at the session. A question still showing whose step the mind no
@@ -455,6 +498,7 @@ impl Bridge {
         tokio::spawn(async move {
             let (tx, mut rx) = unbounded_channel();
             let mind = bridge.mind.clone();
+            let checker = bridge.clone();
             // Owns `tx`: once the call returns (or panics), the channel closes.
             let call = tokio::spawn(async move {
                 let call = async {
@@ -465,14 +509,26 @@ impl Bridge {
                 };
                 let mut call = std::pin::pin!(call);
                 let mut begun = Some(begun);
-                // `begun` is sent once the call has been polled once: it has begun at the
-                // mind, which takes the turn before its first await.
+                // The first poll happens under the bridge's lock, and only while `turn` is
+                // still the live turn: a close, stop or rest that dropped it before the
+                // driver got here cannot slip in between, and the mind never sees it. The
+                // mind takes the turn before its first await; one that must wait for a deed
+                // in flight checks on its own that nothing was dropped meanwhile.
+                // `begun` is sent once that first poll is over, whatever it did.
                 std::future::poll_fn(|cx| {
-                    let polled = call.as_mut().poll(cx);
                     if let Some(b) = begun.take() {
+                        let s = checker.lock();
+                        if s.live != Some(turn) {
+                            drop(s);
+                            let _ = b.send(());
+                            return std::task::Poll::Ready(());
+                        }
+                        let polled = call.as_mut().poll(cx);
+                        drop(s);
                         let _ = b.send(());
+                        return polled;
                     }
-                    polled
+                    call.as_mut().poll(cx)
                 })
                 .await
             });
@@ -513,6 +569,7 @@ mod tests {
         End(u64, After),
         Filler(u64, String),
         Answered(String),
+        Notice(String),
     }
 
     impl Call {
@@ -585,6 +642,9 @@ mod tests {
         }
         fn state(&self) -> State {
             *self.state.lock().unwrap()
+        }
+        fn notice(&self, text: &str) {
+            self.push(Call::Notice(text.into()));
         }
     }
 
@@ -1433,7 +1493,15 @@ mod tests {
                     Err(_) => tokio::time::sleep(std::time::Duration::from_millis(1)).await,
                 }
             }
-            assert_eq!(*mind.begun.lock().unwrap(), heard, "pair {pair}");
+            // An older turn the newer one replaced before the driver took it never begins;
+            // the ones that begin do so in the order heard, the newest last.
+            let begun = mind.begun.lock().unwrap().clone();
+            let mut at = heard.iter();
+            for text in &begun {
+                assert!(at.any(|h| h == text), "pair {pair}: out of order {begun:?}");
+            }
+            assert_eq!(begun.last(), Some(&b), "pair {pair}");
+            assert_eq!(begun.iter().filter(|t| *t == &b).count(), 1, "pair {pair}");
             assert_eq!(
                 *mind.pending.lock().unwrap(),
                 Some(b.clone()),
@@ -1478,16 +1546,8 @@ mod tests {
                 Call::End(2, After::Rest),
             ]
         );
-        assert_eq!(
-            r.ui(),
-            vec![
-                heard_ev("yes"),
-                heard_ev("yes"),
-                VoiceEvent::Saying {
-                    text: "Approved.".into()
-                },
-            ]
-        );
+        // The session shows what it speaks: the bridge does not write it as well.
+        assert_eq!(r.ui(), vec![heard_ev("yes"), heard_ev("yes")]);
         // The live turn's own `Did` is not spoken twice.
         r.mind.script(vec![
             Step::Send(MindEvent::Did {
@@ -1507,7 +1567,8 @@ mod tests {
             ]
         );
         assert_eq!(r.ui(), vec![heard_ev("deny it")]);
-        // With no live turn and the session resting, it is only shown.
+        // With no live turn and the session busy with no turn of ours (listening), it is only
+        // written.
         let gate = Arc::new(Notify::new());
         r.mind.script(vec![
             Step::Wait(gate.clone()),
@@ -1519,6 +1580,7 @@ mod tests {
         r.heard("send it", 4);
         settle().await;
         r.bridge.close();
+        *r.session.state.lock().unwrap() = State::Listening;
         let before = r.session.calls().len();
         gate.notify_one();
         settle().await;
@@ -1531,6 +1593,182 @@ mod tests {
                     text: "Sent to Research.".into()
                 },
             ]
+        );
+        // Resting, it is said as a notice, and the session shows it as it speaks it.
+        let gate = Arc::new(Notify::new());
+        r.mind.script(vec![
+            Step::Wait(gate.clone()),
+            Step::Send(MindEvent::Did {
+                said: "Approved.".into(),
+            }),
+            end(Then::Rest),
+        ]);
+        r.bridge.open();
+        r.heard("approve it", 5);
+        settle().await;
+        r.bridge.close();
+        *r.session.state.lock().unwrap() = State::Idle;
+        gate.notify_one();
+        settle().await;
+        assert_eq!(
+            r.session.calls().last(),
+            Some(&Call::Notice("Approved.".into()))
+        );
+        assert_eq!(r.ui(), vec![heard_ev("approve it")]);
+    }
+
+    /// Turn 1 shows a card, then waits for `gate`, then carries out a deed and says it.
+    async fn deed_in_flight(r: &mut Rig, gate: &Arc<Notify>) {
+        r.mind.script(vec![
+            Step::Send(MindEvent::Card {
+                card: Card::List {
+                    title: "t".into(),
+                    lines: vec![],
+                },
+            }),
+            Step::Wait(gate.clone()),
+            Step::Send(MindEvent::Did {
+                said: "Sent to Research.".into(),
+            }),
+            say("Sent to Research."),
+            end(Then::Rest),
+        ]);
+        r.heard("tell research to look at the build", 1);
+        settle().await;
+        r.ui();
+    }
+
+    /// After the turn was dropped: nothing of it reaches the session, and the deed that was
+    /// already under way is written.
+    async fn finishes_unspoken(r: &mut Rig, gate: &Arc<Notify>) {
+        let before = r.session.calls();
+        *r.session.state.lock().unwrap() = State::Listening;
+        gate.notify_one();
+        settle().await;
+        assert_eq!(r.session.calls(), before);
+        assert_eq!(
+            r.ui(),
+            vec![VoiceEvent::Saying {
+                text: "Sent to Research.".into()
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn open_during_thinking_drops_the_turn() {
+        let mut r = rig();
+        let gate = Arc::new(Notify::new());
+        deed_in_flight(&mut r, &gate).await;
+        r.bridge.open();
+        assert_eq!(&r.mind.calls()[1..], &[MindCall::Cancel, MindCall::Lapse]);
+        assert_eq!(r.session.calls().last(), Some(&Call::Open));
+        assert_eq!(r.ui(), vec![VoiceEvent::Cleared]);
+        finishes_unspoken(&mut r, &gate).await;
+        // With no turn in flight, open only opens.
+        r.bridge.open();
+        assert_eq!(r.mind.calls().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn talking_over_drops_the_turn() {
+        let mut r = rig();
+        let gate = Arc::new(Notify::new());
+        deed_in_flight(&mut r, &gate).await;
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Listening,
+            mic_open: true,
+        });
+        assert_eq!(&r.mind.calls()[1..], &[MindCall::Cancel, MindCall::Lapse]);
+        assert_eq!(
+            r.ui(),
+            vec![
+                VoiceEvent::State {
+                    state: State::Listening,
+                    mic_open: true
+                },
+                VoiceEvent::Cleared
+            ]
+        );
+        finishes_unspoken(&mut r, &gate).await;
+        // Listening with no turn live drops nothing.
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Listening,
+            mic_open: true,
+        });
+        assert_eq!(r.mind.calls().len(), 3);
+    }
+
+    /// The single worker is busy until the returned sender is used (or dropped): what is
+    /// spawned meanwhile waits.
+    fn hold_the_worker() -> std::sync::mpsc::Sender<()> {
+        let (go_tx, go_rx) = std::sync::mpsc::channel::<()>();
+        let (held_tx, held_rx) = std::sync::mpsc::channel::<()>();
+        tokio::spawn(async move {
+            let _ = held_tx.send(());
+            let _ = go_rx.recv();
+        });
+        held_rx.recv().unwrap();
+        go_tx
+    }
+
+    // One worker, and the test body on its own thread: the driver cannot run until the test
+    // lets the worker go, so the turn is surely dropped before the driver takes it.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn a_turn_dropped_before_the_driver_takes_it_never_reaches_the_mind() {
+        for drop_it in ["close", "stop", "idle", "open"] {
+            let r = rig();
+            r.mind.script(vec![
+                Step::Pending(true),
+                ask("Approve it?", &["Yes", "No"]),
+                end(Then::Ask),
+            ]);
+            let go = hold_the_worker();
+            r.heard("approve the research one", 1);
+            match drop_it {
+                "close" => r.bridge.close(),
+                "stop" => r.bridge.stop(),
+                "open" => r.bridge.open(),
+                _ => r.bridge.on_session(SessionEvent::State {
+                    state: State::Idle,
+                    mic_open: false,
+                }),
+            }
+            go.send(()).unwrap();
+            // The driver, the turn task and the call all get to run.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            assert!(
+                !r.mind
+                    .calls()
+                    .iter()
+                    .any(|c| matches!(c, MindCall::Hear(_))),
+                "{drop_it}: {:?}",
+                r.mind.calls()
+            );
+            assert!(!r.mind.pending(), "{drop_it}: a step waits");
+            assert!(
+                !r.session
+                    .calls()
+                    .iter()
+                    .any(|c| matches!(c, Call::End(..) | Call::Delta(..))),
+                "{drop_it}: {:?}",
+                r.session.calls()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_level_that_is_not_a_number_is_sent_as_zero() {
+        let mut r = rig();
+        r.bridge.on_session(SessionEvent::Level {
+            mic: f32::NAN,
+            voice: f32::INFINITY,
+        });
+        assert_eq!(
+            r.ui(),
+            vec![VoiceEvent::Level {
+                mic: 0.0,
+                voice: 0.0
+            }]
         );
     }
 
