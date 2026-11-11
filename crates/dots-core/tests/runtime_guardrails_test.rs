@@ -73,6 +73,10 @@ impl Rt {
             "FAKE_CLAUDE_SCRIPT".into(),
             script_path.to_string_lossy().to_string(),
         ));
+        cfg.claude_env.push((
+            "FAKE_CLAUDE_ARGS_OUT".into(),
+            dir.path().join("args.json").to_string_lossy().to_string(),
+        ));
         let rt = Runtime::start(cfg).await.unwrap();
         Rt {
             dir,
@@ -208,6 +212,15 @@ async fn a_member_dot_is_refused_protected_calls() {
     assert_eq!(results.len(), 2, "{results:?}");
     assert!(results[0].contains(PUSH), "{results:?}");
     assert!(results[1].contains(MIGRATION), "{results:?}");
+    // The CLI was given ask rules for them, not deny rules: a CLI deny would have answered in
+    // its own words before Dots could say it needs an Admin.
+    let rec: Value =
+        serde_json::from_str(&std::fs::read_to_string(t.dir.path().join("args.json")).unwrap())
+            .unwrap();
+    let args: Vec<String> = serde_json::from_value(rec["args"].clone()).unwrap();
+    for rule in ["Bash(git push origin main:*)", "Edit(**/migrations/**)"] {
+        assert!(!args.contains(&rule.to_string()), "{rule}: {args:?}");
+    }
     // Refused at once: nothing waits for anyone.
     assert!(t
         .rt

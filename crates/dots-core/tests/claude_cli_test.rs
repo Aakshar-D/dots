@@ -499,8 +499,19 @@ fn guardrails_send_every_command_to_approve_and_deny_a_members_protected_calls()
         .iter()
         .all(|r| ask.contains(&r.as_str().unwrap().to_string())));
 
+    // A Member's protected calls are asked of the CLI, not denied by it, so they reach
+    // `approve` and the dot reads "This needs an Admin" (guardrails spec §4.2). The dot's own
+    // policy denies stay in `--disallowedTools`.
     c.guardrails = Some(rails(GuardRole::Member));
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Bash(curl:*)", Action::Deny));
     let member = disallowed_tools(&build_args(&c, Path::new("m.json")));
+    assert!(member.contains(&"Bash(curl:*)".to_string()), "{member:?}");
+    let ask: Vec<String> =
+        serde_json::from_value(cli_settings_for(&c)["permissions"]["ask"].clone()).unwrap();
     for rule in [
         "Edit(**/migrations/**)",
         "Write(**/Cargo.lock)",
@@ -510,7 +521,8 @@ fn guardrails_send_every_command_to_approve_and_deny_a_members_protected_calls()
         "Bash(rm -rf:*)",
         "Bash(terraform apply:*)",
     ] {
-        assert!(member.contains(&rule.to_string()), "{rule}: {member:?}");
+        assert!(!member.contains(&rule.to_string()), "{rule}: {member:?}");
+        assert!(ask.contains(&rule.to_string()), "{rule}: {ask:?}");
     }
     // Without guardrails the settings are the private folders' alone.
     c.guardrails = None;

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use crate::accounts::{GitAction, GuardRole, Guardrails};
+use crate::accounts::{GitAction, Guardrails};
 use crate::checkins::Tool;
 use crate::engine::RunContext;
 use crate::model::EngineKind;
@@ -41,7 +41,7 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     } else {
         String::new()
     });
-    let (mut allow, mut deny) = spec.policy.cli_lists();
+    let (mut allow, deny) = spec.policy.cli_lists();
     // Searches and listings always reach `approve`, even where the policy allows them: the CLI
     // checks a search only against the folder it starts in, and Dots also asks when that
     // folder holds a private place (approval guards spec section 3.4). Dots answers the rest
@@ -61,18 +61,16 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         });
     }
     // A dot with guardrails sends every shell command to `approve` too, which reads it for the
-    // protected git actions and commands (guardrails spec §4.2); a Member's dot also gets the
-    // CLI deny rules those can be written as.
-    if let Some(rails) = &ctx.guardrails {
+    // protected git actions and commands (guardrails spec §4.2). Its protected calls are ask
+    // rules of the CLI (`cli_settings_for`), never deny rules: a CLI deny would refuse a
+    // Member's call in the CLI's words, before Dots could say it needs an Admin.
+    if ctx.guardrails.is_some() {
         // And every file write: the CLI matches its own allow rules by case and long names,
         // which a short (8.3) name or another case could pass.
         allow.retain(|rule| {
             let name = rule.split('(').next().unwrap_or(rule).trim();
             !COMMAND_TOOLS.contains(&name) && !crate::policy::rails::WRITE_TOOLS.contains(&name)
         });
-        if rails.role == GuardRole::Member {
-            deny.extend(rails_deny_rules(&rails.guardrails));
-        }
     }
     // The gateway checks every call of a run's MCP server (spec section 4), so the CLI does not
     // ask the `approve` tool for them first.
@@ -166,13 +164,14 @@ pub fn cli_settings() -> Value {
     json!({ "permissions": { "ask": cli_private_ask_rules() } })
 }
 
-/// `cli_settings` for the run of `ctx`: with guardrails, also ask rules for writes under each
-/// protected path, so that an allowed `Write(./**)` still reaches `approve` (guardrails spec
-/// §4.2).
+/// `cli_settings` for the run of `ctx`: with guardrails, also ask rules for each protected
+/// path and the shell prefixes the CLI can match, whatever the role (guardrails spec §4.2). Ask
+/// beats allow, so these calls reach `approve`, where a Member's is refused with "This needs an
+/// Admin".
 pub fn cli_settings_for(ctx: &RunContext) -> Value {
     let mut ask = cli_private_ask_rules();
     if let Some(rails) = &ctx.guardrails {
-        ask.extend(rails_path_rules(&rails.guardrails));
+        ask.extend(rails_ask_rules(&rails.guardrails));
     }
     json!({ "permissions": { "ask": ask } })
 }
@@ -192,9 +191,9 @@ pub fn rails_path_rules(g: &Guardrails) -> Vec<String> {
         .collect()
 }
 
-/// The CLI deny rules of a Member's dot (guardrails spec §4.2): the protected paths' write rules
-/// and the shell prefixes the CLI can match. `approve` stays the check of everything else.
-pub fn rails_deny_rules(g: &Guardrails) -> Vec<String> {
+/// The CLI ask rules of a guarded dot (guardrails spec §4.2): the protected paths' write rules
+/// and the shell prefixes the CLI can match. `approve` reads every call either way.
+pub fn rails_ask_rules(g: &Guardrails) -> Vec<String> {
     let mut prefixes: Vec<String> = Vec::new();
     for action in &g.protected_git {
         let words: &[&str] = match action {
