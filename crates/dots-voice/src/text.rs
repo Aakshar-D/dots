@@ -214,10 +214,20 @@ impl SentenceStream {
         let chars: Vec<(usize, char)> = self.buf.char_indices().collect();
         let mut out = Vec::new();
         let mut start = 0;
+        let mut start_at = 0;
+        let mut in_fence = false;
         let mut i = 0;
         while i < chars.len() {
             let (_, c) = chars[i];
-            if !matches!(c, '.' | '!' | '?') {
+            // A fenced block is indivisible: no sentence ends inside it.
+            if (i == 0 || chars[i - 1].1 == '\n') && opens_fence(&chars, i) {
+                in_fence = !in_fence;
+                while i < chars.len() && chars[i].1 != '\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            if in_fence || !matches!(c, '.' | '!' | '?') {
                 i += 1;
                 continue;
             }
@@ -228,7 +238,8 @@ impl SentenceStream {
                 j += 1;
             }
             let ends_here = chars.get(j).is_some_and(|&(_, next)| next.is_whitespace())
-                && !(c == '.' && follows_single_letter(&chars, i));
+                && !(c == '.'
+                    && (follows_single_letter(&chars, i) || is_list_number(&chars, i, start_at)));
             if ends_here {
                 let end = chars[j].0;
                 let sentence = self.buf[start..end].trim();
@@ -236,6 +247,7 @@ impl SentenceStream {
                     out.push(sentence.to_string());
                 }
                 start = end;
+                start_at = j;
             }
             i = j.max(i + 1);
         }
@@ -255,6 +267,29 @@ impl SentenceStream {
             vec![rest.to_string()]
         }
     }
+}
+
+/// Whether the line at `chars[at]` opens or closes a fenced block (``` or ~~~).
+fn opens_fence(chars: &[(usize, char)], at: usize) -> bool {
+    let mut k = at;
+    while k < chars.len() && matches!(chars[k].1, ' ' | '\t') {
+        k += 1;
+    }
+    let marker = |m: char| (0..3).all(|n| chars.get(k + n).is_some_and(|&(_, c)| c == m));
+    marker('`') || marker('~')
+}
+
+/// Whether the `.` at `chars[at]` ends a list number ("1." at a line or sentence start).
+/// `sentence_at` is where the sentence being read began.
+fn is_list_number(chars: &[(usize, char)], at: usize, sentence_at: usize) -> bool {
+    let mut k = at;
+    while k > 0 && chars[k - 1].1.is_ascii_digit() {
+        k -= 1;
+    }
+    if k == at {
+        return false;
+    }
+    k == 0 || chars[k - 1].1 == '\n' || (k - 1 == sentence_at && chars[k - 1].1.is_whitespace())
 }
 
 /// Whether the `.` at `chars[at]` closes a lone letter, as in `a.m.` or `e.g.`.
@@ -423,5 +458,105 @@ mod tests {
         let cut = trim_spoken(&long);
         assert!(cut.len() <= MAX_SPOKEN_CHARS);
         assert!(cut.ends_with('.'));
+    }
+
+    fn spoken_sentences(chunks: &[&str]) -> Vec<String> {
+        let mut s = SentenceStream::new();
+        let mut sentences = Vec::new();
+        for chunk in chunks {
+            sentences.extend(s.push(chunk));
+        }
+        sentences.extend(s.finish());
+        sentences
+    }
+
+    #[test]
+    fn a_numbered_list_is_not_split_after_its_numbers() {
+        let sentences = spoken_sentences(&["1. First step.
+2. Second step."]);
+        assert!(!sentences.is_empty());
+        for sentence in &sentences {
+            assert!(
+                sentence.chars().any(|c| c.is_alphabetic()),
+                "only a number: {sentence:?}"
+            );
+        }
+        let spoken = sentences
+            .iter()
+            .map(|s| speakable(s))
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(spoken.contains("First step"));
+        assert!(spoken.contains("Second step"));
+        assert!(!spoken.contains("1."));
+        assert!(!spoken.contains("2."));
+
+        let streamed = spoken_sentences(&[
+            "1. First",
+            " step
+2. Second",
+            " step",
+        ]);
+        assert!(streamed
+            .iter()
+            .all(|s| s.chars().any(|c| c.is_alphabetic())));
+    }
+
+    #[test]
+    fn a_fenced_block_is_never_split_or_read() {
+        let text = "Here it is:
+```rust
+let a = 1. ;
+fn b() {}
+```
+Done.";
+        for size in [1, 7, text.len()] {
+            let chunks: Vec<String> = text
+                .chars()
+                .collect::<Vec<_>>()
+                .chunks(size)
+                .map(|c| c.iter().collect())
+                .collect();
+            let chunks: Vec<&str> = chunks.iter().map(String::as_str).collect();
+            let spoken = spoken_sentences(&chunks)
+                .iter()
+                .map(|s| speakable(s))
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert_eq!(
+                spoken, "Here it is: (code is on screen) Done.",
+                "chunk size {size}"
+            );
+            assert!(!spoken.contains("fn") && !spoken.contains("let"));
+        }
+    }
+
+    #[test]
+    fn a_fence_left_open_is_not_read_when_the_stream_finishes() {
+        let spoken = spoken_sentences(&[
+            "Try:
+```
+let a = 1. ",
+            "fn b() {}",
+        ])
+        .iter()
+        .map(|s| speakable(s))
+        .collect::<Vec<_>>()
+        .join(" ");
+        assert_eq!(spoken, "Try: (code is on screen)");
+    }
+
+    #[test]
+    fn edge_inputs_pin_the_output() {
+        assert_eq!(
+            speakable(
+                "```
+x
+```"
+            ),
+            "(code is on screen)"
+        );
+        assert_eq!(speakable(""), "");
+        assert_eq!(speakable("**"), "");
     }
 }
