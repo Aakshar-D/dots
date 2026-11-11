@@ -2,11 +2,13 @@
 //!
 //! Nothing in this crate writes audio or text to disk or to logs.
 
+mod ears;
 mod engine;
 mod models;
 mod sherpa;
 mod text;
 
+pub use ears::{level, EarEvent, EarSettings, Ears};
 pub use engine::{
     resample, Clip, EngineError, Recognizer, Speaker, SpeechDetector, WakeSpotter, WakeWord,
     EAR_RATE, FRAME,
