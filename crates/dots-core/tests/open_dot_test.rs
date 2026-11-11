@@ -12,10 +12,13 @@ use common::{spec, temp_store, wait_status};
 use dots_core::engine::claude::once::{OnceFailure, OnceUsage};
 use dots_core::inbox::{InboxKey, InboxKind};
 use dots_core::model::{
-    Approval, Dot, DotSpec, Message, NewRun, RunStatus, TriggerKind, UsagePeriod, WorkspaceMode,
+    Approval, ApprovalStatus, Dot, DotSpec, Message, NewRun, RunStatus, TriggerKind, UsagePeriod,
+    WorkspaceMode,
 };
+use dots_core::open_dot::act::{carry_out, plan, Deed, Step};
 use dots_core::open_dot::picture::{Picture, View};
 use dots_core::open_dot::prompt::{prompt, Turn};
+use dots_core::open_dot::reply::Wish;
 use dots_core::open_dot::think::{cap_hit, CliThinker, Thinker, THINK_LIMIT};
 use dots_core::settings::Settings;
 use dots_core::spend::{day_bounds_in, Spend};
@@ -323,6 +326,342 @@ async fn an_open_conversation_shows_on_screen() {
     let p = Picture::take(&t.rt, &v).await.unwrap();
     assert!(!p.viewing_topic);
     t.rt.shutdown();
+}
+
+// ---- Acting: checked deeds carried out through the runtime ----
+
+/// The deed `wish` plans to on the picture of `v`, confirmed or done.
+async fn deed_for(t: &Rt, wish: Wish, v: &View) -> Deed {
+    let p = Picture::take(&t.rt, v).await.unwrap();
+    match plan(&wish, &p, v) {
+        Step::Confirm { deed, .. } | Step::Do(deed) => deed,
+        other => panic!("{wish:?} planned {other:?}"),
+    }
+}
+
+/// The dot's runs that `pick` chooses, once one is there.
+async fn wait_run(t: &Rt, dot_id: &str, pick: impl Fn(&dots_core::model::Run) -> bool) -> String {
+    for _ in 0..150 {
+        let runs = t.rt.store().list_runs(Some(dot_id), 50).await.unwrap();
+        if let Some(r) = runs.iter().find(|r| pick(r)) {
+            return r.id.clone();
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("no such run");
+}
+
+fn message_of(r: &dots_core::model::Run) -> Option<&str> {
+    r.payload.as_ref()?.get("message")?.as_str()
+}
+
+#[tokio::test]
+async fn approve_resumes_the_run() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    let approval = t
+        .pending_approval(&dot, "Bash", json!({"command": "git push origin main"}))
+        .await;
+    t.script(succeeding());
+    let v = view("personal", "default");
+    let p = t.picture("default").await;
+    let Step::Confirm { deed, question } = plan(&Wish::Approve { a: "a1".into() }, &p, &v) else {
+        panic!("approving confirms");
+    };
+    // the question is the record's: the guard's summary of the call, not the model's words
+    assert_eq!(
+        question,
+        "Research wants to use Bash on push commits with git (git push origin main). Approve it?"
+    );
+    assert_eq!(carry_out(&t.rt, &deed).await, "Approved.");
+    let decided = t.rt.store().get_approval(&approval.id).await.unwrap();
+    assert_eq!(decided.status, ApprovalStatus::Approved);
+    let resumed = wait_run(&t, &dot.id, |r| r.trigger == TriggerKind::Resume).await;
+    wait_status(t.rt.store(), &resumed, RunStatus::Succeeded, 15).await;
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn deny_is_recorded() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Backup", None, "default").await;
+    let approval = t
+        .pending_approval(&dot, "Bash", json!({"command": "npm test"}))
+        .await;
+    t.script(succeeding());
+    let deed = deed_for(
+        &t,
+        Wish::Deny { a: "a1".into() },
+        &view("personal", "default"),
+    )
+    .await;
+    assert!(matches!(deed, Deed::Deny { .. }));
+    assert_eq!(carry_out(&t.rt, &deed).await, "Denied.");
+    let decided = t.rt.store().get_approval(&approval.id).await.unwrap();
+    assert_eq!(decided.status, ApprovalStatus::Denied);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn already_decided_approval_says_handled() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Backup", None, "default").await;
+    t.pending_approval(&dot, "Bash", json!({"command": "npm test"}))
+        .await;
+    t.script(succeeding());
+    let v = view("personal", "default");
+    let approve = deed_for(&t, Wish::Approve { a: "a1".into() }, &v).await;
+    let deny = deed_for(&t, Wish::Deny { a: "a1".into() }, &v).await;
+    // decided elsewhere (the Inbox) between the picture and the yes
+    let Deed::Approve { approval_id, .. } = &approve else {
+        panic!()
+    };
+    t.rt.decide_approval(approval_id, true, None, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        carry_out(&t.rt, &approve).await,
+        "That one is already handled."
+    );
+    assert_eq!(
+        carry_out(&t.rt, &deny).await,
+        "That one is already handled."
+    );
+    // gone altogether
+    let gone = Deed::Approve {
+        approval_id: "01KNOTANAPPROVAL0000000000".into(),
+        dot_name: "Backup".into(),
+        tool: "Bash".into(),
+        target: "npm test".into(),
+    };
+    assert_eq!(
+        carry_out(&t.rt, &gone).await,
+        "That one is already handled."
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn run_now_starts_a_run() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Backup", None, "default").await;
+    let v = view("personal", "default");
+    let p = t.picture("default").await;
+    let Step::Confirm { deed, question } = plan(&Wish::Run { d: "d1".into() }, &p, &v) else {
+        panic!("running confirms");
+    };
+    assert_eq!(question, "Run Backup now?");
+    assert_eq!(carry_out(&t.rt, &deed).await, "Backup is running.");
+    let run = wait_run(&t, &dot.id, |r| r.trigger == TriggerKind::Manual).await;
+    wait_status(t.rt.store(), &run, RunStatus::Succeeded, 15).await;
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn send_makes_a_new_topic() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    let wish = Wish::Send {
+        d: "d1".into(),
+        text: "look into the build".into(),
+        here: true,
+    };
+    // "here" on the home screen: no topic is open, so a new one
+    let deed = deed_for(&t, wish, &view("personal", "default")).await;
+    assert!(
+        matches!(
+            &deed,
+            Deed::Send {
+                topic_root: None,
+                ..
+            }
+        ),
+        "{deed:?}"
+    );
+    assert_eq!(carry_out(&t.rt, &deed).await, "Sent to Research.");
+    let id = wait_run(&t, &dot.id, |r| {
+        message_of(r) == Some("look into the build")
+    })
+    .await;
+    let run = t.rt.store().get_run(&id).await.unwrap();
+    assert_eq!(run.trigger, TriggerKind::Chat);
+    assert_eq!(run.parent_run_id, None);
+    assert_eq!(run.root_run_id, run.id);
+    wait_status(t.rt.store(), &id, RunStatus::Succeeded, 15).await;
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn send_here_continues_the_topic() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    let first = t.rt.chat(&dot.id, "first", None).await.unwrap();
+    wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 15).await;
+    let mut v = view("personal", "default");
+    v.dot_id = Some(dot.id.clone());
+    v.topic_root = Some(first.id.clone());
+    let wish = Wish::Send {
+        d: "d1".into(),
+        text: "and the tests".into(),
+        here: true,
+    };
+    let deed = deed_for(&t, wish, &v).await;
+    assert_eq!(carry_out(&t.rt, &deed).await, "Sent to Research.");
+    let id = wait_run(&t, &dot.id, |r| message_of(r) == Some("and the tests")).await;
+    let run = t.rt.store().get_run(&id).await.unwrap();
+    assert_eq!(run.parent_run_id.as_deref(), Some(first.id.as_str()));
+    assert_eq!(run.root_run_id, first.id);
+    wait_status(t.rt.store(), &id, RunStatus::Succeeded, 15).await;
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn send_into_a_busy_topic_says_so() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Research", None, "default").await;
+    t.script(json!([init(), {"sleep_ms": 20000}]));
+    let first = t.rt.chat(&dot.id, "first", None).await.unwrap();
+    wait_status(t.rt.store(), &first.id, RunStatus::Running, 15).await;
+    let deed = Deed::Send {
+        dot_id: dot.id.clone(),
+        dot_name: "Research".into(),
+        text: "and more".into(),
+        topic_root: Some(first.id.clone()),
+    };
+    assert_eq!(
+        carry_out(&t.rt, &deed).await,
+        "Research is still working on that. Try again when it finishes."
+    );
+    let runs = t.rt.store().list_runs(Some(&dot.id), 10).await.unwrap();
+    assert_eq!(runs.len(), 1);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn answer_replies_to_the_question() {
+    let t = Rt::start().await;
+    let dot = t.make_dot("Release helper", None, "default").await;
+    let question = t
+        .post_question(&dot, "Ship it to staging?", &["Yes", "No"])
+        .await;
+    let wish = Wish::Answer {
+        q: "q1".into(),
+        text: "Yes".into(),
+        unsure: false,
+    };
+    let deed = deed_for(&t, wish, &view("personal", "default")).await;
+    assert_eq!(carry_out(&t.rt, &deed).await, "Answered Release helper.");
+    let answered = t.rt.store().get_message(&question.id).await.unwrap();
+    assert!(answered.answered_at.is_some());
+    let run = answered.answer_run_id.expect("the answer's run");
+    wait_status(t.rt.store(), &run, RunStatus::Succeeded, 15).await;
+    // the same answer again: already handled
+    assert_eq!(
+        carry_out(&t.rt, &deed).await,
+        "That one is already handled."
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn viewer_cannot_approve_and_hears_why() {
+    use common::clock::FakeClock;
+    use common::fake_openbao::FakeOpenBao;
+    use common::orgs::{
+        at, code, keys, openbao, policy, public_key, roster, sign, sign_roster, token, ACME,
+        ACME_NAME, ISSUED, START, TOKEN,
+    };
+    use dots_core::accounts::identity;
+    use dots_core::vault::MemorySecrets;
+
+    let bao = FakeOpenBao::start().await;
+    bao.allow_token(TOKEN, false);
+    let owner_keys = keys();
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = Config::new(dir.path().join("data"));
+    cfg.port = 0;
+    cfg.clock = FakeClock::new(at(START));
+    cfg.secrets = Some(Arc::new(MemorySecrets::new()));
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    let rt = Runtime::start(cfg).await.unwrap();
+    let me = identity(rt.store()).await.unwrap().public_key;
+    let serve = |seq: u64, role: &str| {
+        let member = |id: &str, email: &str, role: &str, key: &str| {
+            json!({"id": id, "name": email, "email": email, "role": role, "keys": [key],
+                   "workspaces": {"default": "member"}, "added_at": "2026-10-28T09:00:00Z"})
+        };
+        let members = json!([
+            member("01OWNER", "owner@acme.com", "owner", &public_key(&keys())),
+            member("01ME", "me@acme.com", role, &me),
+        ]);
+        let text = roster(ACME, seq, members);
+        let extra = json!({"v": 2, "roster": "required", "admins": [],
+                           "plain": [], "offline_hours": 0});
+        bao.put_env("secret", "dots", json!({}));
+        bao.put_policy(
+            "secret",
+            "dots",
+            &sign(&owner_keys, &policy(ACME, ISSUED, extra)),
+        );
+        bao.put_roster("secret", "dots", &sign_roster(&owner_keys, &text));
+    };
+    serve(1, "member");
+    let orgs = rt.vault().orgs().expect("the runtime's orgs");
+    orgs.join(
+        &code(
+            ACME,
+            ACME_NAME,
+            openbao(&bao.address(), "dots"),
+            &owner_keys,
+        ),
+        Some(token()),
+    )
+    .await
+    .unwrap();
+    let mut s = spec("Triage");
+    s.workdir = dir.path().to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    let dot = rt.create_dot(s, Some(ACME.into()), None).await.unwrap();
+    // Held before the run is queued, so nothing but the deeds below changes it.
+    rt.hold_runs(true).await;
+    let run = rt
+        .store()
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    let approval = rt
+        .store()
+        .create_approval(&run.id, "Bash", &json!({"command": "ls"}))
+        .await
+        .unwrap();
+    serve(2, "viewer");
+    rt.refresh_org(ACME).await.unwrap();
+
+    let approve = Deed::Approve {
+        approval_id: approval.id.clone(),
+        dot_name: "Triage".into(),
+        tool: "Bash".into(),
+        target: "ls".into(),
+    };
+    assert_eq!(
+        carry_out(&rt, &approve).await,
+        "Acme Engineering: a Viewer can't answer approvals. Ask an Admin or Owner."
+    );
+    let still = rt.store().get_approval(&approval.id).await.unwrap();
+    assert_eq!(still.status, ApprovalStatus::Pending);
+    let run_it = Deed::Run {
+        dot_id: dot.id.clone(),
+        dot_name: "Triage".into(),
+    };
+    assert_eq!(
+        carry_out(&rt, &run_it).await,
+        "Acme Engineering: a Viewer can't run dots. Ask an Admin or Owner."
+    );
+    assert_eq!(
+        rt.store().list_runs(Some(&dot.id), 10).await.unwrap().len(),
+        1
+    );
+    rt.shutdown();
 }
 
 // ---- Thinking: one streamed request to the CLI ----
