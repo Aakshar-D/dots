@@ -518,6 +518,8 @@ struct Worker {
     then: After,
     /// When the ears may hear again after speech.
     reopen_at: Option<Instant>,
+    /// "The speaker could not be opened" was said for this turn (or notice) already.
+    speaker_told: bool,
 }
 
 impl Worker {
@@ -566,6 +568,7 @@ impl Worker {
             fillers_pending: 0,
             then: After::Rest,
             reopen_at: None,
+            speaker_told: false,
         }
     }
 
@@ -701,6 +704,8 @@ impl Worker {
                 }
             }
             Command::Notice(text) => {
+                // A notice is no turn's: a missing speaker is told for it on its own.
+                self.speaker_told = false;
                 if self.state == State::Idle && self.ready_sink() {
                     self.voice.say(&text);
                     self.replies_pending += 1;
@@ -753,9 +758,13 @@ impl Worker {
                 true
             }
             Err(e) => {
-                self.send(SessionEvent::Trouble {
-                    message: format!("The speaker could not be opened: {e}"),
-                });
+                // Once per turn: a filler and then the reply find the same missing speaker.
+                if !self.speaker_told {
+                    self.speaker_told = true;
+                    self.send(SessionEvent::Trouble {
+                        message: format!("The speaker could not be opened: {e}"),
+                    });
+                }
                 false
             }
         }
@@ -772,6 +781,7 @@ impl Worker {
         self.turn = turn;
         self.shared.turn.store(turn, Ordering::SeqCst);
         self.turn_open = true;
+        self.speaker_told = false;
         self.send(SessionEvent::Heard { text, turn });
         if let Some(spotter) = &mut self.wake {
             spotter.reset();
@@ -937,9 +947,13 @@ impl Worker {
         self.mic = Some(MicStream { frames, _mic: mic });
         self.mic_broken = false;
         self.mic_owed = false;
+        // A fresh stream: nothing heard on the old one joins what the new one hears.
         if let Some(spotter) = &mut self.wake {
             spotter.reset();
         }
+        self.ears.reset();
+        self.short_ears.reset();
+        self.in_speech = false;
         Ok(())
     }
 
@@ -1172,10 +1186,13 @@ impl Worker {
                             self.enter(State::Idle);
                         }
                         // Only a filler can be at the voice: the reply may still come, and
-                        // a fresh speaker is opened for it.
+                        // a fresh speaker is opened for it. What the voice sent before `stop`
+                        // returned (another filler's failure, its `Stopped`) is this same
+                        // failure: dropped, so it is reported once.
                         State::Thinking => {
                             self.voice.stop();
                             self.fillers_pending = 0;
+                            while self.voice_events.try_recv().is_ok() {}
                         }
                         _ => {}
                     }
@@ -1322,6 +1339,8 @@ mod tests {
     struct FakeRecognizer {
         text: &'static str,
         calls: AtomicUsize,
+        /// The length, in samples, of every clip given.
+        lens: Mutex<Vec<usize>>,
         panics: AtomicBool,
         /// Holds the first call: it reaches `entered`, then waits at `release`.
         gate: Option<(Arc<Barrier>, Arc<Barrier>)>,
@@ -1332,6 +1351,7 @@ mod tests {
             Arc::new(Self {
                 text,
                 calls: AtomicUsize::new(0),
+                lens: Mutex::default(),
                 panics: AtomicBool::new(false),
                 gate: None,
             })
@@ -1339,7 +1359,8 @@ mod tests {
     }
 
     impl Recognizer for FakeRecognizer {
-        fn transcribe(&self, _clip: &Clip) -> Result<String, EngineError> {
+        fn transcribe(&self, clip: &Clip) -> Result<String, EngineError> {
+            self.lens.lock().unwrap().push(clip.samples.len());
             if self.panics.load(Ordering::SeqCst) {
                 panic!("the recogniser broke");
             }
@@ -2332,6 +2353,7 @@ mod tests {
         let recognizer = Arc::new(FakeRecognizer {
             text: "hello",
             calls: AtomicUsize::new(0),
+            lens: Mutex::default(),
             panics: AtomicBool::new(false),
             gate: Some((entered.clone(), release.clone())),
         });
@@ -2849,6 +2871,105 @@ mod tests {
         r.session.notice("Back.");
         r.expect_state(State::Speaking, false);
         r.expect_saying("Back.");
+    }
+
+    // ---- step 3, task 1: one trouble per failure --------------------------------------------
+
+    #[test]
+    fn one_trouble_for_two_fillers() {
+        for _ in 0..5 {
+            let mut r = rig(Opts::default());
+            r.expect_state(State::Idle, false);
+            let turn = r.hear();
+            r.sink.sounding(true);
+            r.session.filler(turn, "One moment.");
+            r.expect_saying("One moment.");
+            r.session.filler(turn, "Still working.");
+            r.sync();
+            // Both fillers are at the voice; the speaker breaks under them.
+            r.sink.fail();
+            assert_eq!(
+                r.next(),
+                SessionEvent::Trouble {
+                    message: "The speaker stopped working.".into()
+                }
+            );
+            // The second filler's failure is the same failure: not reported again.
+            r.clock.advance(10);
+            r.nothing_more();
+            // The reply still comes, on a fresh speaker.
+            r.session.say(turn, "Here.", After::Rest);
+            r.expect_state(State::Speaking, false);
+            r.expect_saying("Here.");
+            r.until_speech_done();
+            r.clock.advance(250);
+            r.expect_state(State::Idle, false);
+            r.nothing_more();
+        }
+    }
+
+    #[test]
+    fn one_trouble_per_turn_when_no_speaker_opens() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        r.sink.fail();
+        r.sink_fails.store(true, Ordering::SeqCst);
+        let turn = r.hear();
+        r.session.filler(turn, "One moment.");
+        assert_eq!(
+            r.next(),
+            SessionEvent::Trouble {
+                message: "The speaker could not be opened: no speaker was found".into()
+            }
+        );
+        r.nothing_more();
+        // The reply of the same turn finds no speaker either: said once already.
+        r.session.say(turn, "Here.", After::Rest);
+        r.expect_state(State::Idle, false);
+        r.nothing_more();
+        // A new turn is told again.
+        let turn = r.hear();
+        r.session.say(turn, "Here.", After::Rest);
+        assert!(matches!(r.next(), SessionEvent::Trouble { .. }));
+        r.expect_state(State::Idle, false);
+        r.nothing_more();
+        assert!(r.speaker.said().is_empty());
+    }
+
+    #[test]
+    fn a_reopened_mic_starts_with_clean_ears() {
+        let mut r = rig(Opts {
+            talk: true,
+            ears: EarSettings {
+                pre_roll_ms: 64, // two frames
+                ..test_ears()
+            },
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, false);
+        let turn = r.hear();
+        r.sink.sounding(true);
+        r.session.say(turn, "A long answer.", After::Rest);
+        r.expect_state(State::Speaking, true);
+        r.expect_saying("A long answer.");
+        // Sound from the old microphone fills the ears' pre-roll, then the microphone goes.
+        r.mic.send(QUIET, 2);
+        r.mic.lost();
+        r.expect_state(State::Speaking, false);
+        r.clock.advance(5_000);
+        r.expect_state(State::Speaking, true); // the quiet try worked
+                                               // Talking over Dot on the new microphone: its clip holds nothing of the old one.
+        r.mic.send(SPEECH, 3);
+        r.expect_state(State::Listening, true);
+        r.mic.send(QUIET, 2);
+        assert!(matches!(r.next(), SessionEvent::Hearing { .. }));
+        assert!(matches!(r.next(), SessionEvent::Heard { .. }));
+        let last = *r.recognizer.lens.lock().unwrap().last().unwrap();
+        assert_eq!(
+            last,
+            5 * FRAME,
+            "three speech and two quiet frames, no old pre-roll"
+        );
     }
 
     // ---- final fix round: clicks become turns ---------------------------------------------------

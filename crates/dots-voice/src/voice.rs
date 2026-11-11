@@ -345,8 +345,13 @@ impl Worker {
                     return; // stopped while synthesising: the clip is thrown away
                 }
                 if !st.sink.play(clip) {
+                    // Refused: a broken speaker ends the reply with trouble; a full queue
+                    // only drops this clip, and the reply goes on.
+                    let broke = st.sink.failed();
                     drop(st);
-                    self.fail(gen, reply, SPEAKER_BROKE.into());
+                    if broke {
+                        self.fail(gen, reply, SPEAKER_BROKE.into());
+                    }
                     return;
                 }
                 self.shared.send(VoiceEvent::Saying(cleaned));
@@ -482,6 +487,8 @@ mod tests {
         idle: AtomicBool,
         stops: AtomicUsize,
         failed: AtomicBool,
+        /// The queue is full: clips are refused, but the sink has not failed.
+        full: AtomicBool,
     }
 
     impl FakeSink {
@@ -491,6 +498,7 @@ mod tests {
                 idle: AtomicBool::new(true),
                 stops: AtomicUsize::new(0),
                 failed: AtomicBool::new(false),
+                full: AtomicBool::new(false),
             })
         }
 
@@ -503,7 +511,7 @@ mod tests {
 
     impl Sink for FakeSink {
         fn play(&self, clip: Clip) -> bool {
-            if self.failed.load(Ordering::SeqCst) {
+            if self.failed.load(Ordering::SeqCst) || self.full.load(Ordering::SeqCst) {
                 return false;
             }
             self.clips.lock().unwrap().push(clip);
@@ -941,6 +949,27 @@ mod tests {
         assert_eq!(fresh.clips.lock().unwrap().len(), 1);
         assert!(rig.sink.clips.lock().unwrap().is_empty());
         assert_eq!(rig.speaker.sentences(), ["Refused.", "Again."]);
+    }
+
+    #[test]
+    fn a_clip_refused_by_a_full_queue_is_dropped_quietly() {
+        let mut rig = rig();
+        rig.sink.full.store(true, Ordering::SeqCst);
+        rig.voice.say("Dropped. Also dropped.");
+        // No trouble: the speaker works, its queue was only full.
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert!(rig.nothing_pending());
+        assert!(!rig.voice.speaking());
+        rig.sink.full.store(false, Ordering::SeqCst);
+        rig.voice.say("Played.");
+        assert_eq!(rig.next(), say("Played."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert_eq!(rig.sink.clips.lock().unwrap().len(), 1);
+        // The reply went on after the first refused clip: both sentences were tried.
+        assert_eq!(
+            rig.speaker.sentences(),
+            ["Dropped.", "Also dropped.", "Played."]
+        );
     }
 
     #[test]
