@@ -216,6 +216,98 @@ describe("Settings > Voice", () => {
     );
   });
 
+  it("shows a download it did not start, and cannot start a second", async () => {
+    voice({ ...sample.voiceOff, enabled: false, downloading: true, download_bytes: 258_000_000 });
+    const { user, listening } = renderApp("/settings/voice");
+    await listening();
+    const toggle = await screen.findByRole("switch", { name: "Open Dot" });
+    expect(toggle).toBeChecked();
+    expect(toggle).toHaveAttribute("aria-disabled", "true");
+    const bar = await screen.findByRole("progressbar", { name: "Speech files downloaded" });
+    expect(bar).not.toHaveAttribute("aria-valuenow");
+    expect(screen.getByText("Getting the speech files…")).toBeVisible();
+    expect(screen.queryByText(/0 MB/)).toBeNull();
+    await user.click(toggle);
+    expect(backend.callsTo("voice_enable")).toEqual([]);
+    act(() =>
+      backend.emit("voice", { kind: "download", done_bytes: 52_000_000, total_bytes: 258_000_000 }),
+    );
+    expect(await screen.findByText("52 MB of 258 MB")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Cancel download" }));
+    expect(backend.callsTo("voice_download_cancel")).toEqual([{}]);
+  });
+
+  it("gives focus back to the switch when the download ends under Cancel", async () => {
+    voice({ ...sample.voiceOff, enabled: false, downloading: true, download_bytes: 258_000_000 });
+    const { user, listening } = renderApp("/settings/voice");
+    await listening();
+    await user.click(await screen.findByRole("button", { name: "Cancel download" }));
+    act(() => backend.emit("voice", { kind: "status", status: ready }));
+    await waitFor(() => expect(screen.queryByRole("progressbar")).toBeNull());
+    expect(screen.getByRole("switch", { name: "Open Dot" })).toHaveFocus();
+  });
+
+  it("shows a saved device as a saved device until the list has loaded", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true, voice_mic: "mic-usb" });
+    const list = later<typeof devices>();
+    backend.on("voice_devices", () => list.answer);
+    renderApp("/settings/voice");
+    const mic = await screen.findByLabelText("Microphone");
+    await waitFor(() => expect(mic).toHaveDisplayValue("Saved device"));
+    expect(screen.queryByText(/mic-usb/)).toBeNull();
+    act(() => list.give(devices));
+    await waitFor(() => expect(mic).toHaveDisplayValue("USB microphone"));
+  });
+
+  it("shows a saved device that is in the list by its name", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true, voice_speaker: "spk-laptop" });
+    renderApp("/settings/voice");
+    const speaker = await screen.findByLabelText("Speaker");
+    await waitFor(() => expect(speaker).toHaveDisplayValue("Laptop speakers"));
+  });
+
+  it("says a saved device is not connected only once the list has loaded", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true, voice_mic: "gone-id" });
+    renderApp("/settings/voice");
+    const mic = await screen.findByLabelText("Microphone");
+    await waitFor(() => expect(mic).toHaveDisplayValue("Saved device (not connected)"));
+    expect(screen.queryByText(/gone-id/)).toBeNull();
+  });
+
+  it("lists the devices as soon as voice is on, before it is ready", async () => {
+    voice({ ...ready, ready: false, state: "off" }, { ...sample.settings, voice_enabled: true });
+    renderApp("/settings/voice");
+    await waitFor(() => expect(backend.callsTo("voice_devices").length).toBeGreaterThan(0));
+  });
+
+  it("shows a trouble event in the status line at once", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true });
+    const { listening } = renderApp("/settings/voice");
+    await listening();
+    await screen.findByText("Ready");
+    act(() => backend.emit("voice", { kind: "trouble", message: "No microphone found." }));
+    expect(screen.getByRole("status", { name: "Open Dot status" })).toHaveTextContent(
+      "No microphone found.",
+    );
+    act(() => backend.emit("voice", { kind: "state", state: "listening", mic_open: true }));
+    expect(screen.getByRole("status", { name: "Open Dot status" })).toHaveTextContent("Ready");
+  });
+
+  it("asks for the voice status again after a save, so a fixed hotkey clears its error", async () => {
+    const now = voice(
+      { ...ready, hotkey_error: "Another app uses Ctrl+Shift+Space." },
+      { ...sample.settings, voice_enabled: true },
+    );
+    const { user } = renderApp("/settings/voice");
+    expect(await screen.findByText("Another app uses Ctrl+Shift+Space.")).toBeVisible();
+    now.status = { ...ready, hotkey_error: null };
+    await user.type(screen.getByLabelText("Hotkey"), "x");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(screen.queryByText("Another app uses Ctrl+Shift+Space.")).toBeNull(),
+    );
+  });
+
   it("follows a status event without asking again", async () => {
     voice(sample.voiceOff);
     const { listening } = renderApp("/settings/voice");

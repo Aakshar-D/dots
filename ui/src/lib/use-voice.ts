@@ -122,9 +122,21 @@ const VIEW_WAIT_MS = 100;
 function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void): void {
   switch (event.kind) {
     case "state":
-      voiceStore.set({ state: event.state, micOpen: event.mic_open });
+      // Listening again means whatever was wrong is not.
+      voiceStore.set({
+        state: event.state,
+        micOpen: event.mic_open,
+        ...(event.state === "listening" ? { trouble: null } : {}),
+      });
       qc.setQueryData<VoiceStatus>(keys.voice, (old) =>
-        old ? { ...old, state: event.state, mic_open: event.mic_open } : old,
+        old
+          ? {
+              ...old,
+              state: event.state,
+              mic_open: event.mic_open,
+              ...(event.state === "listening" ? { trouble: null } : {}),
+            }
+          : old,
       );
       return;
     case "level":
@@ -186,21 +198,26 @@ export function useVoice(): void {
 
   useEffect(() => {
     let subscribed = true;
+    // Whether an event has told the status already: it is newer than any fetch begun before.
+    let heard = false;
     voiceStore.reset();
-    void qc
-      .fetchQuery({ queryKey: keys.voice, queryFn: commands.voiceStatus })
-      .then((status) => {
-        if (subscribed) {
-          voiceStore.set({ state: status.state, micOpen: status.mic_open, trouble: status.trouble });
-        }
-      })
-      .catch(() => {});
+    // Listen first, then ask: an event that comes while the answer is on its way wins.
     const subscription = onVoice(
       (event) => {
-        if (subscribed) take(qc, event, (path) => void go.current(path));
+        if (!subscribed) return;
+        if (event.kind === "status") heard = true;
+        take(qc, event, (path) => void go.current(path));
       },
       () => invalidate(qc, keys.voice),
     );
+    commands
+      .voiceStatus()
+      .then((status) => {
+        if (!subscribed || heard) return;
+        qc.setQueryData(keys.voice, status);
+        voiceStore.set({ state: status.state, micOpen: status.mic_open, trouble: status.trouble });
+      })
+      .catch(() => {});
     return () => {
       subscribed = false;
       void subscription.then((unlisten) => unlisten());

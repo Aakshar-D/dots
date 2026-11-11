@@ -288,6 +288,8 @@ function Form({
       qc.setQueryData(keys.settings, saved.settings);
       // Today's spend is shown against the caps.
       invalidate(qc, keys.spend);
+      // A fixed hotkey clears its error: the voice status is read again.
+      invalidate(qc, keys.voice);
       // A new dot starts with the default model.
       invalidate(qc, keys.newDotSpec);
       // A token chosen for publishing is checked at once (updates UI spec section 5.1).

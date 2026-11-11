@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Play } from "lucide-react";
-import type { ReactNode } from "react";
+import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
@@ -47,12 +47,17 @@ const speedLabel = (speed: number) =>
 /// Bytes in whole megabytes, as the download is described ("about 260 MB").
 const mb = (bytes: number) => `${Math.round(bytes / 1_000_000)} MB`;
 
-/// What the status line says.
-function statusText(status: VoiceStatus | undefined, enabling: boolean): string {
+/// What the status line says. `trouble` is the newest trouble: one that came as an event, or
+/// the status's own.
+function statusText(
+  status: VoiceStatus | undefined,
+  enabling: boolean,
+  trouble: string | null,
+): string {
   if (!status) return "";
   if (enabling || status.downloading) return "Getting ready";
   if (!status.enabled) return "Off";
-  if (status.trouble) return status.trouble;
+  if (trouble) return trouble;
   return status.ready ? "Ready" : "Getting ready";
 }
 
@@ -61,12 +66,14 @@ function statusText(status: VoiceStatus | undefined, enabling: boolean): string 
 function DeviceSelect(props: {
   id: string;
   label: string;
-  devices: VoiceDevice[];
+  /// Undefined until the list has loaded.
+  devices: VoiceDevice[] | undefined;
   value: string | null;
   disabled: boolean;
   onChange: (id: string | null) => void;
 }) {
-  const missing = props.value !== null && !props.devices.some((d) => d.id === props.value);
+  const known = props.devices?.some((d) => d.id === props.value) ?? false;
+  const saved = props.value !== null && !known;
   return (
     <Field label={props.label} htmlFor={props.id}>
       <NativeSelect
@@ -77,50 +84,79 @@ function DeviceSelect(props: {
         onChange={(e) => props.onChange(e.target.value === "" ? null : e.target.value)}
       >
         <option value="">System default</option>
-        {props.devices.map((d) => (
+        {(props.devices ?? []).map((d) => (
           <option key={d.id} value={d.id}>
             {d.name}
           </option>
         ))}
-        {missing && <option value={props.value!}>{props.value} (not found)</option>}
+        {saved && (
+          <option value={props.value!}>
+            {props.devices ? "Saved device (not connected)" : "Saved device"}
+          </option>
+        )}
       </NativeSelect>
     </Field>
   );
 }
 
 /// The download of the speech files: how far, and a way to stop it.
-function Download(props: { totalBytes: number }) {
+function Download(props: { totalBytes: number; onGone: () => void }) {
   const download = useVoiceLive((live) => live.download);
   const cancel = useMutation({ mutationFn: commands.voiceDownloadCancel, onError: notifyError });
+  const cancelButton = useRef<HTMLButtonElement>(null);
+  // Cancel goes away with the download: focus on it moves on instead of being lost.
+  const gone = useRef(props.onGone);
+  gone.current = props.onGone;
+  useLayoutEffect(
+    () => () => {
+      if (cancelButton.current && document.activeElement === cancelButton.current) gone.current();
+    },
+    [],
+  );
   const done = download?.done ?? 0;
   const total = download?.total || props.totalBytes;
+  // Until the first count arrives there is nothing to measure.
+  const known = download !== null;
   return (
     <div className="flex flex-col gap-1.5">
       <div
         role="progressbar"
         aria-label="Speech files downloaded"
-        aria-valuemin={0}
-        aria-valuemax={total}
-        aria-valuenow={done}
-        aria-valuetext={`${mb(done)} of ${mb(total)}`}
+        {...(known
+          ? {
+              "aria-valuemin": 0,
+              "aria-valuemax": total,
+              "aria-valuenow": done,
+              "aria-valuetext": `${mb(done)} of ${mb(total)}`,
+            }
+          : { "aria-valuetext": "Getting the speech files" })}
         className="h-1 w-full max-w-sm overflow-hidden rounded-full bg-muted"
       >
         <div
-          className="h-full rounded-full bg-primary transition-[width] motion-reduce:transition-none"
-          style={{ width: `${total === 0 ? 0 : Math.min(100, (done / total) * 100)}%` }}
+          className={
+            known
+              ? "h-full rounded-full bg-primary transition-[width] motion-reduce:transition-none"
+              : "h-full w-1/3 animate-pulse rounded-full bg-primary motion-reduce:animate-none"
+          }
+          style={
+            known ? { width: `${total === 0 ? 0 : Math.min(100, (done / total) * 100)}%` } : undefined
+          }
         />
       </div>
       <div className="flex items-center gap-3">
         <p className="text-xs text-muted-foreground">
-          {mb(done)} of {mb(total)}
+          {known ? `${mb(done)} of ${mb(total)}` : "Getting the speech files…"}
         </p>
         <Button
           type="button"
           size="sm"
           variant="outline"
           aria-label="Cancel download"
-          disabled={cancel.isPending}
-          onClick={() => cancel.mutate()}
+          ref={cancelButton}
+          aria-disabled={cancel.isPending}
+          onClick={() => {
+            if (!cancel.isPending) cancel.mutate();
+          }}
         >
           Cancel
         </Button>
@@ -146,8 +182,11 @@ export function VoiceSection({
   const devices = useQuery({
     queryKey: keys.voiceDevices,
     queryFn: commands.voiceDevices,
-    enabled: ready,
+    // Listing devices opens none, so it does not wait for the session.
+    enabled: s?.enabled === true,
   });
+  const trouble = useVoiceLive((live) => live.trouble) ?? s?.trouble ?? null;
+  const toggle = useRef<HTMLButtonElement>(null);
 
   /// The core saved `voice_enabled` itself: the stored settings are read again.
   const took = (next: VoiceStatus) => {
@@ -177,8 +216,10 @@ export function VoiceSection({
   });
 
   const enabling = enable.isPending && enable.variables === true;
-  const on = enabling || (s?.enabled ?? false);
   const downloading = enabling || s?.downloading === true;
+  // A download that began elsewhere (before the tab, or before the app restarted) counts.
+  const on = enabling || downloading || (s?.enabled ?? false);
+  const busy = !s || enable.isPending || remove.isPending || downloading;
   const needsSession = !s?.enabled
     ? "Turn Open Dot on to try the voices and choose devices."
     : !ready
@@ -191,9 +232,13 @@ export function VoiceSection({
         <div className="flex items-center gap-2">
           <Switch
             id="settings-voice"
+            ref={toggle}
             checked={on}
-            disabled={!s || enable.isPending || remove.isPending}
-            onCheckedChange={(next) => enable.mutate(next)}
+            // Not disabled: a disabled switch drops focus, and a click only needs ignoring.
+            aria-disabled={busy}
+            onCheckedChange={(next) => {
+              if (!busy) enable.mutate(next);
+            }}
           />
           <Label htmlFor="settings-voice">Open Dot</Label>
         </div>
@@ -206,8 +251,8 @@ export function VoiceSection({
           </p>
         )}
         <p role="status" aria-label="Open Dot status" className="flex gap-1.5 text-xs">
-          <span className={s?.enabled && s.trouble && !downloading ? "text-destructive" : undefined}>
-            {statusText(s, enabling)}
+          <span className={s?.enabled && trouble && !downloading ? "text-destructive" : undefined}>
+            {statusText(s, enabling, trouble)}
           </span>
           {s?.mic_open && (
             <>
@@ -218,11 +263,11 @@ export function VoiceSection({
             </>
           )}
         </p>
-        {downloading && <Download totalBytes={s?.download_bytes ?? 0} />}
+        {downloading && <Download totalBytes={s?.download_bytes ?? 0} onGone={() => toggle.current?.focus()} />}
       </Section>
 
       <Section title="Voice">
-        <div role="radiogroup" aria-label="Voice" className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+        <div role="radiogroup" aria-label="Voice" className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5">
           {VOICES.map((i) => (
             <div key={i} className="flex items-center gap-1.5 rounded-md border px-2 py-1">
               <input
@@ -233,7 +278,7 @@ export function VoiceSection({
                 checked={draft.voice_id === i}
                 onChange={() => set({ voice_id: i })}
               />
-              <Label htmlFor={`settings-voice-${i}`} className="flex-1 font-normal">
+              <Label htmlFor={`settings-voice-${i}`} className="flex-1 font-normal whitespace-nowrap">
                 Voice {i + 1}
               </Label>
               <Button
@@ -335,7 +380,7 @@ export function VoiceSection({
           <DeviceSelect
             id="settings-voice-mic"
             label="Microphone"
-            devices={devices.data?.microphones ?? []}
+            devices={devices.data?.microphones}
             value={draft.voice_mic}
             disabled={!ready}
             onChange={(voice_mic) => set({ voice_mic })}
@@ -343,7 +388,7 @@ export function VoiceSection({
           <DeviceSelect
             id="settings-voice-speaker"
             label="Speaker"
-            devices={devices.data?.speakers ?? []}
+            devices={devices.data?.speakers}
             value={draft.voice_speaker}
             disabled={!ready}
             onChange={(voice_speaker) => set({ voice_speaker })}

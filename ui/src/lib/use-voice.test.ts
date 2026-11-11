@@ -2,12 +2,12 @@ import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { MemoryRouter, useLocation, useNavigate } from "react-router";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { VoiceEvent } from "@/api/types";
 import { createQueryClient, keys } from "@/lib/query";
 import { useVoice, voiceStore } from "@/lib/use-voice";
-import { backend } from "@/test/backend";
+import { backend, later } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
 /// Mounts `useVoice` at `path`, and hands back where the app is and a way to go elsewhere.
@@ -55,7 +55,7 @@ describe("useVoice", () => {
   });
 
   it("reports the view on mount and again when the route changes", async () => {
-    const { result } = mount("/home/dot-a");
+    const { result, rerender } = mount("/home/dot-a");
     await waitFor(() =>
       expect(backend.callsTo("voice_view")).toEqual([
         {
@@ -92,8 +92,14 @@ describe("useVoice", () => {
       },
     });
     // A render that changes nothing sends nothing.
-    await new Promise((r) => setTimeout(r, 300));
-    expect(backend.callsTo("voice_view")).toHaveLength(3);
+    vi.useFakeTimers();
+    try {
+      rerender();
+      act(() => void vi.advanceTimersByTime(300));
+      expect(backend.callsTo("voice_view")).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the status in the query cache and what is heard in the store", async () => {
@@ -119,6 +125,32 @@ describe("useVoice", () => {
     act(() => backend.emit("voice", { kind: "cleared" }));
     expect(voiceStore.get().hearing).toBe("");
     expect(voiceStore.get().saying).toBe("");
+  });
+
+  it("keeps a status event that arrives before the first fetch answers", async () => {
+    const first = later<typeof sample.voiceOff>();
+    backend.on("voice_status", () => first.answer);
+    const { qc } = mount("/home");
+    await hear({ kind: "status", status: sample.voiceReady }, () =>
+      expect(qc.getQueryData(keys.voice)).toEqual(sample.voiceReady),
+    );
+    await act(async () => first.give(sample.voiceOff));
+    expect(qc.getQueryData(keys.voice)).toEqual(sample.voiceReady);
+    expect(voiceStore.get().state).toBe(sample.voiceReady.state);
+  });
+
+  it("clears a trouble when a status without one arrives or Open Dot listens", async () => {
+    mount("/home");
+    await hear({ kind: "trouble", message: "No microphone." }, () =>
+      expect(voiceStore.get().trouble).toBe("No microphone."),
+    );
+    act(() => backend.emit("voice", { kind: "state", state: "listening", mic_open: true }));
+    expect(voiceStore.get().trouble).toBeNull();
+    act(() => backend.emit("voice", { kind: "trouble", message: "Again." }));
+    act(() =>
+      backend.emit("voice", { kind: "status", status: { ...sample.voiceReady, trouble: null } }),
+    );
+    expect(voiceStore.get().trouble).toBeNull();
   });
 
   it("stops listening when it unmounts", async () => {
