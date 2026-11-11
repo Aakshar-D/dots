@@ -3499,9 +3499,21 @@ impl Runtime {
         let mut parked = false;
         let mut failure = None;
         let pending = self.store.pending_for_run(run_id).await?;
-        let shown = pending
+        let shown: Vec<Approval> = pending
             .into_iter()
-            .filter(|a| only.is_none_or(|ids| ids.contains(&a.id)));
+            .filter(|a| only.is_none_or(|ids| ids.contains(&a.id)))
+            .collect();
+        // A call a Member can't approve (guardrails spec §4.2) refuses the whole answer before
+        // any is decided.
+        if approved {
+            for a in &shown {
+                if let Some(g) = self.approval_guardrail(&a.id).await? {
+                    if g.needs_admin {
+                        return Err(Error::NotAllowed(g.text));
+                    }
+                }
+            }
+        }
         for pending in shown {
             match self.hub.decide(&pending.id, approved, note.clone()).await {
                 Ok(DecideEffect::Live(a)) => decided.push(a),
@@ -3722,6 +3734,31 @@ impl Runtime {
         let outcome = self.orgs.edit_members(org_id, base_seq, edit).await?;
         self.org_updated(org_id);
         Ok(outcome)
+    }
+
+    /// The guardrails of a workspace of the org, for the Guardrails tab (guardrails spec §7).
+    pub async fn workspace_guardrails(
+        &self,
+        org_id: &str,
+        workspace_id: &str,
+    ) -> Result<crate::vault::org::GuardrailsView> {
+        self.orgs.guardrails_view(org_id, workspace_id).await
+    }
+
+    /// Sets (or, with `None`, removes) the guardrails of a workspace of the org: a member-list
+    /// edit, signed with this PC's Dots ID and published like the others (guardrails spec §6).
+    pub async fn workspace_guardrails_set(
+        &self,
+        org_id: &str,
+        base_seq: u64,
+        workspace_id: &str,
+        guardrails: Option<crate::accounts::Guardrails>,
+    ) -> Result<EditOutcome> {
+        let edit = RosterEdit::SetGuardrails {
+            workspace_id: workspace_id.to_string(),
+            guardrails,
+        };
+        self.member_edit(org_id, base_seq, edit).await
     }
 
     /// Publishes the org's waiting signed list again.

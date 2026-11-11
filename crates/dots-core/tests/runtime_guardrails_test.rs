@@ -275,6 +275,11 @@ async fn an_admin_dot_asks_and_takes_no_rule() {
         refused(t.rt.decide_approval(&edit.id, true, None, None).await),
         MIGRATION
     );
+    // Nor all at once.
+    assert_eq!(
+        refused(t.rt.decide_run_approvals(&run.id, None, true, None).await),
+        MIGRATION
+    );
     // Denying is still the Member's to do.
     t.rt.decide_approval(&edit.id, false, None, None)
         .await
