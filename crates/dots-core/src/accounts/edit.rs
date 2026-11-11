@@ -289,7 +289,8 @@ pub fn edit_members(
             workspace_id,
             guardrails,
         } => {
-            if let Some(g) = guardrails {
+            let guardrails = guardrails.as_ref().map(Guardrails::normalized);
+            if let Some(g) = &guardrails {
                 g.check().map_err(Error::Invalid)?;
             }
             let workspace = find_workspace(&mut next, workspace_id)?;

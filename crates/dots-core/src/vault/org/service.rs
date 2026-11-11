@@ -1057,6 +1057,36 @@ impl Orgs {
         }
     }
 
+    /// What the org's accepted member list says of the guardrails of workspace `id` (guardrails
+    /// spec §4.4): none, the guardrails, or why they are unknown.
+    pub fn workspace_guard(
+        &self,
+        org_id: &str,
+        id: &str,
+    ) -> crate::accounts::guardrails::GuardLookup {
+        use crate::accounts::guardrails::GuardLookup;
+        use crate::accounts::Membership;
+        match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => match &joined.roster {
+                Some(kept) => match kept.roster.workspaces.iter().find(|w| w.id == id) {
+                    Some(w) => match &w.guardrails {
+                        Some(g) => GuardLookup::Rails(g.clone()),
+                        None => GuardLookup::None,
+                    },
+                    None => GuardLookup::Unknown(format!(
+                        "the workspace '{id}' isn't on the member list"
+                    )),
+                },
+                None if joined.row.member.membership == Membership::Legacy => GuardLookup::None,
+                None => GuardLookup::Unknown("no member list has been accepted on this PC".into()),
+            },
+            Some(Slot::Damaged { .. }) => {
+                GuardLookup::Unknown("its settings on this PC can't be read".into())
+            }
+            Some(Slot::Pending(_)) | None => GuardLookup::NotJoined,
+        }
+    }
+
     /// Why this PC gets nothing from the org, when it is not on its member list: waiting,
     /// its Dots ID changed, or removed (members spec §6.4). `None` otherwise.
     pub fn not_member(&self, org_id: &str) -> Option<NotMember> {

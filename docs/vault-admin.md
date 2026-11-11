@@ -999,6 +999,8 @@ dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.jso
 
 - `--defaults` writes the defaults below. With no option, `guard` shows the workspace's guardrails.
 - `--path`, `--git` and `--command` can be given more than once; each replaces its whole list.
+  `--no-paths`, `--no-git` and `--no-commands` empty one list. A bare folder (`deploy` or
+  `deploy/`) is stored as `deploy/**`, everything in it.
   `--member-max` sets the ceiling. Without `--defaults` they start from the workspace's guardrails,
   or from the defaults when it has none.
 - `--off` removes them.
@@ -1010,7 +1012,7 @@ The fields, and the defaults:
 | Field | Default | Means |
 | --- | --- | --- |
 | `protected_paths` | `.github/**`, `**/migrations/**`, `infra/**`, `**/*.env*`, `**/Cargo.lock`, `**/package-lock.json`, `**/bun.lock`, `**/yarn.lock`, `**/pnpm-lock.yaml` | Files a dot may not write. Globs relative to the dot's folder: `*` within a folder, `**` across folders. Case is ignored. |
-| `protected_git` | all of `push_main`, `force_push`, `delete_branch`, `tags`, `merge_pr`, `release` | Pushing to `main` or `master` (and a `git push` that doesn't name its branch), force pushing, deleting a branch, making or pushing tags, `gh pr merge`, and publishing a GitHub release. |
+| `protected_git` | all of `push_main`, `force_push`, `delete_branch`, `tags`, `merge_pr`, `release` | Pushing to `main` or `master` (a `git push` that doesn't name its branch counts when the dot's folder has `main` or `master` checked out, or a detached or unknown branch), force pushing, deleting a branch, making or pushing tags, `gh pr merge`, and publishing a GitHub release. |
 | `protected_commands` | `rm -rf`, `terraform apply`, `terraform destroy`, `kubectl apply`, `kubectl delete`, `helm install`, `helm upgrade`, `helm uninstall`, `docker push`, `npm publish`, `cargo publish`, `vercel --prod`, `netlify deploy`, `fly deploy`, `wrangler deploy`, `firebase deploy` | A command and the words it must have, in any order: `kubectl apply` also matches `kubectl -n prod apply -f x.yaml`. `rm -rf` covers `rm -fr`, `rm -r -f` and PowerShell's `Remove-Item -Recurse -Force`. |
 | `member_max_preset` | `sandboxed` | The highest tool policy a Member's dot may use: `read-only`, `sandboxed` or `trusted`. |
 
@@ -1028,8 +1030,14 @@ A list that breaks a rule is refused whole.
 
 Above Sandboxed means: Trusted, a default that allows more than Sandboxed's, "Always ask before
 sending or deleting" off, a missing `.git` or `.claude` deny rule, or an allow rule for a whole
-tool (`Bash`, `Write`, `*`, `mcp__*`), an absolute path or a command that runs other commands
-(`bash`, `sudo`). An allow rule for one command (`Bash(npm test:*)`), a path in the dot's folder or
+tool (`Bash`, `Write`, `*`, `mcp__*`), an absolute path, a command that runs other commands
+(`sudo`, `bash`) or code (`python`, `node`, `npx`, `pwsh`). Using your own Claude Code settings
+counts as above every ceiling. `make`, `npm run` and `npm test` stay within Sandboxed.
+
+A dot in a workspace with guardrails never reads your own Claude Code settings, and every shell
+command and file write it makes is checked by Dots. If Dots can't read the guardrails of a dot's
+workspace (the account's member list is missing, or the workspace isn't on it), the dot doesn't
+run until the account is refreshed. An allow rule for one command (`Bash(npm test:*)`), a path in the dot's folder or
 one MCP tool stays within Sandboxed.
 
 **What it can't see.** Guardrails read each call as written. A script the dot writes and then runs,

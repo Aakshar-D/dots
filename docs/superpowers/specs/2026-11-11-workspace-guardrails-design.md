@@ -53,17 +53,17 @@ Each workspace on the member list may carry `guardrails`:
 
 ### 3.1 Fields
 
-`protected_paths`: globs, matched against the path relative to the run's folder. `*` stays within one folder, `**` crosses folders, `?` is one character. Matching ignores case and treats `\` as `/`. `dir/**` also covers `dir` itself. A leading `**/` also matches at the top. A path outside the run's folder is matched at every folder depth (fails closed). Rules: 1 to 200 characters, relative, no `..`, no `(`, `)`, `,` or control characters, at most 100 entries, no duplicates.
+`protected_paths`: globs, matched against the path relative to the run's folder. `*` stays within one folder, `**` crosses folders, `?` is one character. Matching ignores case and treats `\` as `/`. `dir/**` also covers `dir` itself. A leading `**/` also matches at the top. A bare folder (no glob characters, or ending in `/`) means everything in it: `deploy` and `deploy/` are stored as `deploy/**`, and one signed without that is read the same way. While any path is protected, a Windows short (8.3) name such as `MIGRA~1` is a hit, since the long name it stands for is unknown. A path outside the run's folder is matched at every folder depth (fails closed). Rules: 1 to 200 characters, relative, no `..`, no `(`, `)`, `,` or control characters, at most 100 entries, no duplicates.
 
 `protected_git`: any of
 
 | Value | Covers |
 |---|---|
-| `push_main` | `git push` to `main` or `master`. Also a push that doesn't name the branch (`git push`, `git push origin`, `git push origin HEAD`), `--all` and `--mirror`: Dots can't tell where it lands (my call: fail closed). |
-| `force_push` | `git push -f`, `--force`, `--force-with-lease`, `--force-if-includes`, a `+` refspec. |
+| `push_main` | `git push` to `main` or `master` (`refs/heads/` or `heads/` before it is ignored), `--all`, `--mirror`, `--branches`, a refspec with `*`, and a bare `:`. A push that doesn't name the branch (`git push`, `git push origin`, `git push -u origin HEAD`) is decided by the branch checked out in the run's folder, read from `.git/HEAD` (in a worktree, through the `gitdir` file `.git` names): on a named branch other than main or master it is allowed; on main or master, detached, unreadable, or after the line changes folder or repository (`cd`, `git -C`), it is `push_main`. |
+| `force_push` | `git push -f`, `--force`, `--force-with-lease`, `--force-if-includes` (and any prefix git accepts, `--force-w`), a `+` refspec. |
 | `delete_branch` | `git branch -d/-D/--delete`, `git push --delete`, a `:branch` refspec. |
 | `tags` | `git tag <name>` (making or deleting a tag), `git push --tags`, `--follow-tags`, a `refs/tags/` refspec, `git push origin tag <name>`. Listing tags is not covered. |
-| `merge_pr` | `gh pr merge`, `gh api` calls on `.../merge`, and MCP tools whose name merges a pull request (`merge_pull_request`). |
+| `merge_pr` | `gh pr merge`, `gh api` writes on `pulls/<n>/merge` and `merges`, and MCP tools whose name merges a pull request (`merge_pull_request`, `enable_auto_merge`). |
 | `release` | `gh release create/edit/delete/upload/delete-asset`, `gh api` writes on `.../releases`, and MCP tools that create, edit or delete a release. |
 
 No duplicates.
@@ -96,16 +96,21 @@ The role is this PC's role in the dot's workspace, `permissions::access_dot` (me
 
 - **File writes** (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`): the path against `protected_paths`. Reads (`Read`, `Grep`, `Glob`, `LS`) are not guarded.
 - **Shell** (`Bash`, `PowerShell`): the line is split the way the send-and-delete guard splits it (`policy::guard`: separators, quotes, substitutions, wrappers such as `sudo`, `env`, `xargs`, and the strings of `bash -c`, `cmd /c`, `powershell -Command`, `-EncodedCommand`, `eval`). Each simple command is read for git actions, `gh` actions and protected commands.
-- **Paths in a shell line**: any word of the line (redirection targets included) that matches a protected path is a hit, unless every command on the line only reads (`cat`, `type`, `less`, `head`, `tail`, `grep`, `rg`, `findstr`, `ls`, `dir`, `wc`, `stat`, `diff`, `Get-Content`, `Select-String`, and `git status/diff/log/show/blame/add`) and there is no `>` redirection.
-- **Fail closed**: a line Dots can't read (a command named by a variable, `eval` or `Invoke-Expression` of a variable, an encoded command that doesn't decode, nesting past 6 levels) is a hit when its text mentions any protected thing: a git action word (`push`, `merge`, `release`, `tag`, `branch`), the first word of a protected command, or a protected path's literal part (`.github`, `migrations`, `.env`, `cargo.lock`...).
-- **MCP tools** (`mcp__<server>__<tool>`, gateway and CLI alike): only `merge_pr` and `release`, by the tool's name.
+- **Git options and aliases**: long options are read with the prefixes git accepts (`--del`, `--tag`, `--mir`, `--follow`). A git subcommand that isn't one of git's own, `git -c alias.*`, `git config ... alias.*` and `gh alias set` make the line unclear.
+- **`gh api`**: the values of `-H`, `-q`/`--jq`, `-t`/`--template`, `--hostname`, `-f`/`-F`, `--input` and `-X`/`--method` are skipped; the endpoint is matched by shape (`repos/<o>/<r>/...`): `pulls/<n>/merge` and `merges` (merge_pr), `releases...` (release), a write to `git/refs/heads/main|master` (push_main, and force_push with `force=true`), `DELETE git/refs/heads/<b>` (delete_branch), `git/refs/tags...`, `git/tags` and a `git/refs` POST of `refs/tags/...` (tags), `PUT`/`DELETE contents/...` (push_main: it commits to a branch). The method is GET unless `-X` or a field says otherwise. `gh api graphql` with a mutation (a `query=` field holding `mutation`, or `--input`) is a hit of its own.
+- **Folders**: `cd`, `chdir`, `pushd`, `Set-Location` and `Push-Location` into a protected folder are a hit.
+- **Paths in a shell line**: each word of the line with its quotes undone, redirection targets included, is matched whole and in its parts (split at `=`, `,` and spaces), unless every command on the line, and in its substitutions, only reads (`cat`, `type`, `less`, `head`, `tail`, `grep`, `rg`, `findstr`, `ls`, `dir`, `wc`, `stat`, `diff`, `Get-Content`, `Select-String`, and `git status/diff/log/show/blame/add` without `--output`/`-o`) and there is no `>`. On such a line a word Dots can't name (unquoted `$`, a backtick, `*`, `?`, `[`, `{`, `~`, `%` or a backslash escape outside a Windows path; `$` or a backtick inside double quotes) is a hit when, as a glob, it could match a protected name (`mig*`, `.git?ub`), or when it holds a protected path's literal part.
+- **Interpreters and pipes**: `python`, `node`, `deno`, `bun` (but `bun test`, `bun install`, `bun run test`), `ruby`, `perl`, `php`, a shell given a script file, and `pwsh -File` are unclear; their inline code (`-c`, `-e`, `--eval`) is kept for the mentions. A shell, `pwsh`, `cmd` or `iex` that reads its commands from a pipe (`curl ... | bash`) is a hit whenever the workspace protects anything.
+- **Fail closed**: a line Dots can't read (a command named by a variable, `eval` or `Invoke-Expression` of a variable, an encoded command that doesn't decode, an alias, an interpreter, nesting past 6 levels) is a hit when its text, or the text of a script inside it (`-c`, `-Command`, a decoded `-EncodedCommand`), mentions a protected thing: a git action word (`push`, `merge`, `release`, `tag`, `branch`), the first word of a protected command, or a protected path's literal part. For a Member, `git` and `gh` themselves count while any git action is protected.
+- **MCP tools** (`mcp__<server>__<tool>`, gateway and CLI alike), by the tool's name: merging (`merge_pull_request`, `enable_auto_merge`), releases, `push_files`, `create_or_update_file`, `delete_file`, `update_ref` (push_main), `delete_branch`, `delete_ref` (delete_branch), `create_tag`, `create_ref` (tags), and deleting a repository.
 
 ### 4.2 Where it is enforced
 
 - `ApprovalHub::check` and `check_mcp`, which every built-in tool call of both engines reaches (the Claude CLI through the `approve` tool, the local engine directly). For a Member the hit is denied before any one-shot grant is used. For an Admin a call the policy would allow asks instead; a deny stays a deny.
 - **Claude CLI** (`engine/claude/args.rs`), for a dot with guardrails:
-  - shell commands are never in `--allowedTools`, so every command reaches `approve`;
-  - the run's `--settings` file gets `ask` rules `Write(<glob>)`, `Edit(<glob>)`, `MultiEdit(<glob>)`, `NotebookEdit(<glob>)` for each protected path, so an allowed `Write(./**)` still reaches `approve`;
+  - no `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit` or `NotebookEdit` rule is in `--allowedTools`, so every shell command and every file write reaches `approve`, where Dots reads it (the CLI's own glob matching could be passed by case or a short 8.3 name);
+  - `--setting-sources` is empty whatever `use_user_settings` says: the person's own settings could add a hook or a rule that skips `approve`;
+  - the run's `--settings` file gets `ask` rules `Write(<glob>)`, `Edit(<glob>)`, `MultiEdit(<glob>)`, `NotebookEdit(<glob>)` for each protected path;
   - for a Member, `--disallowedTools` also gets those path rules and the shell prefixes the CLI can express: `git push origin main`, `git push origin master`, `git push --force`, `git push -f`, `git push --delete`, `git push --tags`, `git branch -D`, `git branch -d`, `gh pr merge`, `gh release create|edit|delete|upload`, and each protected command (`Bash(<cmd>:*)`, `PowerShell(<cmd>:*)`). The `approve` path stays the backstop for everything else.
 - **Approvals**: `Runtime::decide_approval` refuses to approve a protected call when this PC is a Member in the dot's workspace ("This needs an Admin: ..."), and refuses any allow rule with a protected call, whatever the role (`GUARDRAIL_REFUSAL`: "this is protected by the workspace's guardrails, so it always asks: no rule can allow it"). `approval_rule_candidates` offers none for it. Such an approval can exist when the list changed while it waited.
 
@@ -120,15 +125,24 @@ A Member's dot may use a policy up to `member_max_preset`. `accounts::guardrails
 - an allow rule reaches past the ceiling (my call on what "reaches past" means, so approving "always allow `npm test`" doesn't push a dot over):
   - under both: `*`, a prefix rule (`mcp__*`), or a bare `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `WebFetch`;
   - under Read-only: any `Bash`, `PowerShell`, `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `WebFetch` or `WebSearch` rule, or an MCP tool rule;
-  - under Sandboxed: a file rule with an absolute path or `..`, or a shell rule whose command is a wrapper (`bash`, `sudo`, `env`... as `policy::WRAPPER_COMMANDS`).
+  - under Sandboxed: a file rule with an absolute path or `..`, or a shell rule whose command is a wrapper (`sudo`, `env`... as `policy::WRAPPER_COMMANDS`) or runs code: `python`, `python3`, `py`, `node`, `deno`, `bun` (but `bun test` and `bun run`), `ruby`, `perl`, `php`, `bash`, `sh`, `zsh`, `pwsh`, `powershell`, `cmd`, `npx`. `make`, `npm run` and `npm test` stay within it.
+- `use_user_settings` is on (for every ceiling): the person's own Claude Code settings are outside Dots' view.
   
   Rules for the read tools, Dots' own tools, plumbing tools, one named MCP tool (`mcp__github__create_issue`), a `WebFetch(domain:x)` and a plain shell command (`Bash(npm test:*)`) stay within Sandboxed.
 
 Enforced:
 
-- **Saving**: `create_dot`, `update_dot`, `move_dot` and approving with a rule refuse a policy past the ceiling with `NotAllowed`: "Acme: a Member's dot in the Payments workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner." (the reason after "and" is the first one found).
+- **Saving**: `create_dot`, `move_dot`, approving with a rule, and `update_dot` when the policy or `use_user_settings` changes, refuse a policy past the ceiling. A save that leaves both as they were goes, so a held dot can still be renamed or switched off. They refuse it with `NotAllowed`: "Acme: a Member's dot in the Payments workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner." (the reason after "and" is the first one found).
 - **Starting by hand**: Run now and a chat are refused with the same words.
 - **Dots already past it** (made before the guardrails arrived, or before a role went down): every queued run of the dot is held, unstarted, with `HoldReason::Role` and the text "Acme: this dot's tool policy is past what a Member may use in the Payments workspace (it is Trusted). Change the policy, or ask an Admin." It is the Viewer "Waiting to run" hold (`Runner::role_hold`), so it shows in the Inbox and Run anyway does not release it. It starts once the policy is brought down, or the role rises; saving a dot wakes the dispatcher.
+
+### 4.4 Unknown guardrails
+
+A dot of an account this PC has joined, whose guardrails it can't read, doesn't run: the account's settings are damaged, a member list is required but none was accepted, or the dot's workspace isn't on the accepted list. Its queued runs are held like the ceiling hold, with "Acme: Dots can't read the guardrails of this dot's workspace (<why>), so it doesn't run it. Refresh the account, or ask an Admin.", and Run now and chat are refused with it. Should a call of it reach the hub anyway, it is checked against the default guardrails as for a Member (`accounts::enforced_rails`); so is a call of a dot whose account isn't joined, which other checks already stop. Personal, a legacy account (no member list) and a workspace with no guardrails stay unguarded.
+
+### 4.5 Changes during a run
+
+The hub reads the guardrails and the role again on every call, and every shell command and file write of a guarded dot reaches it (§4.2), so a change to the list takes effect at the next call. The CLI's own lists (`--disallowedTools`, `--settings`) are written when the run starts and are not rewritten mid-run: a dot that gained guardrails during a run is still checked by the hub, but its CLI allow list is the one it started with. Restarting the CLI with fresh flags at the next turn is left for later.
 
 ## 5. Permissions
 
@@ -142,7 +156,7 @@ The matrix goes to the UI as data, so the "What each role can do" table never de
 - **dots-admin**:
   - `roster workspace guard <roster.json> <id>` shows the workspace's guardrails.
   - `... --defaults` sets the defaults; `--off` removes them.
-  - `--path <glob>`, `--git <action>`, `--command <pattern>` (each repeating) replace that list; `--member-max <preset>` sets the ceiling. Without `--defaults`, they start from the workspace's guardrails, or the defaults when it has none.
+  - `--path <glob>`, `--git <action>`, `--command <pattern>` (each repeating) replace that list; `--no-paths`, `--no-git`, `--no-commands` empty one; `--member-max <preset>` sets the ceiling. Without `--defaults`, they start from the workspace's guardrails, or the defaults when it has none.
   - It writes the file only (sign afterwards) and warns about older Dots. `roster sign` warns too when any workspace has guardrails. `roster check` and `verify` list each workspace's guardrails.
 
 ## 7. What the UI gets (PR B)

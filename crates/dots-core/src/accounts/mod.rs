@@ -13,8 +13,8 @@ mod scope;
 mod workspaces;
 
 pub use guardrails::{
-    dot_rails, rails_in, ApprovalGuardrail, DotRails, GitAction, GuardRole, Guardrails,
-    PolicyCeiling, PresetCeiling,
+    dot_rails, enforced_rails, rails_in, rails_state, unknown_rails, ApprovalGuardrail, DotRails,
+    GitAction, GuardRole, Guardrails, PolicyCeiling, PresetCeiling, RailsState,
 };
 pub use identity::{
     ensure_identity, identity, set_profile, sign_with_identity, Identity, IDENTITY_SECRET,

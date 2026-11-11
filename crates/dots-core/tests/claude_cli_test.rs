@@ -479,7 +479,8 @@ fn guardrails_send_every_command_to_approve_and_deny_a_members_protected_calls()
     c.guardrails = Some(rails(GuardRole::Admin));
     let admin = build_args(&c, Path::new("m.json"));
     assert!(!allowed_tools(&admin).iter().any(|a| a.starts_with("Bash(")));
-    assert!(allowed_tools(&admin).contains(&"Write(./**)".to_string()));
+    // Writes reach `approve` too, so a protected path is read by Dots, not the CLI.
+    assert!(!allowed_tools(&admin).contains(&"Write(./**)".to_string()));
     // An Admin's protected calls ask: nothing is denied up front.
     assert_eq!(disallowed_tools(&admin), disallowed_tools(&without));
     let ask = cli_settings_for(&c)["permissions"]["ask"].clone();
@@ -514,4 +515,48 @@ fn guardrails_send_every_command_to_approve_and_deny_a_members_protected_calls()
     // Without guardrails the settings are the private folders' alone.
     c.guardrails = None;
     assert_eq!(cli_settings_for(&c), cli_settings());
+}
+
+#[test]
+fn a_guarded_dot_sends_every_write_to_approve_and_reads_no_settings() {
+    use dots_core::accounts::GuardRole;
+    let mut c = ctx(None);
+    c.dot.spec.policy = Policy::preset(Preset::Sandboxed);
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("NotebookEdit(src/**)", Action::Allow));
+    c.dot
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("MultiEdit(src/**)", Action::Allow));
+    c.dot.spec.use_user_settings = true;
+    c.guardrails = Some(rails(GuardRole::Admin));
+    let args = build_args(&c, Path::new("m.json"));
+    for tool in [
+        "Bash",
+        "PowerShell",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+    ] {
+        assert!(
+            !allowed_tools(&args)
+                .iter()
+                .any(|a| a.split('(').next() == Some(tool)),
+            "{tool}: {:?}",
+            allowed_tools(&args)
+        );
+    }
+    let at = args.iter().position(|a| a == "--setting-sources").unwrap();
+    assert_eq!(args[at + 1], "");
+    // Without guardrails the person's settings choice holds.
+    c.guardrails = None;
+    let args = build_args(&c, Path::new("m.json"));
+    let at = args.iter().position(|a| a == "--setting-sources").unwrap();
+    assert_eq!(args[at + 1], "user,project,local");
+    assert!(allowed_tools(&args).contains(&"Write(./**)".to_string()));
 }

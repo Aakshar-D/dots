@@ -102,10 +102,10 @@ pub fn role_matrix() -> Vec<RoleRow> {
         .map(|&p| {
             let note = match p {
                 Permission::EditDots => Some(
-                    "A Member's dot stays within the workspace's guardrails: its tool policy goes                      no higher than the workspace allows, and protected paths, git actions and                      commands are refused.",
+                    "A Member's dot stays within the workspace's guardrails: its tool policy goes no higher than the workspace allows, and protected paths, git actions and commands are refused.",
                 ),
                 Permission::AnswerApprovals => Some(
-                    "A Member can't approve a call the workspace's guardrails protect; an Admin's                      protected calls always ask.",
+                    "A Member can't approve a call the workspace's guardrails protect; an Admin's protected calls always ask.",
                 ),
                 Permission::SignRoster => Some(
                     "An Admin signs once the owner has added their Dots ID to the policy's admins.",

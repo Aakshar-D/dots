@@ -548,6 +548,32 @@ impl Policy {
     }
 }
 
+/// Interpreters and shells, whose allow rule would let a dot run any code (guardrails spec §4.3):
+/// `make`, `npm run` and `npm test` are not among them, nor `bun test`.
+fn runs_code(command: &str, next: &str) -> bool {
+    const INTERPRETERS: &[&str] = &[
+        "python",
+        "python3",
+        "py",
+        "node",
+        "deno",
+        "ruby",
+        "perl",
+        "php",
+        "bash",
+        "sh",
+        "zsh",
+        "pwsh",
+        "powershell",
+        "cmd",
+        "npx",
+    ];
+    match command {
+        "bun" => !(next == "test" || next == "run"),
+        c => INTERPRETERS.contains(&c),
+    }
+}
+
 /// Whether the allow rule `pattern` stays within the ceiling preset `max` (Read-only or
 /// Sandboxed), whose own policy is `ceiling` (guardrails spec §4.3).
 fn allow_within(pattern: &str, max: Preset, ceiling: &Policy) -> bool {
@@ -603,7 +629,16 @@ fn allow_within(pattern: &str, max: Preset, ceiling: &Policy) -> bool {
                     .to_lowercase();
                 let first = first.rsplit(['/', '\\']).next().unwrap_or(&first);
                 let first = first.strip_suffix(".exe").unwrap_or(first);
-                return !first.is_empty() && !WRAPPER_COMMANDS.contains(&first);
+                let second = spec
+                    .strip_suffix(":*")
+                    .unwrap_or(spec)
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("")
+                    .to_lowercase();
+                return !first.is_empty()
+                    && !WRAPPER_COMMANDS.contains(&first)
+                    && !runs_code(first, &second);
             }
             true
         }

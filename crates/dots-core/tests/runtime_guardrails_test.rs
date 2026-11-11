@@ -345,8 +345,17 @@ async fn a_member_dot_past_the_ceiling_is_refused_then_held() {
         Some(HELD)
     );
     let mut s = t.rt.store().get_dot(&dot).await.unwrap().spec;
+    // Other fields can still change while the policy stays as it is; a new policy past the
+    // ceiling can't be saved.
     s.instructions = "Deploy carefully.".into();
-    assert_eq!(refused(t.rt.update_dot(&dot, s.clone()).await), CEILING);
+    s.name = "deploy-old".into();
+    t.rt.update_dot(&dot, s.clone()).await.unwrap();
+    let mut wider = s.clone();
+    wider.policy.rules.push(dots_core::policy::Rule::new(
+        "Bash",
+        dots_core::policy::Action::Allow,
+    ));
+    assert!(refused(t.rt.update_dot(&dot, wider).await).contains("may use up to Sandboxed"));
 
     t.rt.hold_runs(true).await;
     let run =
@@ -417,4 +426,31 @@ async fn the_guardrails_view_and_the_edit() {
         t.orgs().guardrails_view(ACME, "nope").await,
         Err(Error::NotFound(_))
     ));
+}
+
+#[tokio::test]
+async fn a_dot_whose_guardrails_cannot_be_read_does_not_run() {
+    let t = Rt::start().await;
+    // An Admin: its role reaches every workspace, so only the guardrails stop the dot.
+    t.serve(1, "admin", Some(Guardrails::defaults())).await;
+    t.join().await;
+    let dot = t.payments_dot(Preset::Sandboxed).await.unwrap();
+    // Its workspace is not on the member list.
+    t.rt.store().set_dot_workspace(&dot, "ghost").await.unwrap();
+    let text = refused(t.rt.run_now(&dot).await);
+    assert!(text.contains("can't read the guardrails"), "{text}");
+    t.rt.hold_runs(true).await;
+    let run =
+        t.rt.store()
+            .create_run(&NewRun::new(&dot, TriggerKind::Schedule))
+            .await
+            .unwrap();
+    t.rt.hold_runs(false).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        t.rt.store().get_run(&run.id).await.unwrap().status,
+        RunStatus::Queued
+    );
+    let inbox = t.rt.inbox().await.unwrap();
+    assert!(matches!(&inbox.held[0].reason, HoldReason::Role { text: held, .. } if held == &text));
 }

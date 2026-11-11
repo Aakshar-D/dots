@@ -1800,3 +1800,67 @@ fn workspace_guard_sets_shows_and_removes_guardrails() {
     let signed = run_with(&["roster", "sign", &file, "--key", &key_file], None);
     assert!(!signed.err.contains("0.4.0 and older"), "{}", signed.err);
 }
+
+#[test]
+fn workspace_guard_clears_one_list() {
+    let (dir, _, _) = keys();
+    let file = new_roster(dir.path(), &dots_id());
+    ok(&[
+        "roster",
+        "workspace",
+        "guard",
+        &file,
+        "default",
+        "--defaults",
+    ]);
+    ok(&[
+        "roster",
+        "workspace",
+        "guard",
+        &file,
+        "default",
+        "--no-paths",
+        "--no-git",
+    ]);
+    let g = &read_json(&file)["workspaces"][0]["guardrails"];
+    assert_eq!(g["protected_paths"], json!([]));
+    assert_eq!(g["protected_git"], json!([]));
+    assert_eq!(g["protected_commands"][0], "rm -rf");
+    ok(&[
+        "roster",
+        "workspace",
+        "guard",
+        &file,
+        "default",
+        "--no-commands",
+    ]);
+    assert_eq!(
+        read_json(&file)["workspaces"][0]["guardrails"]["protected_commands"],
+        json!([])
+    );
+    // A bare folder is stored as a folder.
+    ok(&[
+        "roster",
+        "workspace",
+        "guard",
+        &file,
+        "default",
+        "--path",
+        "deploy",
+    ]);
+    assert_eq!(
+        read_json(&file)["workspaces"][0]["guardrails"]["protected_paths"],
+        json!(["deploy/**"])
+    );
+    let err = failure(&[
+        "roster",
+        "workspace",
+        "guard",
+        &file,
+        "default",
+        "--no-paths",
+        "--path",
+        "x/**",
+    ]);
+    assert!(err.to_string().contains("--no-paths"), "{err}");
+}

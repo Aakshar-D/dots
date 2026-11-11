@@ -2024,8 +2024,13 @@ impl Runtime {
         let workspace_id = workspace_id.as_str();
         self.require_in(org_id.as_deref(), workspace_id, Permission::EditDots)
             .await?;
-        self.require_ceiling(org_id.as_deref(), workspace_id, &spec.policy)
-            .await?;
+        self.require_ceiling(
+            org_id.as_deref(),
+            workspace_id,
+            &spec.policy,
+            spec.use_user_settings,
+        )
+        .await?;
         if !spec.variables.0.is_empty() {
             self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
                 .await?;
@@ -2243,8 +2248,13 @@ impl Runtime {
         self.require_dot(&dot, Permission::EditDots).await?;
         self.require_in(dot.org_id.as_deref(), workspace_id, Permission::EditDots)
             .await?;
-        self.require_ceiling(dot.org_id.as_deref(), workspace_id, &dot.spec.policy)
-            .await?;
+        self.require_ceiling(
+            dot.org_id.as_deref(),
+            workspace_id,
+            &dot.spec.policy,
+            dot.spec.use_user_settings,
+        )
+        .await?;
         if let Some(team_id) = self.store.teams_of_dot(dot_id).await?.first() {
             let team = self.store.get_team(team_id).await?;
             return Err(Error::Invalid(format!(
@@ -2415,8 +2425,17 @@ impl Runtime {
         if spec.variables != old.spec.variables {
             self.require_dot(&old, Permission::GrantEntries).await?;
         }
-        self.require_ceiling(old.org_id.as_deref(), &old.workspace_id, &spec.policy)
+        // Only a new policy (or settings choice) past the ceiling is refused: a dot held for
+        // one can still be renamed or switched off (guardrails spec §4.3).
+        if spec.policy != old.spec.policy || spec.use_user_settings != old.spec.use_user_settings {
+            self.require_ceiling(
+                old.org_id.as_deref(),
+                &old.workspace_id,
+                &spec.policy,
+                spec.use_user_settings,
+            )
             .await?;
+        }
         // Only a change to the mode or the folder is refused: a stored dot whose repository
         // has gone can still have its other fields edited.
         if spec.workspace_mode == WorkspaceMode::Worktree
@@ -3147,7 +3166,7 @@ impl Runtime {
         let approval = self.store.get_approval(approval_id).await?;
         let run = self.store.get_run(&approval.run_id).await?;
         let dot = self.store.get_dot(&run.dot_id).await?;
-        let Some(rails) = crate::accounts::dot_rails(Some(&self.orgs), &dot) else {
+        let Some(rails) = crate::accounts::enforced_rails(Some(&self.orgs), &dot) else {
             return Ok(None);
         };
         let workspace = run.workspace_path.as_deref().map(Path::new);
@@ -3170,6 +3189,7 @@ impl Runtime {
             &account,
             policy,
             false,
+            false,
         ))
     }
 
@@ -3183,6 +3203,7 @@ impl Runtime {
             rails.as_ref(),
             &account,
             Some(&dot.spec.policy),
+            dot.spec.use_user_settings,
             true,
         ))
     }
@@ -3194,12 +3215,13 @@ impl Runtime {
         org_id: Option<&str>,
         workspace_id: &str,
         policy: &crate::policy::Policy,
+        own_settings: bool,
     ) -> Result<()> {
         let Some(rails) = crate::accounts::rails_in(Some(&self.orgs), org_id, workspace_id) else {
             return Ok(());
         };
         let account = crate::accounts::account_label(Some(&self.orgs), org_id).await;
-        match rails.ceiling_refusal(&account, policy) {
+        match rails.ceiling_refusal(&account, policy, own_settings) {
             Some(text) => Err(Error::NotAllowed(text)),
             None => Ok(()),
         }
@@ -3456,8 +3478,13 @@ impl Runtime {
             let dot = self.store.get_dot(&run.dot_id).await?;
             let mut widened = dot.spec.policy.clone();
             widened.rules.push(rule.clone());
-            self.require_ceiling(dot.org_id.as_deref(), &dot.workspace_id, &widened)
-                .await?;
+            self.require_ceiling(
+                dot.org_id.as_deref(),
+                &dot.workspace_id,
+                &widened,
+                dot.spec.use_user_settings,
+            )
+            .await?;
         }
         match self.hub.decide_with_rule(id, approved, note, rule).await? {
             DecideEffect::Live(a) => Ok(a),
@@ -3651,8 +3678,17 @@ impl Runtime {
             return Err(Error::Conflict(text));
         }
         self.require_dot(dot, Permission::RunDots).await?;
-        self.require_ceiling(dot.org_id.as_deref(), &dot.workspace_id, &dot.spec.policy)
-            .await
+        let account = crate::accounts::account_label(Some(&self.orgs), dot.org_id.as_deref()).await;
+        if let Some(text) = crate::accounts::unknown_rails(Some(&self.orgs), &account, dot) {
+            return Err(Error::NotAllowed(text));
+        }
+        self.require_ceiling(
+            dot.org_id.as_deref(),
+            &dot.workspace_id,
+            &dot.spec.policy,
+            dot.spec.use_user_settings,
+        )
+        .await
     }
 
     /// `require_dot` on the dot of the run `run_id`.

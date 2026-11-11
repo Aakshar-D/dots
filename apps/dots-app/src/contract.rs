@@ -2438,7 +2438,7 @@ fn guardrails_samples(samples: &mut Value) {
     });
     samples["RoleRow"] = to(role_matrix());
     let too_high = format!(
-        "Acme Engineering: a Member's dot in the Platform workspace may use up to {}, and this          policy is Trusted. Ask an Admin or Owner.",
+        "Acme Engineering: a Member's dot in the Platform workspace may use up to {}, and this policy is Trusted. Ask an Admin or Owner.",
         preset_label(Preset::Sandboxed)
     );
     let preset = |p: Preset, refusal: Option<&str>| PresetCeiling {
@@ -2458,7 +2458,7 @@ fn guardrails_samples(samples: &mut Value) {
             ],
             policy_refusal: Some(too_high.clone()),
             held: Some(
-                "Acme Engineering: this dot's tool policy is past what a Member may use in the                  Platform workspace (this policy is Trusted). Change the policy, or ask an Admin."
+                "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin."
                     .into(),
             ),
             protected: Some(Guardrails::defaults()),
@@ -2481,14 +2481,14 @@ fn guardrails_samples(samples: &mut Value) {
             what: "pushing to main or master".into(),
             workspace_name: "Platform".into(),
             needs_admin: true,
-            text: "This needs an Admin: pushing to main or master is protected in the Platform                    workspace."
+            text: "This needs an Admin: pushing to main or master is protected in the Platform workspace."
                 .into(),
         },
         ApprovalGuardrail {
             what: "the file migrations/0001.sql".into(),
             workspace_name: "Platform".into(),
             needs_admin: false,
-            text: "The file migrations/0001.sql is protected in the Platform workspace, so it                    always asks."
+            text: "The file migrations/0001.sql is protected in the Platform workspace, so it always asks."
                 .into(),
         },
     ]);

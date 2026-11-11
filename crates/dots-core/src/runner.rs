@@ -354,11 +354,17 @@ impl Runner {
 
     /// The account and the hold text when `dot`'s policy reaches past the policy ceiling of a
     /// Member in its workspace (guardrails spec §4.3); `None` otherwise.
+    /// Also held: a dot whose workspace's guardrails can't be read on this PC (guardrails
+    /// spec §4.4).
     pub async fn ceiling_hold(&self, dot: &Dot) -> Option<(String, String)> {
         let orgs = self.vault.get().and_then(|v| v.orgs());
-        let rails = crate::accounts::dot_rails(orgs, dot)?;
+        dot.org_id.as_ref()?;
         let account = crate::accounts::account_label(orgs, dot.org_id.as_deref()).await;
-        let text = rails.ceiling_hold(&account, &dot.spec.policy)?;
+        if let Some(text) = crate::accounts::unknown_rails(orgs, &account, dot) {
+            return Some((account, text));
+        }
+        let rails = crate::accounts::dot_rails(orgs, dot)?;
+        let text = rails.ceiling_hold(&account, &dot.spec.policy, dot.spec.use_user_settings)?;
         Some((account, text))
     }
 
@@ -2145,7 +2151,10 @@ impl Runner {
             tools: tools.clone(),
             autocompact_pct: (rules.enabled && dot.spec.engine == EngineKind::Claude)
                 .then_some(rules.compact_at),
-            guardrails: crate::accounts::dot_rails(self.vault.get().and_then(|v| v.orgs()), &dot),
+            guardrails: crate::accounts::enforced_rails(
+                self.vault.get().and_then(|v| v.orgs()),
+                &dot,
+            ),
         };
         // The run's time limit starts before any extra call, which counts against it
         // (context rules spec section 5).

@@ -104,12 +104,13 @@ impl ApprovalHub {
     /// Gives the hub the accounts joined on this PC, once: from then on each call is checked
     /// against the guardrails of its dot's workspace.
     pub fn set_orgs(&self, orgs: crate::vault::org::Orgs) {
-        let _ = self.orgs.set(orgs);
+        let set = self.orgs.set(orgs);
+        debug_assert!(set.is_ok(), "the hub's orgs are set once");
     }
 
     /// The guardrails `dot` runs under on this PC, if any.
     fn rails(&self, dot: &Dot) -> Option<crate::accounts::DotRails> {
-        crate::accounts::dot_rails(self.orgs.get(), dot)
+        crate::accounts::enforced_rails(self.orgs.get(), dot)
     }
 
     /// Names the engines whose dots get approvals with `self_apply` from now on

@@ -35,7 +35,8 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     // `.claude/settings.json` that could widen the allow list) out of headless runs.
     // Accepted by CLI 2.1.295 (probed 2026-10-09).
     a.push("--setting-sources".into());
-    a.push(if spec.use_user_settings {
+    // A dot with guardrails never reads them: a hook or rule there could skip `approve`.
+    a.push(if spec.use_user_settings && ctx.guardrails.is_none() {
         "user,project,local".into()
     } else {
         String::new()
@@ -63,9 +64,11 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     // protected git actions and commands (guardrails spec §4.2); a Member's dot also gets the
     // CLI deny rules those can be written as.
     if let Some(rails) = &ctx.guardrails {
+        // And every file write: the CLI matches its own allow rules by case and long names,
+        // which a short (8.3) name or another case could pass.
         allow.retain(|rule| {
             let name = rule.split('(').next().unwrap_or(rule).trim();
-            !COMMAND_TOOLS.contains(&name)
+            !COMMAND_TOOLS.contains(&name) && !crate::policy::rails::WRITE_TOOLS.contains(&name)
         });
         if rails.role == GuardRole::Member {
             deny.extend(rails_deny_rules(&rails.guardrails));

@@ -102,9 +102,11 @@ Commands:
       may use; 'use' with no patterns clears them. These edit the file only; sign it afterwards.
   dots-admin roster workspace guard <roster.json> <id> [--defaults | --off]
                         [--path <glob> ...] [--git <action> ...] [--command <pattern> ...]
+                        [--no-paths] [--no-git] [--no-commands]
                         [--member-max <read-only|sandboxed|trusted>]
       Shows the workspace's guardrails, or sets them: --defaults writes the defaults, each
-      list option replaces that list, --off removes them. Git actions: push_main, force_push,
+      list option replaces that list, --no-paths, --no-git and --no-commands empty one, --off
+      removes them. A bare folder (deploy) is stored as deploy/**. Git actions: push_main, force_push,
       delete_branch, tags, merge_pr, release. Dots 0.4.0 and older can't read a list with
       guardrails: update every Dots first. Sign the list afterwards.
   dots-admin roster add-request <roster.json> <request code> --role <owner|admin|member|viewer>

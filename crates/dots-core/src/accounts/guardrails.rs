@@ -109,6 +109,21 @@ impl Guardrails {
         }
     }
 
+    /// The guardrails as stored: a bare folder (`deploy`, `secrets/`) becomes `deploy/**`, so it
+    /// covers what is in it.
+    pub fn normalized(&self) -> Guardrails {
+        let mut g = self.clone();
+        for p in &mut g.protected_paths {
+            let t = p.trim().to_string();
+            *p = match t.strip_suffix('/') {
+                Some(dir) => format!("{dir}/**"),
+                None if !t.contains(['*', '?', '[']) => format!("{t}/**"),
+                None => t,
+            };
+        }
+        g
+    }
+
     /// The §3.1 rules, in plain words: the first broken one.
     pub fn check(&self) -> Result<(), String> {
         if self.member_max_preset == Preset::Custom {
@@ -196,6 +211,16 @@ pub fn over_ceiling(policy: &Policy, max: Preset) -> Option<String> {
     policy.past_ceiling(max)
 }
 
+/// `over_ceiling` for a dot that may also read the person's own Claude Code settings
+/// (`use_user_settings`): those can add hooks and rules Dots never sees, so they are past every
+/// ceiling.
+pub fn over_ceiling_spec(policy: &Policy, own_settings: bool, max: Preset) -> Option<String> {
+    if own_settings {
+        return Some("it uses your own Claude Code settings".into());
+    }
+    over_ceiling(policy, max)
+}
+
 /// How the guardrails treat this PC's dots in a workspace (guardrails spec §4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -218,7 +243,7 @@ pub struct DotRails {
 impl DotRails {
     /// What a call hits, or `None` (`policy::rails::check`).
     pub fn hit(&self, tool: &str, input: &Value, workspace: Option<&Path>) -> Option<RailHit> {
-        rails::check(&self.guardrails, tool, input, workspace)
+        rails::check_as(&self.guardrails, self.role, tool, input, workspace)
     }
 
     /// The refusal of a protected call on a Member's dot.
@@ -245,9 +270,14 @@ impl DotRails {
 
     /// Why `policy` may not be used here, in the words a save is refused with; `None` when it
     /// may.
-    pub fn ceiling_refusal(&self, account: &str, policy: &Policy) -> Option<String> {
+    pub fn ceiling_refusal(
+        &self,
+        account: &str,
+        policy: &Policy,
+        own_settings: bool,
+    ) -> Option<String> {
         let max = self.ceiling()?;
-        let why = over_ceiling(policy, max)?;
+        let why = over_ceiling_spec(policy, own_settings, max)?;
         Some(format!(
             "{account}: a Member's dot in the {} workspace may use up to {}, and {why}. Ask an \
              Admin or Owner.",
@@ -257,9 +287,14 @@ impl DotRails {
     }
 
     /// The hold text of a dot whose policy is past the ceiling (guardrails spec §4.3).
-    pub fn ceiling_hold(&self, account: &str, policy: &Policy) -> Option<String> {
+    pub fn ceiling_hold(
+        &self,
+        account: &str,
+        policy: &Policy,
+        own_settings: bool,
+    ) -> Option<String> {
         let max = self.ceiling()?;
-        let why = over_ceiling(policy, max)?;
+        let why = over_ceiling_spec(policy, own_settings, max)?;
         Some(format!(
             "{account}: this dot's tool policy is past what a Member may use in the {} \
              workspace ({why}). Change the policy, or ask an Admin.",
@@ -302,16 +337,91 @@ pub fn guard_role(
     }
 }
 
-/// The guardrails the workspace `workspace_id` of `org_id` puts on this PC's dots, or `None`.
+/// What this PC knows of the guardrails over a workspace (guardrails spec §4.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RailsState {
+    /// None: Personal, an account with no member list, a workspace without guardrails, or an
+    /// Owner's or Admin's place where they don't apply.
+    Free,
+    Rails(DotRails),
+    /// The account is joined, but its member list or the workspace on it can't be read, so the
+    /// guardrails are unknown: its dots don't run (the text says why).
+    Unknown(String),
+    /// The account isn't joined on this PC: its dots are refused elsewhere.
+    NotJoined,
+}
+
+/// What the accepted member list says of a workspace's guardrails (`Orgs::workspace_guard`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuardLookup {
+    None,
+    Rails(Guardrails),
+    Unknown(String),
+    NotJoined,
+}
+
+/// The guardrails over the workspace `workspace_id` of `org_id` on this PC.
+pub fn rails_state(orgs: Option<&Orgs>, org_id: Option<&str>, workspace_id: &str) -> RailsState {
+    let (Some(org), Some(service)) = (org_id, orgs) else {
+        return RailsState::Free;
+    };
+    let guardrails = match service.workspace_guard(org, workspace_id) {
+        GuardLookup::None => return RailsState::Free,
+        GuardLookup::Unknown(reason) => return RailsState::Unknown(reason),
+        GuardLookup::NotJoined => return RailsState::NotJoined,
+        GuardLookup::Rails(g) => g,
+    };
+    match guard_role(orgs, org_id, workspace_id) {
+        Some(role) => RailsState::Rails(DotRails {
+            role,
+            guardrails,
+            workspace_name: workspace_name(orgs, org, workspace_id),
+        }),
+        None => RailsState::Free,
+    }
+}
+
+/// The guardrails the workspace `workspace_id` of `org_id` puts on this PC's dots, or `None`
+/// (also when they are unknown: see `enforced_rails`).
 pub fn rails_in(orgs: Option<&Orgs>, org_id: Option<&str>, workspace_id: &str) -> Option<DotRails> {
-    let org = org_id?;
-    let role = guard_role(orgs, org_id, workspace_id)?;
-    let guardrails = orgs?.workspace_guardrails(org, workspace_id)?;
-    Some(DotRails {
-        role,
-        guardrails,
-        workspace_name: workspace_name(orgs, org, workspace_id),
-    })
+    match rails_state(orgs, org_id, workspace_id) {
+        RailsState::Rails(r) => Some(r),
+        _ => None,
+    }
+}
+
+/// The guardrails every call of `dot` is checked against: its workspace's, or, when they are
+/// unknown, the defaults as for a Member (fails closed).
+pub fn enforced_rails(orgs: Option<&Orgs>, dot: &crate::model::Dot) -> Option<DotRails> {
+    match rails_state(orgs, dot.org_id.as_deref(), &dot.workspace_id) {
+        RailsState::Free => None,
+        RailsState::Rails(r) => Some(r),
+        RailsState::Unknown(_) | RailsState::NotJoined => Some(DotRails {
+            role: GuardRole::Member,
+            guardrails: Guardrails::defaults(),
+            workspace_name: dot
+                .org_id
+                .as_deref()
+                .map(|org| workspace_name(orgs, org, &dot.workspace_id))
+                .unwrap_or_else(|| dot.workspace_id.clone()),
+        }),
+    }
+}
+
+/// Why `dot` doesn't run: the guardrails of its workspace are unknown on this PC. `None` when
+/// they are known (or none apply).
+pub fn unknown_rails(
+    orgs: Option<&Orgs>,
+    account: &str,
+    dot: &crate::model::Dot,
+) -> Option<String> {
+    match rails_state(orgs, dot.org_id.as_deref(), &dot.workspace_id) {
+        RailsState::Unknown(reason) => Some(format!(
+            "{account}: Dots can't read the guardrails of this dot's workspace ({reason}), so it \
+             doesn't run it. Refresh the account, or ask an Admin."
+        )),
+        _ => None,
+    }
 }
 
 /// `rails_in` the account and workspace of `dot`.
@@ -383,6 +493,7 @@ impl PolicyCeiling {
         rails: Option<&DotRails>,
         account: &str,
         policy: Option<&Policy>,
+        own_settings: bool,
         dot: bool,
     ) -> PolicyCeiling {
         let presets = [
@@ -396,7 +507,7 @@ impl PolicyCeiling {
             preset,
             refusal: match (rails, preset) {
                 (Some(r), p) if p != Preset::Custom => {
-                    r.ceiling_refusal(account, &Policy::preset(p))
+                    r.ceiling_refusal(account, &Policy::preset(p), false)
                 }
                 _ => None,
             },
@@ -409,11 +520,11 @@ impl PolicyCeiling {
             presets,
             policy_refusal: rails
                 .zip(policy)
-                .and_then(|(r, p)| r.ceiling_refusal(account, p)),
+                .and_then(|(r, p)| r.ceiling_refusal(account, p, own_settings)),
             held: rails
                 .zip(policy)
                 .filter(|_| dot)
-                .and_then(|(r, p)| r.ceiling_hold(account, p)),
+                .and_then(|(r, p)| r.ceiling_hold(account, p, own_settings)),
             protected: rails.map(|r| r.guardrails.clone()),
         }
     }

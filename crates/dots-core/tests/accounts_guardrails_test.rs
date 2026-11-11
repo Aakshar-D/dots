@@ -304,3 +304,59 @@ fn trusted_lets_everything_through() {
     p.ask_send_delete = false;
     assert_eq!(over_ceiling(&p, Preset::Trusted), None);
 }
+
+#[test]
+fn interpreters_are_past_sandboxed_but_build_tools_are_not() {
+    let base = Policy::preset(Preset::Sandboxed);
+    for rule in [
+        "Bash(python:*)",
+        "Bash(python3 x.py)",
+        "Bash(py:*)",
+        "Bash(node:*)",
+        "Bash(deno run:*)",
+        "Bash(bun x.ts)",
+        "Bash(ruby:*)",
+        "Bash(perl:*)",
+        "Bash(php:*)",
+        "Bash(sh:*)",
+        "Bash(zsh:*)",
+        "PowerShell(pwsh:*)",
+        "Bash(cmd:*)",
+        "Bash(npx:*)",
+    ] {
+        let p = with(base.clone(), rule, Action::Allow);
+        assert!(over_ceiling(&p, Preset::Sandboxed).is_some(), "{rule}");
+    }
+    for rule in [
+        "Bash(make:*)",
+        "Bash(npm run build)",
+        "Bash(npm test)",
+        "Bash(bun test)",
+        "Bash(bun run test)",
+    ] {
+        let p = with(base.clone(), rule, Action::Allow);
+        assert_eq!(over_ceiling(&p, Preset::Sandboxed), None, "{rule}");
+    }
+}
+
+#[test]
+fn own_claude_settings_are_past_the_ceiling() {
+    use dots_core::accounts::guardrails::over_ceiling_spec;
+    let p = Policy::preset(Preset::Sandboxed);
+    assert_eq!(over_ceiling_spec(&p, false, Preset::Sandboxed), None);
+    for max in [Preset::Sandboxed, Preset::Trusted] {
+        assert!(over_ceiling_spec(&p, true, max)
+            .unwrap()
+            .contains("Claude Code settings"));
+    }
+}
+
+#[test]
+fn bare_folder_patterns_are_stored_as_folders() {
+    let mut g = Guardrails::defaults();
+    g.protected_paths = vec!["deploy".into(), "secrets/".into(), "*.pem".into()];
+    assert_eq!(
+        g.normalized().protected_paths,
+        ["deploy/**", "secrets/**", "*.pem"]
+    );
+}

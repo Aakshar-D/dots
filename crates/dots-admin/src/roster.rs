@@ -397,7 +397,7 @@ fn workspace_guard_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
         args,
         &["member-max"],
         &["path", "git", "command"],
-        &["defaults", "off"],
+        &["defaults", "off", "no-paths", "no-git", "no-commands"],
     )?;
     let [path, id] = args.words(["the member list", "the workspace id"])?;
     let mut roster = read_roster(path)?;
@@ -405,9 +405,16 @@ fn workspace_guard_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
         return Err(failed(format!("no workspace '{id}' on the list")));
     };
     let lists = ["path", "git", "command"];
+    let clears = ["no-paths", "no-git", "no-commands"];
+    for (list, clear) in lists.iter().zip(clears) {
+        if args.switch(clear) && !args.all(list).is_empty() {
+            return Err(usage(format!("--{clear} and --{list} can't go together")));
+        }
+    }
     let changes = args.switch("defaults")
         || args.value("member-max").is_some()
-        || lists.iter().any(|l| !args.all(l).is_empty());
+        || lists.iter().any(|l| !args.all(l).is_empty())
+        || clears.iter().any(|c| args.switch(c));
     if args.switch("off") {
         if changes {
             return Err(usage("--off takes no other option"));
@@ -448,6 +455,16 @@ fn workspace_guard_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     if !args.all("command").is_empty() {
         g.protected_commands = args.all("command").to_vec();
     }
+    if args.switch("no-paths") {
+        g.protected_paths.clear();
+    }
+    if args.switch("no-git") {
+        g.protected_git.clear();
+    }
+    if args.switch("no-commands") {
+        g.protected_commands.clear();
+    }
+    let mut g = g.normalized();
     if let Some(max) = args.value("member-max") {
         g.member_max_preset = match max {
             "read-only" => Preset::ReadOnly,

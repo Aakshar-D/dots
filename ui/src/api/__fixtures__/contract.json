@@ -672,13 +672,13 @@
   "ApprovalGuardrail": [
     {
       "needs_admin": true,
-      "text": "This needs an Admin: pushing to main or master is protected in the Platform                    workspace.",
+      "text": "This needs an Admin: pushing to main or master is protected in the Platform workspace.",
       "what": "pushing to main or master",
       "workspace_name": "Platform"
     },
     {
       "needs_admin": false,
-      "text": "The file migrations/0001.sql is protected in the Platform workspace, so it                    always asks.",
+      "text": "The file migrations/0001.sql is protected in the Platform workspace, so it always asks.",
       "what": "the file migrations/0001.sql",
       "workspace_name": "Platform"
     }
@@ -5844,9 +5844,9 @@
   "PolicyCeiling": [
     {
       "applies_as": "member",
-      "held": "Acme Engineering: this dot's tool policy is past what a Member may use in the                  Platform workspace (this policy is Trusted). Change the policy, or ask an Admin.",
+      "held": "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin.",
       "max_preset": "sandboxed",
-      "policy_refusal": "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this          policy is Trusted. Ask an Admin or Owner.",
+      "policy_refusal": "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner.",
       "presets": [
         {
           "preset": "read-only",
@@ -5858,7 +5858,7 @@
         },
         {
           "preset": "trusted",
-          "refusal": "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this          policy is Trusted. Ask an Admin or Owner."
+          "refusal": "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner."
         },
         {
           "preset": "custom",
@@ -6073,7 +6073,7 @@
     },
     {
       "action": "create or change dots",
-      "note": "A Member's dot stays within the workspace's guardrails: its tool policy goes                      no higher than the workspace allows, and protected paths, git actions and                      commands are refused.",
+      "note": "A Member's dot stays within the workspace's guardrails: its tool policy goes no higher than the workspace allows, and protected paths, git actions and commands are refused.",
       "permission": "edit_dots",
       "roles": [
         "owner",
@@ -6093,7 +6093,7 @@
     },
     {
       "action": "answer approvals",
-      "note": "A Member can't approve a call the workspace's guardrails protect; an Admin's                      protected calls always ask.",
+      "note": "A Member can't approve a call the workspace's guardrails protect; an Admin's protected calls always ask.",
       "permission": "answer_approvals",
       "roles": [
         "owner",
