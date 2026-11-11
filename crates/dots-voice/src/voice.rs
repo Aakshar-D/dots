@@ -53,6 +53,9 @@ struct State {
     next_reply: u64,
     /// The reply still taking text, if any.
     open: Option<u64>,
+    /// A streamed reply was cut short (stop or failure) and its end has not come yet: its
+    /// remaining deltas are dropped.
+    dropping: bool,
     /// Replies begun and not yet finished, stopped or failed.
     pending: usize,
     voice: u8,
@@ -96,6 +99,7 @@ impl Voice {
                 gen: 0,
                 next_reply: 0,
                 open: None,
+                dropping: false,
                 pending: 0,
                 voice: 0,
                 speed: 1.0,
@@ -130,16 +134,22 @@ impl Voice {
         st.speed = speed;
     }
 
-    /// A whole reply: the same as `say_delta(text)` then `end_of_reply()`.
+    /// A whole reply: the same as `say_delta(text)` then `end_of_reply()`. Always a new reply,
+    /// even right after a `stop` that cut a streamed reply short.
     pub fn say(&self, text: &str) {
+        self.shared.lock().dropping = false; // a whole reply is always a new reply
         self.say_delta(text);
         self.end_of_reply();
     }
 
     /// Part of a reply still arriving. A reply spoken while an earlier one is still sounding
     /// queues behind it.
+    /// Dropped while a reply cut short by `stop` or a failure waits for its `end_of_reply`.
     pub fn say_delta(&self, delta: &str) {
         let mut st = self.shared.lock();
+        if st.dropping {
+            return;
+        }
         let reply = match st.open {
             Some(reply) => reply,
             None => {
@@ -159,9 +169,14 @@ impl Voice {
         });
     }
 
-    /// The reply has no more text; whatever partial sentence is left is spoken.
+    /// The reply has no more text; whatever partial sentence is left is spoken. If the reply
+    /// was cut short by `stop` or a failure, this only ends it: nothing is spoken, no event.
     pub fn end_of_reply(&self) {
         let mut st = self.shared.lock();
+        if st.dropping {
+            st.dropping = false; // the cut-short reply is over; no event
+            return;
+        }
         if let Some(reply) = st.open.take() {
             let gen = st.gen;
             let _ = self.commands.send(Command::End { gen, reply });
@@ -169,6 +184,8 @@ impl Voice {
     }
 
     /// Silences everything now. Sends `Stopped` once, and nothing when nothing was being said.
+    /// If a streamed reply is still open (no `end_of_reply` yet), its later `say_delta` calls
+    /// are dropped until `end_of_reply`, so speech never resumes mid-sentence.
     pub fn stop(&self) {
         let mut st = self.shared.lock();
         let was_speaking = st.pending > 0;
@@ -177,7 +194,9 @@ impl Voice {
         }
         st.gen += 1;
         st.pending = 0;
-        st.open = None;
+        if st.open.take().is_some() {
+            st.dropping = true;
+        }
         self.shared.sink.stop();
         self.shared.wake.notify_all();
         if was_speaking {
@@ -202,7 +221,7 @@ impl Drop for Voice {
 struct ReplyState {
     id: u64,
     stream: SentenceStream,
-    /// Characters of spoken text handed on so far.
+    /// Bytes of spoken text handed on so far.
     spoken: usize,
     /// The length cap was reached: later sentences are dropped silently.
     capped: bool,
@@ -286,11 +305,11 @@ impl Worker {
         if cleaned.is_empty() || state.capped {
             return;
         }
-        if state.spoken == 0 && cleaned.chars().count() > MAX_SPOKEN_CHARS {
+        if state.spoken == 0 && cleaned.len() > MAX_SPOKEN_CHARS {
             cleaned = trim_spoken(&cleaned);
         }
         let separator = usize::from(state.spoken > 0);
-        let length = cleaned.chars().count();
+        let length = cleaned.len();
         if state.spoken + separator + length > MAX_SPOKEN_CHARS {
             state.capped = true;
             return;
@@ -315,6 +334,10 @@ impl Worker {
                 let mut st = self.shared.lock();
                 if st.gen == gen {
                     st.pending = st.pending.saturating_sub(1);
+                    if st.open == Some(reply) {
+                        st.open = None;
+                        st.dropping = true;
+                    }
                     self.shared.send(VoiceEvent::Trouble(error.to_string()));
                 }
             }
@@ -732,5 +755,136 @@ mod tests {
             std::thread::yield_now();
         }
         drop(sink);
+    }
+
+    #[test]
+    fn the_cap_counts_bytes_so_multibyte_text_is_cut_too() {
+        let mut rig = rig();
+        let sentence = format!("{}.", vec!["\u{e9}\u{e9}"; 20].join(" "));
+        for _ in 0..100 {
+            rig.voice.say_delta(&format!("{sentence} "));
+        }
+        rig.voice.end_of_reply();
+        let mut total = 0;
+        let mut said = 0;
+        loop {
+            match rig.next() {
+                VoiceEvent::Saying(text) => {
+                    total += text.len();
+                    said += 1;
+                }
+                VoiceEvent::Finished => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        assert!(said > 1);
+        assert!(total <= MAX_SPOKEN_CHARS, "{total} bytes were spoken");
+    }
+
+    #[test]
+    fn deltas_after_a_stop_are_dropped_until_the_reply_ends() {
+        let mut rig = rig();
+        rig.sink.idle.store(false, Ordering::SeqCst);
+        rig.voice.say_delta("First one. Sec");
+        assert_eq!(rig.next(), say("First one."));
+        rig.voice.stop();
+        assert_eq!(rig.next(), VoiceEvent::Stopped);
+        rig.voice.say_delta("ond half. More. ");
+        rig.voice.end_of_reply();
+        rig.voice.say_delta("Fresh.");
+        rig.voice.end_of_reply();
+        rig.sink.idle.store(true, Ordering::SeqCst);
+        assert_eq!(rig.next(), say("Fresh."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert!(rig.nothing_pending());
+        assert_eq!(rig.speaker.sentences(), ["First one.", "Fresh."]);
+    }
+
+    #[test]
+    fn stop_with_no_open_reply_does_not_drop_the_next_deltas() {
+        let mut rig = rig();
+        rig.sink.idle.store(false, Ordering::SeqCst);
+        rig.voice.say("Whole.");
+        assert_eq!(rig.next(), say("Whole."));
+        rig.voice.stop(); // the reply was already ended
+        assert_eq!(rig.next(), VoiceEvent::Stopped);
+        rig.sink.idle.store(true, Ordering::SeqCst);
+        rig.voice.say_delta("Next one.");
+        rig.voice.end_of_reply();
+        assert_eq!(rig.next(), say("Next one."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+    }
+
+    #[test]
+    fn a_whole_reply_after_a_mid_stream_stop_is_spoken() {
+        let mut rig = rig();
+        rig.sink.idle.store(false, Ordering::SeqCst);
+        rig.voice.say_delta("Start. And");
+        assert_eq!(rig.next(), say("Start."));
+        rig.voice.stop();
+        assert_eq!(rig.next(), VoiceEvent::Stopped);
+        rig.sink.idle.store(true, Ordering::SeqCst);
+        rig.voice.say("New.");
+        assert_eq!(rig.next(), say("New."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+    }
+
+    #[test]
+    fn a_failure_mid_stream_closes_the_reply_like_a_stop() {
+        let mut rig = rig();
+        rig.speaker.fail.store(true, Ordering::SeqCst);
+        rig.voice.say_delta("Broken. Rest of it");
+        assert_eq!(rig.next(), VoiceEvent::Trouble("no voice".into()));
+        assert!(!rig.voice.speaking());
+        rig.speaker.fail.store(false, Ordering::SeqCst);
+        rig.voice.say_delta(" goes on. Still.");
+        rig.voice.say("Next."); // no end_of_reply for the failed one
+        assert_eq!(rig.next(), say("Next."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert_eq!(rig.speaker.sentences(), ["Broken.", "Next."]);
+    }
+
+    #[test]
+    fn a_streamed_code_fence_is_pointed_at_not_read() {
+        let mut rig = rig();
+        let text = "Here it is:\n```rust\nlet a = 1. ;\nfn b() {}\n```\nDone.";
+        let chars: Vec<char> = text.chars().collect();
+        for chunk in chars.chunks(7) {
+            rig.voice.say_delta(&chunk.iter().collect::<String>());
+        }
+        rig.voice.end_of_reply();
+        let mut said = Vec::new();
+        loop {
+            match rig.next() {
+                VoiceEvent::Saying(t) => said.push(t),
+                VoiceEvent::Finished => break,
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+        let joined = said.join(" ");
+        assert_eq!(joined, "Here it is: (code is on screen) Done.");
+        assert!(!joined.contains("fn") && !joined.contains("let"));
+    }
+
+    #[test]
+    fn stop_drops_the_rest_of_a_sounding_reply_and_the_one_queued_behind() {
+        let mut rig = rig();
+        rig.sink.idle.store(false, Ordering::SeqCst);
+        rig.voice.say_delta("A one. A tw");
+        assert_eq!(rig.next(), say("A one."));
+        rig.voice.say_delta("o.");
+        rig.voice.end_of_reply();
+        rig.voice.say("B one. B two.");
+        rig.voice.stop();
+        assert_eq!(rig.next(), VoiceEvent::Stopped);
+        assert!(!rig.voice.speaking());
+        rig.sink.idle.store(true, Ordering::SeqCst);
+        rig.voice.say("C.");
+        assert_eq!(rig.next(), say("C."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert!(rig.nothing_pending());
+        assert!(!rig.speaker.sentences().iter().any(|s| s.starts_with('B')));
+        assert!(!rig.speaker.sentences().contains(&"A two.".to_string()));
+        assert_eq!(rig.sink.clips.lock().unwrap().len(), 2);
     }
 }
