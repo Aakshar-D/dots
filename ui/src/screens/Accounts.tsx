@@ -27,6 +27,7 @@ import { localDateTime } from "@/lib/format";
 import { errorMessage, notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { AccountHistory, AuditProblem } from "@/screens/accounts/AccountHistory";
+import { AccountGuardrails } from "@/screens/accounts/AccountGuardrails";
 import { AccountMembers } from "@/screens/accounts/AccountMembers";
 import { AccountWorkspaces } from "@/screens/accounts/AccountWorkspaces";
 import { ApiKeys } from "@/screens/accounts/ApiKeys";
@@ -229,6 +230,9 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {org.membership === "active" && <TabsTrigger value="members">Members</TabsTrigger>}
           <TabsTrigger value="workspaces">Workspaces</TabsTrigger>
+          {org.membership === "active" && (
+            <TabsTrigger value="guardrails">Guardrails</TabsTrigger>
+          )}
           <TabsTrigger value="api-keys">API keys</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
@@ -243,6 +247,12 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
         <TabsContent value="workspaces">
           <AccountWorkspaces org={org} />
         </TabsContent>
+        {/* Guardrails live on the member list, so an account without one has none. */}
+        {org.membership === "active" && (
+          <TabsContent value="guardrails">
+            <AccountGuardrails org={org} />
+          </TabsContent>
+        )}
         <TabsContent value="api-keys">
           <ApiKeys scope={org.id} />
         </TabsContent>
