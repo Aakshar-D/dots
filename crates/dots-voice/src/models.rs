@@ -119,6 +119,56 @@ pub enum ModelError {
     WrongHash { file: String },
     #[error("disk: {0}")]
     Disk(String),
+    /// Nothing arrived for a while; what came so far is kept and the next try resumes.
+    #[error("the download stalled; try again")]
+    Stalled,
+}
+
+/// A rename, replaceable in tests.
+type Rename = fn(&Path, &Path) -> std::io::Result<()>;
+
+/// How long the network may keep us waiting, and how a refused rename is retried.
+#[derive(Clone, Copy)]
+struct Limits {
+    /// To make the connection.
+    connect: Duration,
+    /// For the answer, and then between pieces of the body.
+    stall: Duration,
+    rename: Rename,
+    /// Windows refuses a rename while an antivirus scanner holds a fresh file; it lets go
+    /// within moments.
+    rename_tries: u32,
+    /// The first pause between tries; it doubles each time.
+    rename_pause: Duration,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            connect: Duration::from_secs(15),
+            stall: Duration::from_secs(30),
+            rename: |from, to| std::fs::rename(from, to),
+            rename_tries: if cfg!(windows) { 5 } else { 1 },
+            rename_pause: Duration::from_millis(100),
+        }
+    }
+}
+
+impl Limits {
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        let mut pause = self.rename_pause;
+        let mut tries = 1;
+        loop {
+            match (self.rename)(from, to) {
+                Err(_) if tries < self.rename_tries => {
+                    std::thread::sleep(pause);
+                    pause *= 2;
+                    tries += 1;
+                }
+                done => return done,
+            }
+        }
+    }
 }
 
 fn disk(e: impl std::fmt::Display) -> ModelError {
@@ -182,21 +232,43 @@ async fn forget(path: &Path) {
 }
 
 /// Fetch every file in `manifest` that is not already installed, check it, and put it
-/// in place. A cut download resumes from its `.part` file on the next call.
+/// in place. A cut or stalled download resumes from its `.part` file on the next call, and
+/// a checked `.part` that could not be put in place is kept and not fetched again.
+///
+/// The connection must open within 15 s, and the download ends with
+/// [`ModelError::Stalled`] when no data arrives for 30 s.
 pub async fn install(
     root: &Path,
     manifest: &Manifest,
     on_progress: impl Fn(Progress) + Send + Sync,
     cancel: CancellationToken,
 ) -> Result<(), ModelError> {
+    install_with(root, manifest, Limits::default(), on_progress, cancel).await
+}
+
+async fn install_with(
+    root: &Path,
+    manifest: &Manifest,
+    limits: Limits,
+    on_progress: impl Fn(Progress) + Send + Sync,
+    cancel: CancellationToken,
+) -> Result<(), ModelError> {
     tokio::fs::create_dir_all(root).await.map_err(disk)?;
     let total = manifest.total_bytes();
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(limits.connect)
+        .build()
+        .map_err(net)?;
     let mut finished = 0u64;
     for file in &manifest.files {
         check(&cancel)?;
         if !is_installed(root, file) {
-            install_one(&client, root, file, finished, total, &on_progress, &cancel).await?;
+            let at = Where {
+                root,
+                base_done: finished,
+                total,
+            };
+            install_one(&client, at, file, limits, &on_progress, &cancel).await?;
         }
         finished += file.bytes;
         on_progress(Progress {
@@ -208,23 +280,31 @@ pub async fn install(
     Ok(())
 }
 
-async fn install_one(
-    client: &reqwest::Client,
-    root: &Path,
-    file: &ModelFile,
+/// Where one file goes, and how far the whole install has come before it.
+#[derive(Clone, Copy)]
+struct Where<'a> {
+    root: &'a Path,
     base_done: u64,
     total: u64,
+}
+
+async fn install_one(
+    client: &reqwest::Client,
+    at: Where<'_>,
+    file: &ModelFile,
+    limits: Limits,
     on_progress: &(impl Fn(Progress) + Send + Sync),
     cancel: &CancellationToken,
 ) -> Result<(), ModelError> {
+    let root = at.root;
     let part = root.join(format!("{}.part", file.name));
     let report = Report {
-        base_done,
-        total,
+        base_done: at.base_done,
+        total: at.total,
         name: &file.name,
         on_progress,
     };
-    download(client, file, &part, &report, cancel).await?;
+    download(client, file, &part, &report, limits.stall, cancel).await?;
     check(cancel)?;
 
     if !hash_file(&part, cancel)
@@ -251,12 +331,12 @@ async fn install_one(
     let keep_as = file_name_of(&file.url, &file.name);
     let unpack = file.unpack;
     let (p, t, d) = (part.clone(), tmp.clone(), dest);
-    let placed = tokio::task::spawn_blocking(move || place(&p, &t, &d, unpack, &keep_as))
+    let placed = tokio::task::spawn_blocking(move || place(&p, &t, &d, unpack, &keep_as, &limits))
         .await
         .map_err(disk)?;
     if let Err(e) = placed {
+        // The `.part` is checked and whole: kept, so the next try only puts it in place.
         let _ = tokio::fs::remove_dir_all(&tmp).await;
-        forget(&part).await;
         return Err(e);
     }
     forget(&part).await;
@@ -298,6 +378,7 @@ async fn download<F: Fn(Progress)>(
     file: &ModelFile,
     part: &Path,
     report: &Report<'_, F>,
+    stall: Duration,
     cancel: &CancellationToken,
 ) -> Result<(), ModelError> {
     let mut have = tokio::fs::metadata(part)
@@ -317,7 +398,9 @@ async fn download<F: Fn(Progress)>(
         request = request.header(reqwest::header::RANGE, format!("bytes={have}-"));
     }
     let response = tokio::select! {
-        r = request.send() => r.map_err(net)?,
+        r = tokio::time::timeout(stall, request.send()) => {
+            r.map_err(|_| ModelError::Stalled)?.map_err(net)?
+        }
         _ = cancel.cancelled() => return Err(ModelError::Cancelled),
     };
     let mut open = tokio::fs::OpenOptions::new();
@@ -339,7 +422,12 @@ async fn download<F: Fn(Progress)>(
     };
     let mut out = open.open(part).await.map_err(disk)?;
 
-    let result = pump(response, &mut out, have, file.bytes, report, cancel).await;
+    let body = Body {
+        have,
+        expected: file.bytes,
+        stall,
+    };
+    let result = pump(response, &mut out, body, report, cancel).await;
     let flushed = out.flush().await;
     drop(out);
     match result {
@@ -359,19 +447,33 @@ async fn download<F: Fn(Progress)>(
 /// The server sent past the pinned size; the `.part` file is worthless.
 struct Overrun;
 
+/// What the body should bring: from `have` bytes to `expected`, never pausing `stall`.
+struct Body {
+    have: u64,
+    expected: u64,
+    stall: Duration,
+}
+
 async fn pump<F: Fn(Progress)>(
     response: reqwest::Response,
     out: &mut tokio::fs::File,
-    mut have: u64,
-    expected: u64,
+    body: Body,
     report: &Report<'_, F>,
     cancel: &CancellationToken,
 ) -> Result<Result<(), ModelError>, Overrun> {
+    let Body {
+        mut have,
+        expected,
+        stall,
+    } = body;
     let mut stream = response.bytes_stream();
     let mut last_report: Option<Instant> = None;
     loop {
         let next = tokio::select! {
-            n = stream.next() => n,
+            n = tokio::time::timeout(stall, stream.next()) => match n {
+                Ok(n) => n,
+                Err(_) => return Ok(Err(ModelError::Stalled)),
+            },
             _ = cancel.cancelled() => return Ok(Err(ModelError::Cancelled)),
         };
         let Some(chunk) = next else { break };
@@ -412,19 +514,21 @@ async fn hash_file(path: &Path, cancel: &CancellationToken) -> Result<String, Mo
     Ok(hex(&hasher.finalize()))
 }
 
-/// Move a checked download into place: unpack an archive into `tmp` and rename it to
-/// `dest` (flattening a single top folder), or move a plain file into `dest/<keep_as>`.
+/// Put a checked download in place: unpack an archive into `tmp` and rename it to `dest`
+/// (flattening a single top folder), or copy a plain file into `dest/<keep_as>`. `part` is
+/// left as it is, so a failure here never loses it.
 fn place(
     part: &Path,
     tmp: &Path,
     dest: &Path,
     unpack: bool,
     keep_as: &str,
+    limits: &Limits,
 ) -> Result<(), ModelError> {
     std::fs::create_dir_all(tmp).map_err(disk)?;
     if !unpack {
-        std::fs::rename(part, tmp.join(keep_as)).map_err(disk)?;
-        return std::fs::rename(tmp, dest).map_err(disk);
+        std::fs::copy(part, tmp.join(keep_as)).map_err(disk)?;
+        return limits.rename(tmp, dest).map_err(disk);
     }
 
     let file = std::fs::File::open(part).map_err(disk)?;
@@ -456,10 +560,10 @@ fn place(
         .map_err(disk)?;
     if top.len() == 1 && top[0].file_type().map_err(disk)?.is_dir() {
         let inner = top.remove(0).path();
-        std::fs::rename(&inner, dest).map_err(disk)?;
+        limits.rename(&inner, dest).map_err(disk)?;
         std::fs::remove_dir(tmp).map_err(disk)
     } else {
-        std::fs::rename(tmp, dest).map_err(disk)
+        limits.rename(tmp, dest).map_err(disk)
     }
 }
 
@@ -482,6 +586,8 @@ mod tests {
         Normal,
         CutFirst,
         IgnoreRange,
+        /// The first answer sends half the body, then nothing, and never ends.
+        StallFirst,
     }
 
     struct Server {
@@ -540,6 +646,12 @@ mod tests {
                     Err(std::io::Error::other("connection dropped"))
                 }),
             );
+            return builder.body(Body::from_stream(stream)).unwrap();
+        }
+        if s.mode == Mode::StallFirst && !s.cut_done.swap(true, Ordering::SeqCst) {
+            let half = rest.slice(..rest.len() / 2);
+            let stream = futures_util::stream::once(async move { Ok::<_, std::io::Error>(half) })
+                .chain(futures_util::stream::pending());
             return builder.body(Body::from_stream(stream)).unwrap();
         }
         builder.body(Body::from(rest)).unwrap()
@@ -920,6 +1032,173 @@ mod tests {
         assert!(!installed(dir.path(), &manifest));
         assert!(!dir.path().join("vad").exists());
         remove(dir.path()).unwrap();
+    }
+
+    fn noise(n: u32) -> Vec<u8> {
+        (0..n)
+            .map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8)
+            .collect()
+    }
+
+    fn quick(rename: Rename) -> Limits {
+        Limits {
+            stall: Duration::from_millis(300),
+            rename,
+            rename_tries: 3,
+            rename_pause: Duration::from_millis(1),
+            ..Limits::default()
+        }
+    }
+
+    fn refuse(_: &Path, _: &Path) -> std::io::Result<()> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "in use by a scanner",
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_stalled_download_ends_with_stalled_and_keeps_its_part_to_resume() {
+        let tts = archive("speak", &[("big.bin", &noise(200_000))]);
+        let (base, server) = start(
+            HashMap::from([("speak.tar.bz2".into(), tts.clone())]),
+            Mode::StallFirst,
+        )
+        .await;
+        let manifest = Manifest {
+            files: vec![entry("speak", &base, "speak.tar.bz2", &tts, true)],
+        };
+        let dir = tempfile::tempdir().unwrap();
+
+        let began = Instant::now();
+        let first = install_with(
+            dir.path(),
+            &manifest,
+            quick(|from, to| std::fs::rename(from, to)),
+            nothing,
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(matches!(first, Err(ModelError::Stalled)), "{first:?}");
+        assert!(
+            began.elapsed() < Duration::from_secs(5),
+            "{:?}",
+            began.elapsed()
+        );
+        assert!(first.unwrap_err().to_string().contains("stalled"));
+        let part = std::fs::metadata(dir.path().join("speak.part"))
+            .unwrap()
+            .len();
+        assert!(part > 0 && part < tts.len() as u64);
+
+        install(dir.path(), &manifest, nothing, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(installed(dir.path(), &manifest));
+        assert_eq!(
+            server.ranges.lock().unwrap()[1],
+            Some(format!("bytes={part}-"))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_rename_keeps_the_verified_part_and_the_next_try_does_not_download() {
+        let tts = archive("speak", &[("tts.json", b"{}")]);
+        let vad = b"silero-bytes".to_vec();
+        let (base, server) = start(
+            HashMap::from([
+                ("speak.tar.bz2".into(), tts.clone()),
+                ("silero_vad.onnx".into(), vad.clone()),
+            ]),
+            Mode::Normal,
+        )
+        .await;
+        for (file, data, unpack) in [
+            (
+                entry("speak", &base, "speak.tar.bz2", &tts, true),
+                &tts,
+                true,
+            ),
+            (
+                entry("vad", &base, "silero_vad.onnx", &vad, false),
+                &vad,
+                false,
+            ),
+        ] {
+            let name = file.name.clone();
+            let manifest = Manifest { files: vec![file] };
+            let dir = tempfile::tempdir().unwrap();
+            let asked = server.ranges.lock().unwrap().len();
+
+            let err = install_with(
+                dir.path(),
+                &manifest,
+                quick(refuse),
+                nothing,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, ModelError::Disk(_)), "{name}: {err:?}");
+            assert!(!installed(dir.path(), &manifest), "{name}");
+            let part = dir.path().join(format!("{name}.part"));
+            assert_eq!(std::fs::read(&part).unwrap(), *data, "{name}: part lost");
+            assert!(!dir.path().join(format!("{name}.tmp")).exists(), "{name}");
+            assert!(!dir.path().join(&name).exists(), "{name} unpack={unpack}");
+
+            install(dir.path(), &manifest, nothing, CancellationToken::new())
+                .await
+                .unwrap();
+            assert!(installed(dir.path(), &manifest), "{name}");
+            assert_eq!(
+                server.ranges.lock().unwrap().len(),
+                asked + 1,
+                "{name}: downloaded again"
+            );
+        }
+    }
+
+    static REFUSALS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    /// Refuses the first two renames, as a scanner holding the folder for a moment would.
+    fn refuse_twice(from: &Path, to: &Path) -> std::io::Result<()> {
+        if REFUSALS.fetch_add(1, Ordering::SeqCst) < 2 {
+            return refuse(from, to);
+        }
+        std::fs::rename(from, to)
+    }
+
+    #[tokio::test]
+    async fn a_rename_refused_for_a_moment_is_tried_again() {
+        let tts = archive("speak", &[("tts.json", b"{}")]);
+        let (base, _s) = start(
+            HashMap::from([("speak.tar.bz2".into(), tts.clone())]),
+            Mode::Normal,
+        )
+        .await;
+        let manifest = Manifest {
+            files: vec![entry("speak", &base, "speak.tar.bz2", &tts, true)],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        install_with(
+            dir.path(),
+            &manifest,
+            quick(refuse_twice),
+            nothing,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert!(installed(dir.path(), &manifest));
+        assert!(REFUSALS.load(Ordering::SeqCst) >= 3);
+    }
+
+    #[test]
+    fn the_default_limits_are_the_agreed_ones() {
+        let l = Limits::default();
+        assert_eq!(l.connect, Duration::from_secs(15));
+        assert_eq!(l.stall, Duration::from_secs(30));
+        assert!(l.rename_tries >= if cfg!(windows) { 3 } else { 1 });
     }
 
     #[test]
