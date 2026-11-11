@@ -1035,6 +1035,28 @@ impl Orgs {
         }
     }
 
+    /// The guardrails the org's accepted member list gives the workspace `id` (guardrails spec
+    /// §3). `None` when the org is not joined, keeps no list, the list has no such workspace, or
+    /// the workspace has none.
+    pub fn workspace_guardrails(
+        &self,
+        org_id: &str,
+        id: &str,
+    ) -> Option<crate::accounts::Guardrails> {
+        match self.read().get(org_id) {
+            Some(Slot::Joined(joined)) => joined
+                .roster
+                .as_ref()?
+                .roster
+                .workspaces
+                .iter()
+                .find(|w| w.id == id)?
+                .guardrails
+                .clone(),
+            _ => None,
+        }
+    }
+
     /// Why this PC gets nothing from the org, when it is not on its member list: waiting,
     /// its Dots ID changed, or removed (members spec §6.4). `None` otherwise.
     pub fn not_member(&self, org_id: &str) -> Option<NotMember> {

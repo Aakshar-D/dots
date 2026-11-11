@@ -423,6 +423,16 @@ impl Orgs {
                 },
                 None,
             ),
+            RosterEdit::SetGuardrails {
+                workspace_id,
+                guardrails,
+            } => (
+                Change::SetGuardrails {
+                    workspace_id,
+                    guardrails,
+                },
+                None,
+            ),
         };
 
         let now = self.now();
@@ -703,12 +713,14 @@ pub(super) fn draft_stand(
 }
 
 /// What the role must hold to make `edit`: managing workspaces for changes to the workspace
-/// list, managing members for everything else (a member's workspace roles included).
+/// list, managing guardrails for a workspace's guardrails, managing members for everything else
+/// (a member's workspace roles included).
 fn edit_permission(edit: &RosterEdit) -> Permission {
     match edit {
         RosterEdit::AddWorkspace { .. }
         | RosterEdit::RenameWorkspace { .. }
         | RosterEdit::DeleteWorkspace { .. } => Permission::ManageWorkspaces,
+        RosterEdit::SetGuardrails { .. } => Permission::ManageGuardrails,
         _ => Permission::ManageMembers,
     }
 }
