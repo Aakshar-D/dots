@@ -12,7 +12,10 @@ pub mod roster;
 mod scope;
 mod workspaces;
 
-pub use guardrails::{dot_rails, rails_in, DotRails, GitAction, GuardRole, Guardrails};
+pub use guardrails::{
+    dot_rails, rails_in, ApprovalGuardrail, DotRails, GitAction, GuardRole, Guardrails,
+    PolicyCeiling, PresetCeiling,
+};
 pub use identity::{
     ensure_identity, identity, set_profile, sign_with_identity, Identity, IDENTITY_SECRET,
     MAX_EMAIL, MAX_PROFILE_NAME,

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -85,6 +85,9 @@ pub struct ApprovalHub {
     waiters: Mutex<HashMap<String, oneshot::Sender<Decision>>>,
     /// The engines that perform an approved call themselves after a late decision.
     self_apply: Mutex<HashSet<EngineKind>>,
+    /// The accounts joined on this PC, for the guardrails of each dot's workspace (guardrails
+    /// spec §4.2). Without them (a test hub) no dot has guardrails.
+    orgs: OnceLock<crate::vault::org::Orgs>,
 }
 
 impl ApprovalHub {
@@ -94,7 +97,19 @@ impl ApprovalHub {
             bus,
             waiters: Mutex::new(HashMap::new()),
             self_apply: Mutex::new(HashSet::new()),
+            orgs: OnceLock::new(),
         }
+    }
+
+    /// Gives the hub the accounts joined on this PC, once: from then on each call is checked
+    /// against the guardrails of its dot's workspace.
+    pub fn set_orgs(&self, orgs: crate::vault::org::Orgs) {
+        let _ = self.orgs.set(orgs);
+    }
+
+    /// The guardrails `dot` runs under on this PC, if any.
+    fn rails(&self, dot: &Dot) -> Option<crate::accounts::DotRails> {
+        crate::accounts::dot_rails(self.orgs.get(), dot)
     }
 
     /// Names the engines whose dots get approvals with `self_apply` from now on
@@ -270,6 +285,20 @@ impl PermissionGate for ApprovalHub {
     async fn check(&self, run_id: &str, tool: &str, input: Value) -> Result<PermissionOutcome> {
         let run = self.store.get_run(run_id).await?;
         let dot = self.store.get_dot(&run.dot_id).await?;
+        let workspace = run.workspace_path.as_deref().map(Path::new);
+        // The workspace's guardrails (guardrails spec §4.2): a Member's protected call is
+        // refused before any grant is used; an Admin's always asks.
+        let rails = self.rails(&dot);
+        let hit = rails
+            .as_ref()
+            .and_then(|r| r.hit(tool, &input, workspace).map(|h| (r, h)));
+        if let Some((r, h)) = &hit {
+            if r.role == crate::accounts::GuardRole::Member {
+                return Ok(PermissionOutcome::Deny {
+                    message: r.needs_admin(h),
+                });
+            }
+        }
         if self
             .store
             .take_grant(&run.root_run_id, tool, &grant_key(tool, &input))
@@ -287,8 +316,11 @@ impl PermissionGate for ApprovalHub {
             };
             dot.spec.policy.resolve_mcp(tool, &input, unknown)
         } else {
-            let workspace = run.workspace_path.as_deref().map(Path::new);
             dot.spec.policy.resolve_in(tool, &input, workspace)
+        };
+        let action = match (action, &hit) {
+            (Action::Allow, Some(_)) => Action::Ask,
+            (action, _) => action,
         };
         self.act(action, run_id, &dot, tool, input, None).await
     }
@@ -306,6 +338,17 @@ impl PermissionGate for ApprovalHub {
     ) -> Result<PermissionOutcome> {
         let run = self.store.get_run(run_id).await?;
         let dot = self.store.get_dot(&run.dot_id).await?;
+        let rails = self.rails(&dot);
+        let hit = rails
+            .as_ref()
+            .and_then(|r| r.hit(tool, &input, None).map(|h| (r, h)));
+        if let Some((r, h)) = &hit {
+            if r.role == crate::accounts::GuardRole::Member {
+                return Ok(PermissionOutcome::Deny {
+                    message: r.needs_admin(h),
+                });
+            }
+        }
         let key = grant_key(tool, &input);
         if let Some(granted) = self
             .store
@@ -320,7 +363,10 @@ impl PermissionGate for ApprovalHub {
                 }
             });
         }
-        let action = dot.spec.policy.resolve_mcp(tool, &input, trust);
+        let action = match dot.spec.policy.resolve_mcp(tool, &input, trust) {
+            Action::Allow if hit.is_some() => Action::Ask,
+            action => action,
+        };
         self.act(action, run_id, &dot, tool, input, fingerprint.as_deref())
             .await
     }

@@ -318,3 +318,103 @@ pub fn rails_in(orgs: Option<&Orgs>, org_id: Option<&str>, workspace_id: &str) -
 pub fn dot_rails(orgs: Option<&Orgs>, dot: &crate::model::Dot) -> Option<DotRails> {
     rails_in(orgs, dot.org_id.as_deref(), &dot.workspace_id)
 }
+
+/// What an approval card shows about a call the workspace's guardrails protect (guardrails spec
+/// §7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ApprovalGuardrail {
+    /// What the call hits, as "the file migrations/x.sql" or "pushing to main or master".
+    pub what: String,
+    pub workspace_name: String,
+    /// This PC is a Member in the dot's workspace: it can't approve the call.
+    pub needs_admin: bool,
+    /// The card's words.
+    pub text: String,
+}
+
+impl ApprovalGuardrail {
+    /// The card of `hit` under `rails`.
+    pub fn new(rails: &DotRails, hit: &RailHit) -> ApprovalGuardrail {
+        let needs_admin = rails.role == GuardRole::Member;
+        ApprovalGuardrail {
+            what: hit.what.clone(),
+            workspace_name: rails.workspace_name.clone(),
+            needs_admin,
+            text: if needs_admin {
+                rails.needs_admin(hit)
+            } else {
+                rails.always_asks(hit)
+            },
+        }
+    }
+}
+
+/// One preset in the dot editor, and why this PC may not pick it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PresetCeiling {
+    pub preset: Preset,
+    pub refusal: Option<String>,
+}
+
+/// The policy ceiling of a dot, or of the workspace a new dot goes in (guardrails spec §4.3,
+/// §7).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PolicyCeiling {
+    /// How the guardrails treat this PC's dots there; `None` when there are none.
+    pub applies_as: Option<GuardRole>,
+    pub workspace_name: Option<String>,
+    /// The highest preset this PC's dots may use there; `None`: no ceiling.
+    pub max_preset: Option<Preset>,
+    /// Read-only, Sandboxed, Trusted and Custom, each with why it may not be picked. Custom's is
+    /// always `None`: a custom policy is judged by `policy_refusal`.
+    pub presets: Vec<PresetCeiling>,
+    /// Why the policy given (or the dot's) can't be saved.
+    pub policy_refusal: Option<String>,
+    /// For a dot: the text its runs are held with.
+    pub held: Option<String>,
+    /// What the workspace protects.
+    pub protected: Option<Guardrails>,
+}
+
+impl PolicyCeiling {
+    /// The ceiling under `rails` (`None`: no guardrails) in the account named `account`, for
+    /// `policy` when one is given; `held` is filled for a dot.
+    pub fn new(
+        rails: Option<&DotRails>,
+        account: &str,
+        policy: Option<&Policy>,
+        dot: bool,
+    ) -> PolicyCeiling {
+        let presets = [
+            Preset::ReadOnly,
+            Preset::Sandboxed,
+            Preset::Trusted,
+            Preset::Custom,
+        ]
+        .into_iter()
+        .map(|preset| PresetCeiling {
+            preset,
+            refusal: match (rails, preset) {
+                (Some(r), p) if p != Preset::Custom => {
+                    r.ceiling_refusal(account, &Policy::preset(p))
+                }
+                _ => None,
+            },
+        })
+        .collect();
+        PolicyCeiling {
+            applies_as: rails.map(|r| r.role),
+            workspace_name: rails.map(|r| r.workspace_name.clone()),
+            max_preset: rails.and_then(DotRails::ceiling),
+            presets,
+            policy_refusal: rails
+                .zip(policy)
+                .and_then(|(r, p)| r.ceiling_refusal(account, p)),
+            held: rails
+                .zip(policy)
+                .filter(|_| dot)
+                .and_then(|(r, p)| r.ceiling_hold(account, p)),
+            protected: rails.map(|r| r.guardrails.clone()),
+        }
+    }
+}

@@ -189,6 +189,7 @@ fn ctx(session: Option<&str>) -> RunContext {
         approved_calls: Vec::new(),
         tools: Default::default(),
         autocompact_pct: None,
+        guardrails: None,
     }
 }
 
@@ -443,4 +444,74 @@ fn with_the_guard_on_every_shell_command_reaches_approve() {
     let off = allowed_tools(&build_args(&c, Path::new("m.json")));
     assert!(off.iter().any(|a| a == "Bash(git status:*)"), "{off:?}");
     assert!(off.iter().any(|a| a == "PowerShell(git:*)"), "{off:?}");
+}
+
+fn disallowed_tools(args: &[String]) -> Vec<String> {
+    args.iter()
+        .skip_while(|a| *a != "--disallowedTools")
+        .skip(1)
+        .take_while(|a| !a.starts_with("--"))
+        .cloned()
+        .collect()
+}
+
+fn rails(role: dots_core::accounts::GuardRole) -> dots_core::accounts::DotRails {
+    dots_core::accounts::DotRails {
+        role,
+        guardrails: dots_core::accounts::Guardrails::defaults(),
+        workspace_name: "Payments".into(),
+    }
+}
+
+#[test]
+fn guardrails_send_every_command_to_approve_and_deny_a_members_protected_calls() {
+    use dots_core::accounts::GuardRole;
+    use dots_core::engine::claude::args::cli_settings_for;
+    let mut c = ctx(None);
+    c.dot.spec.policy = Policy::preset(Preset::Sandboxed);
+    c.dot.spec.policy.ask_send_delete = false;
+    let without = build_args(&c, Path::new("m.json"));
+    assert!(allowed_tools(&without).contains(&"Bash(git status:*)".to_string()));
+    assert!(!disallowed_tools(&without)
+        .iter()
+        .any(|d| d.contains("migrations")));
+
+    c.guardrails = Some(rails(GuardRole::Admin));
+    let admin = build_args(&c, Path::new("m.json"));
+    assert!(!allowed_tools(&admin).iter().any(|a| a.starts_with("Bash(")));
+    assert!(allowed_tools(&admin).contains(&"Write(./**)".to_string()));
+    // An Admin's protected calls ask: nothing is denied up front.
+    assert_eq!(disallowed_tools(&admin), disallowed_tools(&without));
+    let ask = cli_settings_for(&c)["permissions"]["ask"].clone();
+    let ask: Vec<String> = serde_json::from_value(ask).unwrap();
+    for rule in [
+        "Write(**/migrations/**)",
+        "Edit(.github/**)",
+        "NotebookEdit(infra/**)",
+    ] {
+        assert!(ask.contains(&rule.to_string()), "{rule}");
+    }
+    // The private folders keep their own.
+    assert!(cli_settings()["permissions"]["ask"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|r| ask.contains(&r.as_str().unwrap().to_string())));
+
+    c.guardrails = Some(rails(GuardRole::Member));
+    let member = disallowed_tools(&build_args(&c, Path::new("m.json")));
+    for rule in [
+        "Edit(**/migrations/**)",
+        "Write(**/Cargo.lock)",
+        "Bash(git push origin main:*)",
+        "PowerShell(git push --force:*)",
+        "Bash(gh pr merge:*)",
+        "Bash(rm -rf:*)",
+        "Bash(terraform apply:*)",
+    ] {
+        assert!(member.contains(&rule.to_string()), "{rule}: {member:?}");
+    }
+    // Without guardrails the settings are the private folders' alone.
+    c.guardrails = None;
+    assert_eq!(cli_settings_for(&c), cli_settings());
 }
