@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
 const BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/";
@@ -201,15 +201,20 @@ pub fn installed(root: &Path, manifest: &Manifest) -> bool {
     manifest.files.iter().all(|f| is_installed(root, f))
 }
 
-/// Delete everything this module lays down under `root` (the folder itself only if it
-/// is left empty). Missing files are fine.
-pub fn remove(root: &Path) -> std::io::Result<()> {
-    fn gone(r: std::io::Result<()>) -> std::io::Result<()> {
+/// Delete everything this module lays down under `root`, the lock file too (the folder itself
+/// only if it is left empty). Missing files are fine. While an install runs in the folder
+/// nothing is deleted and the answer is [`ModelError::Busy`].
+pub fn remove(root: &Path) -> Result<(), ModelError> {
+    fn gone(r: std::io::Result<()>) -> Result<(), ModelError> {
         match r {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            other => other,
+            other => other.map_err(disk),
         }
     }
+    if !root.is_dir() {
+        return Ok(());
+    }
+    let lock = InstallLock::take(root)?;
     for f in &Manifest::pinned().files {
         gone(std::fs::remove_dir_all(root.join(&f.name)))?;
         gone(std::fs::remove_dir_all(
@@ -218,6 +223,9 @@ pub fn remove(root: &Path) -> std::io::Result<()> {
         gone(std::fs::remove_file(root.join(format!("{}.part", f.name))))?;
         gone(std::fs::remove_file(root.join(format!("{}.ok", f.name))))?;
     }
+    // Deleted while still held, so no install can slip in between; then let go.
+    gone(std::fs::remove_file(root.join(LOCK_FILE)))?;
+    drop(lock);
     let _ = std::fs::remove_dir(root);
     Ok(())
 }
@@ -249,111 +257,35 @@ pub async fn install(
     install_with(root, manifest, Limits::default(), on_progress, cancel).await
 }
 
-/// The lock file that keeps a second install out of a folder while one runs.
+/// The lock file that keeps a second install (or a removal) out of a folder while one runs.
 const LOCK_FILE: &str = ".installing";
-/// A lock whose time was not renewed for this long belongs to an install that died: it is
-/// taken over.
-const LOCK_STALE: Duration = Duration::from_secs(60);
-/// The lock's time is renewed at most this often while progress is reported.
-const LOCK_TOUCH: Duration = Duration::from_secs(1);
 
-/// Held while an install runs: `<root>/.installing`, created only if it is not there (or is
-/// stale), its modified time renewed with progress, and removed when this is dropped, on
-/// every way out (done, error, cancel, panic). It holds only a random tag, so a lock taken
-/// over by another install is not removed by the one it was taken from.
+/// Held while an install or a removal runs: the system's own lock on `<root>/.installing`.
+/// The system lets go when this is dropped or the process dies, so a lock file left behind
+/// blocks nothing, and there is no time after which a lock counts as abandoned. The file is
+/// left in place (removing it would let a second install lock a file nobody else sees);
+/// [`remove`] deletes it. Each blocking task of an install holds an `Arc` of this, so an
+/// install future dropped mid-way keeps the folder locked until its last task has ended.
 struct InstallLock {
-    path: PathBuf,
-    /// Closed before the file is removed, so the name is free at once.
-    file: Option<std::fs::File>,
-    tag: String,
-    touched: std::sync::Mutex<Instant>,
+    _file: std::fs::File,
 }
 
 impl InstallLock {
+    /// Taken before anything is written to the folder.
     fn take(root: &Path) -> Result<Self, ModelError> {
-        use std::io::Write;
-        let path = root.join(LOCK_FILE);
-        let create = || {
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-        };
-        let mut file = match create() {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                if !Self::stale(&path) {
-                    return Err(ModelError::Busy);
-                }
-                // The install that held it died: take it over. Two taking it over at
-                // once: one creates it, the other is busy.
-                match std::fs::remove_file(&path) {
-                    Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(disk(e)),
-                    _ => {}
-                }
-                match create() {
-                    Ok(f) => f,
-                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                        return Err(ModelError::Busy)
-                    }
-                    Err(e) => return Err(disk(e)),
-                }
-            }
-            Err(e) => return Err(disk(e)),
-        };
-        let tag = format!("{:016x}", rand_tag());
-        file.write_all(tag.as_bytes()).map_err(disk)?;
-        Ok(Self {
-            path,
-            file: Some(file),
-            tag,
-            touched: std::sync::Mutex::new(Instant::now()),
-        })
-    }
-
-    /// Not renewed for `LOCK_STALE`. A time in the future (a clock moved back) is fresh.
-    fn stale(path: &Path) -> bool {
-        std::fs::metadata(path)
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
-            .is_some_and(|age| age > LOCK_STALE)
-    }
-
-    /// Progress was made: the lock is renewed (at most every `LOCK_TOUCH`).
-    fn touch(&self) {
-        let mut at = self.touched.lock().unwrap_or_else(|e| e.into_inner());
-        if at.elapsed() >= LOCK_TOUCH {
-            *at = Instant::now();
-            if let Some(f) = &self.file {
-                let _ = f.set_modified(std::time::SystemTime::now());
-            }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(root.join(LOCK_FILE))
+            .map_err(disk)?;
+        match file.try_lock() {
+            Ok(()) => Ok(Self { _file: file }),
+            Err(std::fs::TryLockError::WouldBlock) => Err(ModelError::Busy),
+            Err(std::fs::TryLockError::Error(e)) => Err(disk(e)),
         }
     }
-}
-
-impl Drop for InstallLock {
-    fn drop(&mut self) {
-        drop(self.file.take());
-        // Only our own lock: one taken over since holds another tag.
-        if std::fs::read_to_string(&self.path).is_ok_and(|t| t == self.tag) {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
-
-/// A tag unlikely to repeat: the time and an address on this stack, mixed.
-fn rand_tag() -> u64 {
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64);
-    let here = &nanos as *const u64 as u64;
-    let mut h = Sha256::new();
-    h.update(nanos.to_le_bytes());
-    h.update(here.to_le_bytes());
-    h.update(std::process::id().to_le_bytes());
-    let d = h.finalize();
-    u64::from_le_bytes(d[..8].try_into().expect("8 bytes"))
 }
 
 async fn install_with(
@@ -364,11 +296,7 @@ async fn install_with(
     cancel: CancellationToken,
 ) -> Result<(), ModelError> {
     tokio::fs::create_dir_all(root).await.map_err(disk)?;
-    let lock = InstallLock::take(root)?;
-    let on_progress = |p: Progress| {
-        lock.touch();
-        on_progress(p);
-    };
+    let lock = std::sync::Arc::new(InstallLock::take(root)?);
     let total = manifest.total_bytes();
     let client = reqwest::Client::builder()
         .connect_timeout(limits.connect)
@@ -383,7 +311,7 @@ async fn install_with(
                 base_done: finished,
                 total,
             };
-            install_one(&client, at, file, limits, &on_progress, &cancel).await?;
+            install_one(&client, at, file, limits, &on_progress, &cancel, &lock).await?;
         }
         finished += file.bytes;
         on_progress(Progress {
@@ -410,6 +338,7 @@ async fn install_one(
     limits: Limits,
     on_progress: &(impl Fn(Progress) + Send + Sync),
     cancel: &CancellationToken,
+    lock: &std::sync::Arc<InstallLock>,
 ) -> Result<(), ModelError> {
     let root = at.root;
     let part = root.join(format!("{}.part", file.name));
@@ -422,7 +351,7 @@ async fn install_one(
     download(client, file, &part, &report, limits.stall, cancel).await?;
     check(cancel)?;
 
-    if !hash_file(&part, cancel)
+    if !hash_file(&part, cancel, lock)
         .await?
         .eq_ignore_ascii_case(&file.sha256)
     {
@@ -446,9 +375,13 @@ async fn install_one(
     let keep_as = file_name_of(&file.url, &file.name);
     let unpack = file.unpack;
     let (p, t, d) = (part.clone(), tmp.clone(), dest);
-    let placed = tokio::task::spawn_blocking(move || place(&p, &t, &d, unpack, &keep_as, &limits))
-        .await
-        .map_err(disk)?;
+    let held = lock.clone();
+    let placed = tokio::task::spawn_blocking(move || {
+        let _held = held;
+        place(&p, &t, &d, unpack, &keep_as, &limits)
+    })
+    .await
+    .map_err(disk)?;
     if let Err(e) = placed {
         // The `.part` is checked and whole: kept, so the next try only puts it in place.
         let _ = tokio::fs::remove_dir_all(&tmp).await;
@@ -614,19 +547,31 @@ async fn pump<F: Fn(Progress)>(
     Ok(Ok(()))
 }
 
-async fn hash_file(path: &Path, cancel: &CancellationToken) -> Result<String, ModelError> {
-    let mut f = tokio::fs::File::open(path).await.map_err(disk)?;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        check(cancel)?;
-        let n = f.read(&mut buf).await.map_err(disk)?;
-        if n == 0 {
-            break;
+/// The SHA-256 of a file, read on a blocking thread that holds the install's lock.
+async fn hash_file(
+    path: &Path,
+    cancel: &CancellationToken,
+    lock: &std::sync::Arc<InstallLock>,
+) -> Result<String, ModelError> {
+    let (path, cancel, held) = (path.to_path_buf(), cancel.clone(), lock.clone());
+    tokio::task::spawn_blocking(move || {
+        use std::io::Read;
+        let _held = held;
+        let mut f = std::fs::File::open(path).map_err(disk)?;
+        let mut hasher = Sha256::new();
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            check(&cancel)?;
+            let n = f.read(&mut buf).map_err(disk)?;
+            if n == 0 {
+                break;
+            }
+            hasher.update(&buf[..n]);
         }
-        hasher.update(&buf[..n]);
-    }
-    Ok(hex(&hasher.finalize()))
+        Ok(hex(&hasher.finalize()))
+    })
+    .await
+    .map_err(disk)?
 }
 
 /// Put a checked download in place: unpack an archive into `tmp` and rename it to `dest`
@@ -1105,15 +1050,20 @@ mod tests {
         assert_eq!(err.to_string(), "a download is already running");
         assert!(installed(dir.path(), &manifest));
         // Let go when done: the next install runs.
-        assert!(!lock_of(dir.path()).exists());
+        assert!(free(dir.path()));
         install(dir.path(), &manifest, nothing, CancellationToken::new())
             .await
             .unwrap();
-        assert!(!lock_of(dir.path()).exists());
+        assert!(free(dir.path()));
+    }
+
+    /// Nothing holds the folder's lock: it can be taken (and is let go again at once).
+    fn free(root: &Path) -> bool {
+        InstallLock::take(root).is_ok()
     }
 
     #[tokio::test]
-    async fn a_lock_without_progress_for_a_minute_is_taken_over() {
+    async fn a_lock_file_left_by_a_dead_install_does_not_block() {
         let tts = archive("speak", &[("tts.json", b"{}")]);
         let (base, _s) = start(
             HashMap::from([("speak.tar.bz2".into(), tts.clone())]),
@@ -1124,31 +1074,63 @@ mod tests {
             files: vec![entry("speak", &base, "speak.tar.bz2", &tts, true)],
         };
         let dir = tempfile::tempdir().unwrap();
-        let lock = lock_of(dir.path());
-        // A fresh lock of someone else: refused.
-        std::fs::write(&lock, b"").unwrap();
-        let err = install(dir.path(), &manifest, nothing, CancellationToken::new())
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ModelError::Busy), "{err:?}");
-        assert!(lock.is_file(), "someone else's lock is left alone");
-        // 59 s old: still running.
-        let f = std::fs::File::options().write(true).open(&lock).unwrap();
-        f.set_modified(std::time::SystemTime::now() - Duration::from_secs(59))
-            .unwrap();
-        let err = install(dir.path(), &manifest, nothing, CancellationToken::new())
-            .await
-            .unwrap_err();
-        assert!(matches!(err, ModelError::Busy), "{err:?}");
-        // Over a minute without progress: stale, taken over.
-        f.set_modified(std::time::SystemTime::now() - Duration::from_secs(61))
-            .unwrap();
-        drop(f);
+        // The file of an install that died: there, but nobody holds it.
+        std::fs::write(lock_of(dir.path()), b"left over").unwrap();
         install(dir.path(), &manifest, nothing, CancellationToken::new())
             .await
             .unwrap();
         assert!(installed(dir.path(), &manifest));
-        assert!(!lock.exists());
+    }
+
+    /// Entered by the slow rename below; only the test that uses it reads it.
+    static PLACING: AtomicBool = AtomicBool::new(false);
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_dropped_install_keeps_the_lock_until_its_unpacking_ends() {
+        let tts = archive("speak", &[("tts.json", b"{}")]);
+        let (base, _s) = start(
+            HashMap::from([("speak.tar.bz2".into(), tts.clone())]),
+            Mode::Normal,
+        )
+        .await;
+        let manifest = Manifest {
+            files: vec![entry("speak", &base, "speak.tar.bz2", &tts, true)],
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let slow = Limits {
+            rename: |from, to| {
+                PLACING.store(true, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(800));
+                std::fs::rename(from, to)
+            },
+            rename_tries: 1,
+            ..Limits::default()
+        };
+        let (root, m) = (dir.path().to_path_buf(), manifest.clone());
+        let first = tokio::spawn(async move {
+            install_with(&root, &m, slow, nothing, CancellationToken::new()).await
+        });
+        while !PLACING.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        // The install is dropped while its blocking task is still putting files in place.
+        first.abort();
+        assert!(first.await.unwrap_err().is_cancelled());
+        let err = install(dir.path(), &manifest, nothing, CancellationToken::new())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ModelError::Busy), "{err:?}");
+        assert!(matches!(remove(dir.path()), Err(ModelError::Busy)));
+        // Once that task ends the folder is free again.
+        let until = Instant::now() + Duration::from_secs(5);
+        while !free(dir.path()) {
+            assert!(Instant::now() < until, "the lock was never let go");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        install(dir.path(), &manifest, nothing, CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(installed(dir.path(), &manifest));
     }
 
     #[tokio::test]
@@ -1169,7 +1151,7 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ModelError::Cancelled));
-        assert!(!lock_of(dir.path()).exists());
+        assert!(free(dir.path()));
 
         let mut bad = manifest.files[0].clone();
         bad.sha256 = sha_hex(b"something else");
@@ -1178,24 +1160,47 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ModelError::WrongHash { .. }), "{err:?}");
-        assert!(!lock_of(dir.path()).exists());
-        // The lock holds nothing private: no path, no address.
-        let seen = Mutex::new(String::new());
-        install(
-            dir.path(),
-            &manifest,
-            |_| {
-                let mut s = seen.lock().unwrap();
-                if s.is_empty() {
-                    *s = std::fs::read_to_string(lock_of(dir.path())).unwrap() + "|";
-                }
-            },
-            CancellationToken::new(),
+        assert!(free(dir.path()));
+        install(dir.path(), &manifest, nothing, CancellationToken::new())
+            .await
+            .unwrap();
+        // The lock file holds nothing at all.
+        assert_eq!(std::fs::metadata(lock_of(dir.path())).unwrap().len(), 0);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remove_waits_for_no_install_and_takes_the_lock_file_too() {
+        let vad = b"v".to_vec();
+        let (base, _s) = start(
+            HashMap::from([("silero_vad.onnx".into(), vad.clone())]),
+            Mode::Normal,
         )
-        .await
-        .unwrap();
-        let held = seen.into_inner().unwrap();
-        assert!(!held.contains("http") && !held.contains(&*dir.path().to_string_lossy()));
+        .await;
+        let manifest = Manifest {
+            files: vec![entry("vad", &base, "silero_vad.onnx", &vad, false)],
+        };
+        let outer = tempfile::tempdir().unwrap();
+        let root = outer.path().join("models");
+        install(&root, &manifest, nothing, CancellationToken::new())
+            .await
+            .unwrap();
+        // An install holds the folder: nothing is removed.
+        let held = InstallLock::take(&root).unwrap();
+        let err = remove(&root).unwrap_err();
+        assert!(matches!(err, ModelError::Busy), "{err:?}");
+        assert_eq!(err.to_string(), "a download is already running");
+        assert!(installed(&root, &manifest));
+        drop(held);
+        // Free: everything goes, the lock file and the folder with it.
+        remove(&root).unwrap();
+        assert!(
+            !root.exists(),
+            "{:?}",
+            std::fs::read_dir(&root).map(|d| d.count())
+        );
+        // A folder that is not there is already removed.
+        remove(&root).unwrap();
+        assert!(!root.exists());
     }
 
     #[tokio::test]
