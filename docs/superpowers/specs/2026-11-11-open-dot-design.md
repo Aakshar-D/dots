@@ -60,7 +60,7 @@ Anti-goals (these would make it a failure even if it works):
 
 ### 3.1 First time
 
-Settings gains a **Voice** tab. Turning on "Open Dot" explains in two lines what will be downloaded (about 140 MB, once, kept on this computer) and shows progress. When it finishes, the mark in the rail comes alive and a short spoken hello plays in the chosen voice. If the microphone is blocked by the system, the tab says so and how to allow it.
+Settings gains a **Voice** tab. Turning on "Open Dot" explains in two lines what will be downloaded (about 260 MB, once, kept on this computer) and shows progress. When it finishes, the mark in the rail comes alive and a short spoken hello plays in the chosen voice. If the microphone is blocked by the system, the tab says so and how to allow it.
 
 ### 3.2 Starting it
 
