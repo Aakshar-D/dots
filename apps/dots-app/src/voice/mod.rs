@@ -37,6 +37,18 @@ impl VoiceHandle {
             .ok_or_else(|| CmdError::internal("Dots did not start; see the startup error"))
     }
 
+    /// Applies saved settings to voice, in the background, when the service is there; without
+    /// it (the runtime did not start) there is nothing to apply. Whether it applied.
+    pub fn apply_saved(&self, settings: &dots_core::settings::Settings) -> bool {
+        match &self.0 {
+            Some(service) => {
+                service.apply_in_background(settings);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Shuts the session down, when there is one (exit, tray quit, restart).
     pub fn shutdown(&self) {
         if let Some(service) = &self.0 {
@@ -117,4 +129,17 @@ fn spawn_forwarder(app: AppHandle, mut rx: UnboundedReceiver<VoiceEvent>) {
             let _ = app.emit(VOICE_EVENT, &ev);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_save_without_the_voice_service_goes_on() {
+        let none = VoiceHandle(None);
+        assert!(none.get().is_err());
+        assert!(!none.apply_saved(&dots_core::settings::Settings::default()));
+        none.shutdown();
+    }
 }

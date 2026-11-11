@@ -181,6 +181,10 @@ struct Live {
 struct Download {
     cancel: CancellationToken,
     done: watch::Receiver<Option<Result<(), CmdError>>>,
+    /// The person asked for it (`enable`): its failure turns voice off. A resume (at start or
+    /// on `open`) that fails leaves voice on, says why, and is tried again on the next `open`
+    /// or `enable`.
+    asked: bool,
 }
 
 struct Inner {
@@ -427,12 +431,14 @@ impl Service {
         let done = {
             let mut s = self.lock();
             s.settings = settings;
-            if s.download.is_some() {
+            if let Some(d) = s.download.as_mut() {
+                // A resume under way is now one the person asked for.
+                d.asked = true;
                 drop(s);
                 self.changed();
                 return Ok(self.status_now());
             }
-            (!s.installed).then(|| self.start_download(&mut s))
+            (!s.installed).then(|| self.start_download(&mut s, true))
         };
         self.changed();
         match done {
@@ -451,13 +457,19 @@ impl Service {
         Ok(self.status_now())
     }
 
-    /// Starts the download; on success the session is built and greets once.
-    fn start_download(&self, s: &mut Inner) -> watch::Receiver<Option<Result<(), CmdError>>> {
+    /// Starts the download (`asked`: by the person, through `enable`); on success the session
+    /// is built and greets once.
+    fn start_download(
+        &self,
+        s: &mut Inner,
+        asked: bool,
+    ) -> watch::Receiver<Option<Result<(), CmdError>>> {
         let cancel = CancellationToken::new();
         let (tx, rx) = watch::channel(None);
         s.download = Some(Download {
             cancel: cancel.clone(),
             done: rx.clone(),
+            asked,
         });
         s.trouble = None;
         let (me, root, manifest, ui) = (
@@ -491,22 +503,34 @@ impl Service {
         rx
     }
 
-    /// A failed or cancelled download turns voice off (a cut one resumes when turned on
-    /// again); a finished one builds the session, which greets. While Dots quits nothing is
-    /// saved or told: the part stays, and the next start resumes it.
+    /// A cancelled download, or a failed one the person asked for, turns voice off (a cut one
+    /// resumes when turned on again); a resume that failed (no network yet at login) leaves
+    /// voice on and says why, and the next `open` or `enable` tries again. A finished one
+    /// builds the session, which greets. While Dots quits nothing is saved or told: the part
+    /// stays, and the next start resumes it.
     async fn download_ended(&self, result: &Result<(), CmdError>) {
-        {
+        let asked = {
             let mut s = self.lock();
             if s.shutting_down {
                 s.download = None;
                 return;
             }
-        }
+            s.download.as_ref().is_some_and(|d| d.asked)
+        };
         self.refresh_installed();
         match result {
             Ok(()) => {
                 self.lock().download = None;
                 self.settle(true).await;
+            }
+            Err(e) if !asked && e.kind != crate::error::CmdErrorKind::Cancelled => {
+                let mut s = self.lock();
+                s.download = None;
+                s.trouble = Some(if e.message == download::RESUMES {
+                    download::RESUMES_LATER.to_string()
+                } else {
+                    e.message.clone()
+                });
             }
             Err(e) => {
                 let mut settings = self.host.settings().await;
@@ -852,6 +876,10 @@ impl Service {
     pub fn open(&self) {
         let (enabled, busy, installed) = {
             let s = self.lock();
+            // Dots is quitting: nothing starts now, no download either.
+            if s.shutting_down {
+                return;
+            }
             if let Some(live) = &s.live {
                 let bridge = live.bridge.clone();
                 drop(s);
@@ -877,7 +905,7 @@ impl Service {
             self.trouble(GETTING_READY);
             let mut s = self.lock();
             if s.download.is_none() {
-                self.start_download(&mut s);
+                self.start_download(&mut s, false);
             }
             drop(s);
             self.changed();
@@ -1071,18 +1099,10 @@ impl Service {
             if s.settings.voice_enabled && !s.installed && s.download.is_none() && !s.shutting_down
             {
                 tracing::info!("voice: resuming the speech files' download");
-                self.start_download(&mut s);
+                self.start_download(&mut s, false);
             }
         }
         self.changed();
-    }
-
-    /// What a settings save stores: everything sent, except `voice_enabled`, which only the
-    /// Voice switch (`enable`) changes. A draft kept while voice was being turned on (or off)
-    /// cannot undo it.
-    pub async fn settings_to_save(&self, mut sent: Settings) -> Settings {
-        sent.voice_enabled = self.host.settings().await.voice_enabled;
-        sent
     }
 
     /// The hotkey could not be registered (or now could): shown in the status.

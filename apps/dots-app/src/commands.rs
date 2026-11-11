@@ -210,12 +210,10 @@ pub async fn update_settings(
     settings: Settings,
 ) -> Res<SettingsSaved> {
     let rt = state.rt()?;
-    let voice = voice.get()?;
-    // Only the Voice switch (`voice_enable`) turns voice on or off: a save keeps what is
-    // stored, so a draft cannot undo a turn-on still downloading.
-    let settings = voice.settings_to_save(settings).await;
     // Pointing Dots at another program needs the user's own yes, in a dialog the webview
-    // cannot answer.
+    // cannot answer. Only the Voice switch (`voice_enable`) turns voice on or off: the save
+    // keeps the stored `voice_enabled`, read as it stores, so a draft (or a dialog left open)
+    // cannot undo a turn-on still downloading or a failed download's turn-off.
     let saved = confirm::save_settings_confirmed(&rt, settings, |title, message| {
         confirm::ask(&app, title, message)
     })
@@ -232,7 +230,8 @@ pub async fn update_settings(
     phone.get()?.apply(&saved.settings).await;
     // So does voice: a new voice or hotkey at once; a new device rebuilds the session in the
     // background (its outcome comes as `Status` events), so the save does not wait for it.
-    voice.apply_in_background(&saved.settings);
+    // A missing voice service never holds the save back.
+    voice.apply_saved(&saved.settings);
     Ok(saved)
 }
 

@@ -16,6 +16,9 @@ pub const PROGRESS_EVERY: Duration = Duration::from_millis(100);
 pub const CANCELLED: &str = "The download was cancelled.";
 pub const RESUMES: &str =
     "The download stopped. It picks up where it left off when you turn Open Dot on again.";
+/// A resume the person did not ask for (at start) stopped: voice stays on.
+pub const RESUMES_LATER: &str =
+    "The download stopped. It picks up where it left off the next time you open Open Dot.";
 pub const DAMAGED: &str = "The download was damaged. Try again.";
 pub const NO_ROOM: &str = "There is not enough room, or the folder cannot be written.";
 pub const BUSY: &str = "The speech files are busy. Try again in a moment.";

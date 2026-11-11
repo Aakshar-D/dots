@@ -26,6 +26,8 @@ enum Mode {
     Gated,
     /// Sends half the body, then nothing, never ending.
     Hold,
+    /// Answers 503: no network yet.
+    Fail,
 }
 
 struct Server {
@@ -56,6 +58,12 @@ async fn serve(
     s.ranges.lock().unwrap().push(range.clone());
     if s.mode() == Mode::Gated {
         s.gate.notified().await;
+    }
+    if s.mode() == Mode::Fail {
+        return Response::builder()
+            .status(StatusCode::SERVICE_UNAVAILABLE)
+            .body(Body::empty())
+            .unwrap();
     }
     let start = range
         .as_deref()
@@ -1173,41 +1181,6 @@ async fn remove_during_a_download_cancels_it_and_deletes() {
 // ---- small corrections ----------------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn saving_settings_never_changes_voice_enabled() {
-    // Off: a draft that says on does not turn it on.
-    let r = rig(Mode::Hold).await;
-    let draft = r.svc.settings_to_save(on()).await;
-    assert!(!draft.voice_enabled);
-    save(&r, draft).await;
-    assert!(!r.svc.status().await.enabled);
-    assert_eq!(r.server.requests.load(Ordering::SeqCst), 0);
-    // Turning on (still downloading): a stale draft that says off neither turns it off nor
-    // stops the download.
-    let enabling = {
-        let svc = r.svc.clone();
-        tokio::spawn(async move { svc.enable(true).await })
-    };
-    let part = r.part();
-    until("half the file", || {
-        std::fs::metadata(&part).is_ok_and(|m| m.len() >= 25_000)
-    })
-    .await;
-    let stale = Settings {
-        voice_id: 4,
-        ..Settings::default()
-    };
-    let draft = r.svc.settings_to_save(stale).await;
-    assert!(draft.voice_enabled && draft.voice_id == 4);
-    save(&r, draft).await;
-    let status = r.svc.status().await;
-    assert!(status.enabled && status.downloading, "{status:?}");
-    assert!(r.stored().voice_enabled);
-    assert!(!enabling.is_finished());
-    r.svc.download_cancel();
-    let _ = enabling.await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn the_view_is_kept_while_off_and_used_once_on() {
     let r = rig(Mode::Normal).await;
     let view = View {
@@ -1276,4 +1249,84 @@ async fn a_microphone_failure_stays_in_the_status_until_it_listens() {
     });
     tokio::time::sleep(Duration::from_millis(50)).await;
     assert_eq!(r.svc.status().await.trouble, None);
+}
+
+// ---- the last review ------------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn open_while_quitting_starts_nothing() {
+    let mut r = rig(Mode::Normal).await;
+    // On, files missing: an open would resume the download.
+    *r.host.settings.lock().unwrap() = on();
+    r.svc.apply(&on()).await;
+    let svc = r.svc.clone();
+    tokio::task::spawn_blocking(move || svc.shutdown())
+        .await
+        .unwrap();
+    r.ui();
+    r.svc.open();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(r.server.requests.load(Ordering::SeqCst), 0, "no download");
+    assert!(!r.svc.status().await.downloading);
+    assert!(r.ui().is_empty(), "nothing is told while quitting");
+    assert_eq!(r.factory.builds(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_at_start_that_fails_leaves_voice_on_and_open_tries_again() {
+    let mut r = rig(Mode::Fail).await;
+    std::fs::create_dir_all(&r.root).unwrap();
+    std::fs::write(r.part(), &r.server.data[..25_000]).unwrap();
+    *r.host.settings.lock().unwrap() = on();
+    r.svc.start(&on()).await;
+    let svc = r.svc.clone();
+    until("failed", || {
+        let s = svc.status_now();
+        !s.downloading && s.trouble.is_some()
+    })
+    .await;
+    let status = r.svc.status().await;
+    assert!(status.enabled && !status.ready, "{status:?}");
+    assert_eq!(status.trouble.as_deref(), Some(download::RESUMES_LATER));
+    assert!(r.stored().voice_enabled, "still stored on");
+    // The network is back: the next open resumes it.
+    *r.server.mode.lock().unwrap() = Mode::Normal;
+    r.ui();
+    r.svc.open();
+    assert!(r.ui().contains(&VoiceEvent::Trouble {
+        message: GETTING_READY.into()
+    }));
+    until("ready", || svc.status_now().ready).await;
+    assert_eq!(
+        r.server.ranges.lock().unwrap().last().cloned().flatten(),
+        Some("bytes=25000-".to_string())
+    );
+    assert_eq!(r.svc.status().await.trouble, None);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_download_the_person_asked_for_stores_voice_off() {
+    let r = rig(Mode::Fail).await;
+    let err = r.svc.enable(true).await.unwrap_err();
+    assert_eq!(err.message, download::RESUMES);
+    let status = r.svc.status().await;
+    assert!(!status.enabled && !status.downloading, "{status:?}");
+    assert_eq!(status.trouble.as_deref(), Some(download::RESUMES));
+    assert!(!r.stored().voice_enabled, "stored off");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_resume_cancelled_by_the_person_stores_voice_off() {
+    let r = rig(Mode::Hold).await;
+    std::fs::create_dir_all(&r.root).unwrap();
+    *r.host.settings.lock().unwrap() = on();
+    r.svc.start(&on()).await;
+    let svc = r.svc.clone();
+    until("downloading", || svc.status_now().downloading).await;
+    r.svc.download_cancel();
+    until("ended", || !svc.status_now().downloading).await;
+    let status = r.svc.status().await;
+    assert!(!status.enabled, "{status:?}");
+    assert_eq!(status.trouble, None);
+    assert!(!r.stored().voice_enabled, "stored off");
 }

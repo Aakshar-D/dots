@@ -802,11 +802,28 @@ impl Runtime {
     /// and `mark_claude_tested` change them, so a settings form holding an old copy cannot undo
     /// a pause or a "mark as tested".
     pub async fn update_settings(&self, next: Settings) -> Result<SettingsSaved> {
+        self.save_settings(next, false).await
+    }
+
+    /// `update_settings` for the settings form: the stored `voice_enabled` is kept too, read
+    /// under the same lock that stores the rest, so only the Voice switch turns voice on or
+    /// off and a turn-on (or a failed download turning it off) during a slow save is not
+    /// undone by the form's older copy.
+    pub async fn update_settings_keeping_voice(&self, next: Settings) -> Result<SettingsSaved> {
+        self.save_settings(next, true).await
+    }
+
+    async fn save_settings(&self, next: Settings, keep_voice: bool) -> Result<SettingsSaved> {
         let settings = self
             .change_settings(|s| {
                 *s = Settings {
                     schedules_paused: s.schedules_paused,
                     tested_claude_version: std::mem::take(&mut s.tested_claude_version),
+                    voice_enabled: if keep_voice {
+                        s.voice_enabled
+                    } else {
+                        next.voice_enabled
+                    },
                     ..next
                 };
             })
