@@ -10,7 +10,6 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt;
 use tokio_util::sync::CancellationToken;
 
 const BASE: &str = "https://github.com/k2-fsa/sherpa-onnx/releases/download/";
@@ -122,7 +121,7 @@ pub enum ModelError {
     /// Nothing arrived for a while; what came so far is kept and the next try resumes.
     #[error("the download stalled; try again")]
     Stalled,
-    /// Another install into the same folder is running (its lock file is fresh).
+    /// Another install (or a removal) holds the folder's lock.
     #[error("a download is already running")]
     Busy,
 }
@@ -270,21 +269,134 @@ struct InstallLock {
     _file: std::fs::File,
 }
 
+/// How often a lock taken on a lock file that was removed meanwhile is taken again.
+const LOCK_TRIES: u32 = 5;
+
 impl InstallLock {
     /// Taken before anything is written to the folder.
     fn take(root: &Path) -> Result<Self, ModelError> {
-        let file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(root.join(LOCK_FILE))
-            .map_err(disk)?;
-        match file.try_lock() {
-            Ok(()) => Ok(Self { _file: file }),
-            Err(std::fs::TryLockError::WouldBlock) => Err(ModelError::Busy),
-            Err(std::fs::TryLockError::Error(e)) => Err(disk(e)),
+        for _ in 0..LOCK_TRIES {
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(root.join(LOCK_FILE))
+                .map_err(disk)?;
+            if let Some(lock) = Self::hold(file, root)? {
+                return Ok(lock);
+            }
         }
+        // The lock file keeps being removed under us: someone else is at work here.
+        Err(ModelError::Busy)
+    }
+
+    /// Locks `file`, opened as the folder's lock file. `None` when the path no longer names
+    /// that file (a removal deleted it between the open and the lock): a lock on it would
+    /// keep nobody out, as the next install creates and locks a new file.
+    fn hold(file: std::fs::File, root: &Path) -> Result<Option<Self>, ModelError> {
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Err(ModelError::Busy),
+            Err(std::fs::TryLockError::Error(e)) => return Err(disk(e)),
+        }
+        if !names(&root.join(LOCK_FILE), &file) {
+            return Ok(None);
+        }
+        Ok(Some(Self { _file: file }))
+    }
+}
+
+/// Whether `path` names the file `file` has open.
+fn names(path: &Path, file: &std::fs::File) -> bool {
+    let Ok(other) = std::fs::File::open(path) else {
+        return false;
+    };
+    match (file_id(file), file_id(&other)) {
+        (Some(a), Some(b)) => a == b,
+        _ => false,
+    }
+}
+
+#[cfg(unix)]
+fn file_id(file: &std::fs::File) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    let m = file.metadata().ok()?;
+    Some((m.dev(), m.ino()))
+}
+
+#[cfg(windows)]
+fn file_id(file: &std::fs::File) -> Option<(u64, u64)> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    };
+    // SAFETY: the handle is open for the life of `file`; `info` is plain data written by
+    // the call.
+    let mut info: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) };
+    if ok == 0 {
+        return None;
+    }
+    let index = (u64::from(info.nFileIndexHigh) << 32) | u64::from(info.nFileIndexLow);
+    Some((u64::from(info.dwVolumeSerialNumber), index))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn file_id(_: &std::fs::File) -> Option<(u64, u64)> {
+    Some((0, 0))
+}
+
+/// Writes a download's `.part` on blocking threads that hold the install's lock: a write
+/// still under way when the install is dropped keeps the folder locked until it has landed.
+struct PartWriter {
+    file: Option<std::fs::File>,
+    lock: std::sync::Arc<InstallLock>,
+}
+
+impl PartWriter {
+    async fn open(
+        part: &Path,
+        append: bool,
+        lock: &std::sync::Arc<InstallLock>,
+    ) -> Result<Self, ModelError> {
+        let (part, held) = (part.to_path_buf(), lock.clone());
+        let file = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            let mut open = std::fs::OpenOptions::new();
+            open.create(true).write(true);
+            if append {
+                open.append(true);
+            } else {
+                open.truncate(true);
+            }
+            open.open(part)
+        })
+        .await
+        .map_err(disk)?
+        .map_err(disk)?;
+        Ok(Self {
+            file: Some(file),
+            lock: lock.clone(),
+        })
+    }
+
+    async fn write<B: AsRef<[u8]> + Send + 'static>(&mut self, chunk: B) -> Result<(), ModelError> {
+        use std::io::Write;
+        let mut file = self
+            .file
+            .take()
+            .ok_or_else(|| ModelError::Disk("an earlier write failed".into()))?;
+        let held = self.lock.clone();
+        let (file, wrote) = tokio::task::spawn_blocking(move || {
+            let _held = held;
+            let wrote = file.write_all(chunk.as_ref());
+            (file, wrote)
+        })
+        .await
+        .map_err(disk)?;
+        self.file = Some(file);
+        wrote.map_err(disk)
     }
 }
 
@@ -348,7 +460,7 @@ async fn install_one(
         name: &file.name,
         on_progress,
     };
-    download(client, file, &part, &report, limits.stall, cancel).await?;
+    download(client, file, &part, &report, limits.stall, cancel, lock).await?;
     check(cancel)?;
 
     if !hash_file(&part, cancel, lock)
@@ -428,6 +540,7 @@ async fn download<F: Fn(Progress)>(
     report: &Report<'_, F>,
     stall: Duration,
     cancel: &CancellationToken,
+    lock: &std::sync::Arc<InstallLock>,
 ) -> Result<(), ModelError> {
     let mut have = tokio::fs::metadata(part)
         .await
@@ -451,14 +564,12 @@ async fn download<F: Fn(Progress)>(
         }
         _ = cancel.cancelled() => return Err(ModelError::Cancelled),
     };
-    let mut open = tokio::fs::OpenOptions::new();
-    open.create(true).write(true);
-    match response.status().as_u16() {
-        206 => open.append(true),
+    let append = match response.status().as_u16() {
+        206 => true,
         // The server sent the whole body, so the file starts over.
         200 => {
             have = 0;
-            open.truncate(true)
+            false
         }
         416 => {
             forget(part).await;
@@ -468,7 +579,7 @@ async fn download<F: Fn(Progress)>(
         }
         status => return Err(ModelError::Network(format!("the server answered {status}"))),
     };
-    let mut out = open.open(part).await.map_err(disk)?;
+    let mut out = PartWriter::open(part, append, lock).await?;
 
     let body = Body {
         have,
@@ -476,7 +587,6 @@ async fn download<F: Fn(Progress)>(
         stall,
     };
     let result = pump(response, &mut out, body, report, cancel).await;
-    let flushed = out.flush().await;
     drop(out);
     match result {
         Err(Overrun) => {
@@ -485,10 +595,7 @@ async fn download<F: Fn(Progress)>(
                 "the server sent more than expected".into(),
             ))
         }
-        Ok(r) => {
-            r?;
-            flushed.map_err(disk)
-        }
+        Ok(r) => r,
     }
 }
 
@@ -504,7 +611,7 @@ struct Body {
 
 async fn pump<F: Fn(Progress)>(
     response: reqwest::Response,
-    out: &mut tokio::fs::File,
+    out: &mut PartWriter,
     body: Body,
     report: &Report<'_, F>,
     cancel: &CancellationToken,
@@ -533,8 +640,8 @@ async fn pump<F: Fn(Progress)>(
         if have > expected {
             return Err(Overrun);
         }
-        if let Err(e) = out.write_all(&chunk).await {
-            return Ok(Err(disk(e)));
+        if let Err(e) = out.write(chunk).await {
+            return Ok(Err(e));
         }
         if last_report.is_none_or(|t| t.elapsed() >= PROGRESS_EVERY) {
             last_report = Some(Instant::now());
@@ -1060,6 +1167,30 @@ mod tests {
     /// Nothing holds the folder's lock: it can be taken (and is let go again at once).
     fn free(root: &Path) -> bool {
         InstallLock::take(root).is_ok()
+    }
+
+    #[test]
+    fn a_lock_on_a_removed_lock_file_keeps_nobody_out_and_is_not_held() {
+        let outer = tempfile::tempdir().unwrap();
+        let root = outer.path().join("models");
+        std::fs::create_dir_all(&root).unwrap();
+        // An install opened the lock file, then a removal deleted it before the install
+        // locked it.
+        let opened = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(lock_of(&root))
+            .unwrap();
+        remove(&root).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        let second = InstallLock::take(&root).unwrap();
+        // The first install's lock would name a file nobody sees: refused, so it retries.
+        assert!(matches!(InstallLock::hold(opened, &root), Ok(None)));
+        assert!(matches!(InstallLock::take(&root), Err(ModelError::Busy)));
+        drop(second);
+        assert!(free(&root));
     }
 
     #[tokio::test]

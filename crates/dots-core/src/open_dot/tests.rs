@@ -1907,10 +1907,12 @@ fn time_passes(t: &T, ago: Duration) {
 
 #[tokio::test]
 async fn a_step_never_outlives_three_waits() {
-    let t = T::start().await;
+    let mut t = T::start().await;
+    // short, so moving a time this far back needs no long uptime
+    t.mind.pending_limit = Duration::from_secs(5);
     let approval = asking_to_approve(&t).await;
-    let wait = PENDING_LIMIT - Duration::from_secs(1);
-    // the worst case: say that again at 59 s and 118 s, an unclear yes at 177 s
+    let wait = t.mind.pending_limit - Duration::from_secs(1);
+    // the worst case: say that again at 4 s and 8 s, an unclear yes at 12 s (5 s waits)
     for words in ["say that again", "say that again"] {
         time_passes(&t, wait);
         assert!(asks(&t.hear(words).await).is_some(), "{words}");
@@ -1921,10 +1923,10 @@ async fn a_step_never_outlives_three_waits() {
         said(&t.hear("okay").await),
         "I need a clear yes for that. Say yes, or no."
     );
-    assert!(t.mind.pending(), "177 s: still asking");
+    assert!(t.mind.pending(), "12 s: still asking");
     // three waits after it was first asked, it is gone, renewed or not
     time_passes(&t, Duration::from_secs(3) + Duration::from_millis(10));
-    assert!(!t.mind.pending(), "180 s: gone");
+    assert!(!t.mind.pending(), "15 s: gone");
     let got = t.hear("yes").await;
     assert_eq!(got.first(), Some(&MindEvent::Cleared), "{got:?}");
     assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
