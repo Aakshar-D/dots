@@ -1,11 +1,13 @@
 //! Runs the real engines against the real models. Ignored by default: set
 //! `DOTS_VOICE_MODELS` to a models folder in the manifest layout and run with `--ignored`.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use dots_voice::{
-    resample, Clip, ModelPaths, Recognizer, SherpaDetector, SherpaRecognizer, SherpaSpeaker,
-    SherpaWake, Speaker, SpeechDetector, WakeSpotter, WakeWord, EAR_RATE, FRAME,
+    resample, Clip, EarEvent, EarSettings, Ears, ModelPaths, Recognizer, SherpaDetector,
+    SherpaRecognizer, SherpaSpeaker, SherpaWake, Speaker, SpeechDetector, WakeSpotter, WakeWord,
+    EAR_RATE, FRAME,
 };
 
 fn paths() -> ModelPaths {
@@ -149,6 +151,91 @@ fn wake_hit_rates_over_all_voices() {
             assert_eq!(hits, usize::from(speaker.voices()), "a near miss woke it");
         }
     }
+}
+
+/// The longest unbroken run of speech frames the real detector finds in `samples`.
+fn longest_speech_run(detector: &mut SherpaDetector, samples: &[f32]) -> usize {
+    detector.reset();
+    let (mut run, mut longest) = (0, 0);
+    for frame in samples.chunks_exact(FRAME) {
+        if detector.is_speech(frame) {
+            run += 1;
+            longest = longest.max(run);
+        } else {
+            run = 0;
+        }
+    }
+    longest
+}
+
+/// One-word answers, as given after a question, go through the real detector and the
+/// real recogniser with the short-answer settings and come out as a `Final`, in every voice.
+/// Prints the longest speech run of each, in frames of 32 ms, which is what
+/// `min_speech_ms` is judged against.
+///
+/// The speaker's output varies from call to call. About one clip in 200 has no speech the
+/// detector can find at all (a run of 0); no `min_speech_ms` helps that, so such a clip is
+/// made again (and counted) rather than failing the test.
+#[test]
+#[ignore]
+fn one_word_answers_are_heard_with_the_short_answer_settings() {
+    let paths = paths();
+    let speaker = SherpaSpeaker::load(&paths, 2).unwrap();
+    let recognizer: Arc<dyn Recognizer> = Arc::new(SherpaRecognizer::load(&paths).unwrap());
+    let mut short = Ears::new(
+        Box::new(SherpaDetector::load(&paths).unwrap()),
+        recognizer,
+        EarSettings::short_answer(),
+    );
+    let mut probe = SherpaDetector::load(&paths).unwrap();
+    let lead = vec![0.0f32; EAR_RATE as usize * 3 / 10];
+    let tail = vec![0.0f32; EAR_RATE as usize];
+    let (mut wrong, mut unseen, mut shortest) = (Vec::new(), 0, usize::MAX);
+    for voice in 0..speaker.voices() {
+        for word in ["Yes.", "No.", "Stop."] {
+            let (all, run) = (0..3)
+                .map(|_| {
+                    let speech = ears(&speaker.speak(word, voice, 1.0).unwrap());
+                    let all: Vec<f32> = lead.iter().chain(&speech).chain(&tail).copied().collect();
+                    let run = longest_speech_run(&mut probe, &all);
+                    (all, run)
+                })
+                .inspect(|(_, run)| unseen += usize::from(*run == 0))
+                .find(|(_, run)| *run > 0)
+                .expect("the detector found speech in one of three tries");
+            shortest = shortest.min(run);
+            short.reset();
+            let (mut finals, mut dropped) = (Vec::new(), 0);
+            for frame in all.chunks_exact(FRAME) {
+                for event in short.push(frame) {
+                    match event {
+                        EarEvent::Final(text) => finals.push(text),
+                        EarEvent::Dropped => dropped += 1,
+                        EarEvent::Started | EarEvent::Partial(_) => {}
+                    }
+                }
+            }
+            println!(
+                "voice {voice} {word:?}: longest run {run} frames ({} ms), finals {finals:?}",
+                run * 32
+            );
+            let want = word.trim_end_matches('.').to_lowercase();
+            if !finals.iter().any(|f| f.to_lowercase().contains(&want)) {
+                wrong.push(format!(
+                    "voice {voice}: {word:?} gave {finals:?} ({dropped} dropped, run {run})"
+                ));
+            }
+        }
+    }
+    println!("shortest run {shortest} frames; clips with no speech found, made again: {unseen}");
+    assert!(
+        wrong.is_empty(),
+        "{}",
+        wrong.join(
+            "
+"
+        )
+    );
 }
 
 #[test]

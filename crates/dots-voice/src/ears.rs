@@ -44,10 +44,14 @@ impl Default for EarSettings {
 }
 
 impl EarSettings {
-    /// For one-word answers such as yes or no: the sentence ends sooner.
+    /// For one-word answers such as yes or no: the sentence ends sooner, and a shorter run
+    /// of speech counts. Synthetic "Yes.", "No." and "Stop." in all ten voices ran 6 frames
+    /// (192 ms) at the shortest through the real detector, so 160 ms (5 frames) leaves one
+    /// frame to spare and still drops a click of up to 128 ms.
     pub fn short_answer() -> Self {
         Self {
             end_quiet_ms: 450,
+            min_speech_ms: 160,
             ..Self::default()
         }
     }
@@ -365,6 +369,26 @@ mod tests {
         events.extend(feed(&mut r.ears, false, 30, 1.0));
         assert_eq!(events.first(), Some(&EarEvent::Started));
         assert_eq!(events.last(), Some(&EarEvent::Final("42 frames".into())));
+    }
+
+    #[test]
+    fn after_a_question_a_curt_word_is_heard_and_a_click_is_not() {
+        // Measured with the real detector: one-word answers ran 6 frames (192 ms) at the
+        // shortest. A 60 ms click covers 2 frames.
+        let short = EarSettings::short_answer();
+        let mut r = rig(Mode::Count, short);
+        let mut events = feed(&mut r.ears, false, 20, 1.0);
+        events.extend(feed(&mut r.ears, true, 5, 1.0));
+        events.extend(feed(&mut r.ears, false, 20, 1.0));
+        assert_eq!(finals(&events).len(), 1, "{events:?}");
+
+        let mut r = rig(Mode::Count, short);
+        let click = (60 * EAR_RATE / 1000).div_ceil(FRAME as u32) as usize;
+        let mut events = feed(&mut r.ears, false, 20, 1.0);
+        events.extend(feed(&mut r.ears, true, click, 1.0));
+        events.extend(feed(&mut r.ears, false, 20, 1.0));
+        assert_eq!(events, vec![EarEvent::Started, EarEvent::Dropped]);
+        assert!(r.recognizer.clips.lock().unwrap().is_empty());
     }
 
     #[test]
