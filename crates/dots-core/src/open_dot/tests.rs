@@ -572,6 +572,147 @@ async fn lapse_drops_the_confirmation() {
 }
 
 #[tokio::test]
+async fn lapse_during_a_turn_leaves_nothing_pending() {
+    let t = T::start().await;
+    let dot = t.dot("Research").await;
+    let approval = t.approval(&dot, "ls -la").await;
+    // the reply lands after the stage closed
+    t.fake.push(late(approve_a1(), Duration::from_millis(300)));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let view = home();
+    let heard = t.mind.hear(&t.rt, "approve the research one", &view, &tx);
+    let closed = async {
+        while t.fake.calls() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        let (gone, _) = mpsc::unbounded_channel();
+        t.mind.lapse(&gone);
+    };
+    let _ = tokio::join!(heard, closed);
+    let got = drain(&mut rx);
+    assert!(asks(&got).is_none(), "{got:?}");
+    assert!(!t.mind.pending());
+    let got = t.hear("yes").await;
+    assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_stale_confirmation_is_not_passed() {
+    let mut t = T::start().await;
+    t.mind.pending_limit = Duration::from_millis(50);
+    let approval = asking_to_approve(&t).await;
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let got = t.hear("yes").await;
+    assert_eq!(got.first(), Some(&MindEvent::Cleared));
+    assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    assert!(!t.mind.pending());
+    // a click on a stale one does nothing either
+    t.fake.push(approve_a1());
+    t.hear("approve the research one").await;
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    t.pick(0).await;
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_cancelled_turn_sends_nothing() {
+    let t = T::start().await;
+    let dot = t.dot("Research").await;
+    // the model's answer lands after the person said "cancel"
+    t.fake.push(late(
+        says("Sending.\nDO {\"act\":\"send\",\"d\":\"d1\",\"text\":\"deploy\"}"),
+        Duration::from_millis(300),
+    ));
+    let (tx1, mut rx1) = mpsc::unbounded_channel();
+    let (tx2, mut rx2) = mpsc::unbounded_channel();
+    let view = home();
+    let first = t.mind.hear(&t.rt, "tell research to deploy", &view, &tx1);
+    let second = async {
+        while t.fake.calls() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        t.mind.hear(&t.rt, "cancel", &view, &tx2).await
+    };
+    let _ = tokio::join!(first, second);
+    assert_eq!(t.runs(&dot).await, 0);
+    assert_eq!(said(&drain(&mut rx1)), "");
+    assert_eq!(said(&drain(&mut rx2)), "Okay.");
+    // cancel() alone, with the answer in, sends nothing either
+    t.fake.push(late(
+        says("DO {\"act\":\"send\",\"d\":\"d1\",\"text\":\"deploy\"}"),
+        Duration::from_millis(300),
+    ));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let heard = t.mind.hear(&t.rt, "tell research to deploy", &view, &tx);
+    let calls = t.fake.calls();
+    let stop = async {
+        while t.fake.calls() == calls {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        t.mind.cancel();
+    };
+    let _ = tokio::join!(heard, stop);
+    assert_eq!(t.runs(&dot).await, 0);
+    let got = drain(&mut rx);
+    assert_eq!(said(&got), "");
+    assert_eq!(ended(&got), Some(Then::Rest));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn double_yes_reports_the_deed_once() {
+    for twice in ["click", "say"] {
+        let t = T::start().await;
+        let approval = asking_to_approve(&t).await;
+        let (tx1, mut rx1) = mpsc::unbounded_channel();
+        let (tx2, mut rx2) = mpsc::unbounded_channel();
+        let view = home();
+        if twice == "click" {
+            let _ = tokio::join!(
+                t.mind.pick(&t.rt, 0, &view, &tx1),
+                t.mind.pick(&t.rt, 0, &view, &tx2)
+            );
+        } else {
+            let _ = tokio::join!(
+                t.mind.hear(&t.rt, "yes", &view, &tx1),
+                t.mind.hear(&t.rt, "yes", &view, &tx2)
+            );
+        }
+        let one = drain(&mut rx1);
+        let two = drain(&mut rx2);
+        assert_eq!(said(&one), "Approved.", "{twice}: {one:?}");
+        assert_eq!(ended(&one), Some(Then::FollowUp), "{twice}");
+        // the second yes is that same answer: nothing more is said
+        assert!(two.is_empty(), "{twice}: {two:?}");
+        assert_eq!(t.status(&approval).await, ApprovalStatus::Approved);
+        t.rt.shutdown();
+    }
+}
+
+#[tokio::test]
+async fn reset_and_idle_say_what_they_dropped() {
+    let mut t = T::start().await;
+    asking_to_approve(&t).await;
+    assert!(t.mind.reset());
+    assert!(!t.mind.pending());
+    assert!(!t.mind.reset());
+    t.mind.idle_forget = Duration::from_millis(50);
+    t.fake.push(approve_a1());
+    t.hear("approve the research one").await;
+    assert!(t.mind.pending());
+    tokio::time::sleep(Duration::from_millis(120)).await;
+    let got = t.hear("yes").await;
+    assert_eq!(got.first(), Some(&MindEvent::Cleared));
+    assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
+    assert!(!t.mind.pending());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
 async fn pick_by_click_equals_saying_it() {
     let t = T::start().await;
     let approval = asking_to_approve(&t).await;
@@ -583,9 +724,34 @@ async fn pick_by_click_equals_saying_it() {
     let got = t.pick(0).await;
     assert_eq!(said(&got), "Approved.");
     assert_eq!(t.status(&approval).await, ApprovalStatus::Approved);
-    // a pick with nothing offered does nothing
+    // a pick with nothing offered does nothing, and is no turn
     let got = t.pick(0).await;
-    assert_eq!(got, vec![MindEvent::SayEnd { then: Then::Rest }]);
+    assert_eq!(got, vec![]);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_pick_past_the_options_keeps_what_waits() {
+    let t = T::start().await;
+    let approval = asking_to_approve(&t).await;
+    assert_eq!(t.pick(5).await, vec![]);
+    assert!(t.mind.pending());
+    // nor does it end a turn in flight
+    t.fake
+        .push(slow(says("Here it is."), Duration::from_millis(200)));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let view = home();
+    let heard = t.mind.hear(&t.rt, "what about the backup", &view, &tx);
+    let click = async {
+        while t.fake.calls() < 2 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        t.pick(3).await
+    };
+    let (_, clicked) = tokio::join!(heard, click);
+    assert_eq!(clicked, vec![]);
+    assert_eq!(said(&drain(&mut rx)), "Here it is.");
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
     t.rt.shutdown();
 }
 
@@ -727,19 +893,14 @@ async fn cap_reached_skips_the_model_but_quick_answers_work() {
 
 #[tokio::test]
 async fn idle_forgets_turns() {
-    let t = T::start().await;
+    let mut t = T::start().await;
+    // the idle period, made short
+    t.mind.idle_forget = Duration::from_millis(100);
     t.fake.push(says("First answer."));
     t.hear("first question").await;
     t.hear("second question").await;
     assert!(t.fake.last_prompt().contains("Person: first question"));
-    // ten minutes and more pass
-    {
-        let mut s = lock(&t.mind.state);
-        let long_ago = Instant::now()
-            .checked_sub(IDLE_FORGET + Duration::from_secs(1))
-            .expect("a time long enough ago");
-        s.last_heard = Some(long_ago);
-    }
+    tokio::time::sleep(Duration::from_millis(200)).await;
     t.hear("third question").await;
     let p = t.fake.last_prompt();
     assert!(!p.contains("Earlier in this conversation"), "{p}");

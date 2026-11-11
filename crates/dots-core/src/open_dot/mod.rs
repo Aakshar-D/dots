@@ -97,6 +97,9 @@ pub enum Card {
 
 /// Turns and what waits are forgotten after this long without a turn.
 pub const IDLE_FORGET: Duration = Duration::from_secs(600);
+/// A step that waits on the person is dropped this long after it was asked: silence is no,
+/// whether or not the app calls `lapse`.
+pub const PENDING_LIMIT: Duration = Duration::from_secs(60);
 /// "One moment." is said when nothing was said this long after the request started.
 pub const FILLER_AFTER: Duration = Duration::from_millis(1500);
 /// Most turns kept, and the longest record of what was said in one.
@@ -133,7 +136,18 @@ pub struct Mind {
     state: Mutex<State>,
     /// `FILLER_AFTER`; shorter in tests.
     filler_after: Duration,
+    /// `IDLE_FORGET`; shorter in tests.
+    idle_forget: Duration,
+    /// `PENDING_LIMIT`; shorter in tests.
+    pending_limit: Duration,
+    /// Held while a deed is checked, carried out and its outcome said: a newer turn waits for
+    /// it before it begins, so a deed that started is never cut off, and its words never land
+    /// after a newer turn's. A turn answering a step that waits holds it from its start.
+    deeds: tokio::sync::Mutex<()>,
 }
+
+/// What a turn holds while it may carry out a deed (`Mind::deeds`).
+type Gate<'a> = tokio::sync::MutexGuard<'a, ()>;
 
 #[derive(Default)]
 struct State {
@@ -148,15 +162,20 @@ struct State {
     /// The turn running now; a newer one makes an older one's events go nowhere.
     turn: u64,
     cancel: Option<CancellationToken>,
+    /// How many steps that waited were taken by a yes, and whether one's deed is being done:
+    /// a second yes for the same step is that same answer, and does nothing.
+    decided: u64,
+    deciding: bool,
 }
 
 impl State {
-    fn forget(&mut self) {
+    /// Forgets turns, replies and what waits; returns whether a step that waited was dropped.
+    fn forget(&mut self) -> bool {
         self.turns.clear();
-        self.pending = None;
         self.last_said.clear();
         self.last_then = Then::Rest;
         self.read_aloud.clear();
+        self.pending.take().is_some()
     }
 }
 
@@ -166,6 +185,8 @@ struct Pending {
     kind: Waiting,
     account: String,
     workspace: String,
+    /// When it was asked; it is dropped after `PENDING_LIMIT`.
+    asked_at: Instant,
     /// An unclear yes ("okay", "sure") was heard once and the person was asked for a clear one.
     retried: bool,
 }
@@ -268,6 +289,8 @@ struct Out<'a> {
     words: Mutex<String>,
     spoke: AtomicBool,
     read_aloud: Mutex<Vec<String>>,
+    /// A deed was carried out: its outcome is said even if the turn was ended meanwhile.
+    done: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -279,8 +302,22 @@ impl<'a> Out<'a> {
         lock(&self.mind.state).turn == self.turn
     }
 
+    /// Whether a deed may still be carried out: the turn is the current one and not cancelled.
+    fn may_act(&self, cancel: &CancellationToken) -> bool {
+        self.live() && !cancel.is_cancelled()
+    }
+
+    /// From now on, the turn's events go out whatever ends it: a deed was carried out. The
+    /// deed gate keeps any newer turn from beginning until they are out.
+    fn deed_done(&self) {
+        self.done.store(true, Ordering::SeqCst);
+    }
+
+    /// Sends while the turn is the current one (or its deed is done). The check and the send
+    /// are made under the state lock, so a newer turn's first event cannot come before this.
     fn send(&self, event: MindEvent) {
-        if self.live() {
+        let s = lock(&self.mind.state);
+        if s.turn == self.turn || self.done.load(Ordering::SeqCst) {
             let _ = self.tx.send(event);
         }
     }
@@ -344,6 +381,9 @@ impl Mind {
             thinker,
             state: Mutex::new(State::default()),
             filler_after: FILLER_AFTER,
+            idle_forget: IDLE_FORGET,
+            pending_limit: PENDING_LIMIT,
+            deeds: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -370,9 +410,19 @@ impl Mind {
         self.turn(rt, Input::Pick(index), view, out).await
     }
 
-    /// The asking time ran out or the stage closed: the step that waits is dropped ("no").
+    /// The asking time ran out or the stage closed: the step that waits is dropped ("no"), and
+    /// a turn in flight is ended, so a reply that lands later asks and installs nothing. A deed
+    /// already being carried out still finishes and says its outcome.
     pub fn lapse(&self, out: &mpsc::UnboundedSender<MindEvent>) {
-        if lock(&self.state).pending.take().is_some() {
+        let dropped = {
+            let mut s = lock(&self.state);
+            s.turn += 1;
+            if let Some(c) = s.cancel.take() {
+                c.cancel();
+            }
+            s.pending.take().is_some()
+        };
+        if dropped {
             let _ = out.send(MindEvent::Cleared);
         }
     }
@@ -384,14 +434,16 @@ impl Mind {
         }
     }
 
-    /// Forgets everything, and ends a turn in flight.
-    pub fn reset(&self) {
+    /// Forgets everything, and ends a turn in flight. Returns whether a step that waited on the
+    /// person was dropped: the caller then clears its options and card, as on `Cleared`.
+    pub fn reset(&self) -> bool {
         let mut s = lock(&self.state);
-        s.forget();
+        let dropped = s.forget();
         s.turn += 1;
         if let Some(c) = s.cancel.take() {
             c.cancel();
         }
+        dropped
     }
 
     /// Whether a step waits on the person.
@@ -399,16 +451,16 @@ impl Mind {
         lock(&self.state).pending.is_some()
     }
 
-    /// Starts a turn: forgets after `IDLE_FORGET`, ends the turn before, and returns this
-    /// turn's number and what cancels its requests (a child of the runtime's shutdown).
-    fn begin(&self, rt: &Runtime) -> (u64, CancellationToken) {
+    /// Starts a turn: forgets after the idle period, ends the turn before, and returns this
+    /// turn's number, what cancels its requests (a child of the runtime's shutdown), and
+    /// whether forgetting dropped a step that waited.
+    fn begin(&self, rt: &Runtime) -> (u64, CancellationToken, bool) {
         let mut s = lock(&self.state);
         let now = Instant::now();
-        if s.last_heard
-            .is_some_and(|at| now.duration_since(at) > IDLE_FORGET)
-        {
-            s.forget();
-        }
+        let forgot = s
+            .last_heard
+            .is_some_and(|at| now.duration_since(at) > self.idle_forget)
+            && s.forget();
         s.last_heard = Some(now);
         s.turn += 1;
         if let Some(c) = s.cancel.take() {
@@ -416,7 +468,24 @@ impl Mind {
         }
         let cancel = rt.shutdown_token().child_token();
         s.cancel = Some(cancel.clone());
-        (s.turn, cancel)
+        (s.turn, cancel, forgot)
+    }
+
+    /// Whether the input is no turn at all: a click on an option that is not offered (it ends
+    /// nothing and keeps what waits), or a second yes or click for a step a yes already took
+    /// while its deed is being done or since this input arrived (`arrived`).
+    fn no_turn(&self, input: &Input<'_>, arrived: u64, busy: bool) -> bool {
+        let s = lock(&self.state);
+        let options = s
+            .pending
+            .as_ref()
+            .map(|p| p.kind.asked().1)
+            .unwrap_or_default();
+        let repeated = (busy || s.decided != arrived) && s.pending.is_none();
+        match input {
+            Input::Pick(i) => *i >= options.len(),
+            Input::Heard(h) => repeated && (firm_yes(h) || quick(h, &[]) == Some(Quick::Yes)),
+        }
     }
 
     async fn turn(
@@ -427,7 +496,19 @@ impl Mind {
         tx: &mpsc::UnboundedSender<MindEvent>,
     ) -> Result<()> {
         let started = std::time::Instant::now();
-        let (turn, cancel) = self.begin(rt);
+        let (arrived, busy) = {
+            let s = lock(&self.state);
+            (s.decided, s.deciding)
+        };
+        if busy && self.no_turn(&input, arrived, busy) {
+            return Ok(());
+        }
+        // A deed in flight finishes and says its outcome before this turn begins.
+        let gate = self.deeds.lock().await;
+        if self.no_turn(&input, arrived, false) {
+            return Ok(());
+        }
+        let (turn, cancel, forgot) = self.begin(rt);
         let o = Out {
             mind: self,
             tx,
@@ -436,8 +517,12 @@ impl Mind {
             words: Mutex::new(String::new()),
             spoke: AtomicBool::new(false),
             read_aloud: Mutex::new(Vec::new()),
+            done: AtomicBool::new(false),
         };
-        let kind = self.step(rt, input, view, &o, &cancel).await;
+        if forgot {
+            o.send(MindEvent::Cleared);
+        }
+        let kind = self.step(rt, input, view, &o, &cancel, gate).await;
         tracing::debug!(
             ms = started.elapsed().as_millis() as u64,
             step = kind,
@@ -446,18 +531,20 @@ impl Mind {
         Ok(())
     }
 
-    /// The pending step, dropped first when the view moved to another account or workspace.
+    /// The pending step, dropped first when it is older than the pending limit, or when the
+    /// view moved to another account or workspace.
     fn waiting(&self, view: &View, o: &Out<'_>) -> Option<Pending> {
         let (kind, dropped) = {
             let mut s = lock(&self.state);
-            let moved = s
-                .pending
-                .as_ref()
-                .is_some_and(|p| p.account != view.account || p.workspace != view.workspace);
-            if moved {
+            let gone = s.pending.as_ref().is_some_and(|p| {
+                p.account != view.account
+                    || p.workspace != view.workspace
+                    || p.asked_at.elapsed() > self.pending_limit
+            });
+            if gone {
                 s.pending = None;
             }
-            (s.pending.clone(), moved)
+            (s.pending.clone(), gone)
         };
         if dropped {
             o.send(MindEvent::Cleared);
@@ -482,6 +569,7 @@ impl Mind {
                 kind,
                 account: view.account.clone(),
                 workspace: view.workspace.clone(),
+                asked_at: Instant::now(),
                 retried: false,
             });
         }
@@ -493,12 +581,31 @@ impl Mind {
         if s.turn == o.turn {
             if let Some(p) = s.pending.as_mut() {
                 p.retried = true;
+                p.asked_at = Instant::now();
             }
         }
     }
 
-    /// The person said yes to a step that waited on it (already taken away): its deed is done
-    /// once a fresh picture shows its record still there.
+    /// Takes the step that waits for a yes: it is gone, and until `Deciding` is dropped a second
+    /// yes is that same answer. `None` when it is gone already (lapsed or reset meanwhile).
+    fn take_for_yes(&self, o: &Out<'_>) -> Option<Deciding<'_>> {
+        let taken = {
+            let mut s = lock(&self.state);
+            if s.turn != o.turn || s.pending.take().is_none() {
+                return None;
+            }
+            s.decided += 1;
+            s.deciding = true;
+            Deciding(self)
+        };
+        o.send(MindEvent::Cleared);
+        Some(taken)
+    }
+
+    /// The person said yes to a step that waited on it (already taken away), with the deed
+    /// gate held: its deed is done once a fresh picture shows its record still there, and only
+    /// while the turn is still live and not cancelled. Once done, its outcome is said.
+    #[allow(clippy::too_many_arguments)]
     async fn yes(
         &self,
         rt: &Runtime,
@@ -506,14 +613,21 @@ impl Mind {
         heard: &str,
         view: &View,
         o: &Out<'_>,
+        cancel: &CancellationToken,
+        _deciding: Deciding<'_>,
     ) -> &'static str {
+        let may_act = || o.may_act(cancel);
         match kind {
             Waiting::Confirm { deed, .. }
             | Waiting::Ask {
                 then: AskFor::AnswerCheck { deed },
                 ..
             } => {
-                let done = confirmed(rt, &deed, view).await;
+                let Some(done) = confirmed(rt, &deed, view, &may_act).await else {
+                    o.end(Then::Rest);
+                    return "ended before the deed";
+                };
+                o.deed_done();
                 let then = if done.done {
                     Then::FollowUp
                 } else {
@@ -523,7 +637,12 @@ impl Mind {
                 "confirmed"
             }
             Waiting::Create { proposal, .. } => {
+                if !may_act() {
+                    o.end(Then::Rest);
+                    return "ended before the deed";
+                }
                 let (said, opened, then) = create(rt, proposal, view).await;
+                o.deed_done();
                 o.say(&said);
                 if let Some(target) = opened {
                     o.send(MindEvent::Open { target });
@@ -569,6 +688,8 @@ impl Mind {
     }
 
     /// The turn's work; returns the kind of step, for the log.
+    /// The deed gate is held from the turn's start; it is let go unless this turn says yes to
+    /// a step that waited.
     async fn step(
         &self,
         rt: &Runtime,
@@ -576,6 +697,7 @@ impl Mind {
         view: &View,
         o: &Out<'_>,
         cancel: &CancellationToken,
+        gate: Gate<'_>,
     ) -> &'static str {
         let waiting = self.waiting(view, o);
         let options = waiting
@@ -649,8 +771,15 @@ impl Mind {
             };
             match answer {
                 Answer::Yes => {
-                    self.drop_pending(o);
-                    return self.yes(rt, w.kind.clone(), &heard, view, o).await;
+                    let Some(deciding) = self.take_for_yes(o) else {
+                        o.end(Then::Rest);
+                        return "gone before the yes";
+                    };
+                    let said = self
+                        .yes(rt, w.kind.clone(), &heard, view, o, cancel, deciding)
+                        .await;
+                    drop(gate);
+                    return said;
                 }
                 Answer::No | Answer::GiveUp => {
                     self.drop_pending(o);
@@ -673,6 +802,8 @@ impl Mind {
                 Answer::Other => self.drop_pending(o),
             }
         }
+        // No deed of a step that waited: a deed of this turn takes the gate again.
+        drop(gate);
 
         // What goes to the model, and the person's own words, when it does.
         let mut to_model = heard.clone();
@@ -927,7 +1058,14 @@ impl Mind {
                     self.confirm(o, deed, question, false, heard, view);
                     return "confirm";
                 }
+                // Never after the person moved on: a newer turn or a cancel ends this one first.
+                let _gate = self.deeds.lock().await;
+                if !o.may_act(cancel) {
+                    o.end(Then::Rest);
+                    return "ended before the deed";
+                }
                 let done = outcome(rt, &deed).await;
+                o.deed_done();
                 let then = if done.done {
                     Then::FollowUp
                 } else {
@@ -1140,11 +1278,19 @@ impl Mind {
 
 /// Carries out a deed the person said yes to, once a fresh picture shows its record is still
 /// there: the approval still waits and is not private, the dot is still in this workspace, the
-/// question still waits.
-async fn confirmed(rt: &Runtime, deed: &Deed, view: &View) -> Outcome {
+/// question still waits. `None`, and nothing done, when `may_act` says the turn ended first.
+async fn confirmed(
+    rt: &Runtime,
+    deed: &Deed,
+    view: &View,
+    may_act: &dyn Fn() -> bool,
+) -> Option<Outcome> {
     let Ok(picture) = Picture::take(rt, view).await else {
-        return Outcome::refused(WENT_WRONG);
+        return Some(Outcome::refused(WENT_WRONG));
     };
+    if !may_act() {
+        return None;
+    }
     let still = match deed {
         Deed::Approve { approval_id, .. } | Deed::Deny { approval_id, .. } => {
             picture.approvals.iter().any(|a| &a.id == approval_id)
@@ -1155,12 +1301,21 @@ async fn confirmed(rt: &Runtime, deed: &Deed, view: &View) -> Outcome {
         Deed::Answer { message_id, .. } => picture.questions.iter().any(|q| &q.id == message_id),
     };
     if !still {
-        return Outcome::refused(match deed {
+        return Some(Outcome::refused(match deed {
             Deed::Run { .. } | Deed::Send { .. } => DOT_GONE,
             _ => HANDLED,
-        });
+        }));
     }
-    outcome(rt, deed).await
+    Some(outcome(rt, deed).await)
+}
+
+/// While alive, a step taken by a yes is being decided (`State::deciding`).
+struct Deciding<'a>(&'a Mind);
+
+impl Drop for Deciding<'_> {
+    fn drop(&mut self) {
+        lock(&self.0.state).deciding = false;
+    }
 }
 
 /// Creates the proposed dot in the account and workspace in view; the sentence, the screen to
