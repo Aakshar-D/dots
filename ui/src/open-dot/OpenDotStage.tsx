@@ -87,9 +87,12 @@ function Words({ question }: { question: string | null }) {
   const reply = state === "listening" ? [] : shown.slice(-2);
   const finished = reply.length === 0 && hearing !== "" && heard;
   const coming = reply.length === 0 && hearing !== "" && !heard;
+  // The live region is always on the page and never hidden: one that is `display: none` when
+  // a turn starts may not announce its first line. Empty, it takes no height; the words still
+  // coming only show while it is empty, so no gap is kept between the two.
   return (
-    <div className="flex w-full shrink-0 flex-col items-center gap-1 text-center">
-      <div aria-live="polite" className="flex w-full flex-col items-center gap-1 empty:hidden">
+    <div className="flex w-full shrink-0 flex-col items-center text-center">
+      <div aria-live="polite" className="flex w-full flex-col items-center gap-1">
         {reply.map((line, i) => {
           const last = i === reply.length - 1;
           return (
@@ -244,6 +247,9 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
       const now = latest.current;
       if (now.leaving || elsewhere) return;
       if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
+      // On purpose before the typing check: `Esc` closes the stage even when focus is in a
+      // text field (the search box or a composer). Nothing on the stage is typed into, and a
+      // field's own `Esc` (a menu, a dialog) is caught above.
       if (e.key === "Escape") {
         e.preventDefault();
         now.close();

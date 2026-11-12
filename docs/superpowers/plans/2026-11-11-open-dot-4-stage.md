@@ -21,7 +21,7 @@
 - Built with SVG and a blur-and-threshold filter driven by a few numbers per frame. No animation library.
 - `Level` events arrive up to 30 a second: nothing outside The Breath may re-render because of them.
 - The stage lives in the main window above whatever screen is showing; it never blocks the screen behind it from being read (no full-screen scrim) and never steals focus from a text field the person is typing in.
-- `Esc` closes the stage and stops speech (`voice_close`), unless a dialog or menu is open (those keep their own `Esc`). Clicking The Breath stops speech and listens (`voice_stop`). Options are picked by click or by keys `1` to `4` (`voice_pick(index)`), never by sending text.
+- `Esc` closes the stage and stops speech (`voice_close`), unless a dialog or menu is open (those keep their own `Esc`). Clicking The Breath stops speech and listens (`voice_stop`). Options are picked by click or by keys `1` to `4` (`voice_pick(index, seq)`), never by sending text.
 - Whenever the microphone is open the rail mark shows it. When the microphone is not open while the stage is, the stage says why in one line.
 - Copy is plain and short. No jargon ("session", "turn", "pending"). Accessible: the stage is a labelled region, live words are an `aria-live="polite"` area, options are buttons, everything reachable by keyboard.
 - Follow the UI's patterns: Tailwind tokens already in use, `lucide` icons, Geist; tests beside the code with vitest; `bun run typecheck`, `bun run test`, `bun run build` pass.
@@ -30,7 +30,7 @@
 ## What exists (built in step 3)
 
 - `ui/src/lib/use-voice.ts`: `voiceStore` (`get`, `set`, `subscribe`), `useVoiceLive(select)`, `useVoiceStatus()`, `VoiceLive { state, micOpen, level: {mic, voice}, hearing, saying, ask, card, download, trouble }`, `useVoice()` mounted in `Layout`.
-- `ui/src/api/commands.ts`: `voiceOpen`, `voiceClose`, `voiceStop`, `voicePick(index)`, `voiceStatus`, and the rest. `ui/src/api/types.ts`: `VoiceState` (`off | idle | listening | thinking | speaking | asking`), `OpenDotCard` (`proposal { proposal }`, `confirm { deed }`, `list { title, lines }`), `Deed`.
+- `ui/src/api/commands.ts`: `voiceOpen`, `voiceClose`, `voiceStop`, `voicePick(index, seq)`, `voiceStatus`, and the rest. `ui/src/api/types.ts`: `VoiceState` (`off | idle | listening | thinking | speaking | asking`), `OpenDotCard` (`proposal { proposal }`, `confirm { deed }`, `list { title, lines }`), `Deed`.
 - `ui/src/app/Layout.tsx`: the rail (`<nav aria-label="Main">`, `LINKS`, the Search button, `LimitsMeter` last), the only global key listener (Ctrl/Cmd+K).
 - Known gap to close here: `VoiceSection` has its own status query that can overwrite a newer `status` event; and the hook keeps `saying` as the last sentence only.
 

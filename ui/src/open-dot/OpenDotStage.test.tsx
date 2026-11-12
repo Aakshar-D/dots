@@ -105,6 +105,23 @@ describe("the Open Dot stage", () => {
     expect(document.activeElement).toBe(document.body);
   });
 
+  it("keeps the spoken lines' live region in place while empty, so its first line is read out", () => {
+    render(<OpenDotStage />);
+    show({ state: "listening", micOpen: true, hearing: "" });
+    const region = words();
+    expect(region).toBeEmptyDOMElement();
+    // Not taken out of the page while empty: a region that is `display: none` when a turn
+    // starts may not announce the first thing put in it.
+    expect(region.className).not.toMatch(/(^|\s|:)(hidden|invisible|sr-only)(\s|$)/);
+    expect(region.style.display).not.toBe("none");
+    expect(region.style.visibility).not.toBe("hidden");
+    expect(region).toBeVisible();
+    // The same node then carries the reply.
+    show({ state: "speaking", said: lines("Here it is.") });
+    expect(words()).toBe(region);
+    expect(region).toHaveTextContent("Here it is.");
+  });
+
   it("keeps each reply line's node, so a held line is not read out again", () => {
     render(<OpenDotStage />);
     const [one, two, three, four] = lines("One.", "Two.", "Three.", "Four.");
