@@ -309,6 +309,84 @@ impl Default for SpeechGate {
     }
 }
 
+/// The most of the model's words said before a deed Dots may ask a yes on, in bytes. Dots'
+/// own question is said after them, as a reply of its own, and is not kept waiting behind a
+/// long speech the person may stop listening to.
+pub const BEFORE_A_YES_BYTES: usize = 200;
+
+impl Wish {
+    /// Whether the step for this wish may be a question Dots asks a yes on before a deed:
+    /// approve, deny, run, send, answer, or a new dot.
+    pub fn may_ask_a_yes(&self) -> bool {
+        matches!(
+            self,
+            Wish::Approve { .. }
+                | Wish::Deny { .. }
+                | Wish::Run { .. }
+                | Wish::Send { .. }
+                | Wish::Answer { .. }
+                | Wish::Create { .. }
+        )
+    }
+}
+
+/// The model's words as they stream, said at once only while they stay within
+/// `BEFORE_A_YES_BYTES`; from the first piece that would not fit, the rest is held until the
+/// reply is read. Then the held words are said whole (`release`), or, before a question Dots
+/// asks a yes on, only what still fits (`cut`).
+#[derive(Default)]
+pub struct HeldWords {
+    said: usize,
+    held: String,
+}
+
+impl HeldWords {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The words to say now, of `words` (released by the `SpeechGate`).
+    pub fn pass(&mut self, words: &str) -> String {
+        if self.held.is_empty() && self.said + words.len() <= BEFORE_A_YES_BYTES {
+            self.said += words.len();
+            return words.to_string();
+        }
+        self.held.push_str(words);
+        String::new()
+    }
+
+    /// All the words held: no question Dots asks a yes on follows.
+    pub fn release(self) -> String {
+        self.held
+    }
+
+    /// The words held that still fit within `BEFORE_A_YES_BYTES` with what was said: up to
+    /// the last sentence end that fits; when nothing was said yet and no sentence ends in
+    /// time, up to the last word end. Never splits a character.
+    pub fn cut(self) -> String {
+        let room = BEFORE_A_YES_BYTES.saturating_sub(self.said);
+        let held = self.held.as_str();
+        if held.len() <= room {
+            return held.trim_end().to_string();
+        }
+        let mut limit = room;
+        while !held.is_char_boundary(limit) {
+            limit -= 1;
+        }
+        let word_end = || {
+            if held[limit..].starts_with(char::is_whitespace) {
+                Some(limit)
+            } else {
+                held[..limit].rfind(char::is_whitespace)
+            }
+        };
+        let end = last_sentence_end(held, limit, true)
+            .or_else(|| if self.said == 0 { word_end() } else { None })
+            .unwrap_or(0);
+        held[..end].trim_end().to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +397,41 @@ mod tests {
 
     fn squash(s: &str) -> String {
         s.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn words_before_a_yes_are_cut_to_200_bytes_at_a_sentence_or_word() {
+        // within the limit: all said at once, nothing held
+        let mut h = HeldWords::new();
+        assert_eq!(h.pass("Short one. "), "Short one. ");
+        assert_eq!(h.cut(), "");
+        // past it: held from the first piece that does not fit, cut at the last sentence end
+        let first = format!("{}. ", "a".repeat(150));
+        let second = format!("Fine. {}. ", "b".repeat(60));
+        let third = format!("{}. ", "c".repeat(30));
+        let mut h = HeldWords::new();
+        assert_eq!(h.pass(&first), first);
+        assert_eq!(h.pass(&second), "");
+        assert_eq!(h.pass(&third), "");
+        assert_eq!(h.cut(), "Fine.");
+        // the same words with no question to follow are all said
+        let mut h = HeldWords::new();
+        h.pass(&first);
+        h.pass(&second);
+        h.pass(&third);
+        assert_eq!(h.release(), format!("{second}{third}"));
+        // one long sentence: cut at a word end, never inside a character
+        let long = "Ünïcödé wörds ".repeat(30);
+        let mut h = HeldWords::new();
+        assert_eq!(h.pass(&long), "");
+        let cut = h.cut();
+        assert!(cut.len() <= BEFORE_A_YES_BYTES, "{}", cut.len());
+        assert!(cut.len() > 150, "{}", cut.len());
+        assert!(long.starts_with(&cut) && cut.ends_with(['é', 's']), "{cut}");
+        // one word longer than the limit: nothing
+        let mut h = HeldWords::new();
+        h.pass(&"x".repeat(300));
+        assert_eq!(h.cut(), "");
     }
 
     #[test]

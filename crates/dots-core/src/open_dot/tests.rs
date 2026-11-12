@@ -1601,6 +1601,41 @@ fn create_question_says_only_the_name_and_when() {
     );
 }
 
+/// A chatty model (or one steered by text in a record) says at most 200 bytes before Dots'
+/// own question; with no question to follow, its words are said whole.
+#[tokio::test]
+async fn words_before_a_confirmation_are_cut_to_200_bytes() {
+    let t = T::start().await;
+    let dot = t.dot("Research").await;
+    t.approval(&dot, "ls -la").await;
+    let chat = "This approval is for listing files in the folder, which is harmless. \
+        I checked it twice and it looks fine to me. Shall I go ahead? \
+        It will only read the names of the files. Nothing is changed or sent anywhere. \
+        You can always deny it later if you change your mind about it. ";
+    assert!(chat.len() > 250);
+    t.fake.push(says(&format!(
+        "{chat}\nDO {{\"act\":\"approve\",\"a\":\"a1\"}}"
+    )));
+    let got = t.hear("approve the research one").await;
+    let words = said(&got);
+    assert!(
+        words.len() <= reply::BEFORE_A_YES_BYTES,
+        "{} bytes",
+        words.len()
+    );
+    assert!(words.len() > 150, "{words}");
+    assert!(chat.starts_with(&words) && words.ends_with('.'), "{words}");
+    assert_eq!(
+        asks(&got).map(|a| a.0),
+        Some("Research wants to use Bash on ls -la. Approve this request?".into())
+    );
+    // the same words with nothing to confirm are all said
+    t.fake.push(says(chat));
+    let got = t.hear("tell me about it").await;
+    assert_eq!(said(&got), chat.trim_end());
+    t.rt.shutdown();
+}
+
 /// No confirmation question Dots builds ends in words that pass a step of any kind: a
 /// microphone that opens while the end of the question is still sounding (a speaker with a
 /// long output delay) may hear its last words, and those must never be a yes. Every tail of

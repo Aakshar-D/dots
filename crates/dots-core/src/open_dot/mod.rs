@@ -40,7 +40,7 @@ use quick::{
     asks_for_a_deed, common_word, firm_for_another, firm_yes, quick, unclear_yes, words_of,
     ConfirmKind, Quick,
 };
-use reply::{read_reply, SpeechGate, Wish};
+use reply::{read_reply, HeldWords, SpeechGate, Wish};
 use think::{cap_hit, Thinker};
 
 /// What the mind tells the stage, in order.
@@ -1123,10 +1123,13 @@ impl Mind {
         let asking = prompt(&picture, &turns, heard);
         let model = settings.open_dot_model.clone();
         let mut gate = SpeechGate::new();
+        // Past 200 bytes the words wait until the reply is read: before a question Dots asks a
+        // yes on, no more than that is said.
+        let mut held = HeldWords::new();
         let asked = {
             let mut on_text = |delta: &str| {
                 let words = gate.push(delta);
-                o.stream(&words);
+                o.stream(&held.pass(&words));
             };
             let request = self
                 .thinker
@@ -1150,6 +1153,7 @@ impl Mind {
         let answer = match asked {
             Ok(answer) => answer,
             Err(failure) => {
+                o.stream(&held.release());
                 // The CLI's own text is never said, sent or logged.
                 let said = match failure {
                     OnceFailure::NoCli => NO_CLI,
@@ -1167,8 +1171,13 @@ impl Mind {
             }
         }
         // What the stream held back and turned out to be speech; never the words twice.
-        o.stream(&gate.finish());
+        let rest = held.pass(&gate.finish());
+        o.stream(&rest);
         let (reply, bad) = read_reply(&answer.text);
+        match &reply.wish {
+            Some(wish) if wish.may_ask_a_yes() => o.stream(&held.cut()),
+            _ => o.stream(&held.release()),
+        }
         let Some(wish) = reply.wish else {
             // A wish that could not be read is said not to be done, after any words.
             if bad {
