@@ -610,6 +610,10 @@ struct Worker {
     /// This listen began from rest (hotkey or "Hey Dot"): one sentence heard live but empty
     /// when finished is answered "Sorry, I didn't catch that." and listened for once more.
     may_retry: bool,
+    /// This listen began from rest (hotkey, click, tray or "Hey Dot"): only such a listen
+    /// that hears exact silence throughout says the microphone gives nothing. A follow-up
+    /// window or a question on a noise-gated microphone in a quiet room hears zeros too.
+    from_rest: bool,
     /// Words of this sentence were shown live.
     partial_seen: bool,
 }
@@ -673,6 +677,7 @@ impl Worker {
             frames_heard: 0,
             any_sound: false,
             may_retry: false,
+            from_rest: false,
             partial_seen: false,
         }
     }
@@ -990,6 +995,7 @@ impl Worker {
     fn listen_from_rest(&mut self) {
         self.listen(LISTEN_AFTER_OPEN);
         self.may_retry = true;
+        self.from_rest = true;
         self.play_tone();
     }
 
@@ -1006,6 +1012,7 @@ impl Worker {
             return;
         }
         self.may_retry = true;
+        self.from_rest = true;
         if self.settings.tone {
             self.tone_due = Some(self.clock.now() + TONE_WAIT);
         }
@@ -1054,6 +1061,7 @@ impl Worker {
     /// A listen begins: nothing heard yet in it.
     fn fresh_listen(&mut self) {
         self.may_retry = false;
+        self.from_rest = false;
         self.partial_seen = false;
         self.frames_heard = 0;
         self.any_sound = false;
@@ -1508,15 +1516,18 @@ impl Worker {
                 if !self.in_speech
                     && now.saturating_duration_since(self.quiet_since) >= self.listen_limit
                 {
-                    let silent = self.frames_heard >= SILENT_FRAMES && !self.any_sound;
                     let unanswered = self.state == State::Asking;
+                    let silent = !unanswered
+                        && self.from_rest
+                        && self.frames_heard >= SILENT_FRAMES
+                        && !self.any_sound;
                     self.enter(State::Idle);
-                    if silent {
-                        self.trouble(SILENT_MIC);
-                        self.owed = Some(SILENT_MIC.into());
-                    } else if unanswered {
+                    if unanswered {
                         // The app drops what waited on the answer when the session rests.
                         self.owed = Some(NO_ANSWER.into());
+                    } else if silent {
+                        self.trouble(SILENT_MIC);
+                        self.owed = Some(SILENT_MIC.into());
                     }
                 }
             }
@@ -2943,6 +2954,44 @@ mod tests {
         r.until_speech_done();
         r.clock.advance(250);
         r.expect_state(State::Listening, true);
+    }
+
+    /// A microphone that sends exact zeros while nobody talks (a hardware noise gate) is not
+    /// called silent after a follow-up window or a question: only a listen begun from rest
+    /// says so, and an unanswered question still says it did nothing.
+    #[test]
+    fn a_gated_microphone_is_not_called_silent_after_follow_ups_or_questions() {
+        let mut r = rig(Opts::default());
+        r.expect_state(State::Idle, false);
+        let turn = r.hear();
+        r.session.say(turn, "Sure.", After::FollowUp);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Sure.");
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Listening, true);
+        r.mic.send(0.0, 40);
+        for _ in 0..8 {
+            r.sync(); // a pass takes 8 frames
+        }
+        r.clock.advance(6_000);
+        r.expect_state(State::Idle, false);
+        r.nothing_more();
+        let turn = r.hear();
+        r.session.say(turn, "Shall I?", After::Ask);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Shall I?");
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Asking, true);
+        r.mic.send(0.0, 40);
+        for _ in 0..8 {
+            r.sync();
+        }
+        r.clock.advance(20_000);
+        r.expect_state(State::Idle, false);
+        r.said_alone(NO_ANSWER, false);
+        r.nothing_more();
     }
 
     /// A microphone that gives only silence (blocked by the system, which then sends zeros)
