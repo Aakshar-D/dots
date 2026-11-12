@@ -11,7 +11,7 @@
 //!
 //! ```text
 //! cargo build -p dots-core --bin fake-claude
-//! DOTS_VOICE_MODELS=C:\dev\dots-voice-models cargo test -p dots-app --locked --test open_dot_e2e -- --ignored --test-threads=1 --nocapture
+//! DOTS_VOICE_MODELS=C:\dev\dots-voice-models cargo test -p dots-app --locked --test open_dot_e2e -- --ignored --test-threads=1 --nocapture --skip real_cli_timing
 //! ```
 //!
 //! (With `--release`, build `fake-claude` with `--release` too; `DOTS_FAKE_CLAUDE` names it
@@ -23,6 +23,9 @@
 //! as in the session tests of `dots-voice`, so the recorder holds only Dot's words; the wake
 //! test turns it on, as the app has it. "End of the sentence" is the last loud sample fed, not
 //! the end of the speaker's padding of silence after it.
+//!
+//! `real_cli_timing` uses the real Claude CLI and spends a few cents of the person's own
+//! sign-in: run it only by name.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1363,4 +1366,64 @@ fn zz_timings() {
         }
     );
     print_table(&all, false);
+}
+
+// ---- Task 2: the real model -----------------------------------------------------------------
+
+/// The real Claude CLI as the app finds it, model haiku, an empty runtime, five harmless
+/// turns: prints each turn's timings, the median and worst, and the usage recorded. Spends a
+/// few cents of the person's own sign-in: run it only by name. Skips (and says why) when the
+/// CLI is not found or does not answer.
+#[test]
+#[ignore]
+fn real_cli_timing() {
+    let Some(cli) = dots_core::engine::claude::args::resolve_claude(None) else {
+        println!("SKIPPED: no Claude CLI on PATH");
+        return;
+    };
+    println!("Claude CLI: {}", cli.display());
+    let mut h = Harness::start(
+        "real cli",
+        Opts {
+            real_cli: true,
+            ..Opts::default()
+        },
+    );
+    let mut replies = Vec::new();
+    for said in [
+        "What needs me?",
+        "What can you do?",
+        "Say hello.",
+        "What time is it?",
+        "Never mind.",
+    ] {
+        let r = h.turn(said);
+        let failed = ["isn't set up", "went wrong reaching", "too long"]
+            .iter()
+            .any(|f| r.saying.iter().any(|s| s.contains(f)));
+        if failed {
+            println!("SKIPPED: the CLI did not answer ({:?})", r.saying);
+            return;
+        }
+        replies.push(r.saying.len());
+    }
+    let used = block(h.rt.store().open_dot_usage_since(None)).unwrap();
+    println!(
+        "\nreal CLI, haiku ({} build); sentences spoken per turn: {replies:?}",
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    );
+    match used {
+        Some(u) => println!(
+            "usage recorded: {} requests, {} tokens in, {} out, cost {}",
+            u.requests,
+            u.tokens_in,
+            u.tokens_out,
+            u.cost_usd.map_or("unknown".into(), |c| format!("${c:.4}"))
+        ),
+        None => println!("usage recorded: none"),
+    }
 }
