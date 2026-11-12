@@ -1584,6 +1584,19 @@ async fn an_open_the_model_already_announced_is_not_said_twice() {
     }));
     assert_eq!(ended(&got), Some(Then::FollowUp));
 
+    // Said in the model's own words, after other words: still once.
+    t.fake.push(says(
+        "Sure. Opening your Inbox now.\nDO {\"act\":\"open\",\"target\":\"inbox\"}",
+    ));
+    let got = t.hear("show me the inbox please").await;
+    assert_eq!(said(&got), "Sure. Opening your Inbox now.");
+    // Another screen named: Dots says where it really went.
+    t.fake.push(says(
+        "Opening Settings.\nDO {\"act\":\"open\",\"target\":\"inbox\"}",
+    ));
+    let got = t.hear("show me the inbox please").await;
+    assert_eq!(said(&got), "Opening Settings. Opening the Inbox.");
+
     // Other words before it: Dots' own line is still said.
     t.fake.push(says(
         "Sure thing.\nDO {\"act\":\"open\",\"target\":\"inbox\"}",

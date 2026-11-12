@@ -423,21 +423,30 @@ impl<'a> Out<'a> {
         });
     }
 
-    /// Whether the words said so far this turn end with `sentence`, letter case and
-    /// punctuation aside.
+    /// Whether the last sentence said this turn already says `sentence`: it holds every word
+    /// of it that carries meaning, letter case and punctuation aside. "Opening your inbox."
+    /// says "Opening the Inbox."; "Sure thing." does not.
     fn just_said(&self, sentence: &str) -> bool {
-        fn plain(s: &str) -> String {
+        /// The words that carry meaning: no articles or possessives, no single letters (the
+        /// "s" of "Research's").
+        fn words(s: &str) -> Vec<String> {
             s.split(|c: char| !c.is_alphanumeric())
-                .filter(|w| !w.is_empty())
                 .map(str::to_lowercase)
-                .collect::<Vec<_>>()
-                .join(" ")
+                .filter(|w| {
+                    w.chars().count() > 1
+                        && !matches!(w.as_str(), "the" | "an" | "your" | "my" | "its")
+                })
+                .collect()
         }
-        let (said, sentence) = (plain(&lock(&self.words)), plain(sentence));
-        !sentence.is_empty()
-            && said
-                .strip_suffix(&sentence)
-                .is_some_and(|before| before.is_empty() || before.ends_with(' '))
+        let said = lock(&self.words);
+        let last = said
+            .trim_end()
+            .trim_end_matches(['.', '!', '?'])
+            .rsplit(['.', '!', '?'])
+            .next()
+            .unwrap_or_default();
+        let (last, wanted) = (words(last), words(sentence));
+        !wanted.is_empty() && wanted.iter().all(|w| last.contains(w))
     }
 
     /// A sentence of Dots, after what was said before it.
