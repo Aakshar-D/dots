@@ -167,6 +167,10 @@ fn wake_hit_rates_over_all_voices() {
             "Please stop the music before the dog gets a hot donut.",
             None,
         ),
+        // These two woke it now and then with the wake phrase boosted more (see
+        // `WAKE_KEYWORDS`).
+        ("Hey, don't touch the hot pot.", None),
+        ("Hey, do that again tomorrow.", None),
     ] {
         let hits = (0..speaker.voices())
             .filter(|&v| {
@@ -531,7 +535,9 @@ fn hey_dot_then_a_sentence_wakes_the_session_and_is_heard() {
             "voice {voice}: no mic"
         );
         live.feed(&[], 300);
-        live.feed(&wake, 600);
+        // A real microphone never stops: the spotter decodes in chunks and, for some voices,
+        // names a phrase said on its own only once about a second more of sound has come in.
+        live.feed(&wake, 1500);
         let got_woke = live
             .wait(Duration::from_secs(2), |ev| *ev == SessionEvent::Woke)
             .is_some();
@@ -580,15 +586,18 @@ fn trimmed(samples: &[f32]) -> &[f32] {
 
 /// "Hey Dot." and a sentence in one breath (no silence fed between them), with the listening
 /// tone on: `Woke`, then `Heard` with the whole sentence, since the ears open at once after
-/// the wake phrase and the tone waits for a pause that never comes. Prints the hit count over
-/// the ten voices, which must be at least 9 of 10. Paced in real time.
+/// the wake phrase and the tone waits for a pause that never comes. Paced in real time.
+///
+/// The speaker makes each clip anew and the spotter and the recogniser each miss a few in a
+/// hundred, so a voice that misses is said once more: this test is about the session passing
+/// the words on whole, not about how well the engines hear. Prints the hits on the first try
+/// and after the second over the ten voices; the second must be at least 9 of 10.
 #[test]
 #[ignore]
 fn hey_dot_and_a_sentence_in_one_breath_are_heard_whole_with_the_tone_on() {
     let engines = Engines::load();
     let said = "Please read me the first message.";
-    let (mut heard, mut misses) = (0, Vec::new());
-    for voice in 0..engines.speaker.voices() {
+    let once = |voice: u8| -> Result<(), String> {
         // The speaker pads each clip with silence; without it the two run together.
         let mut breath = trimmed(&engines.said("Hey Dot.", voice)).to_vec();
         breath.extend_from_slice(trimmed(&engines.said(said, voice)));
@@ -611,17 +620,36 @@ fn hey_dot_and_a_sentence_in_one_breath_are_heard_whole_with_the_tone_on() {
             Some(SessionEvent::Heard { text, .. }) if woke => {
                 let got = words(&text);
                 if words_missed(said, &text) == 0 && !got.contains(&"hey".to_string()) {
-                    heard += 1;
+                    Ok(())
                 } else {
-                    misses.push(format!("voice {voice}: heard {text:?}"));
+                    Err(format!("voice {voice}: heard {text:?}"))
                 }
             }
-            Some(_) => misses.push(format!("voice {voice}: no Woke")),
-            None => misses.push(format!("voice {voice}: no Heard (woke: {woke})")),
+            Some(_) => Err(format!("voice {voice}: no Woke")),
+            None => Err(format!("voice {voice}: no Heard (woke: {woke})")),
+        }
+    };
+    let (mut first, mut heard, mut misses) = (0, 0, Vec::new());
+    for voice in 0..engines.speaker.voices() {
+        match once(voice) {
+            Ok(()) => {
+                first += 1;
+                heard += 1;
+            }
+            Err(miss) => {
+                misses.push(format!("{miss} (first try)"));
+                match once(voice) {
+                    Ok(()) => heard += 1,
+                    Err(miss) => misses.push(format!("{miss} (second try)")),
+                }
+            }
         }
     }
     let voices = engines.speaker.voices();
-    println!("in one breath with the tone on, the whole sentence was heard {heard}/{voices}");
+    println!(
+        "in one breath with the tone on, the whole sentence was heard {first}/{voices} on the \
+         first try, {heard}/{voices} after a second"
+    );
     for miss in &misses {
         println!("  {miss}");
     }

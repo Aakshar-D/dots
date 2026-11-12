@@ -21,7 +21,13 @@ use crate::engine::{
 use crate::models::ModelPaths;
 
 /// The wake phrases in sherpa's keyword format: `tokens :boost #threshold @name`.
-const WAKE_KEYWORDS: &str = "▁HE Y ▁DO T :1.5 #0.2 @HEY_DOT\n▁DO T ▁ST O P :1.5 #0.2 @DOT_STOP";
+///
+/// "Hey Dot" is boosted less and held to a higher score than "Dot, stop": measured over the
+/// ten voices, boost 1.5 with threshold 0.2 woke on "Hey, don't touch the hot pot." and
+/// "Hey, do that again tomorrow." 3 times in 100 near misses, and 1.0 with 0.25 on none,
+/// while "Hey Dot" was still caught 59 times in 60. A wrong "Dot, stop" only stops Dot
+/// speaking; a wrong "Hey Dot" opens the microphone.
+const WAKE_KEYWORDS: &str = "▁HE Y ▁DO T :1.0 #0.25 @HEY_DOT\n▁DO T ▁ST O P :1.5 #0.2 @DOT_STOP";
 const SPEAK_STEPS: i32 = 5;
 const VOICES: u8 = 10;
 
