@@ -423,6 +423,23 @@ impl<'a> Out<'a> {
         });
     }
 
+    /// Whether the words said so far this turn end with `sentence`, letter case and
+    /// punctuation aside.
+    fn just_said(&self, sentence: &str) -> bool {
+        fn plain(s: &str) -> String {
+            s.split(|c: char| !c.is_alphanumeric())
+                .filter(|w| !w.is_empty())
+                .map(str::to_lowercase)
+                .collect::<Vec<_>>()
+                .join(" ")
+        }
+        let (said, sentence) = (plain(&lock(&self.words)), plain(sentence));
+        !sentence.is_empty()
+            && said
+                .strip_suffix(&sentence)
+                .is_some_and(|before| before.is_empty() || before.ends_with(' '))
+    }
+
     /// A sentence of Dots, after what was said before it.
     fn say(&self, sentence: &str) {
         let sentence = sentence.trim();
@@ -1344,7 +1361,10 @@ impl Mind {
             }
             Step::Open(target, said) => {
                 o.send(MindEvent::Open { target });
-                self.finish(o, heard, &said, Then::FollowUp);
+                // The model often says the same thing first ("Opening the inbox."): once is
+                // enough.
+                let line = if o.just_said(&said) { "" } else { &said };
+                self.finish(o, heard, line, Then::FollowUp);
                 "open"
             }
             Step::Create { description } => {

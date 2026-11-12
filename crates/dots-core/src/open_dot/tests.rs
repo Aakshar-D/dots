@@ -1572,6 +1572,33 @@ async fn what_needs_me_lists_and_opens_the_inbox_for_private_ones() {
 }
 
 #[tokio::test]
+async fn an_open_the_model_already_announced_is_not_said_twice() {
+    let t = T::start().await;
+    t.fake.push(says(
+        "Opening the inbox.\nDO {\"act\":\"open\",\"target\":\"inbox\"}",
+    ));
+    let got = t.hear("show me the inbox please").await;
+    assert_eq!(said(&got), "Opening the inbox.");
+    assert!(got.contains(&MindEvent::Open {
+        target: OpenTarget::Inbox
+    }));
+    assert_eq!(ended(&got), Some(Then::FollowUp));
+
+    // Other words before it: Dots' own line is still said.
+    t.fake.push(says(
+        "Sure thing.\nDO {\"act\":\"open\",\"target\":\"inbox\"}",
+    ));
+    let got = t.hear("show me the inbox please").await;
+    assert_eq!(said(&got), "Sure thing. Opening the Inbox.");
+    // No words at all: Dots' line alone.
+    t.fake
+        .push(says("DO {\"act\":\"open\",\"target\":\"settings\"}"));
+    let got = t.hear("take me to the settings page").await;
+    assert_eq!(said(&got), "Opening Settings.");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
 async fn a_bad_block_with_no_words_asks_again() {
     let t = T::start().await;
     t.fake.push(says("DO {\"act\":\"fly\"}"));
