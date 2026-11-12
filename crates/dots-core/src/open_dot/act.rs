@@ -483,13 +483,15 @@ impl Outcome {
 }
 
 /// Carries out `deed` through the runtime, which checks it again, and returns the sentence to
-/// say. Every error becomes one plain sentence.
+/// say. Every error becomes one plain sentence. It asks nothing first: for the integration
+/// tests only; the mind carries deeds out only after its own checks.
+#[doc(hidden)]
 pub async fn carry_out(rt: &Runtime, deed: &Deed) -> String {
     outcome(rt, deed).await.said
 }
 
 /// `carry_out`, with whether the deed was done.
-pub async fn outcome(rt: &Runtime, deed: &Deed) -> Outcome {
+pub(crate) async fn outcome(rt: &Runtime, deed: &Deed) -> Outcome {
     match deed {
         Deed::Approve { approval_id, .. } | Deed::Deny { approval_id, .. } => {
             let approved = matches!(deed, Deed::Approve { .. });
@@ -616,8 +618,9 @@ fn looks_like_id(word: &str) -> bool {
         .any(|part| part.len() >= 16 && part.chars().any(|c| c.is_ascii_digit()))
 }
 
-/// A dot or tool name for speech: on one line, without quotes around it.
-fn name(s: &str) -> String {
+/// A dot or tool name for speech: on one line, hidden characters out, at most 80 bytes,
+/// without quotes around it. The one name cleaner of Open Dot (`super::spoken_name`).
+pub(crate) fn name(s: &str) -> String {
     let n = clean(s, NAME_BYTES);
     n.trim_matches(|c| matches!(c, '"' | '\'' | '`' | '“' | '”'))
         .to_string()

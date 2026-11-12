@@ -35,8 +35,6 @@ use super::service::Service;
 /// The least time between two notices.
 pub const NOTICE_GAP: Duration = Duration::from_secs(30);
 
-/// The longest a dot's name may be when spoken, in bytes, before the plainness check.
-const NAME_BYTES: usize = 80;
 /// A name said aloud has at most this many characters...
 const PLAIN_CHARS: usize = 32;
 /// ...and at most this many words.
@@ -127,29 +125,10 @@ impl WaitKind {
 }
 
 /// A dot's name cleaned for speech: on one line, without control or hidden characters, at
-/// most 80 bytes (cut on a character boundary); empty when nothing is left.
+/// most 80 bytes (cut on a character boundary); empty when nothing is left. The same cleaner
+/// as the mind's (`dots_core::open_dot::spoken_name`).
 pub fn spoken_name(name: &str) -> String {
-    let mut out = String::with_capacity(name.len().min(NAME_BYTES));
-    let mut gap = false;
-    for c in name.chars() {
-        if c.is_whitespace() || c.is_control() {
-            gap = !out.is_empty();
-            continue;
-        }
-        if hidden(c) {
-            continue;
-        }
-        let space = usize::from(gap);
-        if out.len() + space + c.len_utf8() > NAME_BYTES {
-            break;
-        }
-        if gap {
-            out.push(' ');
-            gap = false;
-        }
-        out.push(c);
-    }
-    out
+    dots_core::open_dot::spoken_name(name)
 }
 
 /// Sentence punctuation, in Latin and other scripts: a name holding one could read as a
@@ -187,31 +166,6 @@ pub fn plain_name(name: &str) -> Option<String> {
         return None;
     }
     Some(name)
-}
-
-/// Characters that show nothing (format and direction marks, joiners, tags, the soft hyphen).
-fn hidden(c: char) -> bool {
-    matches!(
-        c,
-        '\u{00AD}'
-            | '\u{034F}'
-            | '\u{061C}'
-            | '\u{115F}'
-            | '\u{1160}'
-            | '\u{17B4}'
-            | '\u{17B5}'
-            | '\u{180B}'..='\u{180F}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{3164}'
-            | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}'
-            | '\u{FFA0}'
-            | '\u{FFF0}'..='\u{FFF8}'
-            | '\u{1D173}'..='\u{1D17A}'
-            | '\u{E0000}'..='\u{E0FFF}'
-    )
 }
 
 /// "Two" to "Twenty"; digits past that.

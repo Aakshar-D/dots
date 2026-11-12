@@ -34,7 +34,7 @@ use act::{
     needs_confirmation, outcome, plain_error, plan, AskFor, Deed, OpenTarget, Outcome, Step,
     DOT_GONE, HANDLED,
 };
-use picture::{clean, Picture, View, NAME_BYTES};
+use picture::{Picture, View, NAME_BYTES};
 use prompt::{prompt, Turn, INSTRUCTIONS};
 use quick::{
     asks_for_a_deed, common_word, firm_for_another, firm_yes, quick, unclear_yes, words_of,
@@ -1774,9 +1774,11 @@ fn sentence(s: &str) -> String {
     }
 }
 
-/// A dot name for speech, on one line.
-fn spoken_name(name: &str) -> String {
-    clean(name, NAME_BYTES)
+/// A dot name for speech: on one line, control and hidden characters out, at most 80 bytes
+/// (cut on a character boundary), without quotes around it; empty when nothing is left. The
+/// app's spoken notices say names through this too.
+pub fn spoken_name(name: &str) -> String {
+    act::name(name)
 }
 
 fn is_yes(option: &str) -> bool {
