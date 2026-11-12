@@ -17,6 +17,7 @@ pub mod context;
 pub mod context_rules;
 pub mod delivery;
 pub mod deploy;
+pub mod dot_admin;
 pub mod engine;
 pub mod error;
 pub mod events;

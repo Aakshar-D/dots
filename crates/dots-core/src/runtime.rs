@@ -9,10 +9,11 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::accounts::edit::RosterEdit;
-use crate::accounts::{Access, Permission, Role};
+use crate::accounts::{Permission, Role};
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::checkins::CheckIns;
 use crate::checkpoint::{ChangesPreview, Checkpoints, RunChanges, UndoOutcome};
+use crate::dot_admin::{DotAdmin, DotAdminParts};
 use crate::engine::claude::args::resolve_claude;
 use crate::engine::claude::{cli_version, ClaudeEngine};
 use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
@@ -301,6 +302,9 @@ pub struct Runtime {
     usage_counts: Arc<crate::usage_counts::UsageCounts>,
     /// Sends each account's audit records (env vault spec §10).
     audit_sender: Arc<crate::vault::audit::AuditSender>,
+    /// Creates, changes and deletes dots, for the person and for a run's tools alike
+    /// (dots-make-dots design section 12).
+    dot_admin: DotAdmin,
     shutdown: CancellationToken,
 }
 
@@ -676,7 +680,29 @@ impl Runtime {
             viewing.clone(),
             shutdown.clone(),
         );
+        // A dot is created, changed and deleted through one path, the person's and a maker's
+        // alike. The tools for making dots reach it through the check-ins, on both engines
+        // (dots-make-dots design section 12).
+        let dot_admin = DotAdmin::new(DotAdminParts {
+            store: store.clone(),
+            bus: bus.clone(),
+            clock: cfg.clock.clone(),
+            new_dot_root: cfg.new_dot_root.clone(),
+            orgs: orgs.clone(),
+            vault: vault.clone(),
+            scheduler: scheduler.clone(),
+            watchers: watchers.clone(),
+            follow_ups: follow_ups.clone(),
+            runner: runner.clone(),
+            teams: teams.clone(),
+            apps: apps.clone(),
+            chat_files: chat_files.clone(),
+            browsers: browsers.clone(),
+            viewing: viewing.clone(),
+        });
+        checkins.set_dot_admin(&dot_admin);
         Ok(Runtime {
+            dot_admin,
             library: LibraryService::new(store.clone(), bus.clone())
                 .with_skills_dir(cfg.data_dir.join(SKILLS_DIR))
                 .with_vault(vault.clone()),
@@ -1912,6 +1938,12 @@ impl Runtime {
         &self.workflows
     }
 
+    /// What creates, changes and deletes dots: `create_dot`, `update_dot` and `delete_dot` go
+    /// through it, and so do the tools a maker's run has (dots-make-dots design section 12).
+    pub fn dot_admin(&self) -> &DotAdmin {
+        &self.dot_admin
+    }
+
     /// The follow-ups dots scheduled: what the `follow_up*` commands call.
     pub fn follow_ups(&self) -> &Arc<FollowUps> {
         &self.follow_ups
@@ -1982,21 +2014,11 @@ impl Runtime {
     /// dot was disabled and is enabled now), deleted without a schedule. A change of the row
     /// is published as `ScheduleUpdated`.
     async fn sync_schedule(&self, dot: &Dot, enabled_now: bool) -> Result<()> {
-        let schedule = dot.spec.schedule.as_ref();
-        if self
-            .store
-            .sync_schedule_state(&dot.id, schedule, enabled_now, self.clock.now())
-            .await?
-        {
-            self.schedule_updated(&dot.id);
-        }
-        Ok(())
+        self.dot_admin.sync_schedule(dot, enabled_now).await
     }
 
     fn schedule_updated(&self, dot_id: &str) {
-        let _ = self.bus.send(RuntimeEvent::ScheduleUpdated {
-            dot_id: dot_id.to_string(),
-        });
+        self.dot_admin.schedule_updated(dot_id);
     }
 
     /// Creates a dot, in the org `org_id` or, with `None`, in Personal, and in its workspace
@@ -2005,71 +2027,13 @@ impl Runtime {
     /// changing dots, and giving it secrets when it is granted any (members spec §6.3).
     pub async fn create_dot(
         &self,
-        mut spec: DotSpec,
+        spec: DotSpec,
         org_id: Option<String>,
         workspace_id: Option<String>,
     ) -> Result<Dot> {
-        if let Some(org) = &org_id {
-            if self.store.get_org(org).await?.is_none() {
-                return Err(Error::Invalid(format!(
-                    "no org '{org}' is joined on this PC"
-                )));
-            }
-        }
-        let workspace_id =
-            workspace_id.unwrap_or_else(|| crate::accounts::DEFAULT_WORKSPACE.into());
-        self.check_workspace(org_id.as_deref(), &workspace_id)
-            .await?;
-        let workspace_id = workspace_id.as_str();
-        self.require_in(org_id.as_deref(), workspace_id, Permission::EditDots)
-            .await?;
-        if !spec.variables.0.is_empty() {
-            self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
-                .await?;
-        }
-        // A blank folder gets a new one of its own; remembered so a failed create removes it.
-        let mut made: Option<PathBuf> = None;
-        if spec.workdir.trim().is_empty() {
-            let used: Vec<PathBuf> = self
-                .store
-                .list_dots()
-                .await?
-                .into_iter()
-                .map(|d| PathBuf::from(d.spec.workdir.trim()))
-                .collect();
-            let (dir, created) = default_folder(&self.new_dot_root, &spec.name, &used).await?;
-            spec.workdir = dir.to_string_lossy().into_owned();
-            // A folder that was there already, empty, may be another dot's: it stays.
-            made = created.then_some(dir);
-            // A folder Dots made is never a repository's top level: a worktree would check out
-            // whatever repository it happens to sit in.
-            spec.workspace_mode = WorkspaceMode::Folder;
-        }
-        // Worktree mode needs the top level of a repository with a commit; elsewhere the dot
-        // runs in the folder itself.
-        if spec.workspace_mode == WorkspaceMode::Worktree
-            && !worktree_ready(Path::new(spec.workdir.trim())).await
-        {
-            spec.workspace_mode = WorkspaceMode::Folder;
-        }
-        let created = self
-            .store
-            .create_dot(&spec, org_id.as_deref(), workspace_id)
-            .await;
-        let dot = match created {
-            Ok(dot) => dot,
-            Err(e) => {
-                if let Some(dir) = made {
-                    // Only removes an empty folder.
-                    let _ = tokio::fs::remove_dir(dir).await;
-                }
-                return Err(e);
-            }
-        };
-        self.sync_schedule(&dot, false).await?;
-        self.scheduler.reload();
-        self.watchers.reload();
-        Ok(dot)
+        self.dot_admin
+            .create(spec, org_id, workspace_id, None)
+            .await
     }
 
     /// The folders an agent scan reads: the home folder's agents, the workdir of each dot in the
@@ -2216,18 +2180,11 @@ impl Runtime {
 
     /// Refuses a workspace the account (`None` is Personal) doesn't have.
     async fn check_workspace(&self, org_id: Option<&str>, workspace_id: &str) -> Result<()> {
-        let scope = org_id.unwrap_or(crate::accounts::PERSONAL);
-        if self.store.workspace(scope, workspace_id).await?.is_some() {
-            return Ok(());
-        }
-        Err(self.no_workspace(org_id, workspace_id).await)
+        self.dot_admin.check_workspace(org_id, workspace_id).await
     }
 
     async fn no_workspace(&self, org_id: Option<&str>, workspace_id: &str) -> Error {
-        Error::NotFound(format!(
-            "No workspace '{workspace_id}' in {}.",
-            crate::accounts::account_label(Some(&self.orgs), org_id).await
-        ))
+        self.dot_admin.no_workspace(org_id, workspace_id).await
     }
 
     /// Moves a dot to another workspace of its account. The role must allow changing dots in
@@ -2402,93 +2359,14 @@ impl Runtime {
     /// account, the role must allow changing dots, and giving secrets to them when the grants
     /// change (members spec §6.3).
     pub async fn update_dot(&self, id: &str, spec: DotSpec) -> Result<Dot> {
-        let old = self.store.get_dot(id).await?;
-        if let Some(text) = self.vault.org_removed(&old) {
-            return Err(Error::Conflict(text));
-        }
-        self.require_dot(&old, Permission::EditDots).await?;
-        if spec.variables != old.spec.variables {
-            self.require_dot(&old, Permission::GrantEntries).await?;
-        }
-        // Only a change to the mode or the folder is refused: a stored dot whose repository
-        // has gone can still have its other fields edited.
-        if spec.workspace_mode == WorkspaceMode::Worktree
-            && (spec.workspace_mode != old.spec.workspace_mode || spec.workdir != old.spec.workdir)
-            && !spec.workdir.trim().is_empty()
-            && !worktree_ready(Path::new(spec.workdir.trim())).await
-        {
-            return Err(Error::Invalid(NOT_A_REPO.into()));
-        }
-        let was_enabled = old.spec.enabled;
-        let dot = self.store.update_dot(id, &spec).await?;
-        if dot.spec.name != old.spec.name {
-            self.teams.dot_renamed(id).await;
-        }
-        self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
-            .await?;
-        self.scheduler.reload();
-        self.watchers.reload();
-        self.follow_ups.wake();
-        // A cap raised or cleared lets its waiting runs start now.
-        self.runner.nudge();
-        Ok(dot)
+        self.dot_admin.update(id, spec, false).await
     }
 
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`). In an account, the
     /// role must allow changing dots (members spec §6.3), or this PC is waiting for or removed
     /// from the member list, and only cleaning up (`require_cleanup`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
-        let dot = self.store.get_dot(id).await?;
-        self.require_cleanup(&dot).await?;
-        let had_row = self.store.get_schedule_state(id).await?.is_some();
-        let proposals = self.store.list_app_proposals(Some(id)).await?;
-        let watchers: Vec<String> = self
-            .store
-            .list_watchers(id)
-            .await?
-            .into_iter()
-            .map(|w| w.id)
-            .collect();
-        let teams = self.store.teams_of_dot(id).await?;
-        let attachments = self.store.attachment_ids_of_dot(id).await?;
-        let had_goals = self.store.count_intents_of_dot(id).await? > 0;
-        self.store.delete_dot_if_idle(id).await?;
-        // It left its teams (`ON DELETE CASCADE`), and their workflows may now have a problem.
-        self.teams.dot_deleted(&teams).await;
-        // Its goals stay, unlinked (`ON DELETE SET NULL`).
-        if had_goals {
-            let _ = self.bus.send(RuntimeEvent::IntentsUpdated {
-                org_id: dot.org_id.clone(),
-                workspace_id: dot.workspace_id.clone(),
-            });
-        }
-        // Its attached files' rows went with it; their stored copies go too (attachments spec
-        // section 4.7).
-        for a in &attachments {
-            self.chat_files.remove(a);
-        }
-        // Its proposals' rows went with it; their files go too (app library spec section 6.2).
-        for p in &proposals {
-            self.apps.drop_proposed(&p.id).await;
-        }
-        // Its watchers went with it; what they staged and kept goes too.
-        self.watchers.forget(&watchers);
-        // It can no longer be viewed (needs-you spec section 7).
-        {
-            let mut viewing = lock(&self.viewing);
-            if viewing.as_deref() == Some(id) {
-                *viewing = None;
-            }
-        }
-        // Its Edge closes and its profile goes with it (browser spec section 6).
-        self.browsers.forget(id).await;
-        if had_row {
-            self.schedule_updated(id);
-        }
-        self.scheduler.reload();
-        self.watchers.reload();
-        self.follow_ups.wake();
-        Ok(())
+        self.dot_admin.delete(id).await
     }
 
     /// Switches the dot on or off. In an account, the role must allow changing dots (members
@@ -3516,13 +3394,7 @@ impl Runtime {
     /// can't run, and Leave removes the account. So may a member outside the dot's workspace
     /// (members spec §6.3). Enabling, editing and watcher changes stay refused for them.
     async fn require_cleanup(&self, dot: &Dot) -> Result<()> {
-        if matches!(
-            crate::accounts::access_dot(Some(&self.orgs), dot),
-            Access::Waiting | Access::Removed | Access::OutsideWorkspace { .. }
-        ) {
-            return Ok(());
-        }
-        self.require_dot(dot, Permission::EditDots).await
+        self.dot_admin.require_cleanup(dot).await
     }
 
     /// `require_dot` on the dot `dot_id`.
@@ -3742,9 +3614,9 @@ impl Runtime {
 }
 
 /// The dot being viewed (`Runtime::set_viewing`), shared with `watch_viewing`.
-type Viewing = Arc<std::sync::Mutex<Option<String>>>;
+pub(crate) type Viewing = Arc<std::sync::Mutex<Option<String>>>;
 
-fn lock(viewing: &Viewing) -> std::sync::MutexGuard<'_, Option<String>> {
+pub(crate) fn lock(viewing: &Viewing) -> std::sync::MutexGuard<'_, Option<String>> {
     viewing
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

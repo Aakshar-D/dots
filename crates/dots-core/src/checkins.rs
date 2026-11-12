@@ -296,6 +296,9 @@ pub struct CheckIns {
     instructions: crate::instructions::Proposals,
     /// Weak: the workflow runs hold the runner, which holds these.
     workflows: Arc<OnceLock<Weak<crate::workflows::Workflows>>>,
+    /// What creates, changes and deletes dots, for the tools for making dots (dots-make-dots
+    /// design section 12). Weak: it holds the runner, which holds these.
+    dot_admin: Arc<OnceLock<crate::dot_admin::WeakDotAdmin>>,
 }
 
 impl CheckIns {
@@ -311,7 +314,20 @@ impl CheckIns {
             bus,
             follow_ups,
             workflows: Arc::new(OnceLock::new()),
+            dot_admin: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Gives the tools for making dots what creates, changes and deletes dots. The runtime
+    /// calls it once, at start.
+    pub fn set_dot_admin(&self, admin: &crate::dot_admin::DotAdmin) {
+        let _ = self.dot_admin.set(admin.downgrade());
+    }
+
+    /// What creates, changes and deletes dots, once the runtime has set it and while the
+    /// runtime exists. Both engines hold these check-ins, so both reach it here.
+    pub fn dot_admin(&self) -> Option<crate::dot_admin::DotAdmin> {
+        self.dot_admin.get().and_then(|admin| admin.upgrade())
     }
 
     /// Gives the workflow tools the workflow runs. The runtime calls it once, at start.
