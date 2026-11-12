@@ -276,9 +276,10 @@ impl Store {
         Ok(turns.is_some_and(|n| n <= crate::context_rules::BACKOFF_TURNS))
     }
 
-    /// The run's compactions and fresh starts, oldest first.
+    /// The run's compactions and fresh starts, oldest first. Two written within the same
+    /// millisecond come in the order they were written (`rowid`): their ids are random there.
     pub async fn list_context_events(&self, run_id: &str) -> Result<Vec<ContextEvent>> {
-        let rows = sqlx::query("SELECT * FROM context_events WHERE run_id = ? ORDER BY at, id")
+        let rows = sqlx::query("SELECT * FROM context_events WHERE run_id = ? ORDER BY at, rowid")
             .bind(run_id)
             .fetch_all(&self.pool)
             .await?;
