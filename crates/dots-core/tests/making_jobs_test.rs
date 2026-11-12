@@ -1857,33 +1857,38 @@ async fn a_job_run_sent_again_after_its_job_ended_carries_no_job() {
     );
 }
 
-/// A job whose run waits for a spending cap tells the maker once that it has not started
-/// (dots-make-dots design section 8), so the maker does not take it for working; the job stays
-/// open and its end wakes the maker as before.
+/// A job whose run waits for a spending cap that does not hold its maker, here the made dot's
+/// own, tells the maker once that it has not started (dots-make-dots design section 8), so the
+/// maker does not take it for working; the job stays open and its end wakes the maker as
+/// before.
 #[tokio::test]
 async fn a_job_held_by_a_cap_is_reported_to_the_maker_once() {
     let t = quiet().await;
-    let mut s = spec("Researcher");
-    s.workdir = t.dir.path().join("work").to_string_lossy().to_string();
-    s.workspace_mode = WorkspaceMode::Folder;
-    s.making.on = true;
-    s.spend_cap.daily_usd = Some(1.0);
-    let maker = t.rt.create_dot(s, None, None).await.unwrap();
+    let maker = maker(&t).await;
     let run = live_run(&t, &maker).await;
-    make(&t, &run, "Blog Watcher").await;
-    // The maker's own run spent its cap, which it shares with the dots it made.
+    let made = make(&t, &run, "Blog Watcher").await;
+    // The person gives the made dot a daily cap of its own, and a run of it spends it.
+    let mut s = t.rt.store().get_dot(&made.id).await.unwrap().spec;
+    s.spend_cap.daily_usd = Some(0.5);
+    t.rt.update_dot(&made.id, s).await.unwrap();
+    let spent =
+        t.rt.store()
+            .create_run(&NewRun::new(&made.id, TriggerKind::Schedule))
+            .await
+            .unwrap();
+    start(&t, &spent.id).await;
     t.rt.store()
-        .add_usage(&run.id, 10, 10, 0, Some(1.0))
+        .add_usage(&spent.id, 10, 10, 0, Some(0.6))
         .await
         .unwrap();
+    finish(&t, &spent.id, RunStatus::Succeeded, Some("Done."), None).await;
     let job = give(&t, &run, "Blog Watcher", "Read the blogs now.").await;
 
     settle(&t).await;
     settle(&t).await;
 
-    let held = "\"Blog Watcher\" has not started the job: Researcher reached its $1.00 daily \
-                cap, shared with the dots it made. It starts by itself when it may; you will be \
-                woken when the job ends.";
+    let held = "\"Blog Watcher\" has not started the job: Blog Watcher reached its $0.50 daily \
+                cap. It starts by itself when it may; you will be woken when the job ends.";
     assert_eq!(wakes(&t).await, [held]);
     assert_eq!(stored(&t, &job).await.status, JobStatus::Working);
 
@@ -1906,6 +1911,107 @@ async fn a_job_held_by_a_cap_is_reported_to_the_maker_once() {
             "\"Blog Watcher\" finished the job.\n\nIts final message:\n> Three new posts."
         ]
     );
+}
+
+/// A job held by the cap its maker shares with the dots it made is not told to the maker
+/// (dots-make-dots design section 8): the wake would be held by the same cap until the job could
+/// start anyway, and meanwhile it would keep the maker's topic busy. The person can still write
+/// there, and no wake run waits in it.
+#[tokio::test]
+async fn a_job_held_by_the_makers_own_cap_is_not_reported() {
+    let t = quiet().await;
+    let mut s = spec("Researcher");
+    s.workdir = t.dir.path().join("work").to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.making.on = true;
+    s.spend_cap.daily_usd = Some(1.0);
+    let maker = t.rt.create_dot(s, None, None).await.unwrap();
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "Blog Watcher").await;
+    // The maker's own run spent its cap, which it shares with the dots it made.
+    t.rt.store()
+        .add_usage(&run.id, 10, 10, 0, Some(1.0))
+        .await
+        .unwrap();
+    let job = give(&t, &run, "Blog Watcher", "Read the blogs now.").await;
+    let run = finish(&t, &run.id, RunStatus::Succeeded, Some("Gave it."), None).await;
+
+    settle(&t).await;
+    settle(&t).await;
+
+    assert!(wakes(&t).await.is_empty());
+    assert!(!t.rt.store().making_job_held_told(&job.id).await.unwrap());
+    t.rt.makers().deliver_wakes().await.unwrap();
+    let chat =
+        t.rt.chat(&maker.id, "How is it going?", Some(&run.id))
+            .await
+            .unwrap();
+    let thread = t.rt.store().list_thread(&run.root_run_id).await.unwrap();
+    let ids: Vec<&str> = thread.iter().map(|r| r.id.as_str()).collect();
+    assert_eq!(ids, [run.id.as_str(), chat.id.as_str()]);
+}
+
+/// A job held for Claude's usage limit in a topic nobody watches is not told either: its wake
+/// would be background, and held the same way.
+#[tokio::test]
+async fn a_job_held_for_the_usage_limit_in_an_unattended_topic_is_not_reported() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let scheduled = live_run_as(&t, &maker, TriggerKind::Schedule).await;
+    make(&t, &scheduled, "Blog Watcher").await;
+    t.rt.limits().set_shares(HoldShares {
+        enabled: true,
+        five_hour: 60,
+        weekly: 70,
+    });
+    let now = Utc::now();
+    let reading = LimitReading {
+        window: "five_hour".into(),
+        utilization: 0.95,
+        resets_at: timestamp(now + TimeDelta::hours(3)),
+        status: "allowed".into(),
+        read_at: timestamp(now),
+    };
+    t.rt.limits()
+        .record("allowed", vec![reading])
+        .await
+        .unwrap();
+    let job = give(&t, &scheduled, "Blog Watcher", "Read the blogs now.").await;
+    let held = t.rt.limits_get().await.unwrap().held_run_ids;
+    assert!(held.contains(&run_of(&t, &job).await.id), "{held:?}");
+
+    settle(&t).await;
+
+    assert!(wakes(&t).await.is_empty());
+    assert!(!t.rt.store().making_job_held_told(&job.id).await.unwrap());
+}
+
+/// A topic the person started with Run now, or one an app started, is watched though nobody
+/// typed in it (dots-make-dots design section 8): the jobs given there and the wakes that go
+/// there are not background.
+#[tokio::test]
+async fn a_job_and_a_wake_in_a_run_now_or_app_topic_are_not_background() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    for (trigger, name) in [
+        (TriggerKind::Manual, "Blog Watcher"),
+        (TriggerKind::App, "Feed Reader"),
+    ] {
+        let root = live_run_as(&t, &maker, trigger).await;
+        make(&t, &root, name).await;
+        let job = done_job(&t, &root, name, "Three new posts.").await;
+        let its = run_of(&t, &job).await;
+        assert!(!run_is_background(&its), "{trigger:?}: {its:#?}");
+        let root = finish(&t, &root.id, RunStatus::Succeeded, Some("Gave it."), None).await;
+        t.rt.makers().deliver_wakes().await.unwrap();
+        let thread = t.rt.store().list_thread(&root.root_run_id).await.unwrap();
+        assert_eq!(thread.len(), 2, "{trigger:?}: {thread:#?}");
+        assert!(
+            !run_is_background(&thread[1]),
+            "{trigger:?}: {:#?}",
+            thread[1]
+        );
+    }
 }
 
 /// A delete that comes after a job's run ended, before any pass settled the job, reports the

@@ -605,7 +605,8 @@ impl Store {
     }
 
     /// Whether the maker of the job `id` was told that its run waits for a cap
-    /// (`tell_making_job_held`). `false` for a job that is gone.
+    /// (`tell_making_job_held`), ever: its `held_told_at` is set. `false` for a job that is
+    /// gone.
     pub async fn making_job_held_told(&self, id: &str) -> Result<bool> {
         let told: Option<Option<String>> =
             sqlx::query_scalar("SELECT held_told_at FROM making_jobs WHERE id = ?")
@@ -616,9 +617,11 @@ impl Store {
     }
 
     /// Tells the maker of the open job `id` once that its run waits (design section 8): marks
-    /// the job told and stores the wake `message` for the maker's topic the job was given in,
-    /// in one transaction. `false`, with nothing written, when the job was told already, has
-    /// ended or is gone.
+    /// the job told (`held_told_at`) and stores the wake `message` for the maker's topic the
+    /// job was given in, in one transaction. `false`, with nothing written, when the job was
+    /// told already, has ended or is gone. A job is told once, ever: `held_told_at` is never
+    /// cleared, so a later run of the job held again, as a run resumed after an approval may
+    /// be, is not told.
     pub async fn tell_making_job_held(&self, id: &str, message: &str) -> Result<bool> {
         let at = now();
         let mut tx = self.pool.begin().await?;

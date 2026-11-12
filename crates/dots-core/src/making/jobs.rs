@@ -18,7 +18,7 @@ use super::service::{Makers, MAX_JOB};
 use crate::limits::{run_is_background, BACKGROUND, STOPPED_BY_LIMIT};
 use crate::model::{ApprovalStatus, Dot, NewRun, Run, RunStatus, TriggerKind, WaitReason};
 use crate::prompt::{is_typed, JOB_FROM};
-use crate::spend::STOPPED_BY_CAP;
+use crate::spend::{Ledger, STOPPED_BY_CAP};
 use crate::util::new_id;
 use crate::{Error, Result};
 
@@ -49,6 +49,8 @@ pub const FIRST_JOB_STARTED: &str =
 
 /// The most characters of a failed run's error a wake carries.
 const MAX_ERROR: usize = 300;
+/// The key in `LogEvery` of a pass's check of the jobs whose runs may be held.
+const HELD_CHECK: &str = "jobs: held check";
 /// The most runs one pass follows a job through: far more than a turn has.
 const MAX_HOPS: usize = 200;
 
@@ -178,6 +180,27 @@ pub fn held_message(dot: &str, why: &str) -> String {
 /// What a wake says of a job whose made dot the maker deleted before it ended.
 pub fn deleted_message(dot: &str) -> String {
     format!("\"{dot}\" was deleted before the job ended.")
+}
+
+/// Whether the chat topic whose runs are `thread` is unattended (design section 8): the person
+/// never typed in it, and its first run is background (`limits::run_is_background`), as a
+/// schedule's or a watcher's is. A topic the person started with Run now, or one an app
+/// started, is watched. The jobs given in an unattended topic, and its wakes, are background.
+pub(crate) fn unattended(thread: &[Run]) -> bool {
+    let root = thread
+        .iter()
+        .find(|run| run.id == run.root_run_id)
+        .or(thread.first());
+    !thread.iter().any(is_typed) && root.is_some_and(run_is_background)
+}
+
+/// An open job whose queued run may wait for a cap or for Claude's usage limit: what one pass of
+/// `settle_jobs` gathers, so the maker is told after the pass with the facts read once
+/// (`Makers::tell_held`).
+pub(super) struct MaybeHeld {
+    job: MakingJob,
+    dot_name: String,
+    run: Run,
 }
 
 /// How a job whose last run is `run`, which has ended, ended: for the store, in words for the
@@ -368,13 +391,13 @@ impl Makers {
         }
         p.runner.require_run(made).await?;
         // As the maker's run counted; a run that is gone gave the job in the person's sight.
-        // A topic the person never typed in is unattended however its runs started: a wake
+        // An unattended topic (`unattended`) stays so however its later runs started: a wake
         // there, and the jobs it gives, are background too (design section 8).
         let background = match p.store.get_run(maker_run_id).await {
             Ok(run) => run_is_background(&run),
             Err(Error::NotFound(_)) => false,
             Err(e) => return Err(e),
-        } || !self.typed_in(maker_root_run_id).await?;
+        } || self.topic_unattended(maker_root_run_id).await?;
         let lock = p.follow_ups.thread_lock();
         let one_thread = lock.lock().await;
         let earlier = p
@@ -472,10 +495,17 @@ impl Makers {
         store.count_jobs_started(root_run_id, since).await
     }
 
-    /// Whether the person typed a message in the chat topic `root_run_id`.
-    async fn typed_in(&self, root_run_id: &str) -> Result<bool> {
-        let thread = self.parts.store.list_thread(root_run_id).await?;
-        Ok(thread.iter().any(is_typed))
+    /// Whether the chat topic the run `run_id` is in now is unattended (`unattended`). A run
+    /// that is gone is in no topic: `false`.
+    async fn topic_unattended(&self, run_id: &str) -> Result<bool> {
+        let store = &self.parts.store;
+        let run = match store.get_run(run_id).await {
+            Ok(run) => run,
+            Err(Error::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let thread = store.list_thread(&run.root_run_id).await?;
+        Ok(unattended(&thread))
     }
 
     /// The topic of `made` the next job from a topic of the maker goes on in, as its first run
@@ -514,7 +544,7 @@ impl Makers {
     ///
     /// - It has not ended (queued, running, awaiting an approval): nothing, except that a
     ///   queued run that waits for a spending cap or Claude's usage limit is told to the maker
-    ///   once (`held_message`).
+    ///   once (`held_message`), after the pass (`tell_held`), when the maker's wake could start.
     /// - It ended and a run goes on with its work in the same turn (`Store::run_continued_by`):
     ///   the job moves to that run.
     /// - It ended and the newest question a run of the job asked waits for the person: the job
@@ -533,9 +563,10 @@ impl Makers {
         let mut failed = None;
         {
             let _one_pass = p.settling.lock().await;
+            let mut held = Vec::new();
             for job in p.store.open_making_jobs(None).await? {
                 let id = job.id.clone();
-                match self.settle_job(job).await {
+                match self.settle_job(job, &mut held).await {
                     Ok(woke) => {
                         p.logged.forget(&id);
                         ended |= woke;
@@ -547,6 +578,15 @@ impl Makers {
                         }
                         failed.get_or_insert(e);
                     }
+                }
+            }
+            match self.tell_held(held).await {
+                Ok(told) => ended |= told,
+                Err(e) => {
+                    if p.logged.due(HELD_CHECK, std::time::Instant::now()) {
+                        tracing::warn!("the held jobs could not be checked: {e}");
+                    }
+                    failed.get_or_insert(e);
                 }
             }
         }
@@ -563,9 +603,13 @@ impl Makers {
     }
 
     /// One open job of a pass (`settle_jobs`, and a delete of its made dot, which holds
-    /// `settling`). `true` when it stored a wake here: it ended, or its maker was told that its
-    /// run waits for a cap.
-    pub(super) async fn settle_job(&self, mut job: MakingJob) -> Result<bool> {
+    /// `settling`). `true` when it stored a wake here: it ended. A working job whose run is
+    /// queued and may wait for a cap is added to `held`, for the pass to tell (`tell_held`).
+    pub(super) async fn settle_job(
+        &self,
+        mut job: MakingJob,
+        held: &mut Vec<MaybeHeld>,
+    ) -> Result<bool> {
         let store = &self.parts.store;
         let dot = match store.get_dot(&job.dot_id).await {
             Ok(dot) => dot,
@@ -592,7 +636,11 @@ impl Makers {
             if !last.status.is_terminal() {
                 // A run that waits for a cap may wait for hours: the maker is told once.
                 if last.status == RunStatus::Queued && job.status == JobStatus::Working {
-                    return self.tell_if_held(&job, name, &last).await;
+                    held.push(MaybeHeld {
+                        job,
+                        dot_name: name.to_string(),
+                        run: last,
+                    });
                 }
                 return Ok(false);
             }
@@ -680,30 +728,55 @@ impl Makers {
             .any(|a| a.parked && a.status == ApprovalStatus::Denied))
     }
 
-    /// Tells the maker once, with a wake, that the open `job` of the made dot named `dot_name`
-    /// has not started: its queued run `last` waits for a spending cap or for Claude's usage
-    /// limit (design section 8). The job stays open. `true` when the wake was stored here.
-    async fn tell_if_held(&self, job: &MakingJob, dot_name: &str, last: &Run) -> Result<bool> {
+    /// Tells each maker once, with a wake, that its open job of the jobs `held` has not
+    /// started: the job's queued run waits for a spending cap or for Claude's usage limit
+    /// (design section 8). The job stays open. Why each run waits, and the caps, are read once
+    /// for all of them. `true` when a wake was stored here.
+    ///
+    /// The maker is told only when that wake could start: not while a cap holds the maker too,
+    /// as the cap it shares with the dots it made does, and not for Claude's usage limit when
+    /// the wake would be background (`unattended`). Such a wake would wait as long as the job,
+    /// keep the maker's topic busy meanwhile, and arrive when it is no longer true. The job is
+    /// then left untold, and may be told on a later pass.
+    async fn tell_held(&self, held: Vec<MaybeHeld>) -> Result<bool> {
         let p = &self.parts;
-        if p.store.making_job_held_told(&job.id).await? {
+        let mut untold = Vec::with_capacity(held.len());
+        for one in held {
+            if !p.store.making_job_held_told(&one.job.id).await? {
+                untold.push(one);
+            }
+        }
+        if untold.is_empty() {
             return Ok(false);
         }
-        let mut runs = [last.clone()];
+        let mut runs: Vec<Run> = untold.iter().map(|one| one.run.clone()).collect();
         p.runner.fill_wait_reasons(&mut runs).await?;
-        let [run] = runs;
-        let why = match run.wait_reason {
-            Some(WaitReason::SpendCap) => run
-                .wait_detail
-                .unwrap_or_else(|| WaitReason::SpendCap.text().to_string()),
-            Some(WaitReason::UsageHold) => "it is held for Claude's usage limit".to_string(),
-            _ => return Ok(false),
-        };
-        let said = held_message(dot_name, &why);
-        if !p.store.tell_making_job_held(&job.id, &said).await? {
-            return Ok(false);
+        let mut ledger = Ledger::load(&p.store).await?;
+        let mut told = false;
+        for (one, run) in untold.iter().zip(runs) {
+            let MaybeHeld { job, dot_name, .. } = one;
+            let why = match run.wait_reason {
+                Some(WaitReason::SpendCap) => run
+                    .wait_detail
+                    .unwrap_or_else(|| WaitReason::SpendCap.text().to_string()),
+                Some(WaitReason::UsageHold) => {
+                    if self.topic_unattended(&job.maker_root_run_id).await? {
+                        continue;
+                    }
+                    "it is held for Claude's usage limit".to_string()
+                }
+                _ => continue,
+            };
+            if ledger.hit_for(&p.store, &job.maker_dot_id).await?.is_some() {
+                continue;
+            }
+            let said = held_message(dot_name, &why);
+            if p.store.tell_making_job_held(&job.id, &said).await? {
+                tracing::info!(job = %job.id, run = %run.id, "a job's maker was told its run waits");
+                told = true;
+            }
         }
-        tracing::info!(job = %job.id, run = %last.id, "a job's maker was told its run waits");
-        Ok(true)
+        Ok(told)
     }
 
     /// Whether the job that is at the run `last` has been at the run `run_id`: `last` itself,

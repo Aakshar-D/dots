@@ -15,7 +15,6 @@ use tokio_util::sync::CancellationToken;
 use super::service::Makers;
 use crate::events::RuntimeEvent;
 use crate::limits::BACKGROUND;
-use crate::prompt::is_typed;
 use crate::scheduler::ERROR_WAIT;
 use crate::{Error, Result};
 
@@ -163,7 +162,7 @@ impl Makers {
     /// is dropped with a line in the log: neither runs. The wake's run goes on at the topic's
     /// end; when that run has no session (it ended before the dot started working) it goes on
     /// without one, in the same topic, so the topic keeps its history and its count of jobs.
-    /// It is background when the person never typed in the topic (design section 8).
+    /// It is background in an unattended topic (`jobs::unattended`, design section 8).
     async fn deliver_wake(
         &self,
         wake: &MakingWake,
@@ -217,10 +216,9 @@ impl Makers {
             new.branch = end.branch.clone();
             new.base_commit = end.base_commit.clone();
         }
-        let unattended = !thread.iter().any(is_typed);
         if let Some(payload) = new.payload.as_mut() {
             payload[WAKE_ID] = wake.id.clone().into();
-            if unattended {
+            if super::jobs::unattended(&thread) {
                 payload[BACKGROUND] = true.into();
             }
         }

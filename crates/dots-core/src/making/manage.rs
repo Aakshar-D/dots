@@ -1133,7 +1133,8 @@ impl Makers {
         let settling = p.settling.lock().await;
         for job in p.store.open_making_jobs(Some(&dot.id)).await? {
             let id = job.id.clone();
-            if let Err(e) = self.settle_job(job).await {
+            // A job's run that waits is not told here: the dot goes, and the job with it.
+            if let Err(e) = self.settle_job(job, &mut Vec::new()).await {
                 tracing::warn!(job = %id, "settling a job before its dot's delete failed: {e}");
             }
         }
