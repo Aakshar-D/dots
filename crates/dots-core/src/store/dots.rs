@@ -514,6 +514,17 @@ impl Store {
     /// Deletes the dot only if it has no queued/running/awaiting runs, atomically. What a dot
     /// with a maker spent this month is kept first, in the same transaction (`keep_spend`).
     pub async fn delete_dot_if_idle(&self, id: &str) -> Result<()> {
+        self.delete_dot_if_idle_and_wake(id, &[]).await
+    }
+
+    /// `delete_dot_if_idle`, storing in the same transaction `wakes`, each a maker, its chat
+    /// topic and the message it is woken with (dots-make-dots design sections 8 and 9): the
+    /// makers a delete tells are told if and only if the dot is gone.
+    pub async fn delete_dot_if_idle_and_wake(
+        &self,
+        id: &str,
+        wakes: &[(String, String, String)],
+    ) -> Result<()> {
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         keep_spend(&mut tx, id).await?;
         let res = sqlx::query(
@@ -530,6 +541,19 @@ impl Store {
             return Err(Error::Conflict(
                 "dot has queued, running or awaiting runs; cancel them first".into(),
             ));
+        }
+        for (maker, topic, message) in wakes {
+            sqlx::query(
+                "INSERT INTO making_wakes (id, maker_dot_id, root_run_id, message, created_at) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(new_id())
+            .bind(maker)
+            .bind(topic)
+            .bind(message)
+            .bind(now())
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
         Ok(())

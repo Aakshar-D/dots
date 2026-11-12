@@ -92,8 +92,9 @@ pub fn is_background(t: TriggerKind) -> bool {
 }
 
 /// The key of a chat run's payload that marks it background: a job a maker gave in a run that
-/// was itself background (dots-make-dots design section 8). Only Dots writes a chat run's
-/// payload, so no one outside can set it.
+/// was itself background, and a job or a wake in a maker's topic the person never typed in
+/// (dots-make-dots design section 8). Only Dots writes a chat run's payload, so no one outside
+/// can set it.
 pub const BACKGROUND: &str = "background";
 
 /// Whether the usage holds, the role hold and the spending caps treat `run` as background: by

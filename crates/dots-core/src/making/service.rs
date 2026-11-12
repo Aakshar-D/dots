@@ -254,6 +254,14 @@ pub(super) struct Parts {
     /// and while a maker deletes a made dot whose open jobs it ends. Taken after
     /// `one_at_a_time` when both are held.
     pub(super) settling: Mutex<()>,
+    /// How long the wakes' loop waits before it tries again a wake that waits for something
+    /// no event tells the end of (`scheduler::ERROR_WAIT`; shorter in tests).
+    pub(super) retry_wait: std::sync::Mutex<std::time::Duration>,
+    /// Tells the wakes' loop to try again after its wait: a pass outside the loop left a wake
+    /// waiting for a topic that is adding an app, or failed (design section 8).
+    pub(super) retry: Arc<tokio::sync::Notify>,
+    /// When each failure the wakes' loop keeps meeting was last logged (`LogEvery`).
+    pub(super) logged: super::wake::LogEvery,
 }
 
 /// Everything a maker does to other dots, for the tools of both engines. Cheap to clone; the
@@ -295,7 +303,21 @@ impl Makers {
                 runner,
                 one_at_a_time: Mutex::new(()),
                 settling: Mutex::new(()),
+                retry_wait: std::sync::Mutex::new(
+                    crate::scheduler::ERROR_WAIT.to_std().unwrap_or_default(),
+                ),
+                retry: Arc::new(tokio::sync::Notify::new()),
+                logged: super::wake::LogEvery::default(),
             }),
+        }
+    }
+
+    /// Sets how long the wakes' loop waits before it tries a waiting wake again (`retry_wait`),
+    /// for tests: thirty seconds otherwise.
+    #[doc(hidden)]
+    pub fn set_wake_retry(&self, wait: std::time::Duration) {
+        if let Ok(mut retry_wait) = self.parts.retry_wait.lock() {
+            *retry_wait = wait;
         }
     }
 

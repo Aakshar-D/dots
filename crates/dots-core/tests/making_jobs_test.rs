@@ -734,6 +734,12 @@ async fn a_job_whose_approval_is_refused_ends_with_the_parked_run() {
     let job = give(&t, &run, "Blog Watcher", "Read the blogs now.").await;
     let its = run_of(&t, &job).await;
     start(&t, &its.id).await;
+    // The run asks to fetch a page and parks on it; the person refuses, with no note.
+    let approval =
+        t.rt.store()
+            .create_approval(&its.id, "WebFetch", &json!({"url": "https://example.com"}))
+            .await
+            .unwrap();
     t.rt.store()
         .finish_run(
             &its.id,
@@ -743,16 +749,26 @@ async fn a_job_whose_approval_is_refused_ends_with_the_parked_run() {
         )
         .await
         .unwrap();
+    t.rt.store()
+        .decide_approval_with_parked(&approval.id, false, None, true)
+        .await
+        .unwrap();
 
     // A plain refusal closes the parked run with no run after it.
     let child = t.rt.store().resume_parked(&its.id, &[], &[], &[], None);
     assert!(child.await.unwrap().is_none());
     settle(&t).await;
 
-    assert_eq!(stored(&t, &job).await.status, JobStatus::Ended);
+    // The maker is told the person refused, not that the job was done.
+    let job = stored(&t, &job).await;
+    assert_eq!(job.status, JobStatus::Ended);
+    assert_eq!(job.ended_how, Some(JobEnd::Cancelled));
     assert_eq!(
         wakes(&t).await,
-        ["\"Blog Watcher\" finished the job.\n\nIts final message:\n> I need the web."]
+        [
+            "\"Blog Watcher\" was stopped: the person refused what it asked to do.\n\nIts final \
+          message:\n> I need the web."
+        ]
     );
 }
 
@@ -1759,4 +1775,207 @@ async fn the_list_says_which_made_dot_works_on_a_job_from_this_conversation() {
         text[2].ends_with("; running; no run has ended yet"),
         "{text:?}"
     );
+}
+
+/// A topic the person never typed in is unattended from start to end (dots-make-dots design
+/// section 8): the wake a schedule's job brings is background, and so is the job that wake
+/// gives, for the usage holds and the role hold.
+#[tokio::test]
+async fn a_wake_and_its_job_in_a_topic_the_person_never_typed_in_are_background() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let scheduled = live_run_as(&t, &maker, TriggerKind::Schedule).await;
+    make(&t, &scheduled, "Blog Watcher").await;
+    done_job(&t, &scheduled, "Blog Watcher", "Three new posts.").await;
+    let scheduled = finish(
+        &t,
+        &scheduled.id,
+        RunStatus::Succeeded,
+        Some("Gave it."),
+        None,
+    )
+    .await;
+
+    t.rt.makers().deliver_wakes().await.unwrap();
+    let thread =
+        t.rt.store()
+            .list_thread(&scheduled.root_run_id)
+            .await
+            .unwrap();
+    assert_eq!(thread.len(), 2, "{thread:#?}");
+    let woken = start(&t, &thread[1].id).await;
+    assert!(woken.payload.as_ref().unwrap().get("wake_id").is_some());
+    assert!(run_is_background(&woken), "{woken:#?}");
+
+    let job = give(&t, &woken, "Blog Watcher", "Now sum them up.").await;
+    assert!(run_is_background(&run_of(&t, &job).await));
+
+    // A topic the person typed in is watched: its wake and its jobs are not background.
+    let chat = live_run(&t, &maker).await;
+    make(&t, &chat, "Feed Reader").await;
+    done_job(&t, &chat, "Feed Reader", "Two new posts.").await;
+    let chat = finish(&t, &chat.id, RunStatus::Succeeded, Some("Gave it."), None).await;
+    t.rt.makers().deliver_wakes().await.unwrap();
+    let thread = t.rt.store().list_thread(&chat.root_run_id).await.unwrap();
+    let woken = start(&t, &thread[1].id).await;
+    assert!(!run_is_background(&woken), "{woken:#?}");
+    let job = give(&t, &woken, "Feed Reader", "Now sum them up.").await;
+    assert!(!run_is_background(&run_of(&t, &job).await));
+}
+
+/// A failed job run that the person sends again after its job ended is no job any more
+/// (dots-make-dots design section 8): nobody would be woken with its result, so it does not
+/// say it goes back to the maker.
+#[tokio::test]
+async fn a_job_run_sent_again_after_its_job_ended_carries_no_job() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "Blog Watcher").await;
+    let job = give(&t, &run, "Blog Watcher", "Read the blogs now.").await;
+    let its = run_of(&t, &job).await;
+    start(&t, &its.id).await;
+    // It reached the dot, then failed: Send again is the person's way to try it once more.
+    t.rt.store()
+        .set_delivered(&its.id, Utc::now())
+        .await
+        .unwrap();
+    finish(&t, &its.id, RunStatus::Failed, None, Some("boom")).await;
+    settle(&t).await;
+    assert_eq!(stored(&t, &job).await.status, JobStatus::Ended);
+
+    let again = t.rt.resend(&its.id).await.unwrap();
+
+    assert_eq!(again.retry_of.as_deref(), Some(its.id.as_str()));
+    let payload = again.payload.clone().unwrap();
+    assert_eq!(payload, json!({"message": "Read the blogs now."}));
+    settle(&t).await;
+    assert_eq!(wakes(&t).await.len(), 1);
+    assert_eq!(
+        stored(&t, &job).await.last_run_id.as_deref(),
+        Some(its.id.as_str())
+    );
+}
+
+/// A job whose run waits for a spending cap tells the maker once that it has not started
+/// (dots-make-dots design section 8), so the maker does not take it for working; the job stays
+/// open and its end wakes the maker as before.
+#[tokio::test]
+async fn a_job_held_by_a_cap_is_reported_to_the_maker_once() {
+    let t = quiet().await;
+    let mut s = spec("Researcher");
+    s.workdir = t.dir.path().join("work").to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.making.on = true;
+    s.spend_cap.daily_usd = Some(1.0);
+    let maker = t.rt.create_dot(s, None, None).await.unwrap();
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "Blog Watcher").await;
+    // The maker's own run spent its cap, which it shares with the dots it made.
+    t.rt.store()
+        .add_usage(&run.id, 10, 10, 0, Some(1.0))
+        .await
+        .unwrap();
+    let job = give(&t, &run, "Blog Watcher", "Read the blogs now.").await;
+
+    settle(&t).await;
+    settle(&t).await;
+
+    let held = "\"Blog Watcher\" has not started the job: Researcher reached its $1.00 daily \
+                cap, shared with the dots it made. It starts by itself when it may; you will be \
+                woken when the job ends.";
+    assert_eq!(wakes(&t).await, [held]);
+    assert_eq!(stored(&t, &job).await.status, JobStatus::Working);
+
+    // It ends later: the maker is woken with that too.
+    let its = run_of(&t, &job).await;
+    start(&t, &its.id).await;
+    finish(
+        &t,
+        &its.id,
+        RunStatus::Succeeded,
+        Some("Three new posts."),
+        None,
+    )
+    .await;
+    settle(&t).await;
+    assert_eq!(
+        wakes(&t).await,
+        [
+            held,
+            "\"Blog Watcher\" finished the job.\n\nIts final message:\n> Three new posts."
+        ]
+    );
+}
+
+/// A delete that comes after a job's run ended, before any pass settled the job, reports the
+/// job as it ended, with its final text, and not as deleted (dots-make-dots design section
+/// 8); on the person's delete as on the maker's.
+#[tokio::test]
+async fn a_delete_after_a_job_run_ended_reports_the_job_as_it_ended() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    for (name, by_maker) in [("Blog Watcher", true), ("Feed Reader", false)] {
+        let made = make(&t, &run, name).await;
+        let job = give(&t, &run, name, "Read the blogs now.").await;
+        let its = run_of(&t, &job).await;
+        start(&t, &its.id).await;
+        finish(
+            &t,
+            &its.id,
+            RunStatus::Succeeded,
+            Some("Three new posts."),
+            None,
+        )
+        .await;
+        if by_maker {
+            t.rt.makers().delete_dot(&run.id, name).await.unwrap();
+        } else {
+            t.rt.delete_dot(&made.id).await.unwrap();
+        }
+    }
+    assert_eq!(
+        wakes(&t).await,
+        [
+            "\"Blog Watcher\" finished the job.\n\nIts final message:\n> Three new posts.",
+            "\"Feed Reader\" finished the job.\n\nIts final message:\n> Three new posts."
+        ]
+    );
+}
+
+/// A delete that is refused (a run of the dot was queued) changes nothing: the job still
+/// waits for the person's answer, and the maker is not woken.
+#[tokio::test]
+async fn a_refused_delete_leaves_the_job_and_wakes_nobody() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    let job = give(&t, &run, "Blog Watcher", "Read the blogs now.").await;
+    let its = run_of(&t, &job).await;
+    let its = start(&t, &its.id).await;
+    question(&t, &its).await;
+    finish(
+        &t,
+        &its.id,
+        RunStatus::Succeeded,
+        Some("Which first?"),
+        None,
+    )
+    .await;
+    settle(&t).await;
+    assert_eq!(stored(&t, &job).await.status, JobStatus::WaitingAnswer);
+    // A run of the dot is queued, as a schedule would queue it.
+    t.rt.store()
+        .create_run(&NewRun::new(&made.id, TriggerKind::Schedule))
+        .await
+        .unwrap();
+
+    let refused = t.rt.delete_dot(&made.id).await;
+
+    assert!(matches!(refused, Err(Error::Conflict(_))), "{refused:?}");
+    assert_eq!(stored(&t, &job).await.status, JobStatus::WaitingAnswer);
+    assert!(wakes(&t).await.is_empty());
+    assert!(t.rt.store().get_dot(&made.id).await.is_ok());
 }

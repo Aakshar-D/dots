@@ -5,6 +5,7 @@
 //! here delivers it when a run ends, and once at start for what waited across a restart.
 
 use std::collections::HashSet;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
@@ -13,12 +14,47 @@ use tokio_util::sync::CancellationToken;
 
 use super::service::Makers;
 use crate::events::RuntimeEvent;
+use crate::limits::BACKGROUND;
+use crate::prompt::is_typed;
 use crate::scheduler::ERROR_WAIT;
 use crate::{Error, Result};
 
 /// The key of a wake's run's payload that holds the wake's id: the run's message is Dots' own,
 /// not one the person typed, as `follow_up_id` says of a follow-up's.
 pub const WAKE_ID: &str = "wake_id";
+
+/// How often one failure that keeps coming back is logged again.
+const LOG_AGAIN: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// When each failure the wakes' loop keeps meeting was last logged, by a key of its own (a
+/// wake's id, or a part of the loop): so a wake that fails on every pass, every 30 seconds, is
+/// logged once and then at most hourly.
+#[derive(Default)]
+pub(crate) struct LogEvery(std::sync::Mutex<std::collections::HashMap<String, Instant>>);
+
+impl LogEvery {
+    /// Whether the failure `key` is to be logged at `now`: the first time, and once an hour
+    /// has passed since it last was.
+    pub(crate) fn due(&self, key: &str, now: Instant) -> bool {
+        let Ok(mut seen) = self.0.lock() else {
+            return true;
+        };
+        match seen.get(key) {
+            Some(at) if now.saturating_duration_since(*at) < LOG_AGAIN => false,
+            _ => {
+                seen.insert(key.to_string(), now);
+                true
+            }
+        }
+    }
+
+    /// Forgets `key`: it no longer fails, so a new failure is logged at once.
+    pub(crate) fn forget(&self, key: &str) {
+        if let Ok(mut seen) = self.0.lock() {
+            seen.remove(key);
+        }
+    }
+}
 
 /// One wake: a message for the chat topic `root_run_id` of the maker `maker_dot_id`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -68,8 +104,8 @@ impl Makers {
             .add_making_wake(maker_dot_id, root_run_id, message)
             .await?;
         tracing::debug!(wake = %wake.id, maker = %maker_dot_id, "a wake was stored");
-        if let Err(e) = self.wake_pass().await {
-            tracing::warn!(wake = %wake.id, "the wake waits; delivering it failed: {e}");
+        if let Err(e) = self.deliver_wakes().await {
+            tracing::debug!(wake = %wake.id, "the wake waits; delivering it failed: {e}");
         }
         Ok(())
     }
@@ -80,13 +116,20 @@ impl Makers {
     /// Two passes at once deliver a wake once: each wake is tried under the thread lock, and
     /// its row is marked in the transaction that stores its run. A wake whose run could not be
     /// stored stays waiting, and the error of the first such wake is returned after the other
-    /// topics were tried.
+    /// topics were tried. When a wake waits for a topic that is adding an app, or a wake
+    /// failed, the wakes' loop is told to try again after its wait: no end of a run may come
+    /// to set it going.
     pub async fn deliver_wakes(&self) -> Result<()> {
-        self.wake_pass().await.map(|_| ())
+        let pass = self.wake_pass().await;
+        if !matches!(pass, Ok(false)) {
+            self.parts.retry.notify_one();
+        }
+        pass.map(|_| ())
     }
 
     /// One pass. `true` when a wake waits for something whose end no event tells (`Deciding`):
-    /// the loop then tries again after a wait.
+    /// the loop then tries again after a wait. A wake that fails is logged once, then at most
+    /// hourly while it keeps failing (`LogEvery`).
     async fn wake_pass(&self) -> Result<bool> {
         let mut tried_topics = HashSet::new();
         let mut again = false;
@@ -94,9 +137,12 @@ impl Makers {
         for wake in self.parts.store.waiting_making_wakes().await? {
             match self.deliver_wake(&wake, &mut tried_topics).await {
                 Ok(Tried::Deciding) => again = true,
+                Ok(Tried::Delivered | Tried::Done) => self.parts.logged.forget(&wake.id),
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(wake = %wake.id, "the wake's run could not be started: {e}");
+                    if self.parts.logged.due(&wake.id, Instant::now()) {
+                        tracing::warn!(wake = %wake.id, "the wake's run could not be started: {e}");
+                    }
                     failed.get_or_insert(e);
                 }
             }
@@ -112,6 +158,12 @@ impl Makers {
     /// left alone. Here that is no refusal: the wake waits. `tried_topics` are the topics an
     /// earlier wake of this pass was tried for; the wake's own is added, so of several wakes
     /// of one topic the oldest goes first, also when its run could not be stored.
+    ///
+    /// A wake for a maker the person switched off, or whose account was removed from this PC,
+    /// is dropped with a line in the log: neither runs. The wake's run goes on at the topic's
+    /// end; when that run has no session (it ended before the dot started working) it goes on
+    /// without one, in the same topic, so the topic keeps its history and its count of jobs.
+    /// It is background when the person never typed in the topic (design section 8).
     async fn deliver_wake(
         &self,
         wake: &MakingWake,
@@ -126,16 +178,23 @@ impl Makers {
             Ok(run) if run.dot_id == wake.maker_dot_id => run,
             Ok(_) | Err(Error::NotFound(_)) => {
                 // History was pruned or the topic deleted: there is no chat to say it in.
-                if p.store.drop_making_wake(&wake.id).await? {
-                    tracing::warn!(
-                        wake = %wake.id, maker = %wake.maker_dot_id, topic = %wake.root_run_id,
-                        "a wake was dropped because its chat topic is gone"
-                    );
-                }
-                return Ok(Tried::Done);
+                return self.drop_wake(wake, "its chat topic is gone").await;
             }
             Err(e) => return Err(e),
         };
+        let maker = match p.store.get_dot(&wake.maker_dot_id).await {
+            Ok(maker) => maker,
+            Err(Error::NotFound(_)) => return self.drop_wake(wake, "its maker is gone").await,
+            Err(e) => return Err(e),
+        };
+        if !maker.spec.enabled {
+            return self.drop_wake(wake, "its maker is switched off").await;
+        }
+        if p.vault.org_removed(&maker).is_some() {
+            return self
+                .drop_wake(wake, "its maker's account is no longer on this PC")
+                .await;
+        }
         let topic = first.root_run_id.clone();
         if !tried_topics.insert(topic.clone()) {
             return Ok(Tried::Later);
@@ -150,8 +209,20 @@ impl Makers {
         }
         let end = thread.last().unwrap_or(&first);
         let mut new = crate::checkins::continuation(&first, end, wake.message.clone(), None);
+        if new.root_run_id.is_none() {
+            // `continuation` starts a new topic after a run without a session; a wake stays.
+            new.parent_run_id = Some(end.id.clone());
+            new.root_run_id = Some(end.root_run_id.clone());
+            new.workspace_path = end.workspace_path.clone();
+            new.branch = end.branch.clone();
+            new.base_commit = end.base_commit.clone();
+        }
+        let unattended = !thread.iter().any(is_typed);
         if let Some(payload) = new.payload.as_mut() {
             payload[WAKE_ID] = wake.id.clone().into();
+            if unattended {
+                payload[BACKGROUND] = true.into();
+            }
         }
         let Some(run) = p.store.deliver_making_wake(&wake.id, &new).await? else {
             return Ok(Tried::Done);
@@ -162,11 +233,24 @@ impl Makers {
         Ok(Tried::Delivered)
     }
 
+    /// Drops the waiting `wake`, with one line in the log saying `why`.
+    async fn drop_wake(&self, wake: &MakingWake, why: &str) -> Result<Tried> {
+        if self.parts.store.drop_making_wake(&wake.id).await? {
+            tracing::warn!(
+                wake = %wake.id, maker = %wake.maker_dot_id, topic = %wake.root_run_id,
+                "a wake was dropped because {why}"
+            );
+        }
+        Ok(Tried::Done)
+    }
+
     /// Runs the wakes' loop until `shutdown`, or until the runtime that made the makers is
     /// gone: a pass at once, for the wakes that waited across a restart, then one after the end
     /// of each run, which is what frees a topic. After a pass that failed, or that left a wake
     /// waiting for a topic that is adding an app, the next comes after `ERROR_WAIT` at the
-    /// latest. It does not keep the makers alive.
+    /// latest; a pass outside the loop that did so tells the loop (`deliver_wakes`), which then
+    /// passes at once and waits as after its own. It does not keep the makers alive. An error
+    /// that keeps coming back is logged once, then at most hourly.
     ///
     /// Each pass first follows the jobs (`settle_jobs`, design section 8): the end of a run is
     /// what moves or ends a job, the person's answer to a question carries a waiting job on,
@@ -174,29 +258,47 @@ impl Makers {
     /// while Dots was closed; the runtime has failed the interrupted runs by then.
     pub(crate) fn spawn_wakes(&self, shutdown: CancellationToken) -> JoinHandle<()> {
         let makers = self.downgrade();
+        let retry = self.parts.retry.clone();
         // Subscribed before the first pass, so no end of a run is missed.
         let mut events = self.parts.bus.subscribe();
         tokio::spawn(async move {
             loop {
                 let Some(this) = makers.upgrade() else { break };
+                let logged = &this.parts.logged;
                 let jobs_failed = match this.settle_jobs().await {
-                    Ok(()) => false,
+                    Ok(()) => {
+                        logged.forget(JOBS_LOOP);
+                        false
+                    }
                     Err(e) => {
-                        tracing::error!("job loop error: {e}");
+                        if logged.due(JOBS_LOOP, Instant::now()) {
+                            tracing::error!("job loop error: {e}");
+                        }
                         true
                     }
                 };
                 let again = match this.wake_pass().await {
-                    Ok(again) => again || jobs_failed,
+                    Ok(again) => {
+                        logged.forget(WAKES_LOOP);
+                        again || jobs_failed
+                    }
                     Err(e) => {
-                        tracing::error!("wake loop error: {e}");
+                        if logged.due(WAKES_LOOP, Instant::now()) {
+                            tracing::error!("wake loop error: {e}");
+                        }
                         true
                     }
                 };
+                let retry_wait = this
+                    .parts
+                    .retry_wait
+                    .lock()
+                    .map(|wait| *wait)
+                    .unwrap_or_else(|_| ERROR_WAIT.to_std().unwrap_or_default());
                 drop(this);
                 let wait = async {
                     if again {
-                        tokio::time::sleep(ERROR_WAIT.to_std().unwrap_or_default()).await
+                        tokio::time::sleep(retry_wait).await
                     } else {
                         std::future::pending().await
                     }
@@ -205,12 +307,17 @@ impl Makers {
                     biased;
                     _ = shutdown.cancelled() => break,
                     open = run_ended(&mut events) => if !open { break },
+                    _ = retry.notified() => {}
                     _ = wait => {}
                 }
             }
         })
     }
 }
+
+/// The keys of the loop's own errors in `LogEvery`.
+const JOBS_LOOP: &str = "loop: jobs";
+const WAKES_LOOP: &str = "loop: wakes";
 
 /// Returns `true` when a run has ended (its `RunUpdated`), when a question was answered or
 /// dismissed (its `MessageUpdated`: a job may wait on it), or when events were lost and one of
@@ -228,5 +335,27 @@ async fn run_ended(events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) 
             Err(RecvError::Lagged(_)) => return true,
             Err(RecvError::Closed) => return false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failure_that_keeps_coming_back_is_logged_once_then_hourly() {
+        let logged = LogEvery::default();
+        let start = Instant::now();
+        let at = |secs| start + std::time::Duration::from_secs(secs);
+        assert!(logged.due("w1", at(0)));
+        // Every 30 seconds for the hour: not again.
+        assert!((1..120).all(|n| !logged.due("w1", at(n * 30))));
+        // Another wake's failure is its own.
+        assert!(logged.due("w2", at(30)));
+        assert!(logged.due("w1", at(3600)));
+        assert!(!logged.due("w1", at(3630)));
+        // A wake that no longer fails is logged at once when it fails again.
+        logged.forget("w1");
+        assert!(logged.due("w1", at(3660)));
     }
 }

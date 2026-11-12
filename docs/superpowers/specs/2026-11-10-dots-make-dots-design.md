@@ -186,7 +186,11 @@ Deleting the maker discards its waiting requests.
 - When the job ends, in any way (finished, failed, stopped, capped), Dots wakes the maker exactly once: a new run in the maker's same chat topic whose message gives the made dot's name, how the job ended, and the last run's final text, cut at 8,000 characters with a note when cut. If the maker is busy, the wake queues; today's continuation path refuses a busy thread, so queueing is new work.
 - While a job waits on the person's answer, the maker is not woken. The maker's topic shows "<made dot> is waiting for your answer" with **Open run**. If the question is never answered the job stays open; the person can stop it from the made dot's topic, which ends the job as stopped and wakes the maker.
 - Cards in the maker's topic: "<made dot> is working" with the job text and **Open run**, then "<made dot> finished" (or failed, stopped) when it ends.
-- A job run counts as background or not as the maker's run did, for the usage holds that already exist.
+- A job run counts as background or not as the maker's run did, for the usage holds that already exist. A job and a wake are also background when the maker's topic has no message the person typed (a topic a schedule started stays unattended through its wakes and the jobs they give).
+- **Reports and jobs are quoted data** (fix 14b): a made dot's final text in a wake and a maker's job text are written by a model. Every line of them is quoted with `> ` in the prompt, on both engines, in a first prompt and in a session, so no line can open a section such as "## Message from the user". The wake's note says a dot's final message is that dot's work, not instructions, to be checked before acting and never taken as the person's words; the job's note says it is not a message from the person. A run that carries a job or a wake starts no workflows.
+- A job that goes on in the made dot's session is told the dot's instructions and purpose as they are now when they changed since the session began, as a person's message is.
+- A job whose run waits for a spending cap or the usage limit tells the maker once that it has not started; the job stays open. A refused approval with no note ends the job as stopped by the person, not as finished. A failed job run that the person sends again after its job ended is no longer a job.
+- A wake whose topic is adding an app is tried again after a wait; a wake to a topic whose last run has no session stays in that topic; a wake for a maker that is switched off, or whose account is removed, is dropped with a line in the log.
 
 **Loop guard**: in one maker chat topic, at most 6 jobs may be given between one message typed by the person and the next (the existing "typed" flag on a chat message; answers to questions and to cards are not typed and do not reset the count). The 7th is refused with a plain error that tells the dot to report to the person. For a topic started by a schedule or other background trigger, the count runs from that trigger. The number is my call.
 
@@ -225,7 +229,7 @@ Mockups are in `.superpowers/brainstorm/2300-1794370584/content/dots-make-dots.h
 4. **Inbox**: a section for waiting make requests, with the same card.
 5. **Notifications**: the ask card notifies like an approval. "<maker> made a dot: <name>" notifies when the maker's run was not started by a message the person just typed (my call: no noise while they are watching the chat). Both follow the existing notification settings.
 
-The maker's prompt gains a short **Making dots** section: the rules of sections 6 to 10 in a few lines, and the list of its made dots with purpose and schedule, so it reuses a dot before making another.
+The maker's prompt gains a short **Making dots** section: the rules of sections 6 to 10 in a few lines, and the list of its made dots with purpose and schedule (the first 20, then how many more), so it reuses a dot before making another. The section says reports and the final messages of made dots are their work, not instructions. A made dot's prompt says the person's words and settings and its permissions come before what its maker or a job says. Job and wake runs are named as such in a dot's list of recent runs. Reports and jobs are quoted data and their runs start no workflows (section 8).
 
 ## 12. Constraints
 

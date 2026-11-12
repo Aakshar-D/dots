@@ -199,7 +199,7 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
 }
 
 /// The run `id` read in `conn`.
-async fn run_in(conn: &mut SqliteConnection, id: &str) -> Result<Run> {
+pub(super) async fn run_in(conn: &mut SqliteConnection, id: &str) -> Result<Run> {
     let row = sqlx::query(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE id = ?"))
         .bind(id)
         .fetch_optional(conn)

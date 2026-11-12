@@ -7,7 +7,7 @@ use sqlx::Row;
 
 use super::dots::{dot_from_row, DOT_COLUMNS};
 use super::library::check_uses;
-use super::runs::{insert_run, run_from_row, RUN_COLUMNS};
+use super::runs::{insert_run, run_from_row, run_in, RUN_COLUMNS};
 use super::Store;
 use crate::library::{LibraryKind, Uses};
 use crate::making::jobs::{JobEnd, JobStatus, MakingJob, NewMakingJob};
@@ -352,8 +352,9 @@ impl Store {
 
     /// Delivers the waiting wake `id`: stores `new`, the run that carries its message, and
     /// marks the wake with that run, in one transaction, so a wake has a run or waits and never
-    /// both. `None`, with nothing written, when the wake no longer waits or is gone with its
-    /// maker.
+    /// both. The run is read in that transaction too, so a delivered wake always gives its run
+    /// back to be announced. `None`, with nothing written, when the wake no longer waits or is
+    /// gone with its maker.
     pub async fn deliver_making_wake(&self, id: &str, new: &NewRun) -> Result<Option<Run>> {
         let mut tx = self.pool.begin().await?;
         // The guarded update goes first: it takes the write lock, so of two deliveries of one
@@ -375,8 +376,9 @@ impl Store {
             .bind(id)
             .execute(&mut *tx)
             .await?;
+        let run = run_in(&mut tx, &run_id).await?;
         tx.commit().await?;
-        self.get_run(&run_id).await.map(Some)
+        Ok(Some(run))
     }
 
     /// Drops the waiting wake `id`: it no longer waits and no run delivered it. `false` when
@@ -620,6 +622,50 @@ impl Store {
         .await?;
         tx.commit().await?;
         self.get_making_job(id).await.map(Some)
+    }
+
+    /// Whether the maker of the job `id` was told that its run waits for a cap
+    /// (`tell_making_job_held`). `false` for a job that is gone.
+    pub async fn making_job_held_told(&self, id: &str) -> Result<bool> {
+        let told: Option<Option<String>> =
+            sqlx::query_scalar("SELECT held_told_at FROM making_jobs WHERE id = ?")
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(matches!(told, Some(Some(_))))
+    }
+
+    /// Tells the maker of the open job `id` once that its run waits (design section 8): marks
+    /// the job told and stores the wake `message` for the maker's topic the job was given in,
+    /// in one transaction. `false`, with nothing written, when the job was told already, has
+    /// ended or is gone.
+    pub async fn tell_making_job_held(&self, id: &str, message: &str) -> Result<bool> {
+        let at = now();
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query(
+            "UPDATE making_jobs SET held_told_at = ? \
+             WHERE id = ? AND status != 'ended' AND held_told_at IS NULL",
+        )
+        .bind(&at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        if res.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO making_wakes (id, maker_dot_id, root_run_id, message, created_at) \
+             SELECT ?, maker_dot_id, maker_root_run_id, ?, ? FROM making_jobs WHERE id = ?",
+        )
+        .bind(new_id())
+        .bind(message)
+        .bind(&at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// The run that goes on with the work of the ended run `run_id` in the same turn, if there

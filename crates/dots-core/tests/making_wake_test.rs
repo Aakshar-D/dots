@@ -453,3 +453,132 @@ async fn a_wake_run_says_it_is_a_wake_and_not_the_persons_message() {
     });
     assert_eq!(runs[1].payload, Some(expected));
 }
+
+/// The wakes that were dropped or delivered once their wait is over: each has its time, and a
+/// dropped one has no run.
+#[tokio::test]
+async fn a_dropped_wake_has_no_run() {
+    let t = quiet().await;
+    let dot = maker(&t, "Researcher").await;
+    let chat = free_topic(&t, &dot).await;
+    t.rt.store().set_dot_enabled(&dot.id, false).await.unwrap();
+    let wake =
+        t.rt.store()
+            .add_making_wake(&dot.id, &chat.id, "Blog Watcher finished.")
+            .await
+            .unwrap();
+    t.rt.makers().deliver_wakes().await.unwrap();
+    let wake = t.rt.store().get_making_wake(&wake.id).await.unwrap();
+    assert!(wake.delivered_at.is_some());
+    assert_eq!(wake.run_id, None);
+}
+
+/// A wake stored while its topic is adding an app the person accepted waits for that; when
+/// the adding ends with no run of its own, no end of a run tells the wakes' loop, so the loop
+/// tries again after its wait (dots-make-dots design section 8).
+#[tokio::test]
+async fn a_wake_that_waited_for_an_app_being_added_is_tried_again_after_a_wait() {
+    let t = quiet().await;
+    t.rt.makers().set_wake_retry(Duration::from_millis(200));
+    let dot = maker(&t, "Researcher").await;
+    let chat = free_topic(&t, &dot).await;
+    let adding =
+        t.rt.follow_ups()
+            .begin_deciding(&chat.id)
+            .expect("the topic was not adding an app");
+
+    t.rt.makers()
+        .wake(&dot.id, &chat.id, "Blog Watcher finished.")
+        .await
+        .unwrap();
+    assert_eq!(waiting(&t).await, ["Blog Watcher finished."]);
+    // The adding fails: no run is made, so no run ends.
+    drop(adding);
+
+    let runs = thread_of(&t, &chat, 2).await;
+    assert_eq!(message(&runs[1]), "Blog Watcher finished.");
+    assert!(waiting(&t).await.is_empty());
+}
+
+/// A wake of a topic whose last run ended before the dot started working (it has no session)
+/// goes on in that topic, without a session, so the topic keeps its history and its count of
+/// jobs (dots-make-dots design section 8).
+#[tokio::test]
+async fn a_wake_of_a_topic_whose_last_run_has_no_session_stays_in_that_topic() {
+    let t = quiet().await;
+    let dot = maker(&t, "Researcher").await;
+    let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
+    new.payload = Some(json!({"message": "watch three blogs", "typed": true}));
+    let chat = t.rt.store().create_run(&new).await.unwrap();
+    let chat =
+        t.rt.store()
+            .finish_run(&chat.id, RunStatus::Failed, None, Some("could not start"))
+            .await
+            .unwrap();
+    assert_eq!(chat.session_id, None);
+
+    t.rt.makers()
+        .wake(&dot.id, &chat.id, "Blog Watcher finished.")
+        .await
+        .unwrap();
+
+    let runs = thread(&t, &chat).await;
+    assert_eq!(runs.len(), 2, "{runs:#?}");
+    assert_eq!(runs[1].root_run_id, chat.id);
+    assert_eq!(runs[1].parent_run_id.as_deref(), Some(chat.id.as_str()));
+    assert_eq!(runs[1].session_id, None);
+    assert_eq!(message(&runs[1]), "Blog Watcher finished.");
+}
+
+/// A wake for a maker the person switched off is dropped, with a line in the log: a switched
+/// off dot does not run (dots-make-dots design section 8).
+#[tokio::test]
+async fn a_wake_for_a_switched_off_maker_is_dropped() {
+    let t = quiet().await;
+    let dot = maker(&t, "Researcher").await;
+    let chat = free_topic(&t, &dot).await;
+    t.rt.store().set_dot_enabled(&dot.id, false).await.unwrap();
+
+    t.rt.makers()
+        .wake(&dot.id, &chat.id, "Blog Watcher finished.")
+        .await
+        .unwrap();
+
+    assert!(waiting(&t).await.is_empty());
+    assert_eq!(thread(&t, &chat).await.len(), 1);
+    let wakes = t.rt.store().waiting_making_wakes().await.unwrap();
+    assert!(wakes.is_empty());
+}
+
+/// A wake in a topic the person never typed in, as one a schedule started, is a background
+/// run; in a topic the person typed in it is not (dots-make-dots design section 8).
+#[tokio::test]
+async fn a_wake_is_background_in_a_topic_the_person_never_typed_in() {
+    let t = quiet().await;
+    let dot = maker(&t, "Researcher").await;
+    let scheduled =
+        t.rt.store()
+            .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
+            .await
+            .unwrap();
+    assert!(t.rt.store().claim_run(&scheduled.id).await.unwrap());
+    t.rt.store()
+        .set_session(&scheduled.id, "session-s")
+        .await
+        .unwrap();
+    let scheduled = end(&t, &scheduled).await;
+    let chat = free_topic(&t, &dot).await;
+
+    for topic in [&scheduled, &chat] {
+        t.rt.makers()
+            .wake(&dot.id, &topic.id, "Blog Watcher finished.")
+            .await
+            .unwrap();
+    }
+
+    let woken = &thread(&t, &scheduled).await[1];
+    assert_eq!(woken.payload.as_ref().unwrap()["background"], true);
+    assert!(dots_core::limits::run_is_background(woken));
+    let woken = &thread(&t, &chat).await[1];
+    assert!(!dots_core::limits::run_is_background(woken));
+}

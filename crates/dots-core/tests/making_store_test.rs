@@ -373,3 +373,37 @@ async fn saving_a_made_dot_keeps_who_made_it() {
     assert_eq!(saved.made, dot.made);
     assert_eq!(store.count_made_dots(&maker.id).await.unwrap(), 1);
 }
+
+/// Migration 0056 (fix 14b part 3): the jobs' pass and a delete read by index, and a job keeps
+/// whether its maker was told that its run waits.
+#[tokio::test]
+async fn the_making_tables_have_their_indexes_and_the_held_mark() {
+    let (dir, store) = temp_store().await;
+    let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(dir.path().join("dots.db"));
+    let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+    let mut names: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name IN \
+         ('making_jobs_open', 'making_jobs_topic_dot', 'making_wakes_maker')",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "making_jobs_open",
+            "making_jobs_topic_dot",
+            "making_wakes_maker"
+        ]
+    );
+    let held: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM pragma_table_info('making_jobs') WHERE name = 'held_told_at'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(held, 1);
+    pool.close().await;
+    store.close().await;
+}

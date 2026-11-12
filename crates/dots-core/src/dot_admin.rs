@@ -28,6 +28,17 @@ pub const MADE_NOT_A_REPO: &str = "The new dot would work in copies of that fold
     maker does, but the folder is not the top of a git repository with a commit. Leave the \
     folder blank for a new one.";
 
+/// What `DotAdmin::delete_rows` read of a dot before its row went, for `after_delete`.
+pub(crate) struct Deleted {
+    dot: Dot,
+    had_row: bool,
+    proposals: Vec<crate::apps::propose::AppProposal>,
+    watchers: Vec<String>,
+    teams: Vec<String>,
+    attachments: Vec<String>,
+    had_goals: bool,
+}
+
 /// What `DotAdmin` works with: the runtime's own parts, shared with it.
 pub(crate) struct DotAdminParts {
     pub store: Store,
@@ -224,6 +235,20 @@ impl DotAdmin {
     /// role must allow changing dots (members spec §6.3), or this PC is waiting for or removed
     /// from the member list, and only cleaning up (`require_cleanup`).
     pub async fn delete(&self, id: &str) -> Result<()> {
+        let deleted = self.delete_rows(id, &[]).await?;
+        self.after_delete(deleted).await;
+        Ok(())
+    }
+
+    /// The first half of `delete`: the checks, and the dot's row deleted with `wakes` stored in
+    /// the same transaction (`Store::delete_dot_if_idle_and_wake`). The caller then calls
+    /// `after_delete` with what this returns, after any lock it holds for the rows is released:
+    /// that half closes the dot's Edge and tells its teams, which can take a while.
+    pub(crate) async fn delete_rows(
+        &self,
+        id: &str,
+        wakes: &[(String, String, String)],
+    ) -> Result<Deleted> {
         let p = &self.parts;
         let dot = p.store.get_dot(id).await?;
         self.require_cleanup(&dot).await?;
@@ -239,7 +264,31 @@ impl DotAdmin {
         let teams = p.store.teams_of_dot(id).await?;
         let attachments = p.store.attachment_ids_of_dot(id).await?;
         let had_goals = p.store.count_intents_of_dot(id).await? > 0;
-        p.store.delete_dot_if_idle(id).await?;
+        p.store.delete_dot_if_idle_and_wake(id, wakes).await?;
+        Ok(Deleted {
+            dot,
+            had_row,
+            proposals,
+            watchers,
+            teams,
+            attachments,
+            had_goals,
+        })
+    }
+
+    /// The second half of `delete`, once the dot's row is gone (`delete_rows`).
+    pub(crate) async fn after_delete(&self, deleted: Deleted) {
+        let p = &self.parts;
+        let Deleted {
+            dot,
+            had_row,
+            proposals,
+            watchers,
+            teams,
+            attachments,
+            had_goals,
+        } = deleted;
+        let id = dot.id.as_str();
         // It left its teams (`ON DELETE CASCADE`), and their workflows may now have a problem.
         p.teams.dot_deleted(&teams).await;
         // Its goals stay, unlinked (`ON DELETE SET NULL`).
@@ -275,7 +324,6 @@ impl DotAdmin {
         p.scheduler.reload();
         p.watchers.reload();
         p.follow_ups.wake();
-        Ok(())
     }
 
     /// Brings the dot's schedule row in line with the dot after a change of it (Scheduler v2

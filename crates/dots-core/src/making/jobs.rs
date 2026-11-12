@@ -14,7 +14,7 @@ use serde_json::json;
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::service::{Makers, MAX_JOB};
 use crate::limits::{run_is_background, BACKGROUND, STOPPED_BY_LIMIT};
-use crate::model::{Dot, NewRun, Run, RunStatus, TriggerKind};
+use crate::model::{ApprovalStatus, Dot, NewRun, Run, RunStatus, TriggerKind, WaitReason};
 use crate::prompt::{is_typed, JOB_FROM};
 use crate::spend::STOPPED_BY_CAP;
 use crate::util::new_id;
@@ -148,6 +148,18 @@ pub fn gave_text(dot: &str) -> String {
     )
 }
 
+/// How a job ended whose last run parked on a call the person refused, with no note.
+pub const REFUSED: &str = "was stopped: the person refused what it asked to do";
+
+/// What the maker is woken with, once, when the run of a job given to the dot `dot` waits:
+/// `why` says what it waits for, as the run's waiting line does.
+pub fn held_message(dot: &str, why: &str) -> String {
+    format!(
+        "\"{dot}\" has not started the job: {why}. It starts by itself when it may; you will be \
+         woken when the job ends."
+    )
+}
+
 /// What a wake says of a job whose made dot the maker deleted before it ended.
 pub fn deleted_message(dot: &str) -> String {
     format!("\"{dot}\" was deleted before the job ended.")
@@ -252,7 +264,8 @@ impl Makers {
     ///
     /// The job's run is a chat run of the made dot that is not typed; its payload names the
     /// job (`JOB_ID`) and the maker (`prompt::JOB_FROM`), so its prompt says who sent it. It is
-    /// background for the usage holds when the maker's run was (`limits::BACKGROUND`). Jobs
+    /// background for the usage holds when the maker's run was, or when the maker's topic has
+    /// no message the person typed (`limits::BACKGROUND`). Jobs
     /// from one topic of the maker go to one topic of the made dot: the run goes on where the
     /// last job from this topic ended, as the person's next message there would; when there is
     /// none, or that topic is gone or busy with something else, it starts a topic of its own.
@@ -277,11 +290,13 @@ impl Makers {
         }
         p.runner.require_run(made).await?;
         // As the maker's run counted; a run that is gone gave the job in the person's sight.
+        // A topic the person never typed in is unattended however its runs started: a wake
+        // there, and the jobs it gives, are background too (design section 8).
         let background = match p.store.get_run(maker_run_id).await {
             Ok(run) => run_is_background(&run),
             Err(Error::NotFound(_)) => false,
             Err(e) => return Err(e),
-        };
+        } || !self.typed_in(maker_root_run_id).await?;
         let lock = p.follow_ups.thread_lock();
         let one_thread = lock.lock().await;
         let earlier = p
@@ -379,6 +394,12 @@ impl Makers {
         store.count_jobs_started(root_run_id, since).await
     }
 
+    /// Whether the person typed a message in the chat topic `root_run_id`.
+    async fn typed_in(&self, root_run_id: &str) -> Result<bool> {
+        let thread = self.parts.store.list_thread(root_run_id).await?;
+        Ok(thread.iter().any(is_typed))
+    }
+
     /// The topic of `made` the next job from a topic of the maker goes on in, as its first run
     /// and its end: the topic the job `earlier`, the last from there, ran in, while that topic
     /// exists, is the made dot's, has no run going and is not adding an app. The caller holds
@@ -413,14 +434,17 @@ impl Makers {
     /// the person answers or dismisses a question, at startup, and by tests. For each open job,
     /// by where its last run stands:
     ///
-    /// - It has not ended (queued, running, awaiting an approval): nothing.
+    /// - It has not ended (queued, running, awaiting an approval): nothing, except that a
+    ///   queued run that waits for a spending cap or Claude's usage limit is told to the maker
+    ///   once (`held_message`).
     /// - It ended and a run goes on with its work in the same turn (`Store::run_continued_by`):
     ///   the job moves to that run.
     /// - It ended and the newest question a run of the job asked waits for the person: the job
     ///   waits (`waiting_answer`, a `job_waiting` entry), and the maker is not woken.
     /// - That question was answered by a run the job has not been at: the job moves to it.
     /// - That question was dismissed: the job ends as stopped.
-    /// - Otherwise the job ends as its last run did.
+    /// - Otherwise the job ends as its last run did; a run the person's refusal closed, with
+    ///   no note, ends it as stopped (`REFUSED`).
     ///
     /// Ending a job stores its wake in the same transaction (`Store::end_making_job`), so of
     /// any number of passes one ends it and the maker is woken once. One pass runs at a time.
@@ -434,9 +458,15 @@ impl Makers {
             for job in p.store.open_making_jobs(None).await? {
                 let id = job.id.clone();
                 match self.settle_job(job).await {
-                    Ok(has_ended) => ended |= has_ended,
+                    Ok(woke) => {
+                        p.logged.forget(&id);
+                        ended |= woke;
+                    }
                     Err(e) => {
-                        tracing::warn!(job = %id, "the job could not be followed: {e}");
+                        // Every pass tries it again: logged once, then at most hourly.
+                        if p.logged.due(&id, std::time::Instant::now()) {
+                            tracing::warn!(job = %id, "the job could not be followed: {e}");
+                        }
                         failed.get_or_insert(e);
                     }
                 }
@@ -454,8 +484,10 @@ impl Makers {
         }
     }
 
-    /// One open job of a pass (`settle_jobs`). `true` when it ended here.
-    async fn settle_job(&self, mut job: MakingJob) -> Result<bool> {
+    /// One open job of a pass (`settle_jobs`, and a delete of its made dot, which holds
+    /// `settling`). `true` when it stored a wake here: it ended, or its maker was told that its
+    /// run waits for a cap.
+    pub(super) async fn settle_job(&self, mut job: MakingJob) -> Result<bool> {
         let store = &self.parts.store;
         let dot = match store.get_dot(&job.dot_id).await {
             Ok(dot) => dot,
@@ -480,6 +512,10 @@ impl Makers {
                 return self.end_job(&job, name, JobEnd::Failed, &gone).await;
             };
             if !last.status.is_terminal() {
+                // A run that waits for a cap may wait for hours: the maker is told once.
+                if last.status == RunStatus::Queued && job.status == JobStatus::Working {
+                    return self.tell_if_held(&job, name, &last).await;
+                }
                 return Ok(false);
             }
             if let Some(next) = store.run_continued_by(&last.id).await? {
@@ -539,7 +575,11 @@ impl Makers {
                 }
                 None => {}
             }
-            let (how, words, with_error) = run_end(&last);
+            let (how, words, with_error) = if self.refused_without_a_note(&last).await? {
+                (JobEnd::Cancelled, REFUSED, false)
+            } else {
+                run_end(&last)
+            };
             let error = last.error.as_deref().filter(|_| with_error);
             let said = ended_message(name, words, error, final_text);
             return self.end_job(&job, name, how, &said).await;
@@ -548,6 +588,44 @@ impl Makers {
             "job {} went through {MAX_HOPS} runs in one pass",
             job.id
         )))
+    }
+
+    /// Whether the ended run `last` was closed by the person's refusal of a call it parked on,
+    /// with no note: then no run goes on after it, and the store closed it as succeeded.
+    async fn refused_without_a_note(&self, last: &Run) -> Result<bool> {
+        if last.status != RunStatus::Succeeded {
+            return Ok(false);
+        }
+        let approvals = self.parts.store.approvals_for_run(&last.id).await?;
+        Ok(approvals
+            .iter()
+            .any(|a| a.parked && a.status == ApprovalStatus::Denied))
+    }
+
+    /// Tells the maker once, with a wake, that the open `job` of the made dot named `dot_name`
+    /// has not started: its queued run `last` waits for a spending cap or for Claude's usage
+    /// limit (design section 8). The job stays open. `true` when the wake was stored here.
+    async fn tell_if_held(&self, job: &MakingJob, dot_name: &str, last: &Run) -> Result<bool> {
+        let p = &self.parts;
+        if p.store.making_job_held_told(&job.id).await? {
+            return Ok(false);
+        }
+        let mut runs = [last.clone()];
+        p.runner.fill_wait_reasons(&mut runs).await?;
+        let [run] = runs;
+        let why = match run.wait_reason {
+            Some(WaitReason::SpendCap) => run
+                .wait_detail
+                .unwrap_or_else(|| WaitReason::SpendCap.text().to_string()),
+            Some(WaitReason::UsageHold) => "it is held for Claude's usage limit".to_string(),
+            _ => return Ok(false),
+        };
+        let said = held_message(dot_name, &why);
+        if !p.store.tell_making_job_held(&job.id, &said).await? {
+            return Ok(false);
+        }
+        tracing::info!(job = %job.id, run = %last.id, "a job's maker was told its run waits");
+        Ok(true)
     }
 
     /// Whether the job that is at the run `last` has been at the run `run_id`: `last` itself,

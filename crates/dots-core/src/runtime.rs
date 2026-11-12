@@ -2848,6 +2848,24 @@ impl Runtime {
         // Sent by the person: no note that Dots resent it.
         if let Some(serde_json::Value::Object(payload)) = &mut new.payload {
             payload.remove(crate::model::RESENT);
+            // A maker's job whose job has ended since is no job any more (dots-make-dots design
+            // section 8): nobody is woken with its result, so it does not say so.
+            let job = payload
+                .get(crate::making::jobs::JOB_ID)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
+            if let Some(job) = job {
+                let open = match self.store.get_making_job(&job).await {
+                    Ok(job) => job.status != crate::making::jobs::JobStatus::Ended,
+                    Err(Error::NotFound(_)) => false,
+                    Err(e) => return Err(e),
+                };
+                if !open {
+                    payload.remove(crate::making::jobs::JOB_ID);
+                    payload.remove(crate::prompt::JOB_FROM);
+                    payload.remove(crate::limits::BACKGROUND);
+                }
+            }
         }
         // Its files go with it, as a Retry's do (attachments spec section 4.3).
         let run = self
