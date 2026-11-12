@@ -808,7 +808,7 @@ impl Service {
     fn session_trouble(&self, gen: u64, message: String) {
         {
             let mut s = self.lock();
-            if !s.live.as_ref().is_some_and(|l| l.gen == gen) {
+            if s.live.as_ref().is_none_or(|l| l.gen != gen) {
                 return;
             }
             s.trouble = Some(message);
@@ -820,7 +820,7 @@ impl Service {
     fn session_ended(&self, gen: u64) {
         {
             let mut s = self.lock();
-            if !s.live.as_ref().is_some_and(|l| l.gen == gen) {
+            if s.live.as_ref().is_none_or(|l| l.gen != gen) {
                 return;
             }
             tracing::warn!("voice: the session ended");
