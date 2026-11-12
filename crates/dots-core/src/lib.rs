@@ -30,6 +30,7 @@ pub mod kit;
 pub mod library;
 pub mod library_service;
 pub mod limits;
+pub mod making;
 pub mod managed_policy;
 pub mod mcp;
 pub mod memory;
