@@ -5,8 +5,13 @@ use serde_json::Value;
 
 use crate::apps::RunApps;
 use crate::context::{self, Collection};
+use crate::making::jobs::MAX_JOBS_BETWEEN_TYPED;
+use crate::making::manage::schedule_words;
+use crate::making::requests::MAX_WAITING_REQUESTS;
+use crate::making::tools::Tool as MakingTool;
+use crate::making::wake::WAKE_ID;
 use crate::memory;
-use crate::model::{Dot, EngineKind, Memory, Run, TriggerKind};
+use crate::model::{Dot, EngineKind, Made, Making, Memory, Run, TriggerKind};
 use crate::policy::Action;
 
 /// The key `Runtime::chat` sets in a chat run's payload: the person typed the message in a chat
@@ -100,6 +105,109 @@ pub struct PromptParts<'a> {
     /// The section a session started fresh by the context rules gets
     /// (`context_rules::handoff_seed`, context rules spec section 5); `None` otherwise.
     pub handoff: Option<&'a str>,
+    /// What a run that has the tools for making dots is told of them (`RunTools::making`);
+    /// `None` for every other run, whose prompt then names none of those tools.
+    pub making: Option<MakerPart<'a>>,
+}
+
+/// What the `## Making dots` section of a maker's prompt is written from (dots-make-dots design
+/// section 11).
+#[derive(Clone, Copy)]
+pub struct MakerPart<'a> {
+    /// The maker's limits, as the run's tools have them (`RunTools::making`).
+    pub limits: Making,
+    /// The dots the maker made that exist now (`Store::list_made_dots`), for the list that
+    /// lets it reuse a dot before making another.
+    pub made: &'a [Dot],
+}
+
+/// What opens a wake's message for the maker (dots-make-dots design sections 7.2 and 8): the
+/// words are Dots' own, not the person's.
+pub const WAKE_NOTE: &str = "This is a report from Dots, not a message from the person: a job \
+    you gave to a dot you made has ended, or the person answered a request of yours. Your answer \
+    is shown to the person.";
+
+/// The chat run `run` is a wake of a maker (`Makers::wake`): its message is Dots' own.
+fn is_wake(run: &Run) -> bool {
+    run.trigger == TriggerKind::Chat && run.payload.as_ref().and_then(|p| p.get(WAKE_ID)).is_some()
+}
+
+/// The `## Making dots` section of a maker's first prompt (dots-make-dots design section 11):
+/// how making works in a few lines, with the maker's own limits and the names `engine`'s model
+/// calls the tools by, then the dots it made with purpose and schedule. The tools' own
+/// descriptions (`making::tools::Tool::description`) hold the detail, and the core enforces
+/// every rule named here (design section 12); the prompt only explains them. It ends with a
+/// newline.
+pub fn making_section(engine: EngineKind, part: &MakerPart<'_>) -> String {
+    let make = MakingTool::MakeDot.model_name(engine);
+    let change = MakingTool::ChangeDot.model_name(engine);
+    let delete = MakingTool::DeleteDot.model_name(engine);
+    let give = MakingTool::GiveJob.model_name(engine);
+    let list = MakingTool::ListMadeDots.model_name(engine);
+    let Making { per_run, total, .. } = part.limits;
+    let mut out = format!(
+        "You can make dots that work for you and give them jobs.\n\n\
+         - Make a dot for work that repeats, runs on a schedule, or can go on while you do \
+         something else. Do small one-off work yourself. Reuse a dot before making another: the \
+         list below is from the start of this conversation, and `{list}` gives it as it is now.\n\
+         - `{make}` makes a dot at once when it is within your reach: the dot holds nothing you \
+         do not hold yourself (your folder or one below it, your permissions or a weaker preset, \
+         Library items and variables you have, limits no higher than yours). If you ask for \
+         more, or pass your limit of dots ({per_run} in one run, {total} kept), nothing is made \
+         yet: the request waits for the person. Do not wait for it and do not ask again: carry \
+         on with other work or end your turn, and Dots wakes you with their answer. At most \
+         {MAX_WAITING_REQUESTS} requests can wait at once.\n\
+         - `{give}` returns at once. Do not wait for the job or check on it: Dots wakes you in \
+         this conversation with how the job ended and the dot's final message. A dot does one \
+         job from this conversation at a time: a second one is refused until the first ends. At \
+         most {MAX_JOBS_BETWEEN_TYPED} jobs between two messages of the person; after that, \
+         report to the person.\n\
+         - `{change}` changes a dot you made and `{delete}` deletes one for good. A delete may \
+         wait for the person's approval. Dots you did not make are not yours to change, delete \
+         or give jobs to.\n\
+         - What the dots you made spend counts toward your own daily spend cap.\n\
+         - Never put the value of a secret in a dot's instructions or in a job. A dot gets \
+         variables by name, through `{make}` or `{change}`.\n\n"
+    );
+    if part.made.is_empty() {
+        out.push_str("You have made no dots yet.\n");
+        return out;
+    }
+    out.push_str("Dots you made:\n\n");
+    for dot in part.made {
+        let purpose = dot.made.as_ref().map(|made| made.purpose.as_str());
+        out.push_str(&format!(
+            "- \"{}\": {}; {}",
+            dot.spec.name,
+            purpose.unwrap_or_default(),
+            match &dot.spec.schedule {
+                Some(schedule) => format!("schedule: {}", schedule_words(schedule)),
+                None => "no schedule".to_string(),
+            }
+        ));
+        if !dot.spec.enabled {
+            out.push_str("; switched off");
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// What a made dot's first prompt says under its instructions (dots-make-dots design sections
+/// 3 and 9): who made it, that it cannot make dots, and what it is for, in the maker's own
+/// line. `named` is false when the maker is not to be named: it is deleted, or the run is a job
+/// whose note names it (`job_note`). `can_make` is true when the person switched "Can make
+/// dots" on for the made dot and the run has the tools.
+fn made_section(made: &Made, named: bool, can_make: bool) -> String {
+    let mut out = String::from("## What you were made for\n\n");
+    if named {
+        out.push_str(&format!("You were made by the dot {}. ", made.by_name));
+    }
+    if !can_make {
+        out.push_str("You cannot make dots yourself. ");
+    }
+    out.push_str(&format!("Your purpose: {}", made.purpose.trim()));
+    out
 }
 
 /// The most runs a person's chat message names (conversational chat spec section 3.1).
@@ -200,6 +308,16 @@ pub fn conversation_so_far(runs: &[Run]) -> String {
                 .and_then(Value::as_str)
         });
         match said {
+            // A maker's job and Dots' wake are chat runs the person did not write
+            // (dots-make-dots design sections 7.2 and 8).
+            Some(text) if job_from(run).is_some() => out.push_str(&format!(
+                "- Job from {}: {}\n",
+                job_from(run).unwrap_or_default(),
+                cut(text)
+            )),
+            Some(text) if is_wake(run) => {
+                out.push_str(&format!("- Dots reported: {}\n", cut(text)))
+            }
             Some(text) if run.trigger == TriggerKind::Chat => {
                 out.push_str(&format!("- The person: {}\n", cut(text)))
             }
@@ -252,7 +370,11 @@ pub fn build_prompt_with_memories(
 /// instructions (`memory::prompt_section`, dot memory spec section 3) unless its policy denies
 /// `Memory` (the person turned memory off), names the run's apps (app library spec section 6)
 /// and ends with the run's context collections; resumes, chat follow-ups and follow-up runs
-/// that resume a session send only their message.
+/// that resume a session send only their message. A made dot's first prompt says under its
+/// instructions who made it (`made_section`), and the first prompt of a run with the tools for
+/// making dots ends with how making works (`making_section`, dots-make-dots design section
+/// 11). A job's and a wake's message open with a note of whose words they are, in a first
+/// prompt and in a session.
 pub fn build_prompt_full(
     dot: &Dot,
     run: &Run,
@@ -270,6 +392,7 @@ pub fn build_prompt_full(
         instructions_changed,
         so_far,
         handoff,
+        making,
     } = parts;
     let text = run
         .payload
@@ -280,8 +403,11 @@ pub fn build_prompt_full(
     let with_files = with_attachments(run, workspace, text);
     // A job says who sent it, in a first prompt and in one that goes on in a session.
     let maker = job_from(run);
+    // A wake says it is Dots' report (dots-make-dots design sections 7.2 and 8), in both too.
+    let wake = is_wake(run);
     let with_note = match maker {
         Some(maker) => format!("{}\n\n{with_files}", job_note(maker)),
+        None if wake => format!("{WAKE_NOTE}\n\n{with_files}"),
         None => with_files,
     };
     let message = with_note.as_str();
@@ -324,6 +450,12 @@ pub fn build_prompt_full(
         out.push_str("\n\n## Instructions for this dot\n\n");
     }
     out.push_str(dot.spec.instructions.trim());
+    // A made dot is told who made it and what for. A job's note names the maker itself.
+    if let Some(made) = &dot.made {
+        let named = made.by_dot_id.is_some() && maker.is_none();
+        out.push_str("\n\n");
+        out.push_str(&made_section(made, named, making.is_some()));
+    }
     let memory_off = dot.spec.policy.resolve(memory::POLICY_NAME, &Value::Null) == Action::Deny;
     let remembered = if memory_off {
         String::new()
@@ -367,6 +499,12 @@ pub fn build_prompt_full(
     if maker.is_some() {
         // A job a maker gave (dots-make-dots design section 8): not the person's message.
         out.push_str("## Job\n\n");
+        out.push_str(message);
+        out.push_str("\n\n");
+    } else if wake {
+        // A wake of a maker: Dots' report of a job's end or of the person's answer to a
+        // request, not the person's message.
+        out.push_str("## Report from Dots\n\n");
         out.push_str(message);
         out.push_str("\n\n");
     } else if run.trigger == TriggerKind::Chat {
@@ -454,6 +592,12 @@ pub fn build_prompt_full(
         out.push_str("\n## Shared context\n\n");
         out.push_str(&section);
         out.push('\n');
+    }
+    // A run that has the tools for making dots is told how making works (dots-make-dots
+    // design section 11).
+    if let Some(part) = &making {
+        out.push_str("\n## Making dots\n\n");
+        out.push_str(&making_section(dot.spec.engine, part));
     }
     out
 }

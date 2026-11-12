@@ -23,6 +23,7 @@ use dots_core::model::{
     WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::policy::{Action, GuardKind, Preset, Rule};
+use dots_core::prompt::{making_section, MakerPart};
 use dots_core::vault::{Grants, MemorySecrets};
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::{Config, Runtime};
@@ -913,4 +914,105 @@ async fn deleting_a_made_dot_asks_first_while_the_maker_always_asks_before_delet
     assert!(guard.always_asks);
     assert!(made_dot(&t, &maker, "Blog Watcher").await.is_some());
     finish(&t, &[&chat]).await;
+}
+
+/// The prompt of the started CLI whose prompt holds `message`.
+async fn prompt_of(t: &T, message: &str) -> String {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let prompt = std::fs::read_to_string(&t.args_out)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+            .and_then(|r| r["prompt"].as_str().map(str::to_string))
+            .filter(|p| p.contains(message));
+        if let Some(prompt) = prompt {
+            return prompt;
+        }
+        assert!(Instant::now() < deadline, "no CLI started for {message:?}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// The prompt says how making works (dots-make-dots design section 11) exactly where the run
+/// has the tools: a maker's run, with its own limits and the names the `claude` CLI knows the
+/// tools by; not a dot with the switch off, and not a maker whose policy denies `MakeDots`.
+#[tokio::test]
+async fn only_a_makers_prompt_says_how_making_works() {
+    let t = start(held()).await;
+    let plain = create(&t, "Plain", |s| s.making.on = false).await;
+    let plain_chat = t.rt.chat(&plain.id, "hello plain", None).await.unwrap();
+    let plain_prompt = prompt_of(&t, "hello plain").await;
+    let maker = create(&t, "Researcher", |s| {
+        s.making.per_run = 2;
+        s.making.total = 7;
+    })
+    .await;
+    let maker_chat = t.rt.chat(&maker.id, "hello maker", None).await.unwrap();
+    let maker_prompt = prompt_of(&t, "hello maker").await;
+    let denied = create(&t, "Denied", |s| {
+        s.policy
+            .rules
+            .insert(0, Rule::new("MakeDots", Action::Deny));
+    })
+    .await;
+    let denied_chat = t.rt.chat(&denied.id, "hello denied", None).await.unwrap();
+    let denied_prompt = prompt_of(&t, "hello denied").await;
+
+    let section = making_section(
+        EngineKind::Claude,
+        &MakerPart {
+            limits: maker.spec.making,
+            made: &[],
+        },
+    );
+    assert!(
+        maker_prompt.contains(&format!("\n## Making dots\n\n{section}")),
+        "{maker_prompt}"
+    );
+    assert!(
+        maker_prompt.contains("`mcp__dots__make_dot` makes a dot at once"),
+        "{maker_prompt}"
+    );
+    assert!(
+        maker_prompt.contains("(2 in one run, 7 kept)"),
+        "{maker_prompt}"
+    );
+    for name in CLI_NAMES {
+        assert!(maker_prompt.contains(&format!("`{name}`")), "{name}");
+    }
+    for prompt in [&plain_prompt, &denied_prompt] {
+        assert!(prompt.contains("## Standing rules"), "{prompt}");
+        assert!(!prompt.contains("## Making dots"), "{prompt}");
+        for name in NAMES {
+            assert!(!prompt.contains(name), "{prompt}");
+        }
+    }
+    finish(&t, &[&plain_chat, &maker_chat, &denied_chat]).await;
+}
+
+/// A workflow step's run of a maker has no tools for making dots (design section 5), so its
+/// prompt does not name them.
+#[tokio::test]
+async fn a_workflow_steps_prompt_of_a_maker_does_not_say_how_making_works() {
+    let t = start(json!([init(), success()])).await;
+    let maker = create(&t, "Researcher", |_| {}).await;
+    let started = run_step(&t, &maker).await;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let wr = t.rt.workflows().get(&started.id).await.unwrap();
+        if wr.status == WorkflowRunStatus::Succeeded {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{wr:#?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let recorded: Value =
+        serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
+    let prompt = recorded["prompt"].as_str().unwrap();
+    assert!(prompt.contains("## Standing rules"), "{prompt}");
+    assert!(!prompt.contains("## Making dots"), "{prompt}");
+    for name in NAMES {
+        assert!(!prompt.contains(name), "{prompt}");
+    }
+    t.rt.shutdown();
 }

@@ -25,7 +25,7 @@ use crate::model::{
     effective_quiet_limit, ApprovalStatus, Delivery, Dot, EngineKind, NewRun, Run, RunStatus,
     TriggerKind, WorkspaceMode,
 };
-use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
+use crate::prompt::{build_prompt_full, context_tool_name, MakerPart, PromptParts};
 use crate::result_check::{CheckEvent, ResultCheck, ResultChecker};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::spend::STOPPED_BY_CAP;
@@ -2204,6 +2204,12 @@ impl Runner {
         let instructions_changed = self.instructions_changed(run, &dot).await;
         let startable = crate::team_tools::prompt_section(tools.startable(), dot.spec.engine);
         let handoff = seed.as_deref();
+        // A first prompt of a run with the tools for making dots lists the dots its dot made
+        // (dots-make-dots design section 11), as they are now.
+        let made_dots = match tools.making() {
+            Some(_) if run.session_id.is_none() => self.store.list_made_dots(&dot.id).await?,
+            _ => Vec::new(),
+        };
         let prompt = {
             let mut prompt = build_prompt_full(
                 &dot,
@@ -2222,6 +2228,10 @@ impl Runner {
                     instructions_changed,
                     so_far,
                     handoff,
+                    making: tools.making().map(|limits| MakerPart {
+                        limits: *limits,
+                        made: &made_dots,
+                    }),
                 },
             );
             // A chat's first prompt lists the workflows it may start (teams spec section 7).

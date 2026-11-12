@@ -13,11 +13,13 @@ use dots_core::engine::{
     Engine, EngineEvent, PermissionGate, PermissionOutcome, RunContext, UnavailableEngine,
 };
 use dots_core::model::{ApplyState, EngineKind, TriggerKind, WorkspaceMode};
+use dots_core::model::{Made, Making};
 use dots_core::model::{Run, RunStatus};
 use dots_core::prompt::{
     build_prompt, build_prompt_full, context_tool_name, is_typed, recent_runs, PromptParts,
     CHAT_SUMMARY_RULE, CONVERSATION, NO_INSTRUCTIONS_TOOL, PLAN_RULE, RECENT_TEXT,
 };
+use dots_core::prompt::{MakerPart, WAKE_NOTE};
 use serde_json::{json, Value};
 use tokio_util::sync::CancellationToken;
 
@@ -879,4 +881,327 @@ fn a_watcher_run_s_attachments_are_not_a_chat_block() {
     );
     let p = build_prompt(&dot, &run, Path::new("W"), at(), "", &[]);
     assert!(!p.contains("## Attached files"), "{p}");
+}
+
+/// The `## Making dots` section as a maker with the limits 2 and 7 reads it, without its list:
+/// `names` are the engine's names of `make_dot`, `change_dot`, `delete_dot`, `give_job` and
+/// `list_made_dots`.
+fn making_rules(names: [&str; 5]) -> String {
+    let [make, change, delete, give, list] = names;
+    format!(
+        "\n## Making dots\n\n\
+         You can make dots that work for you and give them jobs.\n\n\
+         - Make a dot for work that repeats, runs on a schedule, or can go on while you do \
+         something else. Do small one-off work yourself. Reuse a dot before making another: the \
+         list below is from the start of this conversation, and `{list}` gives it as it is now.\n\
+         - `{make}` makes a dot at once when it is within your reach: the dot holds nothing you \
+         do not hold yourself (your folder or one below it, your permissions or a weaker preset, \
+         Library items and variables you have, limits no higher than yours). If you ask for \
+         more, or pass your limit of dots (2 in one run, 7 kept), nothing is made yet: the \
+         request waits for the person. Do not wait for it and do not ask again: carry on with \
+         other work or end your turn, and Dots wakes you with their answer. At most 3 requests \
+         can wait at once.\n\
+         - `{give}` returns at once. Do not wait for the job or check on it: Dots wakes you in \
+         this conversation with how the job ended and the dot's final message. A dot does one \
+         job from this conversation at a time: a second one is refused until the first ends. At \
+         most 6 jobs between two messages of the person; after that, report to the person.\n\
+         - `{change}` changes a dot you made and `{delete}` deletes one for good. A delete may \
+         wait for the person's approval. Dots you did not make are not yours to change, delete \
+         or give jobs to.\n\
+         - What the dots you made spend counts toward your own daily spend cap.\n\
+         - Never put the value of a secret in a dot's instructions or in a job. A dot gets \
+         variables by name, through `{make}` or `{change}`.\n\n"
+    )
+}
+
+/// A dot `maker` made, for `purpose`.
+fn made_by(maker: &dots_core::model::Dot, name: &str, purpose: &str) -> dots_core::model::Dot {
+    let mut dot = fake_dot(name, Path::new("C:/repo"), WorkspaceMode::Folder);
+    dot.spec.name = name.to_string();
+    dot.made = Some(Made {
+        by_dot_id: Some(maker.id.clone()),
+        by_name: maker.spec.name.clone(),
+        run_id: "RUN0".into(),
+        purpose: purpose.to_string(),
+    });
+    dot
+}
+
+/// A maker's first prompt ends with how making works (dots-make-dots design section 11): the
+/// rules in a few lines, with the dot's own limits and the engine's names of the tools, and
+/// the dots it made. Nothing else in the prompt changes.
+#[test]
+fn a_makers_first_prompt_says_how_making_works_in_its_engines_names() {
+    let limits = Making {
+        on: true,
+        per_run: 2,
+        total: 7,
+    };
+    let cases = [
+        (
+            EngineKind::Claude,
+            [
+                "mcp__dots__make_dot",
+                "mcp__dots__change_dot",
+                "mcp__dots__delete_dot",
+                "mcp__dots__give_job",
+                "mcp__dots__list_made_dots",
+            ],
+        ),
+        (
+            EngineKind::Local,
+            [
+                "make_dot",
+                "change_dot",
+                "delete_dot",
+                "give_job",
+                "list_made_dots",
+            ],
+        ),
+    ];
+    for (engine, names) in cases {
+        let mut maker = fake_dot("Researcher", Path::new("C:/repo"), WorkspaceMode::Folder);
+        maker.spec.engine = engine;
+        maker.spec.making = limits;
+        let mut watcher = made_by(&maker, "Blog Watcher", "Watches three blogs");
+        watcher.spec.schedule = Some(
+            serde_json::from_value(json!({"rule": {"kind": "daily", "time": "09:00"}})).unwrap(),
+        );
+        let mut sorter = made_by(&maker, "Sorter", "Sorts the inbox");
+        sorter.spec.enabled = false;
+        let made = [watcher, sorter];
+        let run = fake_run(
+            TriggerKind::Chat,
+            Some(json!({"message": "watch three blogs", "typed": true})),
+            None,
+        );
+        let prompt = |parts| build_prompt_full(&maker, &run, Path::new("C:/ws"), at(), "", parts);
+        let plain = prompt(PromptParts::default());
+        assert!(!plain.contains("## Making dots"), "{plain}");
+        assert!(!plain.contains("make_dot"), "{plain}");
+
+        let with_dots = prompt(PromptParts {
+            making: Some(MakerPart {
+                limits,
+                made: &made,
+            }),
+            ..PromptParts::default()
+        });
+        assert_eq!(
+            with_dots,
+            format!(
+                "{plain}{}Dots you made:\n\n\
+                 - \"Blog Watcher\": Watches three blogs; schedule: daily at 09:00\n\
+                 - \"Sorter\": Sorts the inbox; no schedule; switched off\n",
+                making_rules(names)
+            ),
+            "{engine:?}"
+        );
+        if engine == EngineKind::Local {
+            assert!(!with_dots.contains("mcp__dots__"), "{with_dots}");
+        }
+
+        let none_yet = prompt(PromptParts {
+            making: Some(MakerPart { limits, made: &[] }),
+            ..PromptParts::default()
+        });
+        assert_eq!(
+            none_yet,
+            format!("{plain}{}You have made no dots yet.\n", making_rules(names)),
+            "{engine:?}"
+        );
+
+        // A run that goes on in a session has the section from its first prompt.
+        let next = fake_run(
+            TriggerKind::Chat,
+            Some(json!({"message": "and a fourth", "typed": true})),
+            Some("s"),
+        );
+        let p = build_prompt_full(
+            &maker,
+            &next,
+            Path::new("C:/ws"),
+            at(),
+            "",
+            PromptParts {
+                making: Some(MakerPart {
+                    limits,
+                    made: &made,
+                }),
+                ..PromptParts::default()
+            },
+        );
+        assert_eq!(p, "and a fourth");
+    }
+}
+
+/// A wake (dots-make-dots design sections 7.2 and 8) is Dots' own report, and the maker's
+/// prompt says so, in a first prompt and in one that goes on in a session.
+#[test]
+fn a_wake_is_shown_as_a_report_from_dots_not_as_the_persons_message() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let payload = json!({"message": "\"Blog Watcher\" finished the job.", "wake_id": "W1"});
+    let note = "This is a report from Dots, not a message from the person: a job you gave to a \
+                dot you made has ended, or the person answered a request of yours. Your answer \
+                is shown to the person.";
+    assert_eq!(WAKE_NOTE, note);
+
+    let first = fake_run(TriggerKind::Chat, Some(payload.clone()), None);
+    let p = build_prompt(&dot, &first, Path::new("C:/ws"), at(), "", &[]);
+    assert!(
+        p.starts_with("Do the thing.\n\n---\n\n## Report from Dots\n\n"),
+        "{p}"
+    );
+    assert!(
+        p.contains(&format!(
+            "## Report from Dots\n\n{note}\n\n\"Blog Watcher\" finished the job.\n\n## Standing \
+             rules"
+        )),
+        "{p}"
+    );
+    assert!(!p.contains("## Message from the user"), "{p}");
+    assert!(!p.contains("## Chat with the person"), "{p}");
+
+    let next = fake_run(TriggerKind::Chat, Some(payload.clone()), Some("s"));
+    assert_eq!(
+        build_prompt(&dot, &next, Path::new("C:/ws"), at(), "", &[]),
+        format!("{note}\n\n\"Blog Watcher\" finished the job.")
+    );
+
+    // A webhook's payload may hold any key: it is no wake.
+    let webhook = fake_run(TriggerKind::Webhook, Some(payload), None);
+    let p = build_prompt(&dot, &webhook, Path::new("C:/ws"), at(), "", &[]);
+    assert!(!p.contains("Report from Dots"), "{p}");
+    assert!(!p.contains("not a message from the person"), "{p}");
+}
+
+/// A made dot's first prompt says, after its instructions, who made it and what for
+/// (dots-make-dots design sections 3 and 9), and that it cannot make dots.
+#[test]
+fn a_made_dot_is_told_who_made_it_and_what_for() {
+    let maker = fake_dot("Researcher", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let plain = fake_dot("Blog Watcher", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let made = made_by(&maker, "Blog Watcher", "Watches three blogs");
+    let run = fake_run(TriggerKind::Manual, None, None);
+    let prompt = |dot: &dots_core::model::Dot, run: &Run, global: &str| {
+        build_prompt(dot, run, Path::new("C:/ws"), at(), global, &[])
+    };
+
+    // The whole prompt of the same dot that nobody made, with the one section added.
+    let before = prompt(&plain, &run, "");
+    let (instructions, rest) = before.split_once("\n\n---\n\n").unwrap();
+    assert_eq!(instructions, "Do the thing.");
+    assert_eq!(
+        prompt(&made, &run, ""),
+        format!(
+            "Do the thing.\n\n## What you were made for\n\nYou were made by the dot Researcher. \
+             You cannot make dots yourself. Your purpose: Watches three blogs\n\n---\n\n{rest}"
+        )
+    );
+    // Under the dot's own instructions, also when every dot's come first.
+    let p = prompt(&made, &run, "Be brief.");
+    assert!(
+        p.starts_with(
+            "## Instructions for every dot\n\nBe brief.\n\n## Instructions for this dot\n\nDo \
+             the thing.\n\n## What you were made for\n\nYou were made by the dot Researcher."
+        ),
+        "{p}"
+    );
+
+    // The maker is deleted: only what the dot is for.
+    let mut orphan = made.clone();
+    orphan.made.as_mut().unwrap().by_dot_id = None;
+    let p = prompt(&orphan, &run, "");
+    assert!(
+        p.starts_with(
+            "Do the thing.\n\n## What you were made for\n\nYou cannot make dots yourself. Your \
+             purpose: Watches three blogs\n\n---\n\n"
+        ),
+        "{p}"
+    );
+    assert!(!p.contains("Researcher"), "{p}");
+
+    // A job names the maker itself (`job_note`), so the section does not name it again.
+    let job = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "Read the blogs.", "job_id": "J1", "job_from": "Researcher"})),
+        None,
+    );
+    let p = prompt(&made, &job, "");
+    assert!(
+        p.starts_with(
+            "Do the thing.\n\n## What you were made for\n\nYou cannot make dots yourself. Your \
+             purpose: Watches three blogs\n\n---\n\n## Job\n\nJob from Researcher (the dot that \
+             made you)."
+        ),
+        "{p}"
+    );
+    assert_eq!(p.matches("made you").count(), 1, "{p}");
+    assert_eq!(p.matches("You were made by").count(), 0, "{p}");
+
+    // The person switched "Can make dots" on for it: its run has the tools, so the prompt does
+    // not say it has none.
+    let p = build_prompt_full(
+        &made,
+        &run,
+        Path::new("C:/ws"),
+        at(),
+        "",
+        PromptParts {
+            making: Some(MakerPart {
+                limits: Making {
+                    on: true,
+                    ..Making::default()
+                },
+                made: &[],
+            }),
+            ..PromptParts::default()
+        },
+    );
+    assert!(
+        p.starts_with(
+            "Do the thing.\n\n## What you were made for\n\nYou were made by the dot Researcher. \
+             Your purpose: Watches three blogs\n\n---\n\n"
+        ),
+        "{p}"
+    );
+    assert!(!p.contains("cannot make dots"), "{p}");
+    assert!(p.contains("## Making dots"), "{p}");
+
+    // A run that goes on in a session sends its message alone, as for any dot.
+    let next = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "go on"})),
+        Some("s"),
+    );
+    assert_eq!(prompt(&made, &next, ""), "go on");
+    assert_eq!(prompt(&made, &next, ""), prompt(&plain, &next, ""));
+}
+
+/// A topic's conversation so far (topic tools spec section 4.4) does not put Dots' reports or
+/// a maker's jobs in the person's mouth.
+#[test]
+fn a_conversation_so_far_names_a_wake_and_a_job_as_what_they_are() {
+    let wake = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "\"Blog Watcher\" finished the job.", "wake_id": "W1"})),
+        None,
+    );
+    let job = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "Read the blogs.", "job_id": "J1", "job_from": "Researcher"})),
+        None,
+    );
+    let said = fake_run(
+        TriggerKind::Chat,
+        Some(json!({"message": "thanks", "typed": true})),
+        None,
+    );
+    let text = dots_core::prompt::conversation_so_far(&[wake, job, said]);
+    assert_eq!(
+        text,
+        "- Dots reported: \"Blog Watcher\" finished the job.\n\
+         - Job from Researcher: Read the blogs.\n\
+         - The person: thanks\n"
+    );
 }

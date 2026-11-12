@@ -21,6 +21,7 @@ use dots_core::model::{
     TeamSpec, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::policy::{Action, GuardKind, Rule};
+use dots_core::prompt::{making_section, MakerPart, WAKE_NOTE};
 use dots_core::vault::MemorySecrets;
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::{Config, Runtime};
@@ -761,5 +762,211 @@ async fn a_rule_that_asks_parks_each_call_and_an_approval_is_for_that_call_alone
     assert!(made_dot(&t, &maker, "Blog Watcher").await.is_some());
     assert_eq!(llm.requests().len(), 6);
     assert_eq!(dot_names(&t).await, ["Blog Watcher", "Researcher"]);
+    t.rt.shutdown();
+}
+
+/// What a recorded request's run was told last: its prompt.
+fn told(req: &Value) -> String {
+    messages(req)
+        .iter()
+        .rfind(|m| m["role"] == "user")
+        .and_then(|m| m["content"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// The prompt of the one recorded request whose run was told `part`.
+fn told_with(reqs: &[Value], part: &str) -> String {
+    let with: Vec<String> = reqs.iter().map(told).filter(|p| p.contains(part)).collect();
+    assert_eq!(with.len(), 1, "{part:?}: {with:#?}");
+    with.into_iter().next().unwrap()
+}
+
+/// The prompt says how making works (dots-make-dots design section 11) exactly where the run
+/// has the tools: a maker's run, with its own limits and the local engine's names; not a dot
+/// with the switch off, and not a maker whose policy denies `MakeDots`.
+#[tokio::test]
+async fn only_a_makers_prompt_says_how_making_works() {
+    let t = start().await;
+    let llm = Llm::start(vec![
+        text("Plain is done."),
+        text("The maker is done."),
+        text("Denied is done."),
+    ])
+    .await;
+    let plain = create(&t, &llm, "Plain", |s| s.making.on = false).await;
+    let plain_chat = t.rt.chat(&plain.id, "hello plain", None).await.unwrap();
+    wait_status(t.rt.store(), &plain_chat.id, RunStatus::Succeeded, 30).await;
+    let maker = create(&t, &llm, "Researcher", |s| {
+        s.making.per_run = 2;
+        s.making.total = 7;
+    })
+    .await;
+    let maker_chat = t.rt.chat(&maker.id, "hello maker", None).await.unwrap();
+    wait_status(t.rt.store(), &maker_chat.id, RunStatus::Succeeded, 30).await;
+    let denied = create(&t, &llm, "Denied", |s| {
+        s.policy
+            .rules
+            .insert(0, Rule::new("MakeDots", Action::Deny));
+    })
+    .await;
+    let denied_chat = t.rt.chat(&denied.id, "hello denied", None).await.unwrap();
+    wait_status(t.rt.store(), &denied_chat.id, RunStatus::Succeeded, 30).await;
+
+    let reqs = llm.requests();
+    assert_eq!(reqs.len(), 3);
+    let section = making_section(
+        EngineKind::Local,
+        &MakerPart {
+            limits: maker.spec.making,
+            made: &[],
+        },
+    );
+    let prompt = told(&reqs[1]);
+    assert!(
+        prompt.contains(&format!("\n## Making dots\n\n{section}")),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("`make_dot` makes a dot at once"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("(2 in one run, 7 kept)"), "{prompt}");
+    assert!(prompt.contains("You have made no dots yet.\n"), "{prompt}");
+    assert!(!prompt.contains("mcp__dots__make_dot"), "{prompt}");
+    for other in [&reqs[0], &reqs[2]] {
+        let prompt = told(other);
+        assert!(prompt.contains("## Standing rules"), "{prompt}");
+        assert!(!prompt.contains("## Making dots"), "{prompt}");
+        for name in NAMES {
+            assert!(!prompt.contains(name), "{prompt}");
+        }
+    }
+    t.rt.shutdown();
+}
+
+/// A workflow step's run of a maker has no tools for making dots (design section 5), so its
+/// prompt does not name them.
+#[tokio::test]
+async fn a_workflow_steps_prompt_of_a_maker_does_not_say_how_making_works() {
+    let t = start().await;
+    let llm = Llm::start(vec![text("Researched.")]).await;
+    let maker = create(&t, &llm, "Researcher", |_| {}).await;
+    let started = run_step(&t, &maker).await;
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let wr = t.rt.workflows().get(&started.id).await.unwrap();
+        if wr.status == WorkflowRunStatus::Succeeded {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{wr:#?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let reqs = llm.requests();
+    assert_eq!(reqs.len(), 1);
+    let prompt = told(&reqs[0]);
+    assert!(prompt.contains("## Standing rules"), "{prompt}");
+    assert!(!prompt.contains("## Making dots"), "{prompt}");
+    for name in NAMES {
+        assert!(!prompt.contains(name), "{prompt}");
+    }
+    t.rt.shutdown();
+}
+
+/// From making to the wake, what each run is told (design sections 8 and 11): the made dot's
+/// job says who made it once; the maker's wake is a report from Dots, not the person's
+/// message; the maker's next conversation lists the dot it made; and the made dot's own chat
+/// with the person says who made it.
+#[tokio::test]
+async fn a_made_dot_and_its_maker_are_told_who_is_who() {
+    let t = start().await;
+    // The maker's second request and the made dot's first come in either order.
+    let llm = Llm::start(vec![
+        call(
+            "m1",
+            "make_dot",
+            json!({
+                "name": "Blog Watcher",
+                "instructions": "Read the three blogs and list what is new.",
+                "purpose": "Reads the feeds",
+                "first_job": "Read them now."
+            }),
+        ),
+        text("ok"),
+        text("ok"),
+        text("ok"),
+        text("ok"),
+        text("ok"),
+    ])
+    .await;
+    let maker = create(&t, &llm, "Researcher", |_| {}).await;
+    let chat = t.rt.chat(&maker.id, "hello maker", None).await.unwrap();
+    wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 30).await;
+    // The job ends and the maker is woken in the same topic: one more run of it.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    let woken = loop {
+        let thread = t.rt.store().list_thread(&chat.root_run_id).await.unwrap();
+        if thread.len() == 2 && thread[1].status == RunStatus::Succeeded {
+            break thread[1].clone();
+        }
+        assert!(Instant::now() < deadline, "{thread:#?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    assert!(woken.payload.as_ref().unwrap().get("wake_id").is_some());
+    let watcher = made_dot(&t, &maker, "Blog Watcher").await.expect("made");
+
+    let again = t.rt.chat(&maker.id, "hello again", None).await.unwrap();
+    wait_status(t.rt.store(), &again.id, RunStatus::Succeeded, 30).await;
+    let direct = t.rt.chat(&watcher.id, "hello watcher", None).await.unwrap();
+    wait_status(t.rt.store(), &direct.id, RunStatus::Succeeded, 30).await;
+
+    let reqs = llm.requests();
+    assert_eq!(reqs.len(), 6);
+    // The job: under the made dot's instructions, what it is for; the job's note names the
+    // maker, once.
+    let job = told_with(&reqs, "## Job");
+    assert!(
+        job.starts_with(
+            "Read the three blogs and list what is new.\n\n## What you were made for\n\nYou \
+             cannot make dots yourself. Your purpose: Reads the feeds\n\n---\n\n## Job\n\nJob \
+             from Researcher (the dot that made you). When you finish, your final message goes \
+             back to Researcher.\n\nRead them now.\n\n## Standing rules"
+        ),
+        "{job}"
+    );
+    assert_eq!(job.matches("made you").count(), 1, "{job}");
+    assert!(!job.contains("## Making dots"), "{job}");
+
+    // The wake goes on in the maker's session: Dots' note, then the report.
+    let wake = told_with(&reqs, "finished the job");
+    assert!(
+        wake.starts_with(&format!(
+            "{WAKE_NOTE}\n\n\"Blog Watcher\" finished the job.\n\nIts final message:\nok"
+        )),
+        "{wake}"
+    );
+    assert!(!wake.contains("Message from the user"), "{wake}");
+
+    // The maker's next conversation lists the dot it made.
+    let next = told_with(&reqs, "hello again");
+    assert!(
+        next.ends_with(
+            "variables by name, through `make_dot` or `change_dot`.\n\nDots you made:\n\n- \
+             \"Blog Watcher\": Reads the feeds; no schedule\n"
+        ),
+        "{next}"
+    );
+
+    // The person's own chat with the made dot names its maker.
+    let direct = told_with(&reqs, "hello watcher");
+    assert!(
+        direct.starts_with(
+            "Read the three blogs and list what is new.\n\n## What you were made for\n\nYou \
+             were made by the dot Researcher. You cannot make dots yourself. Your purpose: Reads \
+             the feeds\n\n## Your recent runs\n\n"
+        ),
+        "{direct}"
+    );
+    assert!(!direct.contains("## Making dots"), "{direct}");
     t.rt.shutdown();
 }
