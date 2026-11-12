@@ -152,6 +152,71 @@ pub fn effective_quiet_limit(spec: &DotSpec, settings: &Settings) -> Option<u64>
     }
 }
 
+/// Dots one run of a maker may make before Dots asks the person, when the dot's settings do
+/// not say (dots-make-dots design section 5).
+pub const MAKE_PER_RUN_DEFAULT: u32 = 3;
+/// The most a dot's settings may allow one run to make.
+pub const MAKE_PER_RUN_MAX: u32 = 10;
+/// Made dots a maker may keep before Dots asks the person, when the dot's settings do not say
+/// (dots-make-dots design section 5).
+pub const MAKE_TOTAL_DEFAULT: u32 = 10;
+/// The most made dots a dot's settings may allow it to keep.
+pub const MAKE_TOTAL_MAX: u32 = 50;
+/// What `Making::validate` says of a `per_run` out of its range.
+pub const MAKE_PER_RUN_RULE: &str = "A dot may make 1 to 10 dots in one run.";
+/// What `Making::validate` says of a `total` out of its range.
+pub const MAKE_TOTAL_RULE: &str = "A dot may keep 1 to 50 made dots.";
+
+/// Whether the dot may make dots, and how many (dots-make-dots design section 5). A part
+/// that is missing reads as its default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Making {
+    /// "Can make dots": off for every dot until the person turns it on.
+    pub on: bool,
+    /// Dots one run of it may make before Dots asks the person.
+    pub per_run: u32,
+    /// Made dots it may keep before Dots asks the person.
+    pub total: u32,
+}
+
+impl Default for Making {
+    fn default() -> Self {
+        Self {
+            on: false,
+            per_run: MAKE_PER_RUN_DEFAULT,
+            total: MAKE_TOTAL_DEFAULT,
+        }
+    }
+}
+
+impl Making {
+    /// The two limits are in their ranges. They are checked while the switch is off as well:
+    /// they are kept for when it is turned on.
+    pub fn validate(&self) -> Result<()> {
+        if !(1..=MAKE_PER_RUN_MAX).contains(&self.per_run) {
+            return Err(Error::Invalid(MAKE_PER_RUN_RULE.to_string()));
+        }
+        if !(1..=MAKE_TOTAL_MAX).contains(&self.total) {
+            return Err(Error::Invalid(MAKE_TOTAL_RULE.to_string()));
+        }
+        Ok(())
+    }
+}
+
+/// Who made a dot (dots-make-dots design sections 3 and 9).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Made {
+    /// The maker; `None` once the maker is deleted.
+    pub by_dot_id: Option<String>,
+    /// The maker's name: kept current while the maker exists, and as it last was after.
+    pub by_name: String,
+    /// The maker's run that made it.
+    pub run_id: String,
+    /// One line on what the dot is for, written by the maker.
+    pub purpose: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DotSpec {
     pub name: String,
@@ -198,6 +263,10 @@ pub struct DotSpec {
     /// The dot's own context rules (context rules spec section 4); `None` takes Settings'.
     #[serde(default)]
     pub context_rules: Option<crate::context_rules::ContextRules>,
+    /// Whether the dot may make dots, and how many (dots-make-dots design section 5). A spec
+    /// written before it existed reads as off.
+    #[serde(default)]
+    pub making: Making,
     pub use_user_settings: bool,
     pub max_turns: u32,
     pub timeout_secs: u64,
@@ -247,6 +316,7 @@ impl DotSpec {
             check_results: true,
             use_graph: true,
             context_rules: None,
+            making: Making::default(),
             use_user_settings: false,
             max_turns: 40,
             timeout_secs: 1800,
@@ -316,6 +386,7 @@ impl DotSpec {
         if let Some(rules) = &self.context_rules {
             rules.validate()?;
         }
+        self.making.validate()?;
         self.policy.validate()?;
         // Whether the Library has each item is checked by the store when the dot is saved.
         self.uses.validate()?;
@@ -344,6 +415,9 @@ pub struct Dot {
     /// moved.
     #[serde(default = "default_workspace")]
     pub workspace_id: String,
+    /// Who made the dot (dots-make-dots design section 3); `None` for a dot a person made.
+    #[serde(default)]
+    pub made: Option<Made>,
     #[serde(flatten)]
     pub spec: DotSpec,
 }

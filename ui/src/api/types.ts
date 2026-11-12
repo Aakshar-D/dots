@@ -137,6 +137,27 @@ export const ContextRules = z.strictObject({
 });
 export type ContextRules = z.infer<typeof ContextRules>;
 
+/// Whether a dot may make dots, and how many (dots-make-dots design section 5): `per_run` is
+/// how many one run of it may make (1 to 10) and `total` how many made dots it may keep (1 to
+/// 50) before Dots asks the person.
+export const Making = z.strictObject({
+  on: z.boolean(),
+  per_run: z.number().int(),
+  total: z.number().int(),
+});
+export type Making = z.infer<typeof Making>;
+
+/// Who made a dot (dots-make-dots design sections 3 and 9): the maker (null once it is
+/// deleted), the maker's name as it is now or last was, the maker's run that made the dot, and
+/// the maker's one line on what the dot is for.
+export const Made = z.strictObject({
+  by_dot_id: nullable(z.string()),
+  by_name: z.string(),
+  run_id: z.string(),
+  purpose: z.string(),
+});
+export type Made = z.infer<typeof Made>;
+
 const dotSpecShape = {
   name: z.string(),
   instructions: z.string(),
@@ -167,6 +188,8 @@ const dotSpecShape = {
   enabled: z.boolean(),
   // The dot's own context rules; null follows Settings.
   context_rules: nullable(ContextRules),
+  // "Can make dots" and its two limits; off until the person turns it on.
+  making: Making,
 };
 export const DotSpec = z.strictObject(dotSpecShape);
 export const Dot = z.strictObject({
@@ -182,6 +205,8 @@ export const Dot = z.strictObject({
   org_id: nullable(z.string()),
   // The workspace of its account the dot is in; "default" until it is moved.
   workspace_id: z.string(),
+  // Who made the dot; null for a dot a person made.
+  made: nullable(Made),
   ...dotSpecShape,
 });
 

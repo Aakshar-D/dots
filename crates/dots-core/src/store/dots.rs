@@ -6,7 +6,7 @@ use super::library::check_uses;
 use super::Store;
 use crate::inbox::{hidden_sql, InboxKind};
 use crate::library::{LibraryConfig, Uses};
-use crate::model::{Dot, DotSpec, EngineKind, WorkspaceMode};
+use crate::model::{Dot, DotSpec, EngineKind, Made, Making, WorkspaceMode};
 use crate::schedule::Schedule;
 use crate::util::{ct_eq, new_id, new_token, now, token_hash};
 use crate::vault::Grants;
@@ -17,10 +17,26 @@ pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, end
     quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id, \
     workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules, \
-    use_graph";
+    use_graph, making_on, making_per_run, making_total, made_by_dot_id, made_by_name, \
+    made_in_run, made_purpose";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
+    // A dot is a made dot when it has the run that made it (migration 0046).
+    let made = match row.try_get::<Option<String>, _>("made_in_run")? {
+        Some(run_id) => Some(Made {
+            by_dot_id: row.try_get("made_by_dot_id")?,
+            by_name: row
+                .try_get::<Option<String>, _>("made_by_name")?
+                .unwrap_or_default(),
+            run_id,
+            purpose: row
+                .try_get::<Option<String>, _>("made_purpose")?
+                .unwrap_or_default(),
+        }),
+        None => None,
+    };
     Ok(Dot {
+        made,
         id: row.try_get("id")?,
         has_webhook_token: !row.try_get::<String, _>("webhook_token")?.is_empty(),
         created_at: row.try_get("created_at")?,
@@ -60,6 +76,11 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?,
             use_graph: row.try_get::<i64, _>("use_graph")? != 0,
+            making: Making {
+                on: row.try_get::<i64, _>("making_on")? != 0,
+                per_run: row.try_get::<i64, _>("making_per_run")? as u32,
+                total: row.try_get::<i64, _>("making_total")? as u32,
+            },
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
             max_turns: row.try_get::<i64, _>("max_turns")? as u32,
             timeout_secs: row.try_get::<i64, _>("timeout_secs")? as u64,
@@ -168,7 +189,33 @@ impl Store {
     ) -> Result<Dot> {
         let mut spec = prepared(spec, None)?;
         spec.variables = self.synced_grants(None, &spec).await?;
-        let spec = &spec;
+        self.insert_dot(&spec, org_id, workspace_id, None).await
+    }
+
+    /// Creates a dot a maker made, as `create_dot` does, and records `made` (dots-make-dots
+    /// design sections 3 and 7.1). Its grants are stored exactly as `spec` gives them: a server
+    /// it uses is not granted the variables of its config, since that could give the dot a name
+    /// its maker lacks (section 6, Variables). What it may hold is the caller's check.
+    pub async fn create_made_dot(
+        &self,
+        spec: &DotSpec,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        made: &Made,
+    ) -> Result<Dot> {
+        let spec = prepared(spec, None)?;
+        self.insert_dot(&spec, org_id, workspace_id, Some(made))
+            .await
+    }
+
+    /// Stores a new dot from `spec`, which is prepared and holds its grants as they are stored.
+    async fn insert_dot(
+        &self,
+        spec: &DotSpec,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        made: Option<&Made>,
+    ) -> Result<Dot> {
         let id = new_id();
         let ts = now();
         // The write lock up front: the clash check reads before the insert, and a deferred
@@ -184,8 +231,10 @@ impl Store {
              quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
              timeout_secs, approval_wait_secs, enabled, created_at, updated_at, org_id, \
              workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules, \
-             use_graph) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             use_graph, making_on, making_per_run, making_total, made_by_dot_id, made_by_name, \
+             made_in_run, made_purpose) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+             ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -218,12 +267,40 @@ impl Store {
         .bind(spec.check_results as i64)
         .bind(rules_json(spec)?)
         .bind(spec.use_graph as i64)
+        .bind(spec.making.on as i64)
+        .bind(spec.making.per_run as i64)
+        .bind(spec.making.total as i64)
+        .bind(made.and_then(|m| m.by_dot_id.as_deref()))
+        .bind(made.map(|m| m.by_name.as_str()))
+        .bind(made.map(|m| m.run_id.as_str()))
+        .bind(made.map(|m| m.purpose.as_str()))
         .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
         check_uses(&mut tx, &spec.uses).await?;
         tx.commit().await?;
         self.get_dot(&id).await
+    }
+
+    /// The dots `maker_id` made that exist now, by name (dots-make-dots design section 9).
+    pub async fn list_made_dots(&self, maker_id: &str) -> Result<Vec<Dot>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {DOT_COLUMNS} FROM dots WHERE made_by_dot_id = ? ORDER BY name"
+        ))
+        .bind(maker_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(dot_from_row).collect()
+    }
+
+    /// How many dots `maker_id` made that exist now: what its total limit counts (dots-make-dots
+    /// design section 10).
+    pub async fn count_made_dots(&self, maker_id: &str) -> Result<u32> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dots WHERE made_by_dot_id = ?")
+            .bind(maker_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n as u32)
     }
 
     /// Moves a dot to another workspace of its account. Whether the workspace exists is the
@@ -261,11 +338,27 @@ impl Store {
     /// otherwise nothing changes and `Error::Conflict` is returned. The check is atomic. The
     /// schedule is prepared against the stored one (`prepared`). Every item its `uses` names
     /// must be in the Library (`Invalid`). A server it uses now and did not before is granted
-    /// its variables; one it no longer uses loses its grants.
+    /// its variables; one it no longer uses loses its grants. Who made the dot stays as it is,
+    /// and a new name is written to the dots it made (dots-make-dots design section 9).
     pub async fn update_dot(&self, id: &str, spec: &DotSpec) -> Result<Dot> {
+        self.save_dot(id, spec, true).await
+    }
+
+    /// Updates a dot as `update_dot` does, but stores its grants exactly as `spec` gives them:
+    /// for a change a maker makes to a dot it made, where the grant of a newly used server's
+    /// variables could give the dot a name its maker lacks (dots-make-dots design section 6,
+    /// Variables). What the dot may hold is the caller's check.
+    pub async fn update_dot_exact(&self, id: &str, spec: &DotSpec) -> Result<Dot> {
+        self.save_dot(id, spec, false).await
+    }
+
+    /// `update_dot` with `sync_grants`, `update_dot_exact` without.
+    async fn save_dot(&self, id: &str, spec: &DotSpec, sync_grants: bool) -> Result<Dot> {
         let stored = self.get_dot(id).await?.spec;
         let mut spec = prepared(spec, stored.schedule.as_ref())?;
-        spec.variables = self.synced_grants(Some(&stored.uses), &spec).await?;
+        if sync_grants {
+            spec.variables = self.synced_grants(Some(&stored.uses), &spec).await?;
+        }
         let spec = &spec;
         // The write lock up front, as in `create_dot`: the clash check reads before the update.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -277,7 +370,8 @@ impl Store {
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \
              browser = ?, quiet_limit_secs = ?, spend_daily_usd = ?, spend_daily_tokens = ?, \
              use_global_instructions = ?, use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
-             enabled = ?, check_results = ?, context_rules = ?, use_graph = ?, updated_at = ? \
+             enabled = ?, check_results = ?, context_rules = ?, use_graph = ?, making_on = ?, \
+             making_per_run = ?, making_total = ?, updated_at = ? \
              WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
              WHERE dot_id = ? AND status IN ('queued','running','awaiting_approval')))",
@@ -306,6 +400,9 @@ impl Store {
         .bind(spec.check_results as i64)
         .bind(rules_json(spec)?)
         .bind(spec.use_graph as i64)
+        .bind(spec.making.on as i64)
+        .bind(spec.making.per_run as i64)
+        .bind(spec.making.total as i64)
         .bind(now())
         .bind(id)
         .bind(&spec.workdir)
@@ -324,6 +421,14 @@ impl Store {
             ));
         }
         check_uses(&mut tx, &spec.uses).await?;
+        if spec.name != stored.name {
+            // The dots it made show its name (dots-make-dots design section 9).
+            sqlx::query("UPDATE dots SET made_by_name = ? WHERE made_by_dot_id = ?")
+                .bind(&spec.name)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         self.get_dot(id).await
     }

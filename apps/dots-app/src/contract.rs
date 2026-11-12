@@ -123,6 +123,7 @@ fn dot() -> Dot {
         seen_at: Some(TS.into()),
         org_id: None,
         workspace_id: "default".into(),
+        made: None,
         spec: spec(),
     }
 }

@@ -17,6 +17,12 @@
         "has_webhook_token": true,
         "id": "01J0DOT",
         "instructions": "Run the tests and summarize failures.",
+        "made": null,
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
         "max_turns": 40,
         "model": "sonnet",
         "name": "nightly-tests",
@@ -2084,6 +2090,12 @@
     "has_webhook_token": true,
     "id": "01J0DOT",
     "instructions": "Run the tests and summarize failures.",
+    "made": null,
+    "making": {
+      "on": false,
+      "per_run": 3,
+      "total": 10
+    },
     "max_turns": 40,
     "model": "sonnet",
     "name": "nightly-tests",
@@ -2277,6 +2289,12 @@
       "has_webhook_token": true,
       "id": "01J0DOT",
       "instructions": "Run the tests and summarize failures.",
+      "made": null,
+      "making": {
+        "on": false,
+        "per_run": 3,
+        "total": 10
+      },
       "max_turns": 40,
       "model": "sonnet",
       "name": "nightly-tests",
@@ -2517,6 +2535,11 @@
     "endpoint_url": "http://127.0.0.1:1234",
     "engine": "local",
     "instructions": "Tidy the notes folder.",
+    "making": {
+      "on": false,
+      "per_run": 3,
+      "total": 10
+    },
     "max_turns": 40,
     "model": "google/gemma-4-12b-qat",
     "name": "notes",
@@ -4950,6 +4973,11 @@
     "endpoint_url": null,
     "engine": "claude",
     "instructions": "",
+    "making": {
+      "on": false,
+      "per_run": 3,
+      "total": 10
+    },
     "max_turns": 40,
     "model": "sonnet",
     "name": "",
@@ -7550,6 +7578,12 @@
         "has_webhook_token": true,
         "id": "01J0DOT",
         "instructions": "Run the tests and summarize failures.",
+        "made": null,
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
         "max_turns": 40,
         "model": "sonnet",
         "name": "nightly-tests",
@@ -7732,6 +7766,12 @@
         "has_webhook_token": true,
         "id": "01J0DOT",
         "instructions": "Run the tests and summarize failures.",
+        "made": null,
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
         "max_turns": 40,
         "model": "sonnet",
         "name": "nightly-tests",
