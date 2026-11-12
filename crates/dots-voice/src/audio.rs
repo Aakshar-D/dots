@@ -15,7 +15,7 @@ use std::sync::mpsc::{
 };
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Frames the microphone keeps for a slow consumer: 64 x 32 ms, about 2 seconds.
 const MIC_QUEUE: usize = 64;
@@ -427,12 +427,16 @@ impl FadeState {
 }
 
 /// Writes the next `out.len() / channels` frames: one queued sample to every channel, silence
-/// once the queue is dry.
-fn fill(out: &mut [f32], channels: u16, queue: &mut VecDeque<f32>, fade: &mut FadeState) {
+/// once the queue is dry. Returns how many frames came from the queue.
+fn fill(out: &mut [f32], channels: u16, queue: &mut VecDeque<f32>, fade: &mut FadeState) -> usize {
+    let mut taken = 0;
     let mut frames = out.chunks_exact_mut(usize::from(channels.max(1)));
     for frame in &mut frames {
         let sample = match queue.pop_front() {
-            Some(s) => s * fade.next_gain(),
+            Some(s) => {
+                taken += 1;
+                s * fade.next_gain()
+            }
             None => {
                 fade.reset();
                 0.0
@@ -441,6 +445,15 @@ fn fill(out: &mut [f32], channels: u16, queue: &mut VecDeque<f32>, fade: &mut Fa
         frame.fill(sample);
     }
     frames.into_remainder().fill(0.0);
+    taken
+}
+
+/// When the last queued sample, written `taken` frames into a buffer the device plays `delay`
+/// after `now`, leaves the device. `None` when the device gave no delay (it cannot tell).
+fn heard_until(now: Instant, delay: Option<Duration>, taken: usize, rate: u32) -> Option<Instant> {
+    let delay = delay.filter(|d| !d.is_zero())?;
+    let written = Duration::from_secs_f64(taken as f64 / f64::from(rate.max(1)));
+    Some(now + delay + written)
 }
 
 /// The most recent samples played, for `level`.
@@ -472,6 +485,10 @@ struct Playback {
     /// The most the queue may hold: `MAX_QUEUED_SECONDS` at the device rate.
     max: usize,
     failed: bool,
+    rate: u32,
+    /// When the sound last written leaves the device, as the device reported its delay when
+    /// the queue ran dry; `None` when it gave none.
+    heard_until: Option<Instant>,
 }
 
 impl Playback {
@@ -483,7 +500,24 @@ impl Playback {
             fade: FadeState::new(rate),
             max,
             failed: false,
+            rate,
+            heard_until: None,
         }
+    }
+
+    /// The output callback's work on `out`, `delay` before the device plays it.
+    fn fill(&mut self, out: &mut [f32], channels: u16, now: Instant, delay: Option<Duration>) {
+        let had = !self.queue.is_empty();
+        let taken = fill(out, channels, &mut self.queue, &mut self.fade);
+        if had && self.queue.is_empty() {
+            self.heard_until = heard_until(now, delay, taken, self.rate);
+        }
+    }
+
+    /// Once idle: how much longer what was played stays audible, if the device said.
+    fn still_audible(&self, now: Instant) -> Option<Duration> {
+        self.heard_until
+            .map(|until| until.saturating_duration_since(now))
     }
 
     /// Appends the samples. Refused (false) after a failure, or when it would take the queue
@@ -515,7 +549,12 @@ impl Playback {
 
 /// The output callback's step. If `play` or `stop` holds the lock right now, writes silence
 /// and leaves the queue alone (so it is not mistaken for idle) rather than waiting.
-fn fill_if_free(playback: &Mutex<Playback>, out: &mut [f32], channels: u16) {
+fn fill_if_free(
+    playback: &Mutex<Playback>,
+    out: &mut [f32],
+    channels: u16,
+    delay: Option<Duration>,
+) {
     let mut guard = match playback.try_lock() {
         Ok(g) => g,
         Err(TryLockError::Poisoned(e)) => e.into_inner(),
@@ -524,8 +563,7 @@ fn fill_if_free(playback: &Mutex<Playback>, out: &mut [f32], channels: u16) {
             return;
         }
     };
-    let Playback { queue, fade, .. } = &mut *guard;
-    fill(out, channels, queue, fade);
+    guard.fill(out, channels, Instant::now(), delay);
 }
 
 struct SinkShared {
@@ -597,6 +635,13 @@ impl Sink for CpalSink {
 
     fn idle(&self) -> bool {
         locked(&self.shared.playback).is_idle()
+    }
+
+    /// From the delay the device reports for each buffer (its latency, as the operating
+    /// system knows it; a Bluetooth speaker's own delay is in it only when the system counts
+    /// it).
+    fn still_audible(&self) -> Option<Duration> {
+        locked(&self.shared.playback).still_audible(Instant::now())
     }
 
     fn level(&self) -> f32 {
@@ -688,9 +733,11 @@ where
     let ch = usize::from(channels.max(1));
     device.build_output_stream::<T, _, _>(
         config,
-        move |data: &mut [T], _| {
+        move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
             scratch.resize(data.len(), 0.0); // grows once, to the device's buffer size
-            fill_if_free(&shared.playback, &mut scratch, channels);
+            let at = info.timestamp();
+            let delay = at.playback.checked_duration_since(at.callback);
+            fill_if_free(&shared.playback, &mut scratch, channels, delay);
             window.push_all(scratch.iter().step_by(ch));
             shared
                 .level
@@ -991,15 +1038,44 @@ mod tests {
         let mut out = [9.0; 4];
         {
             let _held = locked(&playback); // `play` is appending right now
-            fill_if_free(&playback, &mut out, 1);
+            fill_if_free(&playback, &mut out, 1, None);
         }
         assert_eq!(out, [0.0; 4]);
         let p = locked(&playback);
         assert_eq!(p.queue.len(), 10, "nothing was consumed");
         assert!(!p.is_idle());
         drop(p);
-        fill_if_free(&playback, &mut out, 1);
+        fill_if_free(&playback, &mut out, 1, None);
         assert_eq!(out, [0.5; 4]);
+    }
+
+    /// The speaker knows when its sound has left the device: the buffer that ran the queue
+    /// dry is heard the device's delay after the callback, and its last queued frame that
+    /// much later again. A device that gives no delay cannot tell.
+    #[test]
+    fn the_sound_is_heard_until_the_device_delay_has_passed() {
+        let mut p = Playback::new(1_000);
+        p.push(&[0.5; 30]);
+        let now = Instant::now();
+        let delay = Some(Duration::from_millis(400));
+        let mut out = [0.0; 20];
+        p.fill(&mut out, 1, now, delay);
+        assert_eq!(p.still_audible(now), None, "not run dry yet");
+        p.fill(&mut out, 1, now, delay);
+        assert!(p.is_idle());
+        // 10 frames at 1 kHz are 10 ms, after a 400 ms delay
+        assert_eq!(p.still_audible(now), Some(Duration::from_millis(410)));
+        assert_eq!(
+            p.still_audible(now + Duration::from_secs(1)),
+            Some(Duration::ZERO)
+        );
+        // silence written after that changes nothing
+        p.fill(&mut out, 1, now + Duration::from_millis(5), delay);
+        assert_eq!(p.still_audible(now), Some(Duration::from_millis(410)));
+        // no delay given: unknown
+        p.push(&[0.5; 5]);
+        p.fill(&mut out, 1, now, Some(Duration::ZERO));
+        assert_eq!(p.still_audible(now), None);
     }
 
     #[test]

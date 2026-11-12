@@ -159,6 +159,15 @@ impl Ears {
         events
     }
 
+    /// Fills the pre-roll with silence, as if the person had been quiet until now. For words
+    /// that start the moment the ears open (straight after "Hey Dot"): the recogniser can
+    /// return nothing at all for a clip that begins in the middle of speech.
+    pub fn lead_in_silence(&mut self) {
+        self.ring.clear();
+        self.ring
+            .extend(std::iter::repeat_with(|| vec![0.0; FRAME]).take(self.pre_roll));
+    }
+
     /// Forget the clip in progress (no `Final` follows), the pre-roll and the detector.
     pub fn reset(&mut self) {
         self.ring.clear();
@@ -369,6 +378,24 @@ mod tests {
         events.extend(feed(&mut r.ears, false, 30, 1.0));
         assert_eq!(events.first(), Some(&EarEvent::Started));
         assert_eq!(events.last(), Some(&EarEvent::Final("42 frames".into())));
+    }
+
+    /// Words that start the moment the ears open (straight after "Hey Dot") still reach the
+    /// recogniser after a moment of quiet: a pre-roll of silence (10 frames here), and
+    /// nothing else that was heard before.
+    #[test]
+    fn a_lead_in_of_silence_comes_before_words_that_start_at_once() {
+        let mut r = rig(Mode::Count, EarSettings::default());
+        r.ears.lead_in_silence();
+        let mut events = feed(&mut r.ears, true, 20, 1.0);
+        events.extend(feed(&mut r.ears, false, 30, 1.0));
+        assert_eq!(events.last(), Some(&EarEvent::Final("52 frames".into())));
+        let clips = r.recognizer.clips.lock().unwrap();
+        let last = clips.last().unwrap();
+        assert!(last.samples[..10 * FRAME].iter().all(|s| *s == 0.0));
+        assert!(last.samples[10 * FRAME..11 * FRAME]
+            .iter()
+            .all(|s| *s == 1.0));
     }
 
     #[test]

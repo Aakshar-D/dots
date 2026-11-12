@@ -30,6 +30,11 @@ pub trait Sink: Send + Sync {
     fn stop(&self);
     /// True when nothing is queued or playing. A failed sink is idle.
     fn idle(&self) -> bool;
+    /// Once idle, how much longer the sound already handed to the device stays audible (the
+    /// device's own output delay); `None` when the sink cannot tell.
+    fn still_audible(&self) -> Option<Duration> {
+        None
+    }
     /// 0.0..=1.0 of what is sounding now.
     fn level(&self) -> f32;
     /// True once the speaker has stopped working for good; a new sink is needed.
@@ -40,6 +45,9 @@ pub trait Sink: Send + Sync {
 pub enum VoiceEvent {
     /// A sentence was handed to the sink.
     Saying(String),
+    /// Some of the reply was not handed to the sink: the length cap cut it, or the sink's
+    /// queue was full. Sent once, just before the reply's `Finished`.
+    Cut,
     /// The reply was spoken to the end.
     Finished,
     /// `stop` cut the speech short.
@@ -238,8 +246,10 @@ struct ReplyState {
     stream: SentenceStream,
     /// Bytes of spoken text handed on so far.
     spoken: usize,
-    /// The length cap was reached: later sentences are dropped silently.
+    /// The length cap was reached: later sentences are dropped.
     capped: bool,
+    /// Something of the reply was not handed to the sink (`VoiceEvent::Cut`).
+    cut: bool,
     /// Speech failed: the rest of the reply is dropped.
     failed: bool,
 }
@@ -273,6 +283,7 @@ impl Worker {
                 stream: SentenceStream::new(),
                 spoken: 0,
                 capped: false,
+                cut: false,
                 failed: false,
             });
         }
@@ -295,6 +306,7 @@ impl Worker {
             let rest = self.reply_state(reply).stream.finish();
             self.speak_all(gen, reply, rest);
             if !self.reply_state(reply).failed && self.wait_until_idle(gen) {
+                let cut = self.reply_state(reply).cut;
                 let mut st = self.shared.lock();
                 if st.gen == gen {
                     st.pending = st.pending.saturating_sub(1);
@@ -302,6 +314,9 @@ impl Worker {
                     if st.sink.failed() {
                         self.shared.send(VoiceEvent::Trouble(SPEAKER_BROKE.into()));
                     } else {
+                        if cut {
+                            self.shared.send(VoiceEvent::Cut);
+                        }
                         self.shared.send(VoiceEvent::Finished);
                     }
                 }
@@ -322,16 +337,22 @@ impl Worker {
     fn speak(&mut self, gen: u64, reply: u64, sentence: &str) {
         let mut cleaned = speakable(sentence);
         let state = self.reply_state(reply);
-        if cleaned.is_empty() || state.capped {
+        if cleaned.is_empty() {
+            return;
+        }
+        if state.capped {
+            state.cut = true;
             return;
         }
         if state.spoken == 0 && cleaned.len() > MAX_SPOKEN_CHARS {
             cleaned = trim_spoken(&cleaned);
+            state.cut = true;
         }
         let separator = usize::from(state.spoken > 0);
         let length = cleaned.len();
         if state.spoken + separator + length > MAX_SPOKEN_CHARS {
             state.capped = true;
+            state.cut = true;
             return;
         }
         let (voice, speed) = {
@@ -351,6 +372,8 @@ impl Worker {
                     drop(st);
                     if broke {
                         self.fail(gen, reply, SPEAKER_BROKE.into());
+                    } else {
+                        self.reply_state(reply).cut = true;
                     }
                     return;
                 }
@@ -746,12 +769,14 @@ mod tests {
         rig.voice.end_of_reply();
         let mut total = 0;
         let mut said = 0;
+        let mut cut = 0;
         loop {
             match rig.next() {
                 VoiceEvent::Saying(text) => {
                     total += text.chars().count();
                     said += 1;
                 }
+                VoiceEvent::Cut => cut += 1,
                 VoiceEvent::Finished => break,
                 other => panic!("unexpected {other:?}"),
             }
@@ -759,6 +784,12 @@ mod tests {
         assert!(said > 1);
         assert!(total <= MAX_SPOKEN_CHARS, "{total} chars were spoken");
         assert_eq!(rig.speaker.sentences().len(), said);
+        // what was not said is reported, once
+        assert_eq!(cut, 1);
+        // a reply that fits is not cut
+        rig.voice.say("Short.");
+        assert_eq!(rig.next(), say("Short."));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
     }
 
     #[test]
@@ -823,6 +854,7 @@ mod tests {
                     total += text.len();
                     said += 1;
                 }
+                VoiceEvent::Cut => {}
                 VoiceEvent::Finished => break,
                 other => panic!("unexpected {other:?}"),
             }
@@ -956,7 +988,9 @@ mod tests {
         let mut rig = rig();
         rig.sink.full.store(true, Ordering::SeqCst);
         rig.voice.say("Dropped. Also dropped.");
-        // No trouble: the speaker works, its queue was only full.
+        // No trouble: the speaker works, its queue was only full. The reply was not heard
+        // whole, and says so.
+        assert_eq!(rig.next(), VoiceEvent::Cut);
         assert_eq!(rig.next(), VoiceEvent::Finished);
         assert!(rig.nothing_pending());
         assert!(!rig.voice.speaking());
