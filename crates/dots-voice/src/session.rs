@@ -1160,7 +1160,7 @@ impl Worker {
         // A broken microphone is opened at once only to listen, or when its loss is still
         // to be reported and speech is over; otherwise the retry timer tries it.
         let busy = matches!(self.state, State::Thinking | State::Speaking);
-        if self.mic_broken && !self.state.hears() && !(self.mic_owed && !busy) {
+        if self.mic_broken && !self.state.hears() && (!self.mic_owed || busy) {
             return Ok(());
         }
         self.open_mic_now()
