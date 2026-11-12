@@ -1,10 +1,8 @@
-# Open Dot: the hand check after step 3 (app wiring)
+# Open Dot: the hand check after steps 3 to 5
 
-These are the steps to run on the real app, with your own microphone and speaker, after step 3. Each step says what you do and what should happen. Write down anything that does not match, with the step number.
+These are the steps to run on the real app, with your own microphone and speaker. Each step says what you do and what should happen. Write down anything that does not match, with the step number.
 
-What you can and cannot see yet: step 3 joins the voice to Dots, but the stage (the panel with The Breath, the live words, the option pills and the card) is step 4. If the build you check does not have step 4 in it, you will hear Open Dot but see very little: the Voice tab's status line ("Ready", "Getting ready", "Off", a trouble sentence, and "Listening" while the microphone is open), the tray tooltip, and the screens Open Dot opens for you. Questions with options are spoken, but there are no pills to click. Where a step needs the stage, it says so; skip those parts if the stage is not there.
-
-The soft tone when Open Dot opens, the "Hey Dot" wake phrase and talking over it on real audio, and the spoken notices ("Tell me aloud when something needs me") are step 5. Turning those settings on is fine, but do not judge how they behave yet.
+Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added after step 4 (the stage and The Breath) and step 5 (the wake phrase, the tone, stopping it by voice, and spoken notices). A build of the `feat/open-dot` branch has all of them; do them in order.
 
 ## Before you start
 
@@ -126,6 +124,107 @@ The soft tone when Open Dot opens, the "Hey Dot" wake phrase and talking over it
 28. Do steps 10 to 13 and 16 once on speakers and once on headphones.
     - Should: on both, it never hears the tail of its own answer as you talking (it does not answer itself). Write down how long it takes from the end of your sentence to its first word, on both.
 
+## The stage
+
+29. Press the hotkey.
+    - Should: a panel rises from the bottom middle of the window, over whatever screen shows, without covering the rail on the left. In its middle is The Breath, the three dots of the logo. A thin line at the bottom holds a **Close** button with an **Esc** key next to it.
+
+30. Say a sentence slowly, for example **"What needs me today?"**
+    - Should: your words appear under The Breath as you speak, in grey, and change as you go. When you stop, the finished sentence stays; then Dot's answer replaces it, one or two lines, the newest darker and larger.
+
+31. Watch The Breath through one whole turn.
+    - Should: resting, it breathes slowly (about one breath every four and a half seconds). Listening, the dots lean apart and swell as you talk, the yellow one most; when you are quiet they go back to a small breath. Thinking, they circle each other and touch now and then. Speaking, they melt into one shape that pulses with Dot's voice. When it asks with options, they part into one body per option. When the turn ends, they settle back to the logo once and the panel goes away about two and a half seconds later. Every change is smooth; nothing jumps.
+
+32. Ask something that ends with options (for example "Run the Deploy watcher now"). Click one option. Then do it again and answer with the key **1**, **2**, **3** or **4** instead.
+    - Should: the question is printed above the options, which are numbered pills. A click or a number key picks that option; the picked pill is highlighted, the others fade, and a second click or key does nothing. A number key typed while the search box or another text field has focus does not pick.
+
+33. Ask something that shows a card (for example "Set up a dot that tidies my Downloads every morning", or "Approve it" with an approval waiting).
+    - Should: a card under the options shows the proposal (name, what it does, when it runs, where it works) or the approval (dot, tool, target). A long card scrolls inside the panel; the options and the Close button stay in view.
+
+34. While the stage shows, press **Esc**. Open it again, click into the search box, and press **Esc** there too.
+    - Should: the stage closes and any speech stops at once. Esc closes it even from a text field. With a menu or a dialog open, Esc closes only that, and the stage stays.
+
+35. Ask something with a long answer and, while it speaks, click The Breath.
+    - Should: speech stops at once and it listens again.
+
+36. Look at the bottom of the rail on the left.
+    - Should: a small, still copy of the logo sits above the usage meter. Click it: Open Dot listens. While the microphone is open the mark breathes and has a thin ring around it; the ring goes away when the microphone closes. With voice off, clicking it opens the Voice settings.
+
+37. Make the window as small as it goes (800 by 560) and repeat steps 32 and 33.
+    - Should: the panel fits inside the window, the card scrolls, and the options and Close stay visible. The rail's links scroll if they do not fit.
+
+38. Switch between the light and dark themes (Settings) with the stage showing.
+    - Should: the panel, the words, the pills and the card are easy to read in both; the dots keep their colours, and their soft glow is not cut off at the edges.
+
+39. Turn on reduced motion in Windows (Settings, Accessibility, Visual effects, Animation effects off) and restart Dots. Talk to it.
+    - Should: the stage fades in without rising; The Breath holds the logo still and only grows brighter and dimmer with the sound.
+
+## The tone
+
+40. With **Play a tone when Dot starts listening** on (the default), press the hotkey; then click the rail mark; then choose **Talk to Dot** in the tray.
+    - Should: each time a short, soft two-note tone plays, and what you say right after it is heard. The tone itself is never heard as words.
+
+41. Turn on **Hey Dot** and save. Say "Hey Dot", stop, and wait.
+    - Should: about a third of a second after you stop, the tone plays. Then say a sentence: it is heard.
+
+42. Say "Hey Dot" and go straight on talking.
+    - Should: no tone plays, and your sentence is heard.
+
+43. Turn **Play a tone when Dot starts listening** off and save. Press the hotkey.
+    - Should: no tone; it listens at once.
+
+## Hey Dot
+
+44. With **Hey Dot** on, stand across the room (three or four metres away) and say "Hey Dot".
+    - Should: it wakes and listens. Try five times and write down how many worked.
+
+45. Play music on the speakers at a normal level and say "Hey Dot" from your seat.
+    - Should: it wakes. Write down how many of five tries worked, and whether the music ever woke it by itself.
+
+46. Say **"Hey Dot, read me the first message"** in one breath, without stopping after "Dot".
+    - Should: the whole sentence is heard from "read" on (watch the live words), and no tone plays.
+
+47. Hide the Dots window (minimise it, or close it to the tray) and say "Hey Dot, what needs me?"
+    - Should: Dot answers aloud and the window stays hidden. The tray tooltip says "Dot is listening" while the microphone is open.
+
+## Stopping it by voice
+
+48. On speakers: ask something with a long answer and say **"Dot, stop"** while it speaks. Do this ten times.
+    - Should: it stops and listens. How many of ten worked on speakers: ____ / 10.
+
+49. On headphones: do the same five times.
+    - Should: it stops every time.
+
+50. On headphones, with **Interrupt by just talking** on: ask something with a long answer and start talking over it.
+    - Should: it stops and hears what you say. Turn the setting off again afterwards.
+
+## Spoken notices
+
+51. Turn on **Tell me aloud when something needs me** and save, make sure the stage is closed, and make one approval appear (start a dot that asks before running a command).
+    - Should: within a second or two Dot says one line, for example "Research needs your approval." It never says the command or what it acts on.
+
+52. Make several approvals or questions appear within a few seconds.
+    - Should: one line for the first, then nothing for half a minute, then one line counting what still waits ("Three things are waiting for you."). Anything you answered in between is not counted.
+
+53. Make an approval appear that touches something private (a private folder or a vault value).
+    - Should: "One private approval is waiting for you." No dot name.
+
+54. Make an approval appear while you are talking to Dot (the stage is open).
+    - Should: nothing is said until the turn is over and the stage has closed; then one line.
+
+55. Rename a dot to a long name (for example "Weekly research summary for the whole team") and make it ask for an approval.
+    - Should: "An approval is waiting for you." Long names, names with sentence punctuation, and names that sound like "Hey Dot" or "Dot stop" are not read out.
+
+## What to judge by eye
+
+56. The Breath at the normal window size:
+    - The rail mark: is it large enough to read as the logo, and does it sit in line with the other rail icons?
+    - Speaking: are all three colours visible inside the melted shape, not mostly one?
+    - Asking with two options: the dots part into two bodies (the blue one joins the green one). Does that read as "two choices"? With four options a fourth, teal body appears.
+    - The edges at full size: smooth, not jagged.
+
+57. Write down anything that felt slow, jumpy or out of place.
+
 ## When you are done
 
-29. If you used a scratch folder, quit the development build and delete `C:\dev\dots-hand-check`. Nothing heard or said was written there or in the logs; the logs only say that turns happened and how long things took.
+58. If you used a scratch folder, quit the development build and delete `C:\dev\dots-hand-check`. Nothing heard or said was written there or in the logs; the logs only say that turns happened and how long things took.
