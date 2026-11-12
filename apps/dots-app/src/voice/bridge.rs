@@ -274,9 +274,14 @@ impl Bridge {
 
     /// The session listens again while a turn is live: it cut that turn. The turn is dropped
     /// with what it showed; a deed already started still finishes and says its outcome.
+    ///
+    /// It listens with a question showing whose step still waits: the question was cut off
+    /// before it was spoken to its end ("Dot, stop", "Hey Dot", talking over Dot, the
+    /// hotkey), since a question said in full goes on to `Asking`, never to `Listening`. A yes
+    /// counts only for a question heard whole, so the step lapses too.
     fn cut(&self) {
         let mut s = self.lock();
-        if s.live.is_some() {
+        if s.live.is_some() || (s.asking && self.mind.pending()) {
             self.mind.cancel();
             self.drop_live(&mut s);
         }
@@ -1974,6 +1979,67 @@ mod tests {
             mic_open: true,
         });
         assert_eq!(r.mind.calls().len(), 3);
+    }
+
+    fn state(r: &Rig, state: State) {
+        r.bridge.on_session(SessionEvent::State {
+            state,
+            mic_open: true,
+        });
+    }
+
+    /// A question cut off before it was spoken to its end ("Dot, stop", "Hey Dot" or talking
+    /// over Dot, the hotkey): the session listens with the question showing, which it never
+    /// does after a question said in full (that goes `Speaking` -> `Asking`). Nothing is left
+    /// waiting, so a spoken yes decides nothing.
+    #[tokio::test]
+    async fn a_question_cut_off_leaves_nothing_waiting_for_a_yes() {
+        for cut in ["listening", "woke", "open"] {
+            let mut r = rig();
+            asked(&mut r).await;
+            assert!(r.mind.pending());
+            state(&r, State::Speaking);
+            match cut {
+                "woke" => r.bridge.on_session(SessionEvent::Woke),
+                "open" => r.bridge.open(),
+                _ => {}
+            }
+            state(&r, State::Listening);
+            assert!(!r.mind.pending(), "{cut}: the step still waits");
+            assert!(r.mind.calls().contains(&MindCall::Lapse), "{cut}");
+            assert!(r.ui().contains(&VoiceEvent::Cleared), "{cut}");
+            // The options are gone too: a click does nothing.
+            r.bridge.pick(0, 1);
+            assert!(answered(&r).is_empty(), "{cut}");
+            r.heard("yes", 2);
+            settle().await;
+            assert!(!r.mind.pending(), "{cut}");
+            assert_eq!(
+                r.mind.calls().last(),
+                Some(&MindCall::Hear("yes".into())),
+                "{cut}"
+            );
+        }
+    }
+
+    /// The question said to its end: the session asks, and the step still waits for the yes.
+    #[tokio::test]
+    async fn a_question_said_in_full_still_waits_for_the_yes() {
+        let mut r = rig();
+        asked(&mut r).await;
+        state(&r, State::Speaking);
+        state(&r, State::Asking);
+        assert!(r.mind.pending());
+        assert!(!r.mind.calls().contains(&MindCall::Lapse));
+        assert!(!r.ui().contains(&VoiceEvent::Cleared));
+        r.mind
+            .script(vec![Step::Pending(false), end(Then::FollowUp)]);
+        r.heard("yes", 2);
+        settle().await;
+        assert_eq!(r.mind.calls().last(), Some(&MindCall::Hear("yes".into())));
+        // The answer's own reply then listens for a follow-up: nothing waits, nothing lapses.
+        state(&r, State::Listening);
+        assert!(!r.mind.calls().contains(&MindCall::Lapse));
     }
 
     // ---- the wake phrase, the stop phrase and talking over Dot (step 5) ----------------------
