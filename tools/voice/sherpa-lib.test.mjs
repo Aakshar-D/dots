@@ -5,7 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { ARCHIVES, archiveFor, fetchTarget, guardCache, parseArgs, verify } from "./sherpa-lib.mjs";
+import {
+  ARCHIVES,
+  archiveFor,
+  fetchTarget,
+  guardCache,
+  libDirOf,
+  mergeLibs,
+  parseArgs,
+  unpack,
+  unpackTarget,
+  verify,
+} from "./sherpa-lib.mjs";
 
 const bytes = Buffer.from("a pretend archive");
 const pin = { file: "pretend.tar.bz2", size: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") };
@@ -113,4 +124,85 @@ test("the command line takes several targets", () => {
     targetDir: null,
   });
   assert.throws(() => parseArgs(["--bogus", "x"]), /unknown option/);
+});
+
+/// A `tar` that unpacks a pretend archive into its folder: `<stem>/lib/<names>`.
+function fakeTar(names, calls = []) {
+  return (program, args, cwd) => {
+    calls.push({ program, args, cwd });
+    if (program === "tar") {
+      const [, file, , dest] = args;
+      const lib = join(cwd, dest, file.replace(/\.tar\.bz2$/, ""), "lib");
+      mkdirSync(lib, { recursive: true });
+      for (const name of names) writeFileSync(join(lib, name), name);
+    } else if (program === "lipo") {
+      writeFileSync(args[2], "universal");
+    }
+  };
+}
+
+test("unpack leaves the library folder outside the build's target folder and names it", async () => {
+  const out = scratch();
+  const calls = [];
+  const lib = await unpack(["x86_64-pc-windows-msvc"], out, {
+    download: async () => bytes,
+    table,
+    run: fakeTar(["onnxruntime.lib"], calls),
+  });
+  assert.equal(lib, libDirOf(out, "x86_64-pc-windows-msvc", table));
+  assert.equal(lib, join(out, "unpacked", "x86_64-pc-windows-msvc", "pretend", "lib"));
+  assert.ok(existsSync(join(lib, "onnxruntime.lib")));
+  // tar is run in `out` with relative paths: GNU tar takes "D:" for a host name
+  assert.deepEqual(calls[0], {
+    program: "tar",
+    args: ["-xjf", "pretend.tar.bz2", "-C", "unpacked/x86_64-pc-windows-msvc"],
+    cwd: out,
+  });
+  // a second run replaces what the first left
+  writeFileSync(join(lib, "stale.lib"), "old");
+  unpackTarget("x86_64-pc-windows-msvc", out, { table, run: fakeTar(["onnxruntime.lib"]) });
+  assert.equal(existsSync(join(lib, "stale.lib")), false);
+});
+
+test("an archive with no lib folder is refused", () => {
+  const out = scratch();
+  writeFileSync(join(out, pin.file), bytes);
+  assert.throws(
+    () => unpackTarget("x86_64-pc-windows-msvc", out, { table, run: () => {} }),
+    /held no lib folder/,
+  );
+});
+
+test("two Mac targets are merged into universal libraries; others cannot share a folder", async () => {
+  const arm = { ...pin, file: "arm.tar.bz2" };
+  const intel = { ...pin, file: "intel.tar.bz2" };
+  const macs = { "aarch64-apple-darwin": arm, "x86_64-apple-darwin": intel, "x86_64-pc-windows-msvc": pin };
+  const out = scratch();
+  const calls = [];
+  const lib = await unpack(["aarch64-apple-darwin", "x86_64-apple-darwin"], out, {
+    download: async () => bytes,
+    table: macs,
+    run: fakeTar(["libonnxruntime.a", "libsherpa-onnx-c-api.a", "notes.txt"], calls),
+  });
+  assert.equal(lib, join(out, "unpacked", "universal", "lib"));
+  const lipo = calls.filter((c) => c.program === "lipo");
+  assert.deepEqual(
+    lipo.map((c) => c.args[2]),
+    [join(lib, "libonnxruntime.a"), join(lib, "libsherpa-onnx-c-api.a")],
+  );
+  assert.deepEqual(lipo[0].args.slice(3), [
+    join(libDirOf(out, "aarch64-apple-darwin", macs), "libonnxruntime.a"),
+    join(libDirOf(out, "x86_64-apple-darwin", macs), "libonnxruntime.a"),
+  ]);
+  await assert.rejects(
+    unpack(["aarch64-apple-darwin", "x86_64-pc-windows-msvc"], scratch(), { download: async () => bytes, table: macs }),
+    /only Mac targets/,
+  );
+  // a library one archive lacks is an error, not a half-universal build
+  const a = join(scratch(), "a");
+  const b = join(scratch(), "b");
+  mkdirSync(a);
+  mkdirSync(b);
+  writeFileSync(join(a, "libx.a"), "x");
+  assert.throws(() => mergeLibs([a, b], join(scratch(), "u"), { run: () => {} }), /missing/);
 });

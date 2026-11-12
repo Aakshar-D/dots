@@ -5,14 +5,25 @@ checks it against a size and SHA-256 pinned in the script. The `sherpa-onnx-sys`
 downloads that archive from GitHub without any check, so release and CI builds fetch it with
 this script first and point the build script at the verified file.
 
-    node tools/voice/sherpa-lib.mjs fetch --target <triple> --out <dir>
-    export SHERPA_ONNX_ARCHIVE_DIR=<dir>      # the line the script prints
+    node tools/voice/sherpa-lib.mjs unpack --target <triple> --out <dir>
+    export SHERPA_ONNX_LIB_DIR=<dir>/unpacked/<triple>/<archive>/lib   # the line it prints
 
-With that variable the build script copies `<dir>/<archive>` and never downloads; a folder
-without the archive fails the build rather than falling back to a download. It does skip the
-variable when its own cache (`<target dir>/sherpa-onnx-prebuilt`) already holds the archive or
-an unpacked copy, so CI passes `--target-dir target` and the script fails on a cache entry that
-is not pinned. Local builds need none of this: without the variable the crate downloads as before.
+CI and release builds use `unpack`: it fetches and verifies the archive, unpacks it under
+`<dir>/unpacked` (with `tar`) and prints `SHERPA_ONNX_LIB_DIR`. `sherpa-onnx-sys` 2.0.1's build
+script (`resolve_lib_dir`) links a folder given in that variable as it is: it downloads
+nothing and keeps nothing in the build's target folder. That matters for a cached build: the
+build script runs again only when the variable changes, so a link path it once wrote into
+`target/sherpa-onnx-prebuilt` would outlive a cache that dropped that folder, and the link
+would fail. CI unpacks to `$RUNNER_TEMP` on every run, outside `target`.
+
+A Mac universal build compiles both architectures with the one variable, so `unpack` with
+`--target aarch64-apple-darwin --target x86_64-apple-darwin` merges the two folders with
+`lipo -create` into `<dir>/unpacked/universal/lib`; the linker takes each architecture's half.
+
+`fetch` (the archive only, and `SHERPA_ONNX_ARCHIVE_DIR=<dir>`, which the build script copies
+into its own cache instead of downloading) is kept for local use; `--target-dir` checks that
+cache for archives that are not pinned. Local builds need none of this: without either
+variable the crate downloads as before.
 
 ## Local Windows builds
 

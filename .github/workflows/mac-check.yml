@@ -38,11 +38,12 @@ jobs:
 
       # The sherpa-onnx library the voice crate links is downloaded by its build script without
       # any check. This fetches it first, verified against the hash pinned in the repository
-      # (tools/voice/README.md), and the build script then copies that archive and downloads
-      # nothing; the build's own cache must hold nothing else.
-      - name: Fetch the verified sherpa-onnx library
+      # (tools/voice/README.md), unpacks it outside `target` and sets SHERPA_ONNX_LIB_DIR, which
+      # the build script links directly: it downloads nothing and keeps nothing in `target`, so
+      # a restored build cache cannot leave the link pointing at a folder that is gone.
+      - name: Fetch and unpack the verified sherpa-onnx library
         shell: bash
-        run: node tools/voice/sherpa-lib.mjs fetch --target aarch64-apple-darwin --out "$RUNNER_TEMP/sherpa-onnx" --target-dir target >> "$GITHUB_ENV"
+        run: node tools/voice/sherpa-lib.mjs unpack --target aarch64-apple-darwin --out "$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
 
       # The app embeds the built UI, so it is built before the app is compiled.
       - name: Build the UI

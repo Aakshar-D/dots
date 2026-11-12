@@ -13,9 +13,18 @@
 //       `... >> "$GITHUB_ENV"` is safe. With --target-dir, the build script's own cache in
 //       <dir>/sherpa-onnx-prebuilt is checked too (see guardCache).
 //
+//   node tools/voice/sherpa-lib.mjs unpack --target <triple> [--target <triple>...] --out <dir>
+//       Fetches as `fetch` does, then unpacks each verified archive under <dir>/unpacked and
+//       prints SHERPA_ONNX_LIB_DIR=<its lib folder>. The build script then links that folder
+//       directly and keeps nothing of its own in the build's target folder, so a restored
+//       build cache can never point the link at a folder that is gone. Two Mac targets (a
+//       universal build, one variable for both) are merged with `lipo` into one folder of
+//       universal libraries, from which the linker takes each architecture's half.
+//
 // The pins are for sherpa-onnx-sys 2.0.1 in static link mode, the archive its build script
 // picks for each target. See tools/voice/README.md to refresh them.
 
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -145,6 +154,71 @@ export function guardCache(targetDir, table = ARCHIVES) {
   return problems;
 }
 
+/// Runs a program and throws with its output when it fails.
+function runProgram(program, args, cwd) {
+  const result = spawnSync(program, args, { cwd, encoding: "utf8" });
+  if (result.error) throw new Error(`${program}: ${result.error.message}`);
+  if (result.status !== 0) {
+    throw new Error(`${program} ${args.join(" ")} failed (${result.status}): ${result.stderr}`);
+  }
+}
+
+/// The folder `unpack` leaves the libraries of `target` in, under `out`.
+export function libDirOf(out, target, table = ARCHIVES) {
+  const stem = archiveFor(target, table).file.replace(/\.tar\.bz2$/, "");
+  return join(out, "unpacked", target, stem, "lib");
+}
+
+/// Unpacks the verified archive of `target` (already in `out`) under `out/unpacked/<target>`,
+/// replacing what an earlier run left; returns its lib folder. `tar` is given paths relative
+/// to `out`, because GNU tar reads "D:" in a Windows path as a host name.
+export function unpackTarget(target, out, { run = runProgram, table = ARCHIVES } = {}) {
+  const entry = archiveFor(target, table);
+  // Forward slashes: MSYS's GNU tar on Windows does not take a backslash path.
+  const dest = `unpacked/${target}`;
+  rmSync(join(out, dest), { recursive: true, force: true });
+  mkdirSync(join(out, dest), { recursive: true });
+  run("tar", ["-xjf", entry.file, "-C", dest], out);
+  const lib = libDirOf(out, target, table);
+  if (!existsSync(lib)) throw new Error(`${entry.file} held no lib folder (looked for ${lib})`);
+  return lib;
+}
+
+/// Makes `into` hold, for every static library (`.a`) the first folder of `dirs` has, one
+/// universal library of all their copies (`lipo -create`, macOS only).
+export function mergeLibs(dirs, into, { run = runProgram } = {}) {
+  rmSync(into, { recursive: true, force: true });
+  mkdirSync(into, { recursive: true });
+  const names = readdirSync(dirs[0]).filter((name) => name.endsWith(".a"));
+  if (names.length === 0) throw new Error(`no static libraries in ${dirs[0]}`);
+  for (const name of names) {
+    const copies = dirs.map((dir) => join(dir, name));
+    for (const copy of copies) {
+      if (!existsSync(copy)) throw new Error(`${copy} is missing: the archives do not match`);
+    }
+    run("lipo", ["-create", "-output", join(into, name), ...copies]);
+  }
+  return into;
+}
+
+/// Fetches, verifies and unpacks the archives of `targets` under `out`; the folder for
+/// SHERPA_ONNX_LIB_DIR. Several targets must all be Mac ones: they are merged.
+export async function unpack(targets, out, { download: get, table = ARCHIVES, run = runProgram, log = () => {} } = {}) {
+  if (targets.length > 1 && !targets.every((t) => t.endsWith("-apple-darwin"))) {
+    throw new Error("only Mac targets can share one library folder (a universal build)");
+  }
+  const libs = [];
+  for (const target of targets) {
+    await fetchTarget(target, out, { download: get, table, log });
+    libs.push(unpackTarget(target, out, { run, table }));
+    log(`sherpa-lib: ${target} unpacked in ${libs.at(-1)}`);
+  }
+  if (libs.length === 1) return libs[0];
+  const universal = mergeLibs(libs, join(out, "unpacked", "universal", "lib"), { run });
+  log(`sherpa-lib: universal libraries in ${universal}`);
+  return universal;
+}
+
 /// The options of the command line, `--target` as many times as given.
 export function parseArgs(args) {
   const options = { targets: [], out: null, targetDir: null };
@@ -162,10 +236,17 @@ export function parseArgs(args) {
 async function main(args) {
   const log = (line) => console.error(line);
   try {
-    if (args[0] !== "fetch") throw new Error("usage: sherpa-lib.mjs fetch --target <triple> [--target <triple>...] --out <dir> [--target-dir <dir>]");
+    if (args[0] !== "fetch" && args[0] !== "unpack") {
+      throw new Error("usage: sherpa-lib.mjs fetch|unpack --target <triple> [--target <triple>...] --out <dir> [--target-dir <dir>]");
+    }
     const options = parseArgs(args.slice(1));
-    if (options.targets.length === 0 || !options.out) throw new Error("fetch needs --target and --out");
+    if (options.targets.length === 0 || !options.out) throw new Error(`${args[0]} needs --target and --out`);
     const out = resolve(options.out);
+    if (args[0] === "unpack") {
+      const lib = await unpack(options.targets, out, { log });
+      console.log(`SHERPA_ONNX_LIB_DIR=${lib}`);
+      return;
+    }
     for (const target of options.targets) await fetchTarget(target, out, { log });
     if (options.targetDir) {
       const problems = guardCache(resolve(options.targetDir));
