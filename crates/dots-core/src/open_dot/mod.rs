@@ -62,7 +62,8 @@ use think::{cap_hit, Thinker};
 /// has no `SayEnd`; the newer turn's events follow. A deed already carried out is the one
 /// exception: its outcome and `SayEnd` are always sent, and a newer turn begins only after
 /// them. A click on an option that is not offered, or a second yes or click for a step a yes
-/// already took, is no turn and sends nothing.
+/// already took, is no turn and sends nothing (no `SayEnd` either); like a newer turn, it ends
+/// an older turn still in flight, which then sends nothing more.
 ///
 /// `Did` is sent once right after a deed (approve, deny, run, send, answer, create) was
 /// carried out, before the `Say` of its outcome, whether or not the turn is still the
@@ -271,7 +272,7 @@ enum Waiting {
         questions: Vec<String>,
         answers: Vec<String>,
     },
-    /// A proposed dot: "Create it?".
+    /// A proposed dot: "Create this dot?".
     Create {
         proposal: SetupProposal,
         question: String,
@@ -586,9 +587,20 @@ impl Mind {
         Some((s.turn, cancel, forgot, read_before))
     }
 
-    /// Whether the input is no turn at all: a click on an option that is not offered (it ends
-    /// nothing and keeps what waits), or a second yes or click for a step a yes already took
-    /// while its deed is being done or since this input arrived (`arrived`).
+    /// Ends the turn in flight, if any, without beginning one: its remaining events go
+    /// nowhere and it can no longer install a step. What waits is kept.
+    fn end_in_flight(&self) {
+        let mut s = lock(&self.state);
+        s.turn += 1;
+        if let Some(c) = s.cancel.take() {
+            c.cancel();
+        }
+    }
+
+    /// Whether the input is no turn at all: a click on an option that is not offered (it keeps
+    /// what waits), or a second yes or click for a step a yes already took while its deed is
+    /// being done or since this input arrived (`arrived`). Either ends a turn still in flight
+    /// (see `turn`).
     fn no_turn(&self, input: &Input<'_>, arrived: u64, busy: bool) -> bool {
         let s = lock(&self.state);
         let options = s
@@ -619,12 +631,21 @@ impl Mind {
             let s = lock(&self.state);
             (s.decided, s.deciding, s.drops)
         };
+        // An input that is no turn is still the newest turn at the stage, which drops the
+        // events of every older one: nothing older may go on to ask or install a step that
+        // nobody is shown.
         if busy && self.no_turn(&input, arrived, busy) {
+            // A deed is being done and finishes. Older turns waiting for it never begin (this
+            // is the first poll: no newer turn has arrived yet).
+            lock(&self.state).drops += 1;
             return;
         }
         // A deed in flight finishes and says its outcome before this turn begins.
         let gate = self.deeds.lock().await;
         if self.no_turn(&input, arrived, false) {
+            // No deed is in flight while the gate is held: a turn in flight is ended, as a
+            // newer turn would end it.
+            self.end_in_flight();
             return;
         }
         // Dropped (the stage closed or rested) while it waited: it never begins.
@@ -925,7 +946,7 @@ impl Mind {
         }
 
         // A step Dots asked a yes on passes only on a click on Yes or a firm spoken yes for its
-        // kind ("deny" passes "Deny ...?" and is a no to "Approve it?"; "approve" said to
+        // kind ("deny" passes "Deny ...?" and is a no to "Approve ...?"; "approve" said to
         // "Deny ...?" is neither). A spoken position word ("one", "first", "last") is neither
         // yes nor no there.
         let confirming = waiting
@@ -1646,25 +1667,25 @@ fn names(words: &str, dot_id: &str, picture: &Picture) -> bool {
 /// Dots' own question before a send or answer the person did not point at.
 fn check_question(deed: &Deed) -> String {
     match deed {
-        Deed::Send { dot_name, text, .. } => {
-            format!(
-                "Send to {}: {}?",
-                spoken_name(dot_name),
-                text.trim_end_matches('.')
-            )
-        }
-        Deed::Answer { dot_name, text, .. } => format!(
-            "Answer {} with: {}?",
+        Deed::Send { dot_name, text, .. } => format!(
+            "Message for {}: {} {}",
             spoken_name(dot_name),
-            text.trim_end_matches('.')
+            sentence(text),
+            act::SEND_MESSAGE
+        ),
+        Deed::Answer { dot_name, text, .. } => format!(
+            "Answer for {}: {} {}",
+            spoken_name(dot_name),
+            sentence(text),
+            act::SEND_ANSWER
         ),
         _ => String::new(),
     }
 }
 
-/// "<name>. <When it runs>. The rest is on screen. Create it?" Only the name (cleaned, at most
-/// 80 bytes) and the schedule are said: the first message, instructions, folder and access are
-/// on the proposal card, never partly spoken.
+/// "<name>. <When it runs>. The rest is on screen. Create this dot?" Only the name (cleaned,
+/// at most 80 bytes) and the schedule are said: the first message, instructions, folder and
+/// access are on the proposal card, never partly spoken.
 fn create_question(p: &SetupProposal) -> String {
     let name = act::asked_text(&p.name, NAME_BYTES);
     let name = name
@@ -1677,7 +1698,10 @@ fn create_question(p: &SetupProposal) -> String {
         Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
         None => runs,
     };
-    format!("{name}. {runs}. The rest is on screen. Create it?")
+    format!(
+        "{name}. {runs}. The rest is on screen. {}",
+        act::CREATE_THIS
+    )
 }
 
 /// When a schedule runs, in a few words.

@@ -374,7 +374,7 @@ async fn approve_resumes_the_run() {
     // the question is the record's: the guard's summary of the call, not the model's words
     assert_eq!(
         question,
-        "Research wants to use Bash on push commits with git (git push origin main). Approve it?"
+        "Research wants to use Bash on push commits with git (git push origin main). Approve this request?"
     );
     assert_eq!(carry_out(&t.rt, &deed).await, "Approved.");
     let decided = t.rt.store().get_approval(&approval.id).await.unwrap();
@@ -1214,7 +1214,8 @@ async fn set_up_a_dot_by_voice_end_to_end() {
     assert_eq!(
         asked(&got),
         Some((
-            "Downloads digest. Runs every day at 09:00. The rest is on screen. Create it?".into(),
+            "Downloads digest. Runs every day at 09:00. The rest is on screen. Create this dot?"
+                .into(),
             yes_no()
         ))
     );

@@ -166,7 +166,7 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
             };
             if *unsure {
                 Step::Ask {
-                    question: format!("I heard: {}{} Send that?", text, end_mark(&text)),
+                    question: format!("I heard: {}{} {SEND_ANSWER}", text, end_mark(&text)),
                     options: vec!["Yes".into(), "No".into()],
                     then: AskFor::AnswerCheck { deed },
                 }
@@ -177,18 +177,9 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
         Wish::Approve { a } => match picture.approval(a) {
             None => Step::Say(GONE.into()),
             Some(line) => {
-                let dot = name(&line.dot_name);
-                let tool = tool_name(&line.tool);
                 let on_screen = too_long_to_say(line) || no_target(line);
-                let question = if no_target(line) {
-                    format!("{dot} wants to use {tool}. It's on screen. Approve it?")
-                } else if on_screen {
-                    format!("{dot} wants to run a long command with {tool}. It's on screen. Approve it?")
-                } else {
-                    format!("{dot} wants to use {tool}{}. Approve it?", on(&line.target))
-                };
                 Step::Confirm {
-                    question,
+                    question: format!("{} {APPROVE_THIS}", wants(line)),
                     deed: Deed::Approve {
                         approval_id: line.id.clone(),
                         dot_name: line.dot_name.clone(),
@@ -202,18 +193,9 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
         Wish::Deny { a } => match picture.approval(a) {
             None => Step::Say(GONE.into()),
             Some(line) => {
-                let dot = name(&line.dot_name);
-                let tool = tool_name(&line.tool);
                 let on_screen = too_long_to_say(line) || no_target(line);
-                let question = if no_target(line) {
-                    format!("Deny {dot}'s {tool} request? It's on screen.")
-                } else if on_screen {
-                    format!("Deny {dot}'s long {tool} request? It's on screen.")
-                } else {
-                    format!("Deny {dot}'s request to use {tool}{}?", on(&line.target))
-                };
                 Step::Confirm {
-                    question,
+                    question: format!("{} {DENY_THIS}", wants(line)),
                     deed: Deed::Deny {
                         approval_id: line.id.clone(),
                         dot_name: line.dot_name.clone(),
@@ -287,6 +269,29 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
 pub(crate) fn asked_text(s: &str, max: usize) -> String {
     unmarked(&clean(s, max))
 }
+
+/// What an approval asks, as Dots says it before asking to approve or deny it: the dot, the
+/// tool and the target when it can be said; "It's on screen." when it cannot (it is opened).
+fn wants(line: &ApprovalLine) -> String {
+    let dot = name(&line.dot_name);
+    let tool = tool_name(&line.tool);
+    if no_target(line) {
+        format!("{dot} wants to use {tool}. It's on screen.")
+    } else if too_long_to_say(line) {
+        format!("{dot} wants to run a long command with {tool}. It's on screen.")
+    } else {
+        format!("{dot} wants to use {tool}{}.", on(&line.target))
+    }
+}
+
+/// The last words of Dots' own confirmation questions. None ends in words that pass a step of
+/// any kind (`quick::firm_yes`), nor in the target, a name or text Dots did not write: a
+/// microphone that opens while the end of the question still sounds must never hear a yes.
+pub(crate) const APPROVE_THIS: &str = "Approve this request?";
+pub(crate) const DENY_THIS: &str = "Deny this request?";
+pub(crate) const SEND_MESSAGE: &str = "Send this message?";
+pub(crate) const SEND_ANSWER: &str = "Send this answer?";
+pub(crate) const CREATE_THIS: &str = "Create this dot?";
 
 /// Whether an approval has no target to say: only its tool would be heard.
 fn no_target(line: &ApprovalLine) -> bool {
@@ -862,7 +867,9 @@ mod tests {
                     tool: "Bash".into(),
                     target: "git push origin main".into(),
                 },
-                question: "Research wants to use Bash on git push origin main. Approve it?".into(),
+                question:
+                    "Research wants to use Bash on git push origin main. Approve this request?"
+                        .into(),
                 on_screen: false,
             }
         );
@@ -871,7 +878,7 @@ mod tests {
         };
         assert_eq!(
             question,
-            "Deny Research's request to use Bash on git push origin main?"
+            "Research wants to use Bash on git push origin main. Deny this request?"
         );
         // no target to say: the approval is opened, and the question says so
         let Step::Confirm {
@@ -884,7 +891,7 @@ mod tests {
         };
         assert_eq!(
             question,
-            "Backup wants to use Glob. It's on screen. Approve it?"
+            "Backup wants to use Glob. It's on screen. Approve this request?"
         );
         assert!(on_screen);
         let Step::Confirm {
@@ -895,7 +902,10 @@ mod tests {
         else {
             panic!("deny must confirm");
         };
-        assert_eq!(question, "Deny Backup's Glob request? It's on screen.");
+        assert_eq!(
+            question,
+            "Backup wants to use Glob. It's on screen. Deny this request?"
+        );
         assert!(on_screen);
         let Step::Confirm {
             question,
@@ -968,7 +978,7 @@ mod tests {
             };
             assert_eq!(
                 question,
-                "Research wants to run a long command with Bash. It's on screen. Approve it?"
+                "Research wants to run a long command with Bash. It's on screen. Approve this request?"
             );
             assert!(on_screen);
             assert!(!question.contains("echo") && !question.contains("curl"));
@@ -987,7 +997,7 @@ mod tests {
             };
             assert_eq!(
                 question,
-                "Deny Research's long Bash request? It's on screen."
+                "Research wants to run a long command with Bash. It's on screen. Deny this request?"
             );
             assert!(on_screen);
         }
@@ -1022,7 +1032,7 @@ mod tests {
         };
         assert_eq!(
             question,
-            "Research wants to use github create issue. It's on screen. Approve it?"
+            "Research wants to use github create issue. It's on screen. Approve this request?"
         );
         assert_eq!(
             needs_report(&p),
@@ -1077,12 +1087,12 @@ mod tests {
             panic!()
         };
         assert_eq!(text, "the main one please");
-        assert_eq!(question, format!("I heard: {text}. Send that?"));
+        assert_eq!(question, format!("I heard: {text}. Send this answer?"));
         // what ends in a mark keeps it, once
         let Step::Ask { question, .. } = plan(&answer("is it main?", true), &p, &v) else {
             panic!()
         };
-        assert_eq!(question, "I heard: is it main? Send that?");
+        assert_eq!(question, "I heard: is it main? Send this answer?");
         // too long: refused, not cut
         let long = "word ".repeat(100);
         let too_long = Step::Say("That's too long to send by voice. Say a shorter version.".into());
@@ -1222,7 +1232,7 @@ mod tests {
         assert_eq!(
             plan(&unsure, &p, &v),
             Step::Ask {
-                question: "I heard: the main one. Send that?".into(),
+                question: "I heard: the main one. Send this answer?".into(),
                 options: vec!["Yes".into(), "No".into()],
                 then: AskFor::AnswerCheck { deed },
             }

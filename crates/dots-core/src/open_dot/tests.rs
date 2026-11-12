@@ -382,7 +382,7 @@ async fn asking_to_approve(t: &T) -> Approval {
     assert_eq!(
         asks(&got),
         Some((
-            "Research wants to use Bash on ls -la. Approve it?".into(),
+            "Research wants to use Bash on ls -la. Approve this request?".into(),
             yes_no()
         ))
     );
@@ -411,7 +411,7 @@ async fn approve_it_with_nothing_asked_goes_to_the_model() {
     assert_eq!(
         asks(&got),
         Some((
-            "Research wants to use Bash on ls -la. Approve it?".into(),
+            "Research wants to use Bash on ls -la. Approve this request?".into(),
             yes_no()
         ))
     );
@@ -471,7 +471,7 @@ async fn repeat_says_the_last_reply() {
     assert_eq!(said(&got), "Approving now.");
     assert_eq!(
         asks(&got).map(|a| a.0),
-        Some("Research wants to use Bash on ls -la. Approve it?".into())
+        Some("Research wants to use Bash on ls -la. Approve this request?".into())
     );
     assert_eq!(ended(&got), Some(Then::Ask));
     assert!(t.mind.pending());
@@ -529,7 +529,7 @@ async fn model_cannot_pass_a_confirmation() {
     // Dots asks again, and only that yes decides
     assert_eq!(
         asks(&got).map(|a| a.0),
-        Some("Research wants to use Bash on ls -la. Approve it?".into())
+        Some("Research wants to use Bash on ls -la. Approve this request?".into())
     );
     // a spoken position is not a yes: it is a new turn for the model
     for words in ["one", "first"] {
@@ -863,22 +863,41 @@ async fn a_pick_past_the_options_keeps_what_waits() {
     let approval = asking_to_approve(&t).await;
     assert_eq!(t.pick(5).await, vec![]);
     assert!(t.mind.pending());
-    // nor does it end a turn in flight
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    t.rt.shutdown();
+}
+
+/// A click the mind refuses (an option no longer offered) is still the newest turn at the
+/// stage, which drops every older turn's events: an older turn still in flight at the mind is
+/// ended, so its late reply can neither ask nor leave a step waiting that nobody was shown.
+#[tokio::test]
+async fn a_refused_pick_ends_the_turn_in_flight() {
+    let t = T::start().await;
+    let backup = t.dot("Backup").await;
+    // "Run Backup now?" lands late, after the click
+    let hold = Arc::new(tokio::sync::Notify::new());
     t.fake
-        .push(slow(says("Here it is."), Duration::from_millis(200)));
+        .push(held(says("DO {\"act\":\"run\",\"d\":\"d1\"}"), &hold));
     let (tx, mut rx) = mpsc::unbounded_channel();
     let view = home();
-    let heard = t.mind.hear(&t.rt, "what about the backup", &view, &tx);
+    let heard = t.mind.hear(&t.rt, "run the backup dot", &view, &tx);
     let click = async {
-        while t.fake.calls() < 2 {
+        while t.fake.calls() == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        t.pick(3).await
+        // nothing is offered: the click is refused
+        let clicked = t.pick(0).await;
+        hold.notify_one();
+        clicked
     };
     let (_, clicked) = tokio::join!(heard, click);
     assert_eq!(clicked, vec![]);
-    assert_eq!(said(&drain(&mut rx)), "Here it is.");
-    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    let got = drain(&mut rx);
+    assert!(asks(&got).is_none(), "{got:?}");
+    assert!(!t.mind.pending(), "a step waits that was never shown");
+    let got = t.hear("yes").await;
+    assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
+    assert_eq!(t.runs(&backup).await, 0);
     t.rt.shutdown();
 }
 
@@ -1248,7 +1267,10 @@ async fn send_to_an_unnamed_dot_asks_first() {
     let got = t.hear("tell it to look at the build").await;
     assert_eq!(
         asks(&got),
-        Some(("Send to Research: look at the build?".into(), yes_no()))
+        Some((
+            "Message for Research: look at the build. Send this message?".into(),
+            yes_no()
+        ))
     );
     assert_eq!(t.runs(&dot).await, 0);
     let got = t.hear("yes").await;
@@ -1293,7 +1315,10 @@ async fn answer_to_the_only_question_asks_unless_named() {
     let got = t.hear("say main").await;
     assert_eq!(
         asks(&got),
-        Some(("Answer Release helper with: main?".into(), yes_no()))
+        Some((
+            "Answer for Release helper: main. Send this answer?".into(),
+            yes_no()
+        ))
     );
     t.hear("no").await;
     let waits = t.rt.store().get_message(&q.id).await.unwrap();
@@ -1380,7 +1405,9 @@ async fn common_words_do_not_name_a_dot() {
         } else {
             assert_eq!(
                 asks(&got).map(|a| a.0),
-                Some(format!("Send to {name}: look at it?")),
+                Some(format!(
+                    "Message for {name}: look at it. Send this message?"
+                )),
                 "{words}"
             );
             t.hear("no").await;
@@ -1404,7 +1431,10 @@ async fn a_clicked_model_option_names_nothing() {
     let got = t.pick(0).await;
     assert_eq!(
         asks(&got),
-        Some(("Send to Research: look at it?".into(), yes_no()))
+        Some((
+            "Message for Research: look at it. Send this message?".into(),
+            yes_no()
+        ))
     );
     assert_eq!(t.runs(&dot).await, 0);
     t.hear("no").await;
@@ -1433,7 +1463,10 @@ async fn answer_to_an_unmentioned_question_asks_first() {
     let got = t.hear("say main").await;
     assert_eq!(
         asks(&got),
-        Some(("Answer Release helper with: main?".into(), yes_no()))
+        Some((
+            "Answer for Release helper: main. Send this answer?".into(),
+            yes_no()
+        ))
     );
     assert!(t
         .rt
@@ -1469,7 +1502,7 @@ async fn an_unsure_answer_is_read_back_and_no_sends_nothing() {
     let got = t.hear("mmm main I guess").await;
     assert_eq!(
         asks(&got),
-        Some(("I heard: main. Send that?".into(), yes_no()))
+        Some(("I heard: main. Send this answer?".into(), yes_no()))
     );
     let got = t.hear("no").await;
     assert_eq!(said(&got), "Okay, not sent.");
@@ -1551,7 +1584,7 @@ fn create_question_says_only_the_name_and_when() {
     // the first message, instructions and access are on the card, never partly spoken
     assert_eq!(
         create_question(&p),
-        "Downloads digest. Runs every day at 09:00. The rest is on screen. Create it?"
+        "Downloads digest. Runs every day at 09:00. The rest is on screen. Create this dot?"
     );
     let none = SetupProposal {
         name: "N".repeat(200),
@@ -1562,10 +1595,122 @@ fn create_question_says_only_the_name_and_when() {
     assert_eq!(
         create_question(&none),
         format!(
-            "{}. Runs when you ask. The rest is on screen. Create it?",
+            "{}. Runs when you ask. The rest is on screen. Create this dot?",
             "N".repeat(80)
         )
     );
+}
+
+/// No confirmation question Dots builds ends in words that pass a step of any kind: a
+/// microphone that opens while the end of the question is still sounding (a speaker with a
+/// long output delay) may hear its last words, and those must never be a yes. Every tail of
+/// every question, one word or more, is tried against every kind and the quick matcher.
+#[test]
+fn no_confirmation_question_ends_in_a_yes() {
+    use crate::library::Uses;
+    use crate::open_dot::picture::{ApprovalLine, DotLine, QuestionLine};
+    use crate::policy::Preset;
+    let approval = |target: &str, cut: bool| ApprovalLine {
+        handle: "a1".into(),
+        id: "ap-1".into(),
+        dot_id: "id-1".into(),
+        dot_name: "Research".into(),
+        tool: "Bash".into(),
+        target: target.into(),
+        target_cut: cut,
+        target_summary: false,
+    };
+    let picture = |a: ApprovalLine| Picture {
+        dots: vec![DotLine {
+            handle: "d1".into(),
+            id: "id-1".into(),
+            name: "Research".into(),
+            status: "idle".into(),
+            needs_you: 0,
+        }],
+        approvals: vec![a],
+        questions: vec![QuestionLine {
+            handle: "q1".into(),
+            id: "m-1".into(),
+            dot_id: "id-1".into(),
+            dot_name: "Research".into(),
+            text: "Which branch?".into(),
+            choices: vec![],
+        }],
+        ..Picture::default()
+    };
+    let view = home();
+    let mut questions = Vec::new();
+    for a in [
+        approval("npm test", false),
+        approval("", false),
+        approval(&"x".repeat(100), true),
+    ] {
+        let p = picture(a);
+        for wish in [
+            Wish::Approve { a: "a1".into() },
+            Wish::Deny { a: "a1".into() },
+            Wish::Run { d: "d1".into() },
+            Wish::Answer {
+                q: "q1".into(),
+                text: "go ahead".into(),
+                unsure: true,
+            },
+        ] {
+            match plan(&wish, &p, &view) {
+                Step::Confirm { question, .. } | Step::Ask { question, .. } => {
+                    questions.push(question)
+                }
+                other => panic!("{wish:?} gave {other:?}"),
+            }
+        }
+    }
+    // The person's own text is "yes" and "go ahead": it is said, but never last.
+    for text in ["yes", "go ahead."] {
+        questions.push(check_question(&Deed::Send {
+            dot_id: "id-1".into(),
+            dot_name: "Research".into(),
+            text: text.into(),
+            topic_root: None,
+        }));
+        questions.push(check_question(&Deed::Answer {
+            message_id: "m-1".into(),
+            dot_name: "Research".into(),
+            text: text.into(),
+        }));
+    }
+    let proposal = |name: &str| SetupProposal {
+        name: name.into(),
+        instructions: "1. List.".into(),
+        folder: None,
+        schedule: None,
+        preset: Preset::Trusted,
+        extras: vec![],
+        uses: Uses::default(),
+        first_message: String::new(),
+        notes: String::new(),
+    };
+    questions.push(create_question(&proposal("Downloads digest")));
+    questions.push(create_question(&proposal("Do it")));
+    questions.push(CLEAR_YES.to_string());
+    assert_eq!(questions.len(), 19);
+    for question in &questions {
+        let words: Vec<&str> = question.split_whitespace().collect();
+        for from in 0..words.len() {
+            let tail = words[from..].join(" ");
+            for kind in ConfirmKind::ALL {
+                assert!(
+                    !firm_yes(&tail, kind),
+                    "{question:?} ends in {tail:?}, a yes to {kind:?}"
+                );
+            }
+            assert_ne!(
+                quick(&tail, &[]),
+                Some(Quick::Yes),
+                "{question:?} ends in {tail:?}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -1657,7 +1802,7 @@ async fn repeat_says_only_the_question_when_it_came_alone() {
     assert_eq!(said(&got), "");
     assert_eq!(
         asks(&got).map(|a| a.0),
-        Some("Backup wants to use Bash on ls -la. Approve it?".into())
+        Some("Backup wants to use Bash on ls -la. Approve this request?".into())
     );
     assert!(t.mind.pending());
     t.rt.shutdown();
@@ -1706,7 +1851,7 @@ async fn ask_to_deny_again(t: &T) {
     assert_eq!(
         asks(&got),
         Some((
-            "Deny Research's request to use Bash on ls -la?".into(),
+            "Research wants to use Bash on ls -la. Deny this request?".into(),
             yes_no()
         ))
     );

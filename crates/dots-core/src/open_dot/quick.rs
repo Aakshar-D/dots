@@ -68,22 +68,22 @@ const YES: &[&str] = &[
 /// What a confirmation asks: the kind of step a firm yes passes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmKind {
-    /// "<Dot> wants to use <tool> ... Approve it?"
+    /// "<Dot> wants to use <tool> ... Approve this request?"
     Approve,
-    /// "Deny <Dot>'s <tool> request?"
+    /// "<Dot> wants to use <tool> ... Deny this request?"
     Deny,
     /// "Run <Dot> now?"
     Run,
-    /// "<Name>. <When>. ... Create it?"
+    /// "<Name>. <When>. ... Create this dot?"
     Create,
-    /// "Send to <Dot>: ...?"
+    /// "Message for <Dot>: .... Send this message?"
     Send,
-    /// An answer to a dot's question, read back.
+    /// An answer to a dot's question, read back: "... Send this answer?"
     Answer,
 }
 
 impl ConfirmKind {
-    const ALL: [ConfirmKind; 6] = [
+    pub(crate) const ALL: [ConfirmKind; 6] = [
         ConfirmKind::Approve,
         ConfirmKind::Deny,
         ConfirmKind::Run,
@@ -264,7 +264,7 @@ pub fn unclear_yes(heard: &str, kind: ConfirmKind) -> bool {
 
 /// Whether the whole utterance is another kind's own verb and no answer to `kind`: "approve"
 /// said to "Deny ...?", "send it" said to "Run ...?". Such words are neither yes nor no there:
-/// the step is dropped and they go on as a new turn. ("deny" said to "Approve it?" is a `No`
+/// the step is dropped and they go on as a new turn. ("deny" said to an approval is a `No`
 /// before this is asked.)
 pub fn firm_for_another(heard: &str, kind: ConfirmKind) -> bool {
     let j = joined(heard);
