@@ -2,7 +2,7 @@
 
 These are the steps to run on the real app, with your own microphone and speaker. Each step says what you do and what should happen. Write down anything that does not match, with the step number.
 
-Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added after step 4 (the stage and The Breath) and step 5 (the wake phrase, the tone, stopping it by voice, and spoken notices). A build of the `feat/open-dot` branch has all of them; do them in order.
+Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added after step 4 (the stage and The Breath) and step 5 (the wake phrase, the tone, stopping it by voice, and spoken notices). Steps 58 and 59 (a Bluetooth speaker, a gated microphone) were added after the final review. A build of the `feat/open-dot` branch has all of them; do them in order.
 
 ## Before you start
 
@@ -225,6 +225,18 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
 
 57. Write down anything that felt slow, jumpy or out of place.
 
+## A Bluetooth speaker and a gated microphone
+
+58. Connect a Bluetooth speaker (or Bluetooth headphones) and choose it as the speaker. Have an approval waiting (as in step 13). Press the hotkey and say **"Approve it."**
+    - Dot asks "… Approve this request?". Stay silent until the question lapses ("No answer, so I did nothing."). Should: nothing is approved, and Dot never heard its own question as a yes. Write down whether Dot's own voice ever showed up as live words under The Breath.
+    - Ask again and, once the question has ended, say **"yes"**. Should: "Approved.", and the Inbox shows it decided. Write down how long after Dot's last word the yes was heard (a yes said too soon may be lost while the sound is still leaving the speaker; that is expected).
+    - With a fresh approval, ask again and press the hotkey in the middle of the question, before "Approve this request?" is finished. Then say **"yes"**. Should: nothing is approved (the approval is still waiting in the Inbox) and the options are gone; Dot answers that nothing is waiting on a yes or no. Do the same once more with **"Dot, stop"** said over the question in place of the hotkey.
+
+59. With a microphone that has a noise gate or that you mute in hardware (many headsets send pure silence while nobody talks), in a quiet room:
+    - Press the hotkey and say nothing. Should: after about eight seconds Dot says "I can't hear anything from the microphone. Check that Dots may use it." (it heard nothing at all).
+    - Ask something that ends with a follow-up listen ("What needs me?") and stay silent through it. Should: the microphone closes without a word; no line about the microphone.
+    - Ask something that ends in a yes-or-no question and stay silent. Should: after 20 seconds Dot says "No answer, so I did nothing.", never the microphone line.
+
 ## When you are done
 
-58. If you used a scratch folder, quit the development build and delete `C:\dev\dots-hand-check`. Nothing heard or said was written there or in the logs; the logs only say that turns happened and how long things took.
+60. If you used a scratch folder, quit the development build and delete `C:\dev\dots-hand-check`. Nothing heard or said was written there or in the logs; the logs only say that turns happened and how long things took.

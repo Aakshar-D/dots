@@ -69,6 +69,8 @@ A spoken number ("one", "the first") never counts as yes or no. Any other reply 
 
 A step waits 60 seconds. If you say "say that again", the wait starts again, at most twice. After three waits in all, 180 seconds, it is dropped. A question left unanswered for 20 seconds is answered "No answer, so I did nothing."
 
+A yes counts only for a question Dot said to its end. If you stop Dot or talk over it before it has finished asking, the step is dropped and a yes does nothing. Ask again.
+
 Just before it acts, Dot checks that the approval, dot or question is still there. If it is not, it says "That one is already handled." or "I can't find that dot anymore." and does nothing.
 
 ## Stopping and interrupting
@@ -124,7 +126,7 @@ That is slower than the two-second goal. Most of the time is the Claude CLI star
 
 **The microphone is blocked.** Dot says "I can't open the microphone. Check that one is connected and that Dots may use it." The Voice tab shows the reason. Allow Dots to use the microphone in the system's privacy settings (Windows: Settings, Privacy and security, Microphone; macOS: System Settings, Privacy and Security, Microphone), then press the hotkey again. If you pick a microphone in Settings, check it is the one that is plugged in.
 
-**Dot says it can't hear anything.** It heard only silence for a whole listen. Check the microphone is not muted and that Dots may use it.
+**Dot says it can't hear anything.** It heard only silence for a whole listen after you pressed the hotkey, clicked or said "Hey Dot". Check the microphone is not muted and that Dots may use it.
 
 **The hotkey does nothing, or the Voice tab shows a hotkey error.** Another program probably holds that key combination. Type a different one in Hotkey. You can also use the rail mark or the tray's **Talk to Dot**.
 
