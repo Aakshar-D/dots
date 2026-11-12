@@ -1205,6 +1205,9 @@ fn each_extra_says_itself_in_one_plain_line() {
             path: r"C:\work\repo\docs".into(),
             below_maker: true,
         },
+        Extra::SettingsFolder {
+            path: r"C:\work\.git".into(),
+        },
         Extra::Browser,
         Extra::UserSettings,
         Extra::MaxTurns {
@@ -1237,6 +1240,7 @@ fn each_extra_says_itself_in_one_plain_line() {
             "The preset Sandboxed (Researcher has its own rules)",
             r"The folder C:\work\other, outside Researcher's folder",
             r"The folder C:\work\repo\docs, inside Researcher's folder (Researcher itself works in copies of it)",
+            r"The folder C:\work\.git, inside Researcher's folder, where git or Claude keep their own settings",
             "The browser",
             "Your Claude settings",
             "A turn limit of 80 (Researcher has 40)",
@@ -1263,6 +1267,9 @@ fn extras_round_trip_as_json() {
             path: r"C:\work\repo\docs".into(),
             below_maker: true,
         },
+        Extra::SettingsFolder {
+            path: r"C:\work\.git".into(),
+        },
         Extra::Browser,
         Extra::UserSettings,
         Extra::MaxTurns {
@@ -1283,6 +1290,7 @@ fn extras_round_trip_as_json() {
             {"kind": "preset", "preset": "trusted", "makers": "sandboxed"},
             {"kind": "folder", "path": r"C:\work\other", "below_maker": false},
             {"kind": "folder", "path": r"C:\work\repo\docs", "below_maker": true},
+            {"kind": "settings_folder", "path": r"C:\work\.git"},
             {"kind": "browser"},
             {"kind": "user_settings"},
             {"kind": "max_turns", "wanted": 80, "makers": 40},
@@ -1391,4 +1399,375 @@ fn wanted_round_trips_as_json_and_refuses_what_it_does_not_know() {
             .to_string();
         assert!(err.contains("unknown field"), "{err}");
     }
+}
+
+/// The one extra of `reach`, as JSON: a check that does not name the type's variant.
+fn only_extra(reach: &Reach) -> serde_json::Value {
+    assert_eq!(reach.extras.len(), 1, "{:?}", reach.extras);
+    serde_json::to_value(&reach.extras[0]).unwrap()
+}
+
+#[test]
+fn a_maker_whose_folder_is_not_a_full_path_has_no_folder_within_reach() {
+    let place = place();
+    for own in [".", "./", "a/..", "C:"] {
+        let mut maker = maker(&place, WorkspaceMode::Folder);
+        maker.spec.workdir = own.into();
+        // Any folder given by its full path is beyond its reach, even the one it runs in.
+        for folder in [&place.outside, &place.maker_dir] {
+            let mut w = wanted();
+            w.folder = Some(text(folder));
+            let reach = new(&maker, &w, &place);
+            assert_eq!(
+                reach.extras,
+                vec![Extra::Folder {
+                    path: text(folder),
+                    below_maker: false
+                }],
+                "{own}"
+            );
+            assert_eq!(reach.without.workdir, "");
+        }
+        // And one relative to it cannot be found.
+        for folder in ["notes", ".", "../outside"] {
+            let mut w = wanted();
+            w.folder = Some(folder.into());
+            assert_eq!(
+                invalid(reach_new(&maker, &w, &place.worktrees)),
+                "Name the folder by its full path: Researcher's own folder is not one.",
+                "{own} {folder}"
+            );
+        }
+        // A blank folder is still a new folder of the dot's own.
+        let reach = new(&maker, &wanted(), &place);
+        assert!(reach.extras.is_empty());
+    }
+}
+
+#[test]
+fn a_sibling_folder_that_shares_the_start_of_the_name_is_outside() {
+    let place = place();
+    let maker = maker(&place, WorkspaceMode::Folder);
+    let sibling = place.maker_dir.with_file_name("makershop");
+    std::fs::create_dir_all(&sibling).unwrap();
+    for folder in [text(&sibling), "../makershop".to_string()] {
+        let mut w = wanted();
+        w.folder = Some(folder);
+        assert_eq!(
+            new(&maker, &w, &place).extras,
+            vec![Extra::Folder {
+                path: text(&sibling),
+                below_maker: false
+            }]
+        );
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn a_folder_on_another_computer_or_a_device_is_refused_before_the_disk_is_read() {
+    let place = place();
+    let maker = maker(&place, WorkspaceMode::Folder);
+    for folder in [
+        r"\\dots-reach-test.invalid\share\x",
+        r"//dots-reach-test.invalid/share/x",
+        r"\\dots-reach-test.invalid@SSL\x",
+        r"\\?\UNC\dots-reach-test.invalid\share\x",
+        r"\\.\pipe\dots-reach-test",
+        r"\\.\C:\Windows",
+        r"\\?\GLOBALROOT\Device\Null",
+    ] {
+        let mut w = wanted();
+        w.folder = Some(folder.into());
+        assert_eq!(
+            invalid(reach_new(&maker, &w, &place.worktrees)),
+            "That folder is on another computer or a device. Name a folder on this PC.",
+            "{folder}"
+        );
+    }
+    // A drive without its root names a different folder at each moment.
+    let drive = text(&place.maker_dir)[..2].to_string();
+    for folder in [format!("{drive}notes"), drive.clone()] {
+        let mut w = wanted();
+        w.folder = Some(folder.clone());
+        assert_eq!(
+            invalid(reach_new(&maker, &w, &place.worktrees)),
+            format!(
+                "Name the folder by its full path, such as {drive}\\notes, or by its path from \
+                 Researcher's folder."
+            ),
+            "{folder}"
+        );
+    }
+    // A plain drive path, also in its long form, is read as ever.
+    let mut w = wanted();
+    w.folder = Some(format!(r"\\?\{}", text(&place.maker_dir.join("research"))));
+    let reach = new(&maker, &w, &place);
+    assert!(reach.extras.is_empty());
+    assert_eq!(reach.spec.workdir, text(&place.maker_dir.join("research")));
+}
+
+#[cfg(windows)]
+#[test]
+fn a_folder_is_read_as_windows_reads_it_where_the_dot_works() {
+    let place = place();
+    let maker = maker(&place, WorkspaceMode::Folder);
+    let research = place.maker_dir.join("research");
+    std::fs::create_dir_all(&research).unwrap();
+    let above = place.maker_dir.parent().unwrap().to_path_buf();
+    // Windows drops the trailing dots and spaces of the last part: `.. ` is the folder above,
+    // not one inside.
+    for folder in [".. ", "research/../.. "] {
+        let mut w = wanted();
+        w.folder = Some(folder.into());
+        let reach = new(&maker, &w, &place);
+        assert_eq!(
+            reach.extras,
+            vec![Extra::Folder {
+                path: text(&above),
+                below_maker: false
+            }],
+            "{folder:?}"
+        );
+        assert_eq!(reach.spec.workdir, text(&above));
+    }
+    let mut w = wanted();
+    w.folder = Some("research/.. ".into());
+    assert_eq!(new(&maker, &w, &place).spec.workdir, maker.spec.workdir);
+    // And `research. ` is `research`.
+    for folder in ["research.", "research. ", "research/new. "] {
+        let mut w = wanted();
+        w.folder = Some(folder.into());
+        let reach = new(&maker, &w, &place);
+        assert!(reach.extras.is_empty(), "{folder:?}");
+        assert!(!reach.spec.workdir.ends_with([' ', '.']), "{folder:?}");
+    }
+}
+
+#[test]
+fn git_and_claude_folders_below_the_maker_are_beyond_its_reach() {
+    let place = place();
+    std::fs::create_dir_all(place.maker_dir.join(".git").join("hooks")).unwrap();
+    std::fs::create_dir_all(place.maker_dir.join("app").join(".claude")).unwrap();
+    for mode in [WorkspaceMode::Folder, WorkspaceMode::Worktree] {
+        let maker = maker(&place, mode);
+        for (folder, real) in [
+            (".git", place.maker_dir.join(".git")),
+            (".git/hooks", place.maker_dir.join(".git").join("hooks")),
+            (".git/new", place.maker_dir.join(".git").join("new")),
+            ("app/.claude", place.maker_dir.join("app").join(".claude")),
+            (
+                "app/.Claude/x",
+                place.maker_dir.join("app").join(".claude").join("x"),
+            ),
+            ("new/.claude", place.maker_dir.join("new").join(".claude")),
+            (".git.", place.maker_dir.join(".git")),
+        ] {
+            let mut w = wanted();
+            w.folder = Some(folder.into());
+            let reach = new(&maker, &w, &place);
+            // Elsewhere case counts, and `.git.` is a folder of its own.
+            if cfg!(windows) || !matches!(folder, ".git." | "app/.Claude/x") {
+                assert_eq!(
+                    only_extra(&reach),
+                    serde_json::json!({"kind": "settings_folder", "path": text(&real)}),
+                    "{folder}"
+                );
+                assert_eq!(reach.spec.workdir, text(&real));
+            } else {
+                assert_eq!(only_extra(&reach)["kind"], "settings_folder", "{folder}");
+            }
+            assert_eq!(reach.spec.workspace_mode, WorkspaceMode::Folder);
+            assert_eq!(reach.without.workdir, "");
+            assert_eq!(
+                reach.extras[0].line("Researcher"),
+                format!(
+                    "The folder {}, inside Researcher's folder, where git or Claude keep their \
+                     own settings",
+                    reach.spec.workdir
+                )
+            );
+        }
+        #[cfg(windows)]
+        {
+            let mut w = wanted();
+            w.folder = Some(".GIT".into());
+            assert_eq!(
+                only_extra(&new(&maker, &w, &place))["kind"],
+                "settings_folder"
+            );
+        }
+    }
+
+    // Only the parts below the maker's folder count: a maker that itself works inside a
+    // `.claude` folder reaches its subfolders, and `.github` is no settings folder.
+    let maker_dir = place.maker_dir.join(".claude").join("worktrees").join("w1");
+    std::fs::create_dir_all(maker_dir.join(".github")).unwrap();
+    let maker = fake_dot("Researcher", &maker_dir, WorkspaceMode::Folder);
+    for folder in ["docs", ".github", ".gitx"] {
+        let mut w = wanted();
+        w.folder = Some(folder.into());
+        let reach = new(&maker, &w, &place);
+        assert!(reach.extras.is_empty(), "{folder}: {:?}", reach.extras);
+        assert_eq!(reach.spec.workdir, text(&maker_dir.join(folder)));
+    }
+}
+
+#[test]
+fn a_change_that_moves_a_made_dot_into_git_is_an_extra() {
+    let place = place();
+    std::fs::create_dir_all(place.maker_dir.join(".git")).unwrap();
+    let maker = maker(&place, WorkspaceMode::Folder);
+    let made = made_dot(&place);
+    let w = Wanted {
+        folder: Some(".git".into()),
+        ..Wanted::default()
+    };
+    let reach = change(&maker, &made, &w, &place);
+    assert_eq!(
+        only_extra(&reach),
+        serde_json::json!({"kind": "settings_folder", "path": text(&place.maker_dir.join(".git"))})
+    );
+    assert_eq!(reach.spec.workdir, text(&place.maker_dir.join(".git")));
+    assert_eq!(reach.without, made.spec);
+}
+
+#[test]
+fn a_dangling_link_inside_the_makers_folder_is_outside() {
+    let place = place();
+    let maker = maker(&place, WorkspaceMode::Folder);
+    let target = place.outside.join("gone");
+    std::fs::create_dir_all(&target).unwrap();
+    let link = place.maker_dir.join("shortcut");
+    if !link_dir(&target, &link) {
+        eprintln!("skipped: this PC can make neither a symlink nor a junction");
+        return;
+    }
+    std::fs::remove_dir(&target).unwrap();
+    for folder in ["shortcut", "shortcut/below"] {
+        let mut w = wanted();
+        w.folder = Some(folder.into());
+        let said = invalid(reach_new(&maker, &w, &place.worktrees));
+        assert!(said.contains("does not exist"), "{folder}: {said}");
+    }
+}
+
+/// A custom policy: `rules` on a default of `default`, MCP tools denied.
+fn custom(rules: &[(&str, Action)], default: Action) -> Policy {
+    Policy {
+        preset: Preset::Custom,
+        rules: rules.iter().map(|(t, a)| Rule::new(t, *a)).collect(),
+        default,
+        mcp_default: Action::Deny,
+        ask_send_delete: true,
+    }
+}
+
+#[test]
+fn a_custom_maker_gives_read_only_only_when_its_rules_allow_all_that_read_only_allows() {
+    let place = place();
+    let mut w = wanted();
+    w.permissions = Some(WantedPermissions::Preset(Preset::ReadOnly));
+    let read_only = Extra::Preset {
+        preset: Preset::ReadOnly,
+        makers: Preset::Custom,
+    };
+
+    // One meant to call one MCP tool, which may not read the disk.
+    let narrow = custom(
+        &[
+            ("Read", Action::Deny),
+            ("mcp__notes__add", Action::Allow),
+            ("MakeDots", Action::Allow),
+        ],
+        Action::Deny,
+    );
+    // The rules a custom policy starts from: workflows ask, which read-only allows.
+    let from_sandboxed = Policy::preset(Preset::Custom);
+    // Trusted but for one folder, which read-only would read.
+    let mut but_secret = Policy::preset(Preset::Trusted);
+    but_secret
+        .rules
+        .push(Rule::new("Read(C:/secret/**)", Action::Deny));
+    but_secret.preset = Preset::Custom;
+    // Allows nothing beyond its default, which asks.
+    let asks = custom(&[], Action::Ask);
+
+    for policy in [narrow, from_sandboxed, but_secret, asks] {
+        let mut maker = maker(&place, WorkspaceMode::Folder);
+        maker.spec.policy = policy.clone();
+        let reach = new(&maker, &w, &place);
+        assert_eq!(reach.extras, vec![read_only.clone()], "{policy:?}");
+        assert_eq!(reach.spec.policy, Policy::preset(Preset::ReadOnly));
+        assert_eq!(reach.without.policy, policy);
+        assert_eq!(
+            reach.extras[0].line("Researcher"),
+            "The preset Read-only (Researcher has its own rules)"
+        );
+        // Its own rules it may still give.
+        let mut own = wanted();
+        own.permissions = Some(WantedPermissions::Maker);
+        assert!(new(&maker, &own, &place).extras.is_empty());
+    }
+
+    // One that allows everything, but for one command, gives read-only.
+    let mut wide = Policy::preset(Preset::Trusted);
+    wide.rules.push(Rule::new("Bash(rm:*)", Action::Deny));
+    wide.preset = Preset::Custom;
+    let mut maker = maker(&place, WorkspaceMode::Folder);
+    maker.spec.policy = wide.clone();
+    assert!(new(&maker, &w, &place).extras.is_empty());
+
+    // A made dot whose own custom rules allow all that read-only allows may be changed to
+    // read-only by a narrower maker: it holds that already.
+    maker.spec.policy = custom(&[("Read", Action::Deny)], Action::Deny);
+    let mut made = made_dot(&place);
+    made.spec.policy = wide;
+    let change_to = Wanted {
+        permissions: Some(WantedPermissions::Preset(Preset::ReadOnly)),
+        ..Wanted::default()
+    };
+    assert!(change(&maker, &made, &change_to, &place).extras.is_empty());
+
+    // Plain presets keep their order: a Sandboxed maker gives read-only.
+    let maker = self::maker(&place, WorkspaceMode::Folder);
+    assert_eq!(maker.spec.policy.preset, Preset::Sandboxed);
+    assert!(new(&maker, &w, &place).extras.is_empty());
+}
+
+#[test]
+fn uses_with_a_group_it_does_not_have_is_refused_by_name() {
+    use dots_core::making::tools::{check_arguments, Tool};
+    let err = serde_json::from_value::<Wanted>(serde_json::json!({"uses": {"skill": ["pdf"]}}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("uses has no group \"skill\""), "{err}");
+    assert!(
+        err.contains("mcp_servers, skills, plugins, context, apps"),
+        "{err}"
+    );
+
+    let make = serde_json::json!({
+        "name": "Blog Watcher",
+        "instructions": "Watch three blogs.",
+        "purpose": "Watches blogs",
+        "uses": {"skills": ["pdf-tools"], "skill": ["xlsx"]},
+    });
+    let change = serde_json::json!({"dot": "Blog Watcher", "uses": {"mcp_server": ["github"]}});
+    for (tool, call, group) in [
+        (Tool::MakeDot, make, "skill"),
+        (Tool::ChangeDot, change, "mcp_server"),
+    ] {
+        let said = check_arguments(tool, &call).unwrap_err();
+        assert!(
+            said.contains(&format!("uses has no group \"{group}\"")),
+            "{said}"
+        );
+    }
+    // The groups it has still read, and `null` is not named.
+    let w: Wanted =
+        serde_json::from_value(serde_json::json!({"uses": {"apps": ["board"]}})).unwrap();
+    assert_eq!(w.uses.unwrap().apps, names(&["board"]));
+    let w: Wanted = serde_json::from_value(serde_json::json!({"uses": null})).unwrap();
+    assert_eq!(w.uses, None);
 }

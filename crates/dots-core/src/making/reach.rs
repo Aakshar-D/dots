@@ -7,13 +7,13 @@
 //! a variable, the limits (section 10), and that the maker made the dot it changes are the
 //! caller's checks.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path, PathBuf, Prefix};
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::library::{LibraryKind, Uses};
 use crate::model::{Dot, DotSpec, Making, WorkspaceMode};
-use crate::policy::{Policy, Preset};
+use crate::policy::{Action, Policy, Preset};
 use crate::schedule::Schedule;
 use crate::vault::{Consumer, Grants};
 use crate::{Error, Result};
@@ -42,8 +42,12 @@ pub struct Wanted {
     pub folder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permissions: Option<WantedPermissions>,
-    /// The whole set of Library items the dot is to use; none when a new dot names none.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// The whole set of Library items the dot is to use; none when a new dot names none. A
+    /// group `Uses` does not have is refused, not dropped.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "known_uses"
+    )]
     pub uses: Option<Uses>,
     /// The whole set of variables the dot is to be granted, by consumer (`shell` or
     /// `mcp:<server>`); none when a new dot names none.
@@ -62,6 +66,29 @@ pub struct Wanted {
     /// a model writes `null` for a field it leaves out.
     #[serde(skip_serializing_if = "Option::is_none", with = "schedule_or_none")]
     pub schedule: Option<Option<Schedule>>,
+}
+
+/// The groups of `uses`, as `Uses` reads them.
+const USES_GROUPS: [&str; 5] = ["mcp_servers", "skills", "plugins", "context", "apps"];
+
+/// `uses` as `Uses` reads it, but a group it does not have (`"skill"`) is refused by name, so
+/// the maker learns that nothing of it was asked. `Uses` itself stays lenient: stored dots and
+/// the other callers read it.
+fn known_uses<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<Uses>, D::Error> {
+    use serde::de::Error as _;
+    let value = serde_json::Value::deserialize(d)?;
+    if let Some(groups) = value.as_object() {
+        if let Some(unknown) = groups
+            .keys()
+            .find(|key| !USES_GROUPS.contains(&key.as_str()))
+        {
+            return Err(D::Error::custom(format!(
+                "uses has no group {unknown:?}; its groups are {}",
+                USES_GROUPS.join(", ")
+            )));
+        }
+    }
+    Option::<Uses>::deserialize(value).map_err(D::Error::custom)
 }
 
 mod schedule_or_none {
@@ -146,8 +173,9 @@ pub enum Extra {
     },
     /// A variable the maker is not granted for that consumer (`shell` or `mcp:<server>`).
     Variable { consumer: String, name: String },
-    /// A plain preset stronger than the maker's (`makers`), or any but read-only when the
-    /// maker's is custom.
+    /// A plain preset stronger than the maker's (`makers`); when the maker's is custom, any
+    /// but read-only, and read-only too unless the maker's rules allow all that read-only
+    /// allows.
     Preset { preset: Preset, makers: Preset },
     /// A folder outside the maker's folder, or, with `below_maker`, a folder below the folder
     /// of a maker that works in worktree copies. `path` is the real path.
@@ -156,6 +184,9 @@ pub enum Extra {
         #[serde(default)]
         below_maker: bool,
     },
+    /// A folder below the maker's that is, or is inside, git's or Claude's own folder (`.git`,
+    /// `.claude`), whose settings and hooks run code. `path` is the real path.
+    SettingsFolder { path: String },
     /// The browser, which the maker does not have.
     Browser,
     /// The person's own Claude settings, which the maker does not use.
@@ -224,6 +255,10 @@ impl Extra {
                 below_maker: true,
             } => format!(
                 "The folder {path}, inside {maker}'s folder ({maker} itself works in copies of it)"
+            ),
+            Self::SettingsFolder { path } => format!(
+                "The folder {path}, inside {maker}'s folder, where git or Claude keep their own \
+                 settings"
             ),
             Self::Browser => "The browser".to_string(),
             Self::UserSettings => "Your Claude settings".to_string(),
@@ -320,11 +355,78 @@ struct Placed {
     create: Option<PathBuf>,
 }
 
+/// What is said of a folder on another computer or a device.
+const ELSEWHERE: &str = "That folder is on another computer or a device. Name a folder on this PC.";
+
+/// Refuses, before anything reads the disk, a folder on another computer or a device (a
+/// `\\server\share` path, `\\?\UNC\…`, `\\.\…`), whose mere lookup would connect to it, and a
+/// drive without its root (`C:notes`), which means a different folder at each moment.
+fn refuse_unplain(given: &str, maker: &str) -> Result<()> {
+    let mut parts = Path::new(given).components();
+    let Some(Component::Prefix(prefix)) = parts.next() else {
+        return Ok(());
+    };
+    if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) {
+        return Err(Error::Invalid(ELSEWHERE.into()));
+    }
+    if !matches!(parts.next(), Some(Component::RootDir)) {
+        return Err(Error::Invalid(format!(
+            "Name the folder by its full path, such as {}\\notes, or by its path from \
+             {maker}'s folder.",
+            prefix.as_os_str().to_string_lossy()
+        )));
+    }
+    Ok(())
+}
+
+/// Whether a part of `path` is a link or junction whose target cannot be found: the folder it
+/// names would follow the link once a target appears, wherever that is.
+fn dangling_link(path: &Path) -> bool {
+    path.ancestors().any(|part| {
+        std::fs::symlink_metadata(part).is_ok_and(|meta| meta.file_type().is_symlink())
+            && std::fs::canonicalize(part).is_err()
+    })
+}
+
+/// Whether `part` of a path names git's or Claude's own folder, `.git` or `.claude`, in any
+/// case. Windows drops trailing dots and spaces, and reads `name::$INDEX_ALLOCATION` as the
+/// folder `name`.
+fn settings_part(part: &std::ffi::OsStr) -> bool {
+    let text = part.to_string_lossy();
+    let name = text
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(['.', ' ']);
+    name.eq_ignore_ascii_case(".git") || name.eq_ignore_ascii_case(".claude")
+}
+
 /// Applies the folder rules to `given`, a folder that is not blank: absolute, or relative to
 /// the maker's folder.
 fn place(maker: &Dot, given: &str, worktrees_root: &Path) -> Result<Placed> {
-    let makers = real_path(Path::new(maker.spec.workdir.trim()));
-    let real = real_path(&makers.join(given));
+    refuse_unplain(given, &maker.spec.name)?;
+    let own = maker.spec.workdir.trim();
+    // A maker whose folder is not a full path (".", "C:") has no folder a path can be inside:
+    // every folder is beyond its reach, and one relative to it cannot be found.
+    let anchored = Path::new(own).is_absolute();
+    if !anchored && !Path::new(given).is_absolute() {
+        return Err(Error::Invalid(format!(
+            "Name the folder by its full path: {}'s own folder is not one.",
+            maker.spec.name
+        )));
+    }
+    let makers = real_path(Path::new(own));
+    // The path as Windows reads it where the dot uses it (`GetFullPathNameW`, which reads no
+    // disk): `.. ` is `..` and a trailing dot goes, which `real_path`'s long form keeps.
+    let joined = std::path::absolute(makers.join(given))
+        .map_err(|_| Error::Invalid(format!("{given} is not a folder path.")))?;
+    if let Some(Component::Prefix(prefix)) = joined.components().next() {
+        // A device name (`nul`, `com1`) is a device, not a folder.
+        if matches!(prefix.kind(), Prefix::DeviceNS(_)) {
+            return Err(Error::Invalid(ELSEWHERE.into()));
+        }
+    }
+    let real = real_path(&joined);
     let (key, makers_key) = (folded(&real), folded(&makers));
     // A worktree copy goes when its run is discarded or merged, so no card can allow it.
     if !worktrees_root.as_os_str().is_empty() && key.starts_with(folded(&real_path(worktrees_root)))
@@ -335,7 +437,7 @@ fn place(maker: &Dot, given: &str, worktrees_root: &Path) -> Result<Placed> {
             maker.spec.name
         )));
     }
-    if key == makers_key {
+    if anchored && key == makers_key {
         // The maker's mode too, so a made dot of a worktree maker works in worktree copies.
         return Ok(Placed {
             real,
@@ -361,13 +463,28 @@ fn place(maker: &Dot, given: &str, worktrees_root: &Path) -> Result<Placed> {
     }
     let missing = !real.is_dir();
     let workdir = real.to_string_lossy().into_owned();
-    if key.starts_with(&makers_key) {
+    // Inside by its path; a dangling link in it may lead anywhere, so it is not inside.
+    let below = anchored && key.starts_with(&makers_key) && !dangling_link(&real);
+    if below {
+        // Git's and Claude's own folders hold settings and hooks that run code, which no
+        // preset but Trusted lets a dot write: one that works there writes them by a relative
+        // path, which the deny rules of `.git` and `.claude` do not see.
+        let settings = key.strip_prefix(&makers_key).is_ok_and(|tail| {
+            tail.components()
+                .any(|part| settings_part(part.as_os_str()))
+        });
         // A worktree maker only ever writes in worktree copies; a dot in a subfolder would
         // write straight into the person's checkout, which is more than the maker can do.
-        let extra = (maker.spec.workspace_mode == WorkspaceMode::Worktree).then(|| Extra::Folder {
-            path: workdir.clone(),
-            below_maker: true,
-        });
+        let extra = if settings {
+            Some(Extra::SettingsFolder {
+                path: workdir.clone(),
+            })
+        } else {
+            (maker.spec.workspace_mode == WorkspaceMode::Worktree).then(|| Extra::Folder {
+                path: workdir.clone(),
+                below_maker: true,
+            })
+        };
         return Ok(Placed {
             create: missing.then(|| real.clone()),
             real,
@@ -403,6 +520,17 @@ fn rank(preset: Preset) -> Option<u8> {
         Preset::Trusted => Some(2),
         Preset::Custom => None,
     }
+}
+
+/// Whether `has` allows, for any input, each tool an allow rule of `wanted` names. Each of the
+/// read-only preset's allow rules names a tool alone; an input of nothing matches no allow rule
+/// with an argument and every deny or ask rule with one, so `Allow` means allowed everywhere.
+fn allows_all(has: &Policy, wanted: &Policy) -> bool {
+    wanted
+        .rules
+        .iter()
+        .filter(|rule| rule.action == Action::Allow)
+        .all(|rule| has.resolve(&rule.tool, &serde_json::Value::Null) == Action::Allow)
 }
 
 /// The list of `uses` that names items of `kind`.
@@ -520,10 +648,15 @@ fn check(maker: &Dot, base: &DotSpec, wanted: &Wanted, worktrees_root: &Path) ->
             let no_stronger_than = |has: Preset| rank(has).is_some_and(|has| asked <= has);
             // `Policy::preset` carries the allow rules of Dots' own tools.
             spec.policy = Policy::preset(preset);
-            // Read-only is the weakest there is, so a custom maker may give it too.
-            if asked == 0
-                || no_stronger_than(m.policy.preset)
+            // Custom rules can be narrower than read-only, so a custom policy gives read-only
+            // only when it allows all that read-only allows.
+            let custom_gives = |has: &Policy| {
+                has.preset == Preset::Custom && asked == 0 && allows_all(has, &spec.policy)
+            };
+            if no_stronger_than(m.policy.preset)
                 || no_stronger_than(base.policy.preset)
+                || custom_gives(&m.policy)
+                || custom_gives(&base.policy)
             {
                 without.policy = spec.policy.clone();
             } else {

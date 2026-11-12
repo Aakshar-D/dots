@@ -21,6 +21,13 @@ use crate::vault::org::Orgs;
 use crate::vault::Vault;
 use crate::{Error, Result};
 
+/// Why a made dot that is to work in copies of a folder, as its maker does, is not made when
+/// the folder is not ready for them: it would work in the folder itself, which its maker never
+/// does.
+pub const MADE_NOT_A_REPO: &str = "The new dot would work in copies of that folder, as its \
+    maker does, but the folder is not the top of a git repository with a commit. Leave the \
+    folder blank for a new one.";
+
 /// What `DotAdmin` works with: the runtime's own parts, shared with it.
 pub(crate) struct DotAdminParts {
     pub store: Store,
@@ -124,10 +131,14 @@ impl DotAdmin {
             spec.workspace_mode = WorkspaceMode::Folder;
         }
         // Worktree mode needs the top level of a repository with a commit; elsewhere the dot
-        // runs in the folder itself.
+        // runs in the folder itself. A made dot is not moved to the folder itself: it would
+        // write straight into a folder its maker only ever works in copies of.
         if spec.workspace_mode == WorkspaceMode::Worktree
             && !worktree_ready(Path::new(spec.workdir.trim())).await
         {
+            if made.is_some() {
+                return Err(Error::Invalid(MADE_NOT_A_REPO.into()));
+            }
             spec.workspace_mode = WorkspaceMode::Folder;
         }
         let created = match &made {

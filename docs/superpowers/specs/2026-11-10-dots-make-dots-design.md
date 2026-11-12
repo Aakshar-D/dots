@@ -103,7 +103,7 @@ The check runs when a dot is made and each time its maker changes it. It compare
 | Model | The maker's by default. Another model of the same engine is within reach. |
 | Folder | See "Folder rules" below the table. |
 | Workspace mode | Follows from the folder rules. Not choosable. |
-| Permissions | One of: (a) an exact copy of the maker's whole policy, or (b) a plain preset, with no added rules, that is no stronger than the maker's preset, in the fixed order read-only, sandboxed, trusted. A maker whose preset is custom may give (a) or read-only. Default when not stated: (a). |
+| Permissions | One of: (a) an exact copy of the maker's whole policy, or (b) a plain preset, with no added rules, that is no stronger than the maker's preset, in the fixed order read-only, sandboxed, trusted. A maker whose preset is custom may give (a); it may give read-only only when its own rules allow everything read-only allows (each of read-only's allow rules comes back allow from the maker's policy, for any input), since custom rules can be narrower than read-only. Otherwise read-only asks. Default when not stated: (a). |
 | Library items (`uses`: MCP servers, skills, plugins, context, apps) | Each named item is one the maker names in its own `uses`. Items switched to "every dot" come anyway, as for any dot. |
 | Variables | For each consumer, the names are among those the maker is granted for that consumer. Today, saving a dot grants a newly used MCP server every variable its config reads; for a made dot that automatic grant must not add a name the maker lacks. |
 | Browser | Only if the maker has it. |
@@ -121,7 +121,9 @@ The check runs when a dot is made and each time its maker changes it. It compare
 - **A folder below the maker's folder, when the maker is in folder mode**: within reach, in folder mode. A relative path is taken from the maker's folder. A folder that does not exist yet is created by Dots.
 - **A folder below the maker's folder, when the maker is in worktree mode**: beyond reach, so it asks. The maker itself only ever writes in worktree copies; a made dot in a subfolder would write straight into the person's real checkout, which is more than the maker can do. A path inside a run's worktree copy is refused with a plain error that says to leave the folder blank or use the maker's own.
 - **Anywhere else**: beyond reach, so it asks. The folder must exist.
-- Paths are compared after resolving the real path (case, `..`, links and junctions), so a link that leads outside is outside.
+- Paths are compared after resolving the real path (case, `..`, links and junctions), so a link that leads outside is outside. A link or junction whose target cannot be found is outside too.
+- A folder below the maker's that is, or is inside, `.git` or `.claude` (any case) is beyond reach: their settings and hooks run code. A maker whose own folder is not a full path (`.`, `C:`) has no folder within reach: a full path asks, a relative one is refused.
+- Before anything reads the disk, a folder on another computer or a device (`\\server\share`, `\\?\UNC\…`, `\\.\…`) and a drive without its root (`C:notes`) are refused with a plain error. A made dot that is to work in worktree copies of a folder not ready for them is refused, never moved to folder mode.
 
 Notes:
 

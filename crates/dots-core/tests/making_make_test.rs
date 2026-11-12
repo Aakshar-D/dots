@@ -737,6 +737,34 @@ async fn a_made_dots_grants_are_exactly_what_was_asked() {
     assert_eq!(dot.spec.variables, grants("mcp:github", "GITHUB_TOKEN"));
 }
 
+#[tokio::test]
+async fn a_made_dot_is_never_moved_from_worktree_copies_to_the_folder_itself() {
+    let t = start().await;
+    // A maker that works in copies of a folder that is not ready for them (no repository, as
+    // when the repository went after the maker was saved), stored as it is.
+    let mut s = maker_spec(&t);
+    s.workspace_mode = WorkspaceMode::Worktree;
+    let maker = t.rt.store().create_dot(&s, None, "default").await.unwrap();
+    let run = live_run(&t, &maker).await;
+    let mut asked = ask("Blog Watcher");
+    asked.wanted.folder = Some(".".into());
+    let said = refused(&t, &run, asked).await;
+    assert_eq!(
+        said,
+        "The new dot would work in copies of that folder, as its maker does, but the folder is \
+         not the top of a git repository with a commit. Leave the folder blank for a new one."
+    );
+    assert_eq!(dot_names(&t).await, ["Researcher"]);
+
+    // A dot the person makes there still works in the folder itself.
+    let mut own = maker_spec(&t);
+    own.name = "Notes".into();
+    own.making.on = false;
+    own.workspace_mode = WorkspaceMode::Worktree;
+    let dot = t.rt.create_dot(own, None, None).await.unwrap();
+    assert_eq!(dot.spec.workspace_mode, WorkspaceMode::Folder);
+}
+
 #[test]
 fn a_tool_calls_json_reads_as_an_ask() {
     let call = json!({
