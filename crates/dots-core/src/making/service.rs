@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::reach::{reach_new, Reach, Wanted};
+use super::requests::{MakeRequest, NewMakeRequest, RequestKind, MAX_WAITING_REQUESTS};
 use crate::dot_admin::DotAdmin;
 use crate::events::{Bus, RuntimeEvent};
 use crate::followups::FollowUps;
@@ -80,12 +81,51 @@ impl<'de> Deserialize<'de> for MakeDot {
 pub enum MakeOutcome {
     /// Created at once.
     Made { dot: Dot },
-    /// Beyond the maker's reach (`reach.extras`) or over a limit (`over`), or both: nothing
-    /// was created, and the person is to answer (design sections 7.1 and 10).
-    NeedsPerson {
-        reach: Reach,
-        over: Option<OverLimit>,
+    /// Stored for the person; nothing was created (design section 7.1): something of it is
+    /// beyond the maker's reach (`request.extras`), or a limit would be passed
+    /// (`request.over`), or both. `maker_name` is the maker's name, for the words of the
+    /// extras.
+    Waiting {
+        request: MakeRequest,
+        maker_name: String,
     },
+}
+
+impl MakeOutcome {
+    /// What the tool tells the maker's run (design section 7.1), the same on both engines.
+    pub fn tool_text(&self) -> String {
+        match self {
+            Self::Made { dot } => {
+                let mut text = format!(
+                    "Made the dot \"{}\". It is on and ready; give it a job with give_job.",
+                    dot.spec.name
+                );
+                if dot.spec.schedule.is_some() {
+                    text.push_str(" It will also run on its schedule.");
+                }
+                text
+            }
+            Self::Waiting {
+                request,
+                maker_name,
+            } => {
+                let extras: Vec<String> =
+                    request.extras.iter().map(|e| e.line(maker_name)).collect();
+                let more = format!("it asks for more than you have ({})", extras.join("; "));
+                let why = match &request.over {
+                    Some(over) if extras.is_empty() => format!("it would be the {}", over.line()),
+                    Some(over) => format!("{more} and it would be the {}", over.line()),
+                    None => more,
+                };
+                format!(
+                    "Not made yet: \"{}\" needs the person's say-so, because {why}. The request \
+                     is waiting for them. Do not wait for it and do not ask again: carry on with \
+                     other work or end your turn, and you will be woken with their answer.",
+                    request.name
+                )
+            }
+        }
+    }
 }
 
 /// Which limit a make would pass (design section 10), with the numbers the ask card's line
@@ -146,8 +186,8 @@ pub(crate) fn checked_purpose(purpose: &str) -> Result<String> {
 pub(super) struct Parts {
     pub(super) store: Store,
     pub(super) bus: Bus,
-    dot_admin: DotAdmin,
-    vault: Vault,
+    pub(super) dot_admin: DotAdmin,
+    pub(super) vault: Vault,
     /// Where runs' worktree copies are made (`RunnerConfig::worktrees_dir`).
     worktrees_root: PathBuf,
     /// For the thread lock every writer that continues a chat holds, and the chats that are
@@ -156,8 +196,9 @@ pub(super) struct Parts {
     /// Announces a wake's run and wakes the dispatcher for it.
     pub(super) runner: Arc<Runner>,
     /// Held from counting a maker's dots until the new one is stored, so two calls of one run
-    /// cannot both take the last place.
-    one_at_a_time: Mutex<()>,
+    /// cannot both take the last place; and while the person's answer to a make request is
+    /// carried out, so two answers, or an answer and a make, cannot both pass.
+    pub(super) one_at_a_time: Mutex<()>,
 }
 
 /// Everything a maker does to other dots, for the tools of both engines. Cheap to clone; the
@@ -217,8 +258,10 @@ impl Makers {
     ///
     /// `Made` when everything asked is within the maker's reach and its limits: the dot
     /// exists, in the maker's account and workspace, with who made it recorded, and the
-    /// topic's log has a `made` entry. `NeedsPerson` when something is beyond reach or a limit
-    /// would be passed: nothing was created.
+    /// topic's log has a `made` entry. `Waiting` when something is beyond reach or a limit
+    /// would be passed: nothing was created, a make request is stored for the person, and the
+    /// topic's log has an `asked` entry. At most `MAX_WAITING_REQUESTS` of one maker wait; a
+    /// further one is refused (`Invalid`).
     ///
     /// An error, with a sentence the model can act on, for what no answer of the person could
     /// allow: a dot that may not make dots, a workflow step's run, a run that has ended
@@ -244,7 +287,13 @@ impl Makers {
         self.check_name_free(&reach.spec.name).await?;
         let over = self.over_limit(&maker, &run.id).await?;
         if over.is_some() || !reach.extras.is_empty() {
-            return Ok(MakeOutcome::NeedsPerson { reach, over });
+            let request = self
+                .store_request(&maker, &run, &purpose, &ask, &reach, over.as_ref())
+                .await?;
+            return Ok(MakeOutcome::Waiting {
+                request,
+                maker_name: maker.spec.name,
+            });
         }
         let Reach {
             spec,
@@ -264,6 +313,69 @@ impl Makers {
         // The first job is not started here: `ask.first_job` is checked above and goes no
         // further yet (design section 8).
         Ok(MakeOutcome::Made { dot })
+    }
+
+    /// Stores the make request for a dot that is beyond reach or over a limit, writes the
+    /// `asked` entry of the log, so the ask card shows in the topic in order with the other
+    /// cards, and publishes `MakingUpdated` (design sections 7.1 and 7.2). Refuses it when
+    /// the maker has `MAX_WAITING_REQUESTS` that the person has not answered.
+    async fn store_request(
+        &self,
+        maker: &Dot,
+        run: &Run,
+        purpose: &str,
+        ask: &MakeDot,
+        reach: &Reach,
+        over: Option<&OverLimit>,
+    ) -> Result<MakeRequest> {
+        let p = &self.parts;
+        if p.store.count_waiting_make_requests(&maker.id).await? >= MAX_WAITING_REQUESTS {
+            return Err(Error::Invalid(format!(
+                "{} already has {MAX_WAITING_REQUESTS} requests waiting for the person. Wait to \
+                 be woken with an answer before asking for more.",
+                maker.spec.name
+            )));
+        }
+        let create_folder = reach
+            .create_folder
+            .as_ref()
+            .map(|folder| folder.to_string_lossy().into_owned());
+        let request = p
+            .store
+            .add_make_request(&NewMakeRequest {
+                maker_dot_id: &maker.id,
+                run_id: &run.id,
+                root_run_id: &run.root_run_id,
+                kind: RequestKind::Make,
+                dot_id: None,
+                purpose,
+                spec: &reach.spec,
+                without: &reach.without,
+                extras: &reach.extras,
+                over,
+                create_folder: create_folder.as_deref(),
+                first_job: ask.first_job.as_deref().map(str::trim),
+            })
+            .await?;
+        // The request waits whether or not its entry could be written, so a failure here is
+        // logged and the ask still stands.
+        let logged = p
+            .store
+            .add_making_event(&NewMakingEvent {
+                maker_dot_id: &maker.id,
+                run_id: &run.id,
+                root_run_id: &run.root_run_id,
+                kind: MakingEventKind::Asked,
+                dot_id: None,
+                dot_name: &request.name,
+                detail: json!({ "request_id": request.id }),
+            })
+            .await;
+        if let Err(e) = logged {
+            tracing::error!(request = %request.id, run = %run.id, "the request was not logged: {e}");
+        }
+        self.updated(&maker.id, &run.root_run_id);
+        Ok(request)
     }
 
     /// Refuses what `spec`, a dot a maker asks for, names that does not exist (design section

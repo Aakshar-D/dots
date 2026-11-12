@@ -1,7 +1,7 @@
 //! A maker's run makes a dot (dots-make-dots design sections 5, 7.1 and 10): a dot within the
 //! maker's reach and within its limits is created at once, with who made it recorded and a
-//! "made" entry in the makers' log; one beyond reach or over a limit creates nothing and comes
-//! back for the person; and what could never be allowed is a plain error.
+//! "made" entry in the makers' log; one beyond reach or over a limit creates nothing and waits
+//! for the person (`making_request_test.rs`); and what could never be allowed is a plain error.
 
 mod common;
 
@@ -531,12 +531,12 @@ async fn a_variable_or_consumer_that_does_not_exist_is_a_plain_error() {
     let mut asked = ask("Blog Watcher");
     asked.wanted.variables = Some(grants("shell", "GITHUB_TOKEN"));
     let outcome = t.rt.makers().make_dot(&run.id, asked).await.unwrap();
-    let MakeOutcome::NeedsPerson { reach, over } = outcome else {
+    let MakeOutcome::Waiting { request, .. } = outcome else {
         panic!("made: {outcome:?}");
     };
-    assert_eq!(over, None);
+    assert_eq!(request.over, None);
     assert_eq!(
-        reach.extras,
+        request.extras,
         [Extra::Variable {
             consumer: "shell".into(),
             name: "GITHUB_TOKEN".into()
@@ -554,21 +554,26 @@ async fn an_extra_makes_nothing_and_says_what_it_is() {
     asked.wanted.browser = Some(true);
     asked.wanted.folder = Some("notes/blogs".into());
     let outcome = t.rt.makers().make_dot(&run.id, asked).await.unwrap();
-    let MakeOutcome::NeedsPerson { reach, over } = outcome else {
+    let MakeOutcome::Waiting { request, .. } = outcome else {
         panic!("made: {outcome:?}");
     };
-    assert_eq!(reach.extras, [Extra::Browser]);
-    assert_eq!(over, None);
+    assert_eq!(request.extras, [Extra::Browser]);
+    assert_eq!(request.over, None);
     // The dot as asked and the dot without the extra, for the person's answer.
-    assert!(reach.spec.browser);
-    assert!(!reach.without.browser);
-    assert_eq!(reach.spec.name, "Blog Watcher");
-    // No dot, no folder, no entry in the log, no event.
+    assert!(request.spec.browser);
+    assert!(!request.without.browser);
+    assert_eq!(request.spec.name, "Blog Watcher");
+    // No dot and no folder: only the ask is in the log.
     assert_eq!(dot_names(&t).await, ["Researcher"]);
     assert!(!t.work().join("notes").exists());
     assert!(folders(&t.root).is_empty());
-    assert!(log(&t, &run).await.is_empty());
-    assert!(updated(&mut rx).is_empty());
+    let events = log(&t, &run).await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, MakingEventKind::Asked);
+    assert_eq!(
+        updated(&mut rx),
+        [(maker.id.clone(), run.root_run_id.clone())]
+    );
 }
 
 #[tokio::test]
@@ -580,16 +585,17 @@ async fn the_fourth_dot_of_a_run_needs_the_person() {
         make(&t, &run, name).await;
     }
     let outcome = t.rt.makers().make_dot(&run.id, ask("Four")).await.unwrap();
-    let MakeOutcome::NeedsPerson { reach, over } = outcome else {
+    let MakeOutcome::Waiting { request, .. } = outcome else {
         panic!("made: {outcome:?}");
     };
-    assert_eq!(over, Some(OverLimit::PerRun { nth: 4, limit: 3 }));
+    assert_eq!(request.over, Some(OverLimit::PerRun { nth: 4, limit: 3 }));
     // Nothing of it is beyond reach: only the limit is passed.
-    assert!(reach.extras.is_empty());
-    assert_eq!(reach.spec.name, "Four");
+    assert!(request.extras.is_empty());
+    assert_eq!(request.spec.name, "Four");
     assert_eq!(dot_names(&t).await, ["One", "Researcher", "Three", "Two"]);
     assert_eq!(folders(&t.root), ["one", "three", "two"]);
-    assert_eq!(log(&t, &run).await.len(), 3);
+    // Three dots made, and the ask.
+    assert_eq!(log(&t, &run).await.len(), 4);
 }
 
 #[tokio::test]
@@ -603,13 +609,13 @@ async fn deleting_a_made_dot_does_not_give_the_run_a_place_back() {
     t.rt.delete_dot(&three.id).await.unwrap();
     // Two exist now, of three it may keep; but this run made three.
     let outcome = t.rt.makers().make_dot(&run.id, ask("Four")).await.unwrap();
-    let MakeOutcome::NeedsPerson { over, .. } = outcome else {
+    let MakeOutcome::Waiting { request, .. } = outcome else {
         panic!("made: {outcome:?}");
     };
-    assert_eq!(over, Some(OverLimit::PerRun { nth: 4, limit: 3 }));
-    // The entry of the deleted dot stays in the log, without the dot.
+    assert_eq!(request.over, Some(OverLimit::PerRun { nth: 4, limit: 3 }));
+    // The entry of the deleted dot stays in the log, without the dot; the ask follows it.
     let events = log(&t, &run).await;
-    assert_eq!(events.len(), 3);
+    assert_eq!(events.len(), 4);
     assert_eq!(events[2].dot_name, "Three");
     assert_eq!(events[2].dot_id, None);
 }
@@ -621,16 +627,10 @@ async fn a_new_run_starts_the_run_count_again() {
     let first = live_run(&t, &maker).await;
     make(&t, &first, "One").await;
     let outcome = t.rt.makers().make_dot(&first.id, ask("Two")).await.unwrap();
-    assert!(
-        matches!(
-            outcome,
-            MakeOutcome::NeedsPerson {
-                over: Some(OverLimit::PerRun { nth: 2, limit: 1 }),
-                ..
-            }
-        ),
-        "{outcome:?}"
-    );
+    let MakeOutcome::Waiting { request, .. } = outcome else {
+        panic!("made: {outcome:?}");
+    };
+    assert_eq!(request.over, Some(OverLimit::PerRun { nth: 2, limit: 1 }));
     // A wake is a new run (design section 10).
     let second = live_run(&t, &maker).await;
     make(&t, &second, "Two").await;
@@ -650,11 +650,12 @@ async fn the_total_counts_made_dots_that_exist_now() {
             .make_dot(&second.id, ask("Three"))
             .await
             .unwrap();
-    let MakeOutcome::NeedsPerson { over, .. } = outcome else {
+    let MakeOutcome::Waiting { request, .. } = outcome else {
         panic!("made: {outcome:?}");
     };
-    assert_eq!(over, Some(OverLimit::Total { nth: 3, limit: 2 }));
-    // Deleting one frees a place (design section 10).
+    assert_eq!(request.over, Some(OverLimit::Total { nth: 3, limit: 2 }));
+    // Deleting one frees a place (design section 10). The name is free too: the request that
+    // waits holds no name.
     t.rt.delete_dot(&one.id).await.unwrap();
     make(&t, &second, "Three").await;
     assert_eq!(dot_names(&t).await, ["Researcher", "Three", "Two"]);
@@ -667,10 +668,10 @@ async fn the_run_limit_is_said_first_when_both_are_passed() {
     let run = live_run(&t, &maker).await;
     make(&t, &run, "One").await;
     let outcome = t.rt.makers().make_dot(&run.id, ask("Two")).await.unwrap();
-    let MakeOutcome::NeedsPerson { over, .. } = outcome else {
+    let MakeOutcome::Waiting { request, .. } = outcome else {
         panic!("made: {outcome:?}");
     };
-    assert_eq!(over, Some(OverLimit::PerRun { nth: 2, limit: 1 }));
+    assert_eq!(request.over, Some(OverLimit::PerRun { nth: 2, limit: 1 }));
 }
 
 #[tokio::test]

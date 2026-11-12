@@ -7,6 +7,13 @@ use serde_json::Value;
 str_enum!(MakingEventKind {
     // The maker's run made a dot. `detail`: `{"purpose": ..}`.
     Made => "made",
+    // The maker's run asked for a dot that is beyond its reach or over a limit: a make request
+    // waits for the person (design section 7.2). `dot_name` is the name asked for.
+    // `detail`: `{"request_id": ..}`.
+    Asked => "asked",
+    // The person answered a make request. `dot_id` is the dot the answer made, if any.
+    // `detail`: `{"request_id": .., "decision": "allow" | "without" | "refuse", "dot_name": ..}`.
+    Answered => "answered",
 });
 
 /// One thing a maker's run did: one card of the maker's chat topic (design section 11).

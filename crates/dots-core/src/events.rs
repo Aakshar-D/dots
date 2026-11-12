@@ -108,8 +108,10 @@ pub enum RuntimeEvent {
         id: String,
         dot_id: String,
     },
-    /// The makers' log of one chat topic of the maker `dot_id` changed: it made a dot
-    /// (dots-make-dots design section 11). The topic's cards read it again.
+    /// The makers' log of one chat topic of the maker `dot_id` changed, or a make request of
+    /// that topic did: it made a dot, asked the person for one, the person answered, or what a
+    /// request names has gone (dots-make-dots design sections 7.2 and 11). The topic's cards
+    /// read it again.
     MakingUpdated {
         dot_id: String,
         root_run_id: String,

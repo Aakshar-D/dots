@@ -1,5 +1,6 @@
-//! The makers' log, what a make is checked against before anything is saved, and the makers'
-//! wakes (dots-make-dots design sections 7.1, 8, 10 and 11).
+//! The makers' log, what a make is checked against before anything is saved, the make requests
+//! that wait for the person, and the makers' wakes (dots-make-dots design sections 7.1, 7.2, 8,
+//! 10 and 11).
 
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
@@ -7,8 +8,9 @@ use sqlx::Row;
 use super::library::check_uses;
 use super::runs::insert_run;
 use super::Store;
-use crate::library::Uses;
+use crate::library::{LibraryKind, Uses};
 use crate::making::log::{MakingEvent, MakingEventKind, NewMakingEvent};
+use crate::making::requests::{MakeRequest, NewMakeRequest, RequestKind, RequestStatus};
 use crate::making::wake::MakingWake;
 use crate::model::{NewRun, Run};
 use crate::util::{new_id, now};
@@ -44,6 +46,190 @@ fn wake_from_row(row: &SqliteRow) -> Result<MakingWake> {
         run_id: row.try_get("run_id")?,
         delivered_at: row.try_get("delivered_at")?,
     })
+}
+
+const REQUEST_COLUMNS: &str = "id, maker_dot_id, run_id, root_run_id, kind, dot_id, name, \
+     purpose, spec, without, extras, over, create_folder, first_job, status, gone_reason, \
+     created_at, decided_at, made_dot_id";
+
+fn request_from_row(row: &SqliteRow) -> Result<MakeRequest> {
+    let over: Option<String> = row.try_get("over")?;
+    Ok(MakeRequest {
+        id: row.try_get("id")?,
+        maker_dot_id: row.try_get("maker_dot_id")?,
+        run_id: row.try_get("run_id")?,
+        root_run_id: row.try_get("root_run_id")?,
+        kind: RequestKind::parse(&row.try_get::<String, _>("kind")?)?,
+        dot_id: row.try_get("dot_id")?,
+        name: row.try_get("name")?,
+        purpose: row.try_get("purpose")?,
+        spec: serde_json::from_str(&row.try_get::<String, _>("spec")?)?,
+        without: serde_json::from_str(&row.try_get::<String, _>("without")?)?,
+        extras: serde_json::from_str(&row.try_get::<String, _>("extras")?)?,
+        over: over.as_deref().map(serde_json::from_str).transpose()?,
+        create_folder: row.try_get("create_folder")?,
+        first_job: row.try_get("first_job")?,
+        status: RequestStatus::parse(&row.try_get::<String, _>("status")?)?,
+        gone_reason: row.try_get("gone_reason")?,
+        created_at: row.try_get("created_at")?,
+        decided_at: row.try_get("decided_at")?,
+        made_dot_id: row.try_get("made_dot_id")?,
+    })
+}
+
+/// The statuses of a request the person has not answered: one that waits, and one marked gone,
+/// which waits for its "Don't make it".
+const UNANSWERED: &str = "status IN ('waiting', 'gone')";
+
+/// Make requests (dots-make-dots design sections 7.1 and 7.2).
+impl Store {
+    /// Stores a make request, waiting, as of now. Its name is the name of `new.spec`. An error
+    /// when the maker does not exist.
+    pub async fn add_make_request(&self, new: &NewMakeRequest<'_>) -> Result<MakeRequest> {
+        let request = MakeRequest {
+            id: new_id(),
+            maker_dot_id: new.maker_dot_id.to_string(),
+            run_id: new.run_id.to_string(),
+            root_run_id: new.root_run_id.to_string(),
+            kind: new.kind,
+            dot_id: new.dot_id.map(str::to_string),
+            name: new.spec.name.trim().to_string(),
+            purpose: new.purpose.to_string(),
+            spec: new.spec.clone(),
+            without: new.without.clone(),
+            extras: new.extras.to_vec(),
+            over: new.over.cloned(),
+            create_folder: new.create_folder.map(str::to_string),
+            first_job: new.first_job.map(str::to_string),
+            status: RequestStatus::Waiting,
+            gone_reason: None,
+            created_at: now(),
+            decided_at: None,
+            made_dot_id: None,
+        };
+        let over = match &request.over {
+            Some(over) => Some(serde_json::to_string(over)?),
+            None => None,
+        };
+        sqlx::query(
+            "INSERT INTO make_requests (id, maker_dot_id, run_id, root_run_id, kind, dot_id, \
+             name, purpose, spec, without, extras, over, create_folder, first_job, status, \
+             created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&request.id)
+        .bind(&request.maker_dot_id)
+        .bind(&request.run_id)
+        .bind(&request.root_run_id)
+        .bind(request.kind.as_str())
+        .bind(&request.dot_id)
+        .bind(&request.name)
+        .bind(&request.purpose)
+        .bind(serde_json::to_string(&request.spec)?)
+        .bind(serde_json::to_string(&request.without)?)
+        .bind(serde_json::to_string(&request.extras)?)
+        .bind(over)
+        .bind(&request.create_folder)
+        .bind(&request.first_job)
+        .bind(request.status.as_str())
+        .bind(&request.created_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(request)
+    }
+
+    /// The request `id`, answered or not.
+    pub async fn get_make_request(&self, id: &str) -> Result<MakeRequest> {
+        let row = sqlx::query(&format!(
+            "SELECT {REQUEST_COLUMNS} FROM make_requests WHERE id = ?"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("make request {id}")))?;
+        request_from_row(&row)
+    }
+
+    /// The requests of the maker `maker_dot_id`, or of every maker with `None`, oldest first.
+    /// With `waiting_only`, those the person has not answered: the ones that wait and the ones
+    /// marked gone, which still need their "Don't make it".
+    pub async fn list_make_requests(
+        &self,
+        maker_dot_id: Option<&str>,
+        waiting_only: bool,
+    ) -> Result<Vec<MakeRequest>> {
+        let unanswered = if waiting_only { UNANSWERED } else { "1" };
+        let rows = sqlx::query(&format!(
+            "SELECT {REQUEST_COLUMNS} FROM make_requests \
+             WHERE (?1 IS NULL OR maker_dot_id = ?1) AND {unanswered} \
+             ORDER BY created_at, rowid"
+        ))
+        .bind(maker_dot_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(request_from_row).collect()
+    }
+
+    /// How many requests of the maker the person has not answered: what the limit of waiting
+    /// requests counts (dots-make-dots design section 7.2). One marked gone counts until it is
+    /// refused, since its card is still before the person.
+    pub async fn count_waiting_make_requests(&self, maker_dot_id: &str) -> Result<u32> {
+        let n: i64 = sqlx::query_scalar(&format!(
+            "SELECT COUNT(*) FROM make_requests WHERE maker_dot_id = ? AND {UNANSWERED}"
+        ))
+        .bind(maker_dot_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n as u32)
+    }
+
+    /// Writes the person's answer on the request `id`: `status`, now as the time, and the dot
+    /// the answer made. Only a request that waits is moved, or one marked gone when `status`
+    /// is `refused`. `false`, with nothing written, for any other.
+    pub async fn decide_make_request(
+        &self,
+        id: &str,
+        status: RequestStatus,
+        made_dot_id: Option<&str>,
+    ) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE make_requests SET status = ?1, decided_at = ?2, made_dot_id = ?3 \
+             WHERE id = ?4 AND (status = 'waiting' OR (status = 'gone' AND ?1 = 'refused'))",
+        )
+        .bind(status.as_str())
+        .bind(now())
+        .bind(made_dot_id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Marks the waiting request `id` gone: something it names is no longer there, and
+    /// `reason` says what, in one sentence for the person. `false` when it did not wait.
+    pub async fn mark_make_request_gone(&self, id: &str, reason: &str) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE make_requests SET status = 'gone', gone_reason = ? \
+             WHERE id = ? AND status = 'waiting'",
+        )
+        .bind(reason)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Whether the Library has an item of `kind` named `name` that a dot can name in its
+    /// `uses`: one of its own, not an MCP server that comes with a plugin (`check_uses`).
+    pub async fn library_has(&self, kind: LibraryKind, name: &str) -> Result<bool> {
+        Ok(sqlx::query(
+            "SELECT 1 FROM library_items WHERE kind = ? AND name = ? AND owner_id IS NULL",
+        )
+        .bind(kind.as_str())
+        .bind(name)
+        .fetch_optional(&self.pool)
+        .await?
+        .is_some())
+    }
 }
 
 /// The makers' wakes (dots-make-dots design sections 7.2 and 8).
