@@ -195,6 +195,9 @@ pub enum Extra {
     MaxTurns { wanted: u32, makers: u32 },
     /// A time limit above the maker's.
     Timeout { wanted_secs: u64, makers_secs: u64 },
+    /// "Can make dots" switched on, with the dot's own limits: a made dot the person let make
+    /// dots, which its maker could use to make dots past its own limits (design section 9).
+    Making { per_run: u32, total: u32 },
 }
 
 /// A preset as the person reads it.
@@ -273,6 +276,9 @@ impl Extra {
                 time_label(*wanted_secs),
                 time_label(*makers_secs)
             ),
+            Self::Making { per_run, total } => {
+                format!("Can make dots itself ({per_run} in one run, {total} kept)")
+            }
         }
     }
 }
@@ -815,25 +821,35 @@ pub fn reach_change(
     check(maker, &made.spec, wanted, worktrees_root)
 }
 
-/// Whether `folder`, a folder just made for a dot below the maker's folder, is still within
-/// the maker's reach by its real path now (design section 6, folder rules): below the maker's
-/// folder, with no dangling link in it, and not in git's or Claude's own folder. A link or
-/// junction planted in its path between the check and the making leads it elsewhere.
-pub fn still_below_maker(maker: &Dot, folder: &Path) -> bool {
-    let own = maker.spec.workdir.trim();
-    if !Path::new(own).is_absolute() {
-        return false;
+/// Whether `folder`, a folder just made for a dot, is still by its real path the folder that
+/// was judged (design section 6, folder rules): within the maker's reach, or shown on the card
+/// the person allowed. `folder` is that folder as judged, a real path (`Reach::create_folder`).
+/// A link or junction planted in its path between the check and the making leads it
+/// elsewhere, and a dangling link may lead anywhere.
+pub fn still_as_judged(folder: &Path) -> bool {
+    let real = real_path(folder);
+    folded(&real) == folded(folder) && !dangling_link(&real)
+}
+
+/// Whether `spec` gives the dot the thing `extra` names, as `held_extras` finds it: so an
+/// extra a card did not show can be told apart as one the dot was given since, or one its
+/// maker no longer has.
+pub(super) fn spec_holds(spec: &DotSpec, extra: &Extra) -> bool {
+    let same_folder = |path: &str| {
+        let workdir = spec.workdir.trim();
+        !workdir.is_empty() && folded(&real_path(Path::new(workdir))) == folded(Path::new(path))
+    };
+    match extra {
+        Extra::Item { item_kind, name } => spec.uses.names(*item_kind).contains(name),
+        Extra::Variable { consumer, name } => grants(&spec.variables, consumer, name),
+        Extra::Preset { preset, .. } => spec.policy.preset == *preset,
+        Extra::Folder { path, .. } | Extra::SettingsFolder { path } => same_folder(path),
+        Extra::Browser => spec.browser,
+        Extra::UserSettings => spec.use_user_settings,
+        Extra::MaxTurns { wanted, .. } => spec.max_turns >= *wanted,
+        Extra::Timeout { wanted_secs, .. } => spec.timeout_secs >= *wanted_secs,
+        Extra::Making { .. } => spec.making.on,
     }
-    let (real, makers) = (real_path(folder), real_path(Path::new(own)));
-    let (key, makers_key) = (folded(&real), folded(&makers));
-    if dangling_link(&real) {
-        return false;
-    }
-    key.strip_prefix(&makers_key).is_ok_and(|tail| {
-        !tail
-            .components()
-            .any(|part| settings_part(part.as_os_str()))
-    })
 }
 
 /// What `made`, a dot the maker made, holds that is beyond the maker's reach as the maker is
@@ -900,12 +916,22 @@ pub fn held_extras(maker: &Dot, made: &DotSpec, own_folder: bool) -> Vec<Extra> 
             makers_secs: m.timeout_secs,
         });
     }
+    // A made dot is made with the switch off. Its limits do nothing while it is off; once the
+    // person turns it on, the dot could make dots for its maker past the maker's own limits.
+    if made.making.on {
+        extras.push(Extra::Making {
+            per_run: made.making.per_run,
+            total: made.making.total,
+        });
+    }
     extras
 }
 
 /// The folder of `made` as an extra, when it is beyond the maker's reach now: outside the
 /// maker's folder, in git's or Claude's own folder, or below the folder of a maker that works
-/// in worktree copies. The maker's own folder is within reach.
+/// in worktree copies. The maker's own folder is within reach in the maker's own mode: a dot
+/// that works in it directly, while the maker works in worktree copies of it, writes the
+/// person's checkout, which the maker never does.
 fn held_folder(maker: &Dot, made: &DotSpec) -> Option<Extra> {
     let workdir = made.workdir.trim();
     if workdir.is_empty() {
@@ -917,7 +943,12 @@ fn held_folder(maker: &Dot, made: &DotSpec) -> Option<Extra> {
     let path = real.to_string_lossy().into_owned();
     let (key, makers_key) = (folded(&real), folded(&real_path(Path::new(own))));
     if anchored && key == makers_key {
-        return None;
+        let copies = maker.spec.workspace_mode == WorkspaceMode::Worktree
+            && made.workspace_mode != WorkspaceMode::Worktree;
+        return copies.then_some(Extra::Folder {
+            path,
+            below_maker: true,
+        });
     }
     if anchored && key.starts_with(&makers_key) && !dangling_link(&real) {
         let settings = key.strip_prefix(&makers_key).is_ok_and(|tail| {

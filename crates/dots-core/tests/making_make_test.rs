@@ -250,7 +250,11 @@ async fn a_dot_within_reach_is_made_at_once() {
     assert_eq!(event.root_run_id, run.root_run_id);
     assert_eq!(event.dot_id.as_deref(), Some(dot.id.as_str()));
     assert_eq!(event.dot_name, "Blog Watcher");
-    assert_eq!(event.detail, json!({"purpose": "Reads the feeds"}));
+    // It keeps the folder made for the dot, so that folder is known as its own.
+    assert_eq!(
+        event.detail,
+        json!({"purpose": "Reads the feeds", "folder": dot.spec.workdir})
+    );
     assert_eq!(
         updated(&mut rx),
         [(maker.id.clone(), run.root_run_id.clone())]
@@ -999,7 +1003,7 @@ async fn a_folder_that_leads_outside_once_made_is_removed_and_nothing_is_made() 
             .unwrap_err();
     match err {
         Error::Invalid(text) => assert!(
-            text.contains("no longer lies inside Researcher's folder, so the dot was not made"),
+            text.contains("leads somewhere else now that it exists, so the dot was not made"),
             "{text}"
         ),
         other => panic!("{other:?}"),
@@ -1050,5 +1054,73 @@ async fn the_switch_turned_off_between_two_calls_of_one_run_refuses_the_second()
         refused(&t, &run, ask("Two")).await,
         "Researcher may not make dots. The person turns that on in the dot's settings."
     );
+    assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
+}
+
+// ---- fix 14b part 2b: a settings folder the person allowed; the model as plain text
+
+#[tokio::test]
+async fn a_claude_folder_the_person_allowed_is_made_and_stays() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let mut wanted = ask("Blog Watcher");
+    wanted.wanted.folder = Some(".claude/x".into());
+    let outcome = t.rt.makers().make_dot(&run.id, wanted).await.unwrap();
+    let MakeOutcome::Waiting { request, .. } = outcome else {
+        panic!("made: {outcome:?}");
+    };
+    let folder = real_path(&t.work()).join(".claude").join("x");
+    let path = folder.to_string_lossy().into_owned();
+    assert_eq!(
+        request.extras,
+        [Extra::SettingsFolder { path: path.clone() }]
+    );
+
+    let after =
+        t.rt.makers()
+            .decide_request(
+                &request.id,
+                dots_core::making::requests::MakeDecision::Allow,
+                None,
+            )
+            .await
+            .unwrap();
+
+    let made = after.made_dot_id.as_deref().expect("the dot was made");
+    let dot = t.rt.store().get_dot(made).await.unwrap();
+    assert_eq!(dot.spec.workdir, path);
+    assert!(folder.is_dir());
+}
+
+#[tokio::test]
+async fn a_model_that_is_not_plain_text_is_refused() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let rule = dots_core::making::service::MODEL_CHARS;
+    assert_eq!(
+        rule,
+        "The model is plain text: no line breaks, control characters or marks that change the \
+         direction of text."
+    );
+    for model in ["opus\u{202E}tset", "opus\nModel: trusted", "a\u{2028}b"] {
+        let mut wanted = ask("Blog Watcher");
+        wanted.wanted.model = Some(model.into());
+        assert_eq!(refused(&t, &run, wanted).await, rule, "{model:?}");
+    }
+    make(&t, &run, "One").await;
+    let change = dots_core::making::manage::ChangeDot {
+        dot: "One".into(),
+        purpose: None,
+        wanted: Wanted {
+            model: Some("opus\u{2066}x".into()),
+            ..Wanted::default()
+        },
+    };
+    match t.rt.makers().change_dot(&run.id, change).await {
+        Err(Error::Invalid(text)) => assert_eq!(text, rule),
+        other => panic!("expected Invalid, got {other:?}"),
+    }
     assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
 }

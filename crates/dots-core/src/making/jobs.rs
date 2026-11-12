@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::log::{MakingEventKind, NewMakingEvent};
+use super::reach::Extra;
+use super::requests::{MakeRequest, NewMakeRequest, RequestKind};
 use super::service::{Makers, MAX_JOB};
 use crate::limits::{run_is_background, BACKGROUND, STOPPED_BY_LIMIT};
 use crate::model::{ApprovalStatus, Dot, NewRun, Run, RunStatus, TriggerKind, WaitReason};
@@ -148,6 +150,19 @@ pub fn gave_text(dot: &str) -> String {
     )
 }
 
+/// What `give_job` tells the maker's run when the job waits for the person (design section 8):
+/// the made dot named `dot` holds `held`, more than the maker has. `maker` is the maker's name.
+pub fn job_waits_text(dot: &str, maker: &str, held: &[Extra]) -> String {
+    let held: Vec<String> = held.iter().map(|e| e.line(maker)).collect();
+    format!(
+        "Not started yet: the job for \"{dot}\" needs the person's say-so, because \"{dot}\" has \
+         more than you have ({}). The request is waiting for them. Do not wait for it and do not \
+         give the job again: carry on with other work or end your turn, and you will be woken \
+         with their answer.",
+        held.join("; ")
+    )
+}
+
 /// How a job ended whose last run parked on a call the person refused, with no note.
 pub const REFUSED: &str = "was stopped: the person refused what it asked to do";
 
@@ -231,6 +246,13 @@ impl Makers {
     /// Returns what the tool tells the run, at once: the job's run is queued, and the maker is
     /// woken when the job ends.
     ///
+    /// When the made dot holds anything beyond the maker's reach as the maker is now
+    /// (`held_now`, the check `change_dot` makes), the job does not start: a request of the
+    /// kind `job` is stored for the person, with the job and what the dot holds, and the topic's
+    /// log has an `asked` entry (`job_waits_text`). It counts toward the
+    /// `MAX_WAITING_REQUESTS` of the maker, only one may wait per made dot, and it counts
+    /// toward the loop guard only once the person allows it and it starts.
+    ///
     /// An error, with a sentence the model can act on: what `make_dot` refuses a run for, a
     /// dot the maker did not make (the same sentence for any other dot), a job that is not 1 to
     /// 4,000 characters, a made dot that is switched off, and what `start_job` refuses.
@@ -252,9 +274,63 @@ impl Makers {
                 made.spec.name
             )));
         }
-        self.start_job(&maker, &run.id, &run.root_run_id, &made, message)
+        let held = self.held_now(&maker, &made).await?;
+        if !held.is_empty() {
+            self.store_job_request(&maker, &run, &made, message, &held)
+                .await?;
+            return Ok(job_waits_text(&made.spec.name, &maker.spec.name, &held));
+        }
+        self.start_job(&maker, &run.id, &run.root_run_id, &made, message, true)
             .await?;
         Ok(gave_text(&made.spec.name))
+    }
+
+    /// Stores the job `message` for `made`, which holds `held` beyond the reach of `maker`, as
+    /// a request for the person (design section 8), and writes its `asked` entry. Refused while
+    /// a job request for the dot waits, and while the maker has `MAX_WAITING_REQUESTS`.
+    async fn store_job_request(
+        &self,
+        maker: &Dot,
+        run: &Run,
+        made: &Dot,
+        message: &str,
+        held: &[Extra],
+    ) -> Result<MakeRequest> {
+        let p = &self.parts;
+        let waiting = p.store.list_make_requests(Some(&maker.id), true).await?;
+        if waiting.iter().any(|request| {
+            request.kind == RequestKind::Job && request.dot_id.as_deref() == Some(made.id.as_str())
+        }) {
+            return Err(Error::Invalid(format!(
+                "A job for \"{}\" is already waiting for the person. You will be woken with \
+                 their answer.",
+                made.spec.name
+            )));
+        }
+        self.check_may_ask(maker).await?;
+        let purpose = made.made.as_ref().map_or("", |m| m.purpose.as_str());
+        let request = p
+            .store
+            .add_make_request(&NewMakeRequest {
+                maker_dot_id: &maker.id,
+                run_id: &run.id,
+                root_run_id: &run.root_run_id,
+                kind: RequestKind::Job,
+                dot_id: Some(&made.id),
+                purpose,
+                spec: &made.spec,
+                without: &made.spec,
+                extras: held,
+                over: None,
+                create_folder: None,
+                first_job: Some(message),
+                ask: None,
+                make_ask: None,
+            })
+            .await?;
+        self.log_asked(&request, &maker.spec.name, Some(&made.id), &made.spec.name)
+            .await;
+        Ok(request)
     }
 
     /// Starts a job for the dot `made` of `maker`, given by the maker's run `maker_run_id` in
@@ -272,9 +348,10 @@ impl Makers {
     /// The run, the job and the `job_started` entry of the log are stored in one transaction,
     /// under the thread lock every writer that continues a chat holds.
     ///
-    /// Refused (`Invalid`) for the job past the loop guard, and while the last job from this
-    /// topic to this dot has not ended: a topic is one line of runs, so the next job cannot be
-    /// queued behind it. Refused (`NotAllowed`) when this PC's role may not run the made dot.
+    /// Refused (`Invalid`) for the job past the loop guard, when `guarded`, and while the last
+    /// job from this topic to this dot has not ended: a topic is one line of runs, so the next
+    /// job cannot be queued behind it. A job the person allowed is not `guarded`: the person
+    /// gave it. Refused (`NotAllowed`) when this PC's role may not run the made dot.
     pub(crate) async fn start_job(
         &self,
         maker: &Dot,
@@ -282,10 +359,11 @@ impl Makers {
         maker_root_run_id: &str,
         made: &Dot,
         message: &str,
+        guarded: bool,
     ) -> Result<MakingJob> {
         let p = &self.parts;
         let name = &made.spec.name;
-        if self.jobs_since_typed(maker_root_run_id).await? >= MAX_JOBS_BETWEEN_TYPED {
+        if guarded && self.jobs_since_typed(maker_root_run_id).await? >= MAX_JOBS_BETWEEN_TYPED {
             return Err(Error::Invalid(guard_refusal(&maker.spec.name)));
         }
         p.runner.require_run(made).await?;
@@ -364,7 +442,7 @@ impl Makers {
     ) -> Option<FirstJob> {
         let message = message?.trim();
         let started = self
-            .start_job(maker, maker_run_id, maker_root_run_id, made, message)
+            .start_job(maker, maker_run_id, maker_root_run_id, made, message, true)
             .await;
         Some(match started {
             Ok(job) => FirstJob::Started(job),

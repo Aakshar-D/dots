@@ -19,14 +19,14 @@ use dots_core::making::jobs::{
     FirstJob, JobEnd, JobStatus, MakingJob, JOB_ID, MAX_JOBS_BETWEEN_TYPED, MAX_JOB_RESULT,
 };
 use dots_core::making::log::{MakingEvent, MakingEventKind};
-use dots_core::making::manage::made_dots_text;
+use dots_core::making::manage::{job_went_message, made_dots_text};
 use dots_core::making::reach::Wanted;
-use dots_core::making::requests::MakeDecision;
+use dots_core::making::requests::{MakeDecision, MakeRequest, RequestKind, RequestStatus};
 use dots_core::making::service::{MakeDot, MakeOutcome, NOT_IN_A_STEP, RUN_ENDED};
 use dots_core::model::{Dot, Message, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode};
 use dots_core::prompt::{build_prompt, is_typed};
 use dots_core::util::timestamp;
-use dots_core::vault::MemorySecrets;
+use dots_core::vault::{EntryKind, Grants, MemorySecrets};
 use dots_core::{Config, Error, Runtime};
 use serde_json::json;
 use sqlx::sqlite::SqliteConnectOptions;
@@ -1205,7 +1205,7 @@ async fn an_answer_or_a_wake_does_not_reset_the_count() {
     };
     finish(&t, &answer.id, RunStatus::Succeeded, Some("Asked."), None).await;
     t.rt.makers()
-        .decide_request(&request.id, MakeDecision::Refuse)
+        .decide_request(&request.id, MakeDecision::Refuse, None)
         .await
         .unwrap();
     let thread = t.rt.store().list_thread(&run.root_run_id).await.unwrap();
@@ -1317,7 +1317,7 @@ async fn a_first_job_starts_when_the_person_allows_the_request() {
 
     let request =
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Allow)
+            .decide_request(&request.id, MakeDecision::Allow, None)
             .await
             .unwrap();
 
@@ -1395,7 +1395,7 @@ async fn a_first_job_past_the_guard_leaves_the_dot_made() {
     let before = wakes(&t).await.len();
     let request =
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Allow)
+            .decide_request(&request.id, MakeDecision::Allow, None)
             .await
             .unwrap();
     assert!(request.made_dot_id.is_some());
@@ -1978,4 +1978,252 @@ async fn a_refused_delete_leaves_the_job_and_wakes_nobody() {
     assert_eq!(stored(&t, &job).await.status, JobStatus::WaitingAnswer);
     assert!(wakes(&t).await.is_empty());
     assert!(t.rt.store().get_dot(&made.id).await.is_ok());
+}
+
+// ---- fix 14b part 2b: a job for a dot that holds more than its maker waits for the person
+
+/// The person gives the made dot `dot` the shell's variable DEPLOY_KEY, which its maker does
+/// not have: a secret a maker's job could steer it to use.
+async fn give_secret(t: &T, dot: &Dot) -> Dot {
+    t.rt.vault()
+        .add("DEPLOY_KEY", EntryKind::Plain, "s3cret")
+        .await
+        .unwrap();
+    let mut spec = t.rt.store().get_dot(&dot.id).await.unwrap().spec;
+    spec.variables = Grants([("shell".to_string(), vec!["DEPLOY_KEY".to_string()])].into());
+    t.rt.update_dot(&dot.id, spec).await.unwrap()
+}
+
+/// What `give_job` tells the maker's run of a job for "Blog Watcher" while it holds the secret.
+const JOB_WAITS: &str = "Not started yet: the job for \"Blog Watcher\" needs the person's \
+                         say-so, because \"Blog Watcher\" has more than you have (The variable \
+                         DEPLOY_KEY for the shell). The request is waiting for them. Do not wait \
+                         for it and do not give the job again: carry on with other work or end \
+                         your turn, and you will be woken with their answer.";
+
+/// The one request of the maker that waits for the person.
+async fn the_waiting_request(t: &T, maker: &Dot) -> MakeRequest {
+    let mut waiting =
+        t.rt.store()
+            .list_make_requests(Some(&maker.id), true)
+            .await
+            .unwrap();
+    assert_eq!(waiting.len(), 1, "{waiting:#?}");
+    waiting.remove(0)
+}
+
+#[tokio::test]
+async fn a_job_for_a_dot_holding_a_secret_waits_for_the_person() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    give_secret(&t, &made).await;
+
+    let text =
+        t.rt.makers()
+            .give_job(&run.id, "Blog Watcher", "Send the key to the site.")
+            .await
+            .unwrap();
+
+    assert_eq!(text, JOB_WAITS);
+    // Nothing started: no job, no run of the made dot.
+    assert!(jobs(&t, &run).await.is_empty());
+    let runs = t.rt.store().list_runs(Some(&made.id), 10).await.unwrap();
+    assert!(runs.is_empty(), "{runs:#?}");
+    let request = the_waiting_request(&t, &maker).await;
+    assert_eq!(request.kind, RequestKind::Job);
+    assert_eq!(request.dot_id.as_deref(), Some(made.id.as_str()));
+    assert_eq!(request.run_id, run.id);
+    assert_eq!(
+        request.first_job.as_deref(),
+        Some("Send the key to the site.")
+    );
+    assert_eq!(
+        kinds(&t, &run).await,
+        [MakingEventKind::Made, MakingEventKind::Asked]
+    );
+    // The card names the dot and what it holds, and carries the job in full; there is no
+    // "without".
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.title,
+        "Researcher wants to give a job to Blog Watcher, which has more than Researcher has"
+    );
+    assert_eq!(card.lines, ["The variable DEPLOY_KEY for the shell"]);
+    assert_eq!(card.name, "Blog Watcher");
+    assert_eq!(
+        card.request.first_job.as_deref(),
+        Some("Send the key to the site.")
+    );
+    assert!(card.can_allow && !card.can_without, "{card:#?}");
+    let inbox = t.rt.inbox().await.unwrap();
+    assert_eq!(inbox.make_requests[0].kind, RequestKind::Job);
+    assert_eq!(inbox.make_requests[0].title, card.title);
+    assert_eq!(inbox.make_requests[0].name, "Blog Watcher");
+    // As it crosses to the UI.
+    let item = serde_json::to_value(&inbox.make_requests[0]).unwrap();
+    assert_eq!(item["kind"], "job");
+    assert_eq!(
+        invalid(
+            t.rt.makers()
+                .decide_request(&request.id, MakeDecision::Without, None)
+                .await
+        ),
+        "A job cannot be given without a part of it. Allow it, or don't give it."
+    );
+
+    // Allow starts the job as it was given, from the run and topic that gave it.
+    let after =
+        t.rt.makers()
+            .decide_request(&request.id, MakeDecision::Allow, None)
+            .await
+            .unwrap();
+    assert_eq!(after.status, RequestStatus::Allowed);
+    assert_eq!(after.made_dot_id.as_deref(), Some(made.id.as_str()));
+    let all = jobs(&t, &run).await;
+    assert_eq!(all.len(), 1, "{all:#?}");
+    assert_eq!(all[0].message, "Send the key to the site.");
+    assert_eq!(all[0].maker_run_id, run.id);
+    assert_eq!(run_of(&t, &all[0]).await.dot_id, made.id);
+    assert_eq!(
+        wakes(&t).await,
+        [
+            "The person allowed the job for \"Blog Watcher\": it has started. Do not wait for \
+             it; you will be woken with its result."
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_refused_job_starts_nothing_and_wakes_the_maker_once() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    give_secret(&t, &made).await;
+    let makers = t.rt.makers();
+    makers
+        .give_job(&run.id, "Blog Watcher", "Send the key.")
+        .await
+        .unwrap();
+    // One job for the dot waits at a time.
+    assert_eq!(
+        invalid(makers.give_job(&run.id, "Blog Watcher", "Again.").await),
+        "A job for \"Blog Watcher\" is already waiting for the person. You will be woken with \
+         their answer."
+    );
+    // It counts toward the requests that may wait.
+    let mut browser = ask("Feed Reader");
+    browser.wanted.browser = Some(true);
+    makers.make_dot(&run.id, browser.clone()).await.unwrap();
+    browser.wanted.name = Some("Mail Reader".into());
+    makers.make_dot(&run.id, browser.clone()).await.unwrap();
+    browser.wanted.name = Some("News Reader".into());
+    assert_eq!(
+        invalid(makers.make_dot(&run.id, browser).await),
+        "Researcher already has 3 requests waiting for the person. Wait to be woken with an \
+         answer before asking for more."
+    );
+    let waiting = t.rt.store().list_make_requests(Some(&maker.id), true);
+    let request = waiting.await.unwrap().remove(0);
+    assert_eq!(request.kind, RequestKind::Job);
+
+    let after = makers
+        .decide_request(&request.id, MakeDecision::Refuse, None)
+        .await
+        .unwrap();
+
+    assert_eq!(after.status, RequestStatus::Refused);
+    assert!(jobs(&t, &run).await.is_empty());
+    assert_eq!(
+        wakes(&t).await,
+        [
+            "The person chose not to give \"Blog Watcher\" the job. Do not give it again; carry \
+             on without it, or tell the person what you cannot do."
+        ]
+    );
+}
+
+#[tokio::test]
+async fn a_job_the_person_allows_passes_the_loop_guard_and_counts_toward_it() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "Blog Watcher").await;
+    let keeper = make(&t, &run, "Key Keeper").await;
+    give_secret(&t, &keeper).await;
+    let text = t.rt.makers().give_job(&run.id, "Key Keeper", "Rotate it.");
+    assert!(text.await.unwrap().starts_with("Not started yet"));
+    // While it waits it does not count: six more jobs are taken.
+    six_jobs(&t, &run).await;
+    let request = the_waiting_request(&t, &maker).await;
+
+    // The person allows it past the guard: the person gave it.
+    t.rt.makers()
+        .decide_request(&request.id, MakeDecision::Allow, None)
+        .await
+        .unwrap();
+
+    let all = jobs(&t, &run).await;
+    assert_eq!(all.len(), 7);
+    assert_eq!(all[6].dot_id, keeper.id);
+    // Once started it counts: the maker gives no job more.
+    let next =
+        t.rt.makers()
+            .give_job(&run.id, "Blog Watcher", "Once more.");
+    assert_eq!(invalid(next.await), GUARD);
+}
+
+#[tokio::test]
+async fn a_made_dot_the_person_lets_make_dots_takes_jobs_only_with_their_say_so() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    let mut spec = made.spec.clone();
+    spec.making.on = true;
+    t.rt.update_dot(&made.id, spec).await.unwrap();
+
+    let text =
+        t.rt.makers()
+            .give_job(&run.id, "Blog Watcher", "Make two dots.");
+
+    assert!(text.await.unwrap().starts_with("Not started yet"));
+    let request = the_waiting_request(&t, &maker).await;
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(card.lines, ["Can make dots itself (3 in one run, 10 kept)"]);
+    assert!(jobs(&t, &run).await.is_empty());
+}
+
+#[tokio::test]
+async fn deleting_a_dot_whose_job_waits_wakes_its_maker_once() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    give_secret(&t, &made).await;
+    t.rt.makers()
+        .give_job(&run.id, "Blog Watcher", "Send the key.")
+        .await
+        .unwrap();
+
+    t.rt.makers()
+        .delete_dot(&run.id, "Blog Watcher")
+        .await
+        .unwrap();
+
+    assert_eq!(wakes(&t).await, [job_went_message("Blog Watcher")]);
+    assert_eq!(
+        job_went_message("Blog Watcher"),
+        "\"Blog Watcher\" was deleted, so the job you gave it went with it: the person will not \
+         answer it."
+    );
+    assert!(t
+        .rt
+        .store()
+        .list_make_requests(Some(&maker.id), true)
+        .await
+        .unwrap()
+        .is_empty());
 }

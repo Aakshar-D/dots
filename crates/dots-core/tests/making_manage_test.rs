@@ -162,10 +162,13 @@ async fn change_request(t: &T, run: &Run, ask: ChangeDot) -> MakeRequest {
     }
 }
 
-/// The person's answer, which must be taken.
+/// The person's answer to the card they see, which must be taken: it sends back the card's
+/// limit line, as the UI does.
 async fn decide(t: &T, request: &MakeRequest, decision: MakeDecision) -> MakeRequest {
-    t.rt.makers()
-        .decide_request(&request.id, decision)
+    let makers = t.rt.makers();
+    let card = makers.request_card(&request.id).await.unwrap();
+    makers
+        .decide_request(&request.id, decision, card.limit.as_deref())
         .await
         .unwrap()
 }
@@ -1059,7 +1062,7 @@ async fn allow_applies_the_change_onto_the_dot_as_it_is_then() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Refuse)
+                .decide_request(&request.id, MakeDecision::Refuse, None)
                 .await
         ),
         "That request was already answered."
@@ -1187,7 +1190,7 @@ async fn the_card_for_a_change_says_give_more() {
     assert_eq!(
         invalid(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Without)
+                .decide_request(&request.id, MakeDecision::Without, None)
                 .await
         ),
         "Everything this request asks is beyond reach, so there is nothing to change without \
@@ -1268,7 +1271,7 @@ async fn a_change_request_dies_with_its_dot() {
         MakeDecision::Refuse,
     ] {
         assert!(matches!(
-            makers.decide_request(&request.id, decision).await,
+            makers.decide_request(&request.id, decision, None).await,
             Err(Error::NotFound(_))
         ));
     }
@@ -1306,7 +1309,7 @@ async fn the_makers_reach_shrank_since_it_asked() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow)
+                .decide_request(&request.id, MakeDecision::Allow, None)
                 .await
         ),
         why
@@ -1639,7 +1642,7 @@ async fn a_dot_holding_more_than_its_maker_asks_for_any_change_that_is_not_narro
     assert_eq!(
         invalid(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Without)
+                .decide_request(&request.id, MakeDecision::Without, None)
                 .await
         ),
         "This dot has more than its maker has, so the change cannot be saved without that. \
@@ -1790,4 +1793,93 @@ async fn deleting_a_dot_with_a_waiting_change_wakes_its_maker_once() {
     make(&t, &run, "Two").await;
     t.rt.makers().delete_dot(&run.id, "Two").await.unwrap();
     assert_eq!(wakes(&t).await.len(), 1);
+}
+
+// ---- fix 14b part 2b: what a dot holds, and what the card says when it was given more
+
+#[tokio::test]
+async fn a_folder_in_the_new_dots_folder_that_was_not_made_for_the_dot_is_held() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let one = make(&t, &run, "One").await;
+    // An old dot's folder, directly in the folder for new dots, that no dot works in now.
+    let old = t.dir.path().join("Dots").join("old-dot");
+    std::fs::create_dir_all(&old).unwrap();
+    person_edits(&t, &one, |spec| {
+        spec.workdir = old.to_string_lossy().into_owned()
+    })
+    .await;
+
+    let request = change_request(&t, &run, new_instructions("One")).await;
+
+    let path = dots_core::making::reach::real_path(&old)
+        .to_string_lossy()
+        .into_owned();
+    assert_eq!(
+        request.extras,
+        [Extra::Folder {
+            path,
+            below_maker: false
+        }]
+    );
+    // The folder a dot was made with is its own, within reach: it changes at once.
+    make(&t, &run, "Two").await;
+    changed(&t, &run, new_instructions("Two")).await;
+}
+
+#[tokio::test]
+async fn a_dot_given_more_since_the_change_was_asked_says_so() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let one = make(&t, &run, "One").await;
+    let request = change_request(&t, &run, browser_and_instructions("One")).await;
+    // The person gives the dot a turn limit above its maker's while the change waits.
+    person_edits(&t, &one, |spec| spec.max_turns = 80).await;
+
+    let why = "One was given more since Researcher asked, so it has more than its maker can \
+               give. Don't change it, and let it ask again.";
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert!(!card.can_allow);
+    assert_eq!(card.blocked.as_deref(), Some(why));
+    assert_eq!(
+        conflict(
+            t.rt.makers()
+                .decide_request(&request.id, MakeDecision::Allow, None)
+                .await
+        ),
+        why
+    );
+    assert_eq!(
+        stored(&t, &one).await.spec.instructions,
+        one.spec.instructions
+    );
+}
+
+#[tokio::test]
+async fn without_tells_the_maker_what_was_left_out_of_the_change_as_it_stood_then() {
+    let t = start().await;
+    add_github(&t).await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "One").await;
+    let mut asked = browser_and_instructions("One");
+    asked.wanted.uses = Some(uses_github());
+    let request = change_request(&t, &run, asked).await;
+    assert_eq!(request.extras.len(), 2, "{:?}", request.extras);
+    // The person gives the maker the server: only the browser is beyond its reach now.
+    let mut spec = maker.spec.clone();
+    spec.uses = uses_github();
+    t.rt.update_dot(&maker.id, spec).await.unwrap();
+
+    decide(&t, &request, MakeDecision::Without).await;
+
+    assert_eq!(
+        wakes(&t).await,
+        [
+            "The person chose to change \"One\" without what was beyond your reach. Left out: \
+             The browser."
+        ]
+    );
 }

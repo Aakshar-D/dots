@@ -11,11 +11,11 @@ use serde_json::{json, Value};
 use super::jobs::{deleted_message, JobEnd, JobStatus, JOB_WAITING, JOB_WORKING};
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::reach::{
-    folded, grants, held_extras, preset_label, rank, reach_change, real_path, still_below_maker,
+    folded, grants, held_extras, preset_label, rank, reach_change, real_path, still_as_judged,
     time_label, Extra, Reach, Wanted, WantedPermissions,
 };
 use super::requests::{MakeRequest, NewMakeRequest, RequestKind, SOMETHING_GONE};
-use super::service::{check_folder_text, checked_purpose, may_make, Makers};
+use super::service::{check_shown_text, checked_purpose, may_make, moved_folder, Makers};
 use crate::dot_admin::Deleted;
 use crate::library::LibraryKind;
 use crate::model::{Dot, DotSpec, Run};
@@ -442,11 +442,12 @@ pub(super) fn same_thing(now: &Extra, seen: &Extra) -> bool {
     }
 }
 
-/// Makes `folder`, below the folder of `maker`, and the folders above it that are missing.
-/// Returns those it made, deepest last, for `remove_folders` when the change is not saved. Its
-/// real path is checked again once it exists: a link or junction planted in it since the reach
-/// check would lead it outside the maker's folder, and then what was made is removed again.
-async fn make_folders(maker: &Dot, folder: Option<&Path>) -> Result<Vec<PathBuf>> {
+/// Makes `folder`, a folder that was judged within the maker's reach or shown on the card the
+/// person allowed, and the folders above it that are missing. Returns those it made, deepest
+/// last, for `remove_folders` when the change is not saved. Its real path is checked again once
+/// it exists (`still_as_judged`): a link or junction planted in it since the check would lead it
+/// elsewhere, and then what was made is removed again.
+async fn make_folders(folder: Option<&Path>) -> Result<Vec<PathBuf>> {
     let mut made: Vec<PathBuf> = Vec::new();
     let Some(folder) = folder else {
         return Ok(made);
@@ -461,13 +462,9 @@ async fn make_folders(maker: &Dot, folder: Option<&Path>) -> Result<Vec<PathBuf>
     }
     made.reverse();
     tokio::fs::create_dir_all(folder).await?;
-    if !still_below_maker(maker, folder) {
+    if !still_as_judged(folder) {
         remove_folders(&made).await;
-        return Err(Error::Invalid(format!(
-            "The folder {} no longer lies inside {}'s folder, so the dot was not changed.",
-            folder.display(),
-            maker.spec.name
-        )));
+        return Err(Error::Invalid(moved_folder(folder, "changed")));
     }
     Ok(made)
 }
@@ -555,6 +552,15 @@ pub fn change_went_message(name: &str) -> String {
     format!(
         "\"{name}\" was deleted, so the change you asked for it went with it: the person will \
          not answer it. Do not ask for it again."
+    )
+}
+
+/// What a maker is woken with when the made dot named `name`, for which a job it gave waits for
+/// the person, is deleted (design section 8): the request went with the dot.
+pub fn job_went_message(name: &str) -> String {
+    format!(
+        "\"{name}\" was deleted, so the job you gave it went with it: the person will not \
+         answer it."
     )
 }
 
@@ -661,7 +667,7 @@ impl Makers {
         let p = &self.parts;
         let (_, maker) = self.caller(run_id).await?;
         ask.purpose = ask.purpose.as_deref().map(checked_purpose).transpose()?;
-        check_folder_text(&ask.wanted)?;
+        check_shown_text(&ask.wanted)?;
         let made = self.made_dot(&maker, &ask.dot).await?;
         if ask.purpose.is_none() && names_nothing(&ask.wanted) {
             return Err(Error::Invalid(NOTHING_TO_CHANGE.into()));
@@ -789,8 +795,7 @@ impl Makers {
         if !new_purpose && narrows(&made.spec, &reach.spec) {
             return Ok((extras, false));
         }
-        let own_folder = self.own_folder(made).await?;
-        let held = held_extras(maker, &made.spec, own_folder);
+        let held = self.held_now(maker, made).await?;
         if held.is_empty() {
             return Ok((extras, false));
         }
@@ -803,19 +808,22 @@ impl Makers {
     }
 
     /// Whether the folder of `made` is the new folder of its own it was made with (design
-    /// section 6), which is within its maker's reach: a folder directly in the folder for new
-    /// dots (`Config::new_dot_root`) that no other dot works in.
-    async fn own_folder(&self, made: &Dot) -> Result<bool> {
-        let workdir = real_path(Path::new(made.spec.workdir.trim()));
-        let root = folded(&real_path(self.parts.dot_admin.new_dot_root()));
-        if workdir.parent().map(folded) != Some(root) {
+    /// section 6), which is within its maker's reach: the folder `DotAdmin::create` made for it,
+    /// as the `made` entry of the log keeps it (`Store::made_own_folder`). Any other folder,
+    /// one in the folder for new dots too, is judged as a folder.
+    pub(super) async fn own_folder(&self, made: &Dot) -> Result<bool> {
+        let Some(own) = self.parts.store.made_own_folder(&made.id).await? else {
             return Ok(false);
-        }
-        let key = folded(&workdir);
-        let dots = self.parts.store.list_dots().await?;
-        Ok(!dots.iter().any(|dot| {
-            dot.id != made.id && folded(&real_path(Path::new(dot.spec.workdir.trim()))) == key
-        }))
+        };
+        let workdir = real_path(Path::new(made.spec.workdir.trim()));
+        Ok(folded(&real_path(Path::new(&own))) == folded(&workdir))
+    }
+
+    /// What `made`, a dot `maker` made, holds beyond the maker's reach as the maker is now
+    /// (`held_extras`), with its own folder within reach.
+    pub(super) async fn held_now(&self, maker: &Dot, made: &Dot) -> Result<Vec<Extra>> {
+        let own_folder = self.own_folder(made).await?;
+        Ok(held_extras(maker, &made.spec, own_folder))
     }
 
     /// `reach_change` for what `wanted` names of `made`, with the grants of MCP servers the
@@ -904,7 +912,7 @@ impl Makers {
         if spec == made.spec && purpose.is_none() {
             return Ok((made.clone(), Vec::new()));
         }
-        let new_folders = make_folders(maker, create_folder.as_deref()).await?;
+        let new_folders = make_folders(create_folder.as_deref()).await?;
         // Also when only the purpose changes: the role is checked there.
         let mut dot = match p.dot_admin.update(&made.id, spec, true).await {
             Ok(dot) => dot,
@@ -1135,7 +1143,7 @@ impl Makers {
             .list_make_requests(None, true)
             .await?
             .into_iter()
-            .filter(|r| r.kind == RequestKind::Change && r.dot_id.as_deref() == Some(&dot.id))
+            .filter(|r| r.kind != RequestKind::Make && r.dot_id.as_deref() == Some(&dot.id))
             .collect();
         let mut topics = p.store.making_topics_of(&dot.id).await?;
         let name = dot.spec.name.as_str();
@@ -1149,11 +1157,15 @@ impl Makers {
             );
         }
         for request in &changes {
+            let went = match request.kind {
+                RequestKind::Job => job_went_message(name),
+                _ => change_went_message(name),
+            };
             push_wake(
                 &mut wakes,
                 &request.maker_dot_id,
                 &request.root_run_id,
-                change_went_message(name),
+                went,
             );
         }
         let wakes: Vec<(String, String, String)> = wakes

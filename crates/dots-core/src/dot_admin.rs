@@ -85,11 +85,6 @@ impl DotAdmin {
         }
     }
 
-    /// Where a dot created without a folder gets one (`Config::new_dot_root`).
-    pub(crate) fn new_dot_root(&self) -> &Path {
-        &self.parts.new_dot_root
-    }
-
     pub(crate) fn downgrade(&self) -> WeakDotAdmin {
         WeakDotAdmin(Arc::downgrade(&self.parts))
     }

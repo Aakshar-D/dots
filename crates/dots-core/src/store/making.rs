@@ -13,7 +13,6 @@ use crate::library::{LibraryKind, Uses};
 use crate::making::jobs::{JobEnd, JobStatus, MakingJob, NewMakingJob};
 use crate::making::log::{MakingEvent, MakingEventKind, NewMakingEvent};
 use crate::making::requests::{MakeRequest, NewMakeRequest, RequestKind, RequestStatus};
-use crate::making::service::OverLimit;
 use crate::making::wake::MakingWake;
 use crate::model::{Dot, Message, NewRun, Run};
 use crate::util::{new_id, now};
@@ -240,25 +239,6 @@ impl Store {
         .bind(status.as_str())
         .bind(now())
         .bind(made_dot_id)
-        .bind(id)
-        .execute(&self.pool)
-        .await?;
-        Ok(res.rows_affected() > 0)
-    }
-
-    /// Keeps `over` as the limit the card of the waiting request `id` shows: the limit as it
-    /// is when the card is read or answered (dots-make-dots design section 10). `false`, with
-    /// nothing written, when it did not wait or already held that limit.
-    pub async fn set_make_request_over(&self, id: &str, over: Option<&OverLimit>) -> Result<bool> {
-        let over = match over {
-            Some(over) => Some(serde_json::to_string(over)?),
-            None => None,
-        };
-        let res = sqlx::query(
-            "UPDATE make_requests SET over = ?1 \
-             WHERE id = ?2 AND status = 'waiting' AND over IS NOT ?1",
-        )
-        .bind(over)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -789,6 +769,19 @@ impl Store {
         .fetch_one(&self.pool)
         .await?;
         Ok(n as u32)
+    }
+
+    /// The new folder of its own the made dot `dot_id` was made with, as the `made` entry of the
+    /// log keeps it; `None` when it was made with a folder it was given, or the entry has none.
+    pub async fn made_own_folder(&self, dot_id: &str) -> Result<Option<String>> {
+        let folder: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT json_extract(detail, '$.folder') FROM making_events \
+             WHERE dot_id = ? AND kind = 'made' ORDER BY created_at, rowid LIMIT 1",
+        )
+        .bind(dot_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(folder.flatten())
     }
 
     /// Refuses a name of `uses` that the Library does not have, as saving a dot with them

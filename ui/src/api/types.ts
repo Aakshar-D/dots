@@ -1310,14 +1310,15 @@ export const Inbox = z.strictObject({
   // them: the core always sends the list.
   make_requests: z.array(z.lazy(() => PendingMakeRequest)).optional(),
 });
-// A make request, or a request to change a made dot, that waits for the person, as the Inbox
-// lists it. `dot_id` and `dot_name` are the maker's; `status` is "waiting" or "gone".
+// A make request, a request to change a made dot, or a job for a made dot that holds more than
+// its maker, that waits for the person, as the Inbox lists it. `dot_id` and `dot_name` are the
+// maker's; `name` is the dot's as it is called now; `status` is "waiting" or "gone".
 export const PendingMakeRequest = z.strictObject({
   id: z.string(),
   dot_id: z.string(),
   dot_name: z.string(),
   root_run_id: z.string(),
-  kind: z.enum(["make", "change"]),
+  kind: z.enum(["make", "change", "job"]),
   name: z.string(),
   purpose: z.string(),
   title: z.string(),

@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 use super::jobs::FirstJob;
 use super::log::{MakingEventKind, NewMakingEvent};
-use super::reach::{reach_new, still_below_maker, Reach, Wanted};
+use super::reach::{reach_new, still_as_judged, Reach, Wanted};
 use super::requests::{MakeRequest, NewMakeRequest, RequestKind, MAX_WAITING_REQUESTS};
 use crate::dot_admin::DotAdmin;
 use crate::events::{Bus, RuntimeEvent};
@@ -37,6 +37,10 @@ pub const PURPOSE_CHARS: &str = "The purpose is plain text: no tabs, control cha
 /// What is said of a folder with a line break, a control character or a mark that turns text
 /// around: the ask card shows the folder to the person.
 pub const FOLDER_CHARS: &str = "The folder is plain text: no line breaks, control characters \
+    or marks that change the direction of text.";
+/// What is said of a model with a line break, a control character or a mark that turns text
+/// around: the ask card shows the model to the person.
+pub const MODEL_CHARS: &str = "The model is plain text: no line breaks, control characters \
     or marks that change the direction of text.";
 /// What a workflow step's run is told by every tool for making dots (design section 5).
 pub const NOT_IN_A_STEP: &str =
@@ -221,15 +225,16 @@ pub(crate) fn checked_purpose(purpose: &str) -> Result<String> {
     Ok(purpose.to_string())
 }
 
-/// Refuses a folder the model wrote that is not plain text (`FOLDER_CHARS`): the ask card shows
-/// the part of it that does not exist yet as it was written.
-pub(crate) fn check_folder_text(wanted: &Wanted) -> Result<()> {
-    if wanted
-        .folder
-        .as_deref()
-        .is_some_and(|folder| folder.contains(unplain_char))
-    {
+/// Refuses a folder or a model the model wrote that is not plain text (`FOLDER_CHARS`,
+/// `MODEL_CHARS`): the ask card shows the part of the folder that does not exist yet, and the
+/// model, as they were written.
+pub(crate) fn check_shown_text(wanted: &Wanted) -> Result<()> {
+    let unplain = |text: &Option<String>| text.as_deref().is_some_and(|t| t.contains(unplain_char));
+    if unplain(&wanted.folder) {
         return Err(Error::Invalid(FOLDER_CHARS.into()));
+    }
+    if unplain(&wanted.model) {
+        return Err(Error::Invalid(MODEL_CHARS.into()));
     }
     Ok(())
 }
@@ -359,7 +364,7 @@ impl Makers {
                 return Err(Error::Invalid(FIRST_JOB_RULE.into()));
             }
         }
-        check_folder_text(&ask.wanted)?;
+        check_shown_text(&ask.wanted)?;
         let mut reach = reach_new(&maker, &ask.wanted, &p.worktrees_root)?;
         // Before the limits and the extras: no request is kept for what can never be made.
         // Before the lock too: the vault may be slow, and the lock holds every maker's makes.
@@ -667,18 +672,17 @@ impl Makers {
             new_folders.reverse();
             tokio::fs::create_dir_all(folder).await?;
             // The real path again, now that it exists: a link or junction planted in it since
-            // the reach check would take the dot outside the maker's folder.
-            if !still_below_maker(maker, folder) {
+            // the reach check would take the dot to a folder nobody judged.
+            if !still_as_judged(folder) {
                 for made in new_folders.iter().rev() {
                     let _ = tokio::fs::remove_dir(made).await;
                 }
-                return Err(Error::Invalid(format!(
-                    "The folder {} no longer lies inside {}'s folder, so the dot was not made.",
-                    folder.display(),
-                    maker.spec.name
-                )));
+                return Err(Error::Invalid(moved_folder(folder, "made")));
             }
         }
+        // A blank folder is a new one of its own, which `DotAdmin::create` makes: the log keeps
+        // it, so the dot's folder is known as its own later (`Makers::own_folder`).
+        let own_folder = spec.workdir.trim().is_empty();
         let made = Made {
             by_dot_id: Some(maker.id.clone()),
             by_name: maker.spec.name.clone(),
@@ -715,7 +719,11 @@ impl Makers {
                 kind: MakingEventKind::Made,
                 dot_id: Some(&dot.id),
                 dot_name: &dot.spec.name,
-                detail: json!({ "purpose": purpose }),
+                detail: if own_folder {
+                    json!({ "purpose": purpose, "folder": dot.spec.workdir })
+                } else {
+                    json!({ "purpose": purpose })
+                },
             })
             .await;
         if let Err(e) = logged {
@@ -732,6 +740,15 @@ impl Makers {
             root_run_id: root_run_id.to_string(),
         });
     }
+}
+
+/// What a folder made for a dot that leads elsewhere once made is told: nothing was `done`
+/// ("made", "changed").
+pub(super) fn moved_folder(folder: &Path, done: &str) -> String {
+    format!(
+        "The folder {} leads somewhere else now that it exists, so the dot was not {done}.",
+        folder.display()
+    )
 }
 
 /// Whether `run`, a run of `maker`, may use the tools for making dots (design section 5): the

@@ -3305,12 +3305,15 @@ impl Runtime {
     /// answer. The checks are `Makers::decide_request`'s: an answer that makes or changes a
     /// dot needs this PC's right to change dots in the maker's account and workspace, and to
     /// give secrets when variables are given (`NotAllowed`, and the request still waits).
+    /// `limit` is the limit line of the card the person answered (`MakeRequestCard::limit`):
+    /// an answer that makes a dot past another limit is refused (`Conflict`).
     pub async fn decide_make_request(
         &self,
         id: &str,
         decision: MakeDecision,
+        limit: Option<&str>,
     ) -> Result<MakeRequest> {
-        self.makers.decide_request(id, decision).await
+        self.makers.decide_request(id, decision, limit).await
     }
 
     /// The making cards of the chat topic `root_run_id`, oldest first (dots-make-dots design

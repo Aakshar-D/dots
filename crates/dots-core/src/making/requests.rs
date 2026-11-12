@@ -6,6 +6,9 @@
 //! A change a maker asked for a dot it made that gives the dot more than the maker has waits
 //! here too (section 9), as a request of the kind `change`: nothing of it is saved until the
 //! person allows it, changes the dot without the extras, or does not change it.
+//!
+//! A job a maker gives a dot it made that holds more than the maker has waits here as well
+//! (section 8), as a request of the kind `job`: it starts only when the person allows it.
 
 use std::path::{Path, PathBuf};
 
@@ -15,7 +18,7 @@ use serde_json::json;
 use super::jobs::FirstJob;
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::manage::{change_lines, same_thing, schedule_words, ChangeDot, Standing, Stands};
-use super::reach::{reach_new, Extra, Reach};
+use super::reach::{reach_new, spec_holds, Extra, Reach};
 use super::service::{MakeDot, Makers, OverLimit};
 use crate::accounts::Permission;
 use crate::library::LibraryKind;
@@ -43,24 +46,58 @@ pub const NOTHING_WITHIN_REACH: &str =
     "Everything this request asks is beyond reach, so there is nothing to change without it. \
      Allow it, or don't change it.";
 
+/// What "without" is told for a job: a job has no part to start without the rest.
+pub const NOTHING_WITHOUT_JOB: &str =
+    "A job cannot be given without a part of it. Allow it, or don't give it.";
+/// What follows the reason when a job request that names something that has gone is allowed.
+pub const ONLY_REFUSE_JOB_LEFT: &str = "Only \"Don't give it\" is left.";
+
 /// What changing a dot without the extras is told when the dot itself holds more than its maker
 /// has: the change would steer that, so no part of it is saved alone.
 pub const NOTHING_WITHOUT_HELD: &str =
     "This dot has more than its maker has, so the change cannot be saved without that. Allow \
      it, or don't change it.";
 
-/// What Allow is told, and the card says, of a request whose maker was narrowed since it asked
-/// (`Makers::make_stands`, `Makers::change_stands`). `maker` is the maker's name.
-fn reach_shrank(kind: RequestKind, maker: &str) -> String {
+/// What Allow is told, and the card says, of a request that would now give something its card
+/// did not show (`Makers::make_stands`, `Makers::change_stands`, `Makers::job_stands`).
+/// `maker` is the maker's name. `gained` is the made dot's name when it was the dot that was
+/// given more since the maker asked (`gained_since`); `None` when the maker was narrowed.
+fn reach_shrank(kind: RequestKind, maker: &str, gained: Option<&str>) -> String {
     let dont = match kind {
         RequestKind::Make => "Don't make it",
         RequestKind::Change => "Don't change it",
+        RequestKind::Job => "Don't give it",
     };
-    format!("{maker}'s own settings changed since it asked. {dont}, and let it ask again.")
+    match gained {
+        Some(dot) => format!(
+            "{dot} was given more since {maker} asked, so it has more than its maker can give. \
+             {dont}, and let it ask again."
+        ),
+        None => {
+            format!("{maker}'s own settings changed since it asked. {dont}, and let it ask again.")
+        }
+    }
+}
+
+/// `dot`, the made dot's name, when one of `now`, what a request for it would give now, was not
+/// on the card of `request` and is something the dot was not given when it was asked
+/// (`spec_holds`): the dot was given more since. `None` when every such extra is one the dot
+/// had, so it is the maker that has less now.
+fn gained_since(request: &MakeRequest, now: &[Extra], dot: &str) -> Option<String> {
+    let seen = |extra: &Extra| request.extras.iter().any(|seen| same_thing(extra, seen));
+    now.iter()
+        .filter(|extra| !seen(extra))
+        .any(|extra| !spec_holds(&request.spec, extra))
+        .then(|| dot.to_string())
+}
+
+/// What the person is told of a job request whose made dot named `dot` is switched off.
+fn switched_off(dot: &str) -> String {
+    format!("\"{dot}\" is switched off. Turn it on to allow the job.")
 }
 
 /// What an answer that makes the dot is told of a request that passes a limit now that the
-/// card did not show: the card shows it from then on.
+/// card it answered did not show: the card read again shows it.
 fn limit_reached(over: &OverLimit) -> String {
     format!(
         "A limit was reached since the card was shown: it would be the {}. Look at the card \
@@ -115,6 +152,21 @@ enum MakeStands {
     Gone(String),
 }
 
+/// Whether a job request can still be allowed (`Makers::job_stands`).
+#[allow(clippy::large_enum_variant)]
+enum JobStands {
+    Yes {
+        /// The made dot as it is now.
+        dot: Dot,
+        /// What it holds beyond the maker's reach as the maker is now: what the card shows.
+        held: Vec<Extra>,
+        /// It holds something the card the person saw did not show.
+        beyond_what_was_seen: bool,
+    },
+    /// What has gone, in one sentence for the person.
+    Gone(String),
+}
+
 str_enum!(RequestStatus {
     // The person has not answered.
     Waiting => "waiting",
@@ -135,6 +187,8 @@ str_enum!(RequestKind {
     Make => "make",
     // A change to a dot the maker made (design section 9).
     Change => "change",
+    // A job for a dot the maker made that holds more than the maker has (design section 8).
+    Job => "job",
 });
 
 impl RequestKind {
@@ -144,6 +198,7 @@ impl RequestKind {
         match self {
             Self::Make => ONLY_REFUSE_LEFT,
             Self::Change => ONLY_REFUSE_CHANGE_LEFT,
+            Self::Job => ONLY_REFUSE_JOB_LEFT,
         }
     }
 }
@@ -168,28 +223,30 @@ pub struct MakeRequest {
     /// The maker's chat topic, where the ask card shows and the answer wakes the maker.
     pub root_run_id: String,
     pub kind: RequestKind,
-    /// The made dot a change is asked for; `None` for a make.
+    /// The made dot a change or a job is asked for; `None` for a make.
     pub dot_id: Option<String>,
     /// The name of the dot asked for; for a change, the made dot's name as the change leaves
-    /// it.
+    /// it; for a job, the made dot's name when it was asked.
     pub name: String,
     /// One line on what the dot is for, as `checked_purpose` gives it; for a change, the new
     /// purpose, or the dot's own when the change names none.
     pub purpose: String,
     /// The dot as asked: what Allow makes. For a change, the made dot with the change on it
     /// as both were when it was asked: the card's lines come from it, and an answer puts `ask`
-    /// on the dot as it is then instead (`Makers::change_stands`).
+    /// on the dot as it is then instead (`Makers::change_stands`). For a job, the made dot as
+    /// it was when it was asked.
     pub spec: DotSpec,
     /// The same with the extras removed: what Make it without these makes.
     pub without: DotSpec,
-    /// What lies beyond the maker's reach; empty when only a limit is passed.
+    /// What lies beyond the maker's reach; empty when only a limit is passed. For a job, what
+    /// the made dot held beyond it.
     pub extras: Vec<Extra>,
     /// The limit that would be passed, with the numbers as they were when it was asked.
     pub over: Option<OverLimit>,
     /// The folder of `spec` to make first, when it lies below the maker's and does not exist
     /// (`Reach::create_folder`).
     pub create_folder: Option<String>,
-    /// The first job given with the request.
+    /// The first job given with the request; for a request of the kind `job`, the job itself.
     pub first_job: Option<String>,
     pub status: RequestStatus,
     /// What has gone, in one sentence for the person, when `status` is `gone`.
@@ -197,8 +254,8 @@ pub struct MakeRequest {
     pub created_at: String,
     /// When the person answered.
     pub decided_at: Option<String>,
-    /// The dot an answer made, or the made dot an answer changed; `None` once that dot is
-    /// deleted.
+    /// The dot an answer made, or the made dot an answer changed or gave the job to; `None`
+    /// once that dot is deleted.
     pub made_dot_id: Option<String>,
     /// The change as the maker asked it, for a request of the kind `change`; `None` for a
     /// make.
@@ -238,11 +295,13 @@ impl MakeRequest {
     /// change's title names the made dot as the maker named it when it asked; the card names
     /// it as it is called now (`Makers::request_card`).
     pub fn title(&self, maker: &str) -> String {
-        if self.kind == RequestKind::Change {
-            let dot = self.ask.as_ref().map_or(self.name.as_str(), |ask| &ask.dot);
-            change_title(maker, dot.trim())
-        } else {
-            make_title(maker, &self.extras)
+        match self.kind {
+            RequestKind::Change => {
+                let dot = self.ask.as_ref().map_or(self.name.as_str(), |ask| &ask.dot);
+                change_title(maker, dot.trim())
+            }
+            RequestKind::Job => job_title(maker, &self.name),
+            RequestKind::Make => make_title(maker, &self.extras),
         }
     }
 
@@ -276,16 +335,43 @@ fn held_title(maker: &str, dot: &str) -> String {
     format!("{maker} wants to change {dot}, which has more than {maker} has")
 }
 
+/// The title of the ask card for a job for the made dot named `dot`, which holds more than its
+/// maker has (design section 8).
+fn job_title(maker: &str, dot: &str) -> String {
+    format!("{maker} wants to give a job to {dot}, which has more than {maker} has")
+}
+
+/// What came of the person's answer to a request, under the service's lock (`Makers::answer`):
+/// what the maker is woken with comes from it (`answer_message`).
+pub struct Answer {
+    /// The request as it is after.
+    pub request: MakeRequest,
+    /// The maker's name.
+    pub maker_name: String,
+    /// What came of the first job given with a make request, when the answer made the dot.
+    pub first_job: Option<FirstJob>,
+    /// What "without" left out, as the request stood when it was answered.
+    pub left_out: Vec<Extra>,
+    /// The made dot's name as it is now, for a job request.
+    pub dot_name: String,
+}
+
 /// What the maker is woken with after the person's answer `decision` to `request`, a request
-/// of the kind `change` (design section 9). `maker` is the maker's name.
-fn change_answer_message(request: &MakeRequest, decision: MakeDecision, maker: &str) -> String {
+/// of the kind `change` (design section 9). `maker` is the maker's name; `left_out` what
+/// "without" left out.
+fn change_answer_message(
+    request: &MakeRequest,
+    decision: MakeDecision,
+    maker: &str,
+    left_out: &[Extra],
+) -> String {
     let name = &request.name;
     match decision {
         MakeDecision::Allow => {
             format!("The person allowed it: \"{name}\" was changed as you asked.")
         }
         MakeDecision::Without => {
-            let extras: Vec<String> = request.extras.iter().map(|e| e.line(maker)).collect();
+            let extras: Vec<String> = left_out.iter().map(|e| e.line(maker)).collect();
             format!(
                 "The person chose to change \"{name}\" without what was beyond your reach. Left \
                  out: {}.",
@@ -298,18 +384,33 @@ fn change_answer_message(request: &MakeRequest, decision: MakeDecision, maker: &
     }
 }
 
-/// What the maker is woken with after the person's answer `decision` to `request` (design
-/// sections 7.2 and 9). `maker` is the maker's name. `first_job` is what came of the first job
-/// given with the request, when the answer made the dot: the message ends with its sentence
-/// (`FirstJob::sentence`).
-pub fn answer_message(
-    request: &MakeRequest,
-    decision: MakeDecision,
-    maker: &str,
-    first_job: Option<&FirstJob>,
-) -> String {
-    if request.kind == RequestKind::Change {
-        return change_answer_message(request, decision, maker);
+/// What the maker is woken with after the person's answer `decision` to a job request for the
+/// made dot named `dot` (design section 8).
+fn job_answer_message(decision: MakeDecision, dot: &str) -> String {
+    match decision {
+        MakeDecision::Refuse => format!(
+            "The person chose not to give \"{dot}\" the job. Do not give it again; carry on \
+             without it, or tell the person what you cannot do."
+        ),
+        _ => format!(
+            "The person allowed the job for \"{dot}\": it has started. Do not wait for it; you \
+             will be woken with its result."
+        ),
+    }
+}
+
+/// What the maker is woken with after the person's answer `decision` (design sections 7.2, 8
+/// and 9). The maker's name is `answer.maker_name`. What came of the first job given with a
+/// make request, when the answer made the dot, ends the message (`FirstJob::sentence`). For
+/// "without", the message names what was left out as the request stood when it was answered.
+pub fn answer_message(answer: &Answer, decision: MakeDecision) -> String {
+    let (request, maker) = (&answer.request, answer.maker_name.as_str());
+    match request.kind {
+        RequestKind::Change => {
+            return change_answer_message(request, decision, maker, &answer.left_out)
+        }
+        RequestKind::Job => return job_answer_message(decision, &answer.dot_name),
+        RequestKind::Make => {}
     }
     let name = &request.name;
     let mut message = match decision {
@@ -317,7 +418,7 @@ pub fn answer_message(
             format!("The person allowed it: the dot \"{name}\" was made as you asked.")
         }
         MakeDecision::Without => {
-            let extras: Vec<String> = request.extras.iter().map(|e| e.line(maker)).collect();
+            let extras: Vec<String> = answer.left_out.iter().map(|e| e.line(maker)).collect();
             format!(
                 "The person chose to make \"{name}\" without what was beyond your reach. It \
                  was made without: {}.",
@@ -331,7 +432,7 @@ pub fn answer_message(
             )
         }
     };
-    if let Some(first_job) = first_job {
+    if let Some(first_job) = &answer.first_job {
         message.push_str(&first_job.sentence());
     }
     message
@@ -343,6 +444,10 @@ pub struct MakeRequestCard {
     pub request: MakeRequest,
     /// The maker's name now.
     pub maker_name: String,
+    /// The dot's name now: the new dot asked for, or the made dot a change or a job is for, as
+    /// it is called now.
+    #[serde(default)]
+    pub name: String,
     pub title: String,
     /// The extras in plain words, one per line, then the limit when one is passed: as things
     /// are when the card is read, against the maker as it is then.
@@ -361,6 +466,11 @@ pub struct MakeRequestCard {
     /// one and for a change that does not name it.
     #[serde(default)]
     pub schedule: Option<String>,
+    /// The limit line `lines` ends with, when a limit would be passed now (`OverLimit::line`):
+    /// the answer to this card sends it back, so an answer that makes the dot is refused when
+    /// a limit was reached since the card was read (`Makers::decide_request`).
+    #[serde(default)]
+    pub limit: Option<String>,
     /// Whether Allow for this dot is on.
     pub can_allow: bool,
     /// Whether Make it without these is on. Off when the only problem is a limit.
@@ -384,7 +494,8 @@ pub struct PendingMakeRequest {
     /// The maker's chat topic, where the ask card shows.
     pub root_run_id: String,
     pub kind: RequestKind,
-    /// The name of the dot asked for, or of the made dot a change is asked for.
+    /// The name of the dot asked for, or of the made dot a change or a job is for, as it is
+    /// called now.
     pub name: String,
     pub purpose: String,
     /// The ask card's title (`MakeRequest::title`).
@@ -407,7 +518,7 @@ impl PendingMakeRequest {
             dot_name: card.maker_name.clone(),
             root_run_id: request.root_run_id.clone(),
             kind: request.kind,
-            name: request.name.clone(),
+            name: card.name.clone(),
             purpose: request.purpose.clone(),
             title: card.title.clone(),
             lines: card.lines.clone(),
@@ -460,9 +571,10 @@ impl Makers {
     ///
     /// What the maker asked is put against the maker as it is now (`make_stands`): the lines,
     /// the title and Make it without these come from that, and the limit line from the limits
-    /// as they are now, which the request keeps as the one the card showed. When the maker was
-    /// narrowed since it asked, so that Allow would give the dot something the request did not
-    /// show at first, Allow is off and `blocked` says so.
+    /// as they are now (`limit`). Reading a card writes no limit: the answer to it sends back
+    /// the limit line the card showed. When the maker was narrowed since it asked, so that
+    /// Allow would give the dot something the request did not show at first, Allow is off and
+    /// `blocked` says so.
     ///
     /// Allow needs this PC's right to change dots in the maker's account and workspace, and to
     /// give secrets when the dot is given variables; Make it without these needs the same for
@@ -473,21 +585,22 @@ impl Makers {
         let _one_at_a_time = p.one_at_a_time.lock().await;
         let mut request = p.store.get_make_request(request_id).await?;
         let maker = p.store.get_dot(&request.maker_dot_id).await?;
-        if request.kind == RequestKind::Change {
-            return self.change_card(request, maker).await;
+        match request.kind {
+            RequestKind::Change => return self.change_card(request, maker).await,
+            RequestKind::Job => return self.job_request_card(request, maker).await,
+            RequestKind::Make => {}
         }
         let maker_name = maker.spec.name.clone();
         let mut asked = request.stored_reach();
+        let mut over = request.over.clone();
         let (mut can_allow, mut can_without, mut blocked) = (false, false, None);
         if request.status == RequestStatus::Waiting {
             match self.make_stands(&maker, &request).await? {
                 MakeStands::Gone(reason) => request = self.mark_gone(&request, &reason).await?,
                 MakeStands::Yes(standing) => {
-                    if standing.over != request.over {
-                        request = self.show_over(&request, standing.over.as_ref()).await?;
-                    }
+                    over = standing.over.clone();
                     if standing.beyond_what_was_seen {
-                        blocked = Some(reach_shrank(RequestKind::Make, &maker_name));
+                        blocked = Some(reach_shrank(RequestKind::Make, &maker_name, None));
                     } else {
                         match self.may_answer(&maker, &standing.reach.spec).await {
                             Ok(()) => can_allow = true,
@@ -517,10 +630,12 @@ impl Makers {
         }
         Ok(MakeRequestCard {
             title: make_title(&maker_name, &asked.extras),
-            lines: card_lines(&maker_name, &asked.extras, request.over.as_ref()),
+            lines: card_lines(&maker_name, &asked.extras, over.as_ref()),
+            limit: over.as_ref().map(OverLimit::line),
             asked: Vec::new(),
             instructions: Some(asked.spec.instructions.clone()),
             schedule: asked.spec.schedule.as_ref().map(schedule_words),
+            name: request.name.clone(),
             maker_name,
             request,
             can_allow,
@@ -561,20 +676,6 @@ impl Makers {
         }))
     }
 
-    /// Keeps `over` as the limit the card of the waiting `request` shows, and says the topic's
-    /// cards changed. Returns the request as it is after.
-    async fn show_over(
-        &self,
-        request: &MakeRequest,
-        over: Option<&OverLimit>,
-    ) -> Result<MakeRequest> {
-        let p = &self.parts;
-        if p.store.set_make_request_over(&request.id, over).await? {
-            self.updated(&request.maker_dot_id, &request.root_run_id);
-        }
-        p.store.get_make_request(&request.id).await
-    }
-
     /// The ask card of a change request (design section 9), under the service's lock. Its
     /// title names the made dot as it is called now. A waiting request is held against things
     /// as they are now (`change_stands`): when the dot or something the change names has gone,
@@ -595,6 +696,12 @@ impl Makers {
             None => Vec::new(),
         };
         let mut asked = named(request.ask.as_ref(), &request.spec, &request.spec);
+        // The dot as it is called now, while it exists; else as the maker named it.
+        let mut dot_name = request
+            .ask
+            .as_ref()
+            .map_or(request.name.as_str(), |ask| ask.dot.trim())
+            .to_string();
         let (mut can_allow, mut can_without, mut blocked) = (false, false, None);
         match request.status {
             RequestStatus::Waiting => match self.change_stands(&maker, &request).await? {
@@ -604,6 +711,7 @@ impl Makers {
                 }
                 Stands::Yes(standing) => {
                     let name = &standing.dot.spec.name;
+                    dot_name = name.clone();
                     title = if standing.held && standing.reach.extras.is_empty() {
                         held_title(&maker_name, name)
                     } else {
@@ -616,7 +724,12 @@ impl Makers {
                         &standing.reach.spec,
                     );
                     if standing.beyond_what_was_seen {
-                        blocked = Some(reach_shrank(RequestKind::Change, &maker_name));
+                        let gained = gained_since(&request, &standing.extras, name);
+                        blocked = Some(reach_shrank(
+                            RequestKind::Change,
+                            &maker_name,
+                            gained.as_deref(),
+                        ));
                     } else {
                         match self.may_change(&standing.dot, &standing.reach.spec).await {
                             Ok(()) => can_allow = true,
@@ -639,6 +752,7 @@ impl Makers {
                 if let Some(dot_id) = &request.dot_id {
                     if let Ok(dot) = self.parts.store.get_dot(dot_id).await {
                         title = change_title(&maker_name, &dot.spec.name);
+                        dot_name = dot.spec.name;
                     }
                 }
                 if status == RequestStatus::Gone {
@@ -660,15 +774,202 @@ impl Makers {
         Ok(MakeRequestCard {
             title,
             lines,
+            limit: None,
             asked,
             instructions,
             schedule,
+            name: dot_name,
             maker_name,
             request,
             can_allow,
             can_without,
             blocked,
         })
+    }
+
+    /// Holds the job request `request` of `maker` against things as they are now (design
+    /// section 8), for its card and for the person's answer: the made dot as it is now, and
+    /// what it holds beyond the maker's reach as the maker is now (`held_now`).
+    /// `beyond_what_was_seen` is set when it holds something the card the person saw did not
+    /// show. `Gone` when the made dot no longer exists or is no longer this maker's.
+    async fn job_stands(&self, maker: &Dot, request: &MakeRequest) -> Result<JobStands> {
+        let gone = || {
+            Ok(JobStands::Gone(format!(
+                "{} no longer exists.",
+                request.name
+            )))
+        };
+        let Some(dot_id) = &request.dot_id else {
+            return Ok(JobStands::Gone(SOMETHING_GONE.to_string()));
+        };
+        let dot = match self.parts.store.get_dot(dot_id).await {
+            Ok(dot) => dot,
+            Err(Error::NotFound(_)) => return gone(),
+            Err(e) => return Err(e),
+        };
+        let makers = dot.made.as_ref().and_then(|made| made.by_dot_id.as_deref());
+        if makers != Some(maker.id.as_str()) {
+            return gone();
+        }
+        let held = self.held_now(maker, &dot).await?;
+        let seen = |extra: &Extra| request.extras.iter().any(|seen| same_thing(extra, seen));
+        let beyond_what_was_seen = !held.iter().all(seen);
+        Ok(JobStands::Yes {
+            dot,
+            held,
+            beyond_what_was_seen,
+        })
+    }
+
+    /// The ask card of a job request (design section 8), under the service's lock. Its title
+    /// names the made dot as it is called now, its lines are what the dot holds beyond the
+    /// maker's reach, and the job itself is `request.first_job`, in full. There is no
+    /// "without": Allow starts the job as asked, Don't give it wakes the maker. Allow is on
+    /// when the dot holds nothing the card did not show, is switched on, and this PC may run
+    /// it.
+    async fn job_request_card(
+        &self,
+        mut request: MakeRequest,
+        maker: Dot,
+    ) -> Result<MakeRequestCard> {
+        let maker_name = maker.spec.name.clone();
+        let mut name = request.name.clone();
+        if let Some(dot_id) = &request.dot_id {
+            if let Ok(dot) = self.parts.store.get_dot(dot_id).await {
+                name = dot.spec.name;
+            }
+        }
+        let mut lines = request.lines(&maker_name);
+        let (mut can_allow, mut blocked) = (false, None);
+        match request.status {
+            RequestStatus::Waiting => match self.job_stands(&maker, &request).await? {
+                JobStands::Gone(reason) => {
+                    request = self.mark_gone(&request, &reason).await?;
+                    blocked = Some(reason);
+                }
+                JobStands::Yes {
+                    dot,
+                    held,
+                    beyond_what_was_seen,
+                } => {
+                    lines = card_lines(&maker_name, &held, None);
+                    if beyond_what_was_seen {
+                        let gained = gained_since(&request, &held, &name);
+                        blocked = Some(reach_shrank(
+                            RequestKind::Job,
+                            &maker_name,
+                            gained.as_deref(),
+                        ));
+                    } else if !dot.spec.enabled {
+                        blocked = Some(switched_off(&name));
+                    } else {
+                        match self.parts.runner.require_run(&dot).await {
+                            Ok(()) => can_allow = true,
+                            Err(Error::NotAllowed(why)) => blocked = Some(why),
+                            Err(e) => return Err(e),
+                        }
+                    }
+                }
+            },
+            RequestStatus::Gone => {
+                blocked = Some(
+                    request
+                        .gone_reason
+                        .clone()
+                        .unwrap_or_else(|| SOMETHING_GONE.to_string()),
+                );
+            }
+            _ => {}
+        }
+        Ok(MakeRequestCard {
+            title: job_title(&maker_name, &name),
+            lines,
+            limit: None,
+            asked: Vec::new(),
+            instructions: None,
+            schedule: None,
+            name,
+            maker_name,
+            request,
+            can_allow,
+            can_without: false,
+            blocked,
+        })
+    }
+
+    /// The person answers a job request (design section 8), under the service's lock: the
+    /// request as it is after, the maker's name and the made dot's name now.
+    ///
+    /// Allow starts the job as the maker gave it, as a job of the run that asked, in that
+    /// run's topic (`start_job`), without the loop guard: the person gave it. It is refused
+    /// (`Conflict`) when the dot has gone (the request is marked `gone`), holds something the
+    /// card did not show, or is switched off; and as `start_job` refuses, while the last job
+    /// from that topic to the dot has not ended. Then the request still waits. There is
+    /// nothing to give without (`Invalid`).
+    async fn answer_job(
+        &self,
+        request: MakeRequest,
+        decision: MakeDecision,
+    ) -> Result<(MakeRequest, String, String)> {
+        let p = &self.parts;
+        let maker = p.store.get_dot(&request.maker_dot_id).await?;
+        let mut dot = match &request.dot_id {
+            Some(dot_id) => p.store.get_dot(dot_id).await.ok(),
+            None => None,
+        };
+        match decision {
+            MakeDecision::Refuse => {}
+            MakeDecision::Without => return Err(Error::Invalid(NOTHING_WITHOUT_JOB.into())),
+            MakeDecision::Allow => {
+                let (made, held, beyond) = match self.job_stands(&maker, &request).await? {
+                    JobStands::Yes {
+                        dot,
+                        held,
+                        beyond_what_was_seen,
+                    } => (dot, held, beyond_what_was_seen),
+                    JobStands::Gone(reason) => {
+                        self.mark_gone(&request, &reason).await?;
+                        return Err(Error::Conflict(format!("{reason} {ONLY_REFUSE_JOB_LEFT}")));
+                    }
+                };
+                let name = &made.spec.name;
+                if beyond {
+                    let gained = gained_since(&request, &held, name);
+                    return Err(Error::Conflict(reach_shrank(
+                        RequestKind::Job,
+                        &maker.spec.name,
+                        gained.as_deref(),
+                    )));
+                }
+                if !made.spec.enabled {
+                    return Err(Error::Conflict(switched_off(name)));
+                }
+                let message = request.first_job.as_deref().unwrap_or_default();
+                self.start_job(
+                    &maker,
+                    &request.run_id,
+                    &request.root_run_id,
+                    &made,
+                    message,
+                    false,
+                )
+                .await?;
+                dot = Some(made);
+            }
+        }
+        let dot_name = dot
+            .as_ref()
+            .map_or(request.name.clone(), |d| d.spec.name.clone());
+        let dot_id = dot.as_ref().map(|d| d.id.as_str());
+        let given = match decision {
+            MakeDecision::Allow => dot_id,
+            _ => None,
+        };
+        self.record_answer(&request, decision, given, dot_id, &dot_name)
+            .await?;
+        let given = given.map(str::to_string);
+        let request = self.answered(&request, decision, given).await?;
+        Ok((request, maker.spec.name, dot_name))
     }
 
     /// `Ok` when this PC may save `spec` as the made dot `dot` (design sections 5 and 9), as
@@ -701,9 +1002,10 @@ impl Makers {
         &self,
         request: MakeRequest,
         decision: MakeDecision,
-    ) -> Result<(MakeRequest, String)> {
+    ) -> Result<(MakeRequest, String, Vec<Extra>)> {
         let p = &self.parts;
         let maker = p.store.get_dot(&request.maker_dot_id).await?;
+        let mut left_out = Vec::new();
         let changed = match decision {
             MakeDecision::Refuse => None,
             MakeDecision::Allow | MakeDecision::Without => {
@@ -717,9 +1019,12 @@ impl Makers {
                     }
                 };
                 if decision == MakeDecision::Allow && standing.beyond_what_was_seen {
+                    let name = &standing.dot.spec.name;
+                    let gained = gained_since(&request, &standing.extras, name);
                     return Err(Error::Conflict(reach_shrank(
                         RequestKind::Change,
                         &maker.spec.name,
+                        gained.as_deref(),
                     )));
                 }
                 if decision == MakeDecision::Without && standing.held {
@@ -735,6 +1040,9 @@ impl Makers {
                     purpose,
                     ..
                 } = standing;
+                if decision == MakeDecision::Without {
+                    left_out = reach.extras.clone();
+                }
                 let (spec, folder) = match decision {
                     MakeDecision::Allow => (reach.spec, reach.create_folder),
                     _ => (reach.without, without_folder),
@@ -775,7 +1083,7 @@ impl Makers {
         )
         .await?;
         let request = self.answered(&request, decision, changed_id).await?;
-        Ok((request, maker.spec.name))
+        Ok((request, maker.spec.name, left_out))
     }
 
     /// `request` as it is after the person's answer `decision`, which made or changed the dot
@@ -863,10 +1171,12 @@ impl Makers {
     /// the dot, the answer is refused (`NotAllowed`) and the request still waits. What the maker
     /// asked is put against the maker as it is now, as the card does (`make_stands`): Allow is
     /// refused (`Conflict`) when that gives the dot something the request did not show, and
-    /// the request still waits; an answer that makes the dot is refused (`Conflict`) when it
-    /// passes a limit now that the card did not show, which the card shows from then on. Allow
-    /// covers this one dot, also past a limit the card showed (section 10). When the dot cannot
-    /// be created the request still waits and the error is returned.
+    /// the request still waits. `limit` is the limit line of the card the person answered
+    /// (`MakeRequestCard::limit`), or `None` when it showed none: an answer that makes the dot
+    /// is refused (`Conflict`) when it passes a limit now that is not that line, and the card
+    /// read again shows it. Allow covers this one dot, also past a limit the card showed
+    /// (section 10). When the dot cannot be created the request still waits and the error is
+    /// returned. A job request (section 8) is answered by `answer_job`.
     ///
     /// The maker's switch is not looked at: when the person turned "Can make dots" off after
     /// the request was stored, Allow and Make it without these still make the dot, since it
@@ -875,14 +1185,16 @@ impl Makers {
         &self,
         request_id: &str,
         decision: MakeDecision,
+        limit: Option<&str>,
     ) -> Result<MakeRequest> {
-        let (request, maker_name, first_job) = {
+        let answer = {
             // With `make_dot`: two answers, or an answer and a make, cannot both pass.
             let _one_at_a_time = self.parts.one_at_a_time.lock().await;
-            self.answer(request_id, decision).await?
+            self.answer(request_id, decision, limit).await?
         };
         // After every lock is released: `wake` takes the thread lock itself.
-        let message = answer_message(&request, decision, &maker_name, first_job.as_ref());
+        let message = answer_message(&answer, decision);
+        let request = answer.request;
         if let Err(e) = self
             .wake(&request.maker_dot_id, &request.root_run_id, &message)
             .await
@@ -892,15 +1204,16 @@ impl Makers {
         Ok(request)
     }
 
-    /// `decide_request` without the wake, under the service's lock: the request as it is
-    /// after, the maker's name, and what came of the first job given with the request, when
-    /// the answer made the dot (design section 7.2): it starts once the dot is made, as the
-    /// job of the run that asked, in that run's topic.
+    /// `decide_request` without the wake, under the service's lock (`Answer`): with what came
+    /// of the first job given with the request, when the answer made the dot (design section
+    /// 7.2): it starts once the dot is made, as the job of the run that asked, in that run's
+    /// topic.
     async fn answer(
         &self,
         request_id: &str,
         decision: MakeDecision,
-    ) -> Result<(MakeRequest, String, Option<FirstJob>)> {
+        limit: Option<&str>,
+    ) -> Result<Answer> {
         let p = &self.parts;
         let request = p.store.get_make_request(request_id).await?;
         match (request.status, decision) {
@@ -912,11 +1225,32 @@ impl Makers {
             }
             _ => return Err(Error::Conflict(ALREADY_ANSWERED.into())),
         }
-        if request.kind == RequestKind::Change {
-            let (request, maker_name) = self.answer_change(request, decision).await?;
-            return Ok((request, maker_name, None));
+        match request.kind {
+            RequestKind::Change => {
+                let (request, maker_name, left_out) = self.answer_change(request, decision).await?;
+                let dot_name = request.name.clone();
+                return Ok(Answer {
+                    request,
+                    maker_name,
+                    first_job: None,
+                    left_out,
+                    dot_name,
+                });
+            }
+            RequestKind::Job => {
+                let (request, maker_name, dot_name) = self.answer_job(request, decision).await?;
+                return Ok(Answer {
+                    request,
+                    maker_name,
+                    first_job: None,
+                    left_out: Vec::new(),
+                    dot_name,
+                });
+            }
+            RequestKind::Make => {}
         }
         let maker = p.store.get_dot(&request.maker_dot_id).await?;
+        let mut left_out = Vec::new();
         let made = match decision {
             MakeDecision::Refuse => None,
             MakeDecision::Allow | MakeDecision::Without => {
@@ -935,18 +1269,22 @@ impl Makers {
                     return Err(Error::Conflict(reach_shrank(
                         RequestKind::Make,
                         &maker.spec.name,
+                        None,
                     )));
                 }
-                // A limit passed now that the card did not show: the card shows it from now
-                // on, and the person answers again.
+                // A limit passed now that the card the person answered did not show: the card
+                // read again shows it, and the person answers again.
                 if let Some(over) = &standing.over {
-                    if Some(over) != request.over.as_ref() {
-                        self.show_over(&request, Some(over)).await?;
+                    if limit != Some(over.line().as_str()) {
+                        self.updated(&request.maker_dot_id, &request.root_run_id);
                         return Err(Error::Conflict(limit_reached(over)));
                     }
                 }
                 let without_folder = without_folder(&standing.reach);
                 let reach = standing.reach;
+                if decision == MakeDecision::Without {
+                    left_out = reach.extras.clone();
+                }
                 let (spec, folder) = match decision {
                     MakeDecision::Allow => (reach.spec, reach.create_folder),
                     _ => (reach.without, without_folder),
@@ -989,7 +1327,14 @@ impl Makers {
             .await?;
         let made_id = made_id.map(str::to_string);
         let request = self.answered(&request, decision, made_id).await?;
-        Ok((request, maker.spec.name, first_job))
+        let dot_name = request.name.clone();
+        Ok(Answer {
+            request,
+            maker_name: maker.spec.name,
+            first_job,
+            left_out,
+            dot_name,
+        })
     }
 
     /// `Ok` when this PC may create `spec` in the maker's account and workspace (design

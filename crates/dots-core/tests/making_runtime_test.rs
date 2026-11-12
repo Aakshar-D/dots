@@ -349,7 +349,11 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
     ];
     let mut left = 3;
     for (request, decision, status) in answers {
-        let after = t.rt.decide_make_request(&request.id, decision).await;
+        // As the card shows it: the request for Two is past the run's limit.
+        let card = t.rt.make_request_card(&request.id).await.unwrap();
+        let after =
+            t.rt.decide_make_request(&request.id, decision, card.limit.as_deref())
+                .await;
         assert_eq!(after.unwrap().status, status);
         left -= 1;
         let inbox = t.rt.inbox().await.unwrap();
@@ -363,7 +367,7 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
     assert_eq!(row.needs_you, 0);
     // An answer given twice is refused as the makers refuse it.
     assert!(matches!(
-        t.rt.decide_make_request(&two.id, MakeDecision::Refuse)
+        t.rt.decide_make_request(&two.id, MakeDecision::Refuse, None)
             .await,
         Err(Error::Conflict(_))
     ));
@@ -408,7 +412,7 @@ async fn a_request_is_snoozed_and_marked_done_as_a_proposal_is() {
     assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
 
     // A key of a request that is answered is no longer in the Inbox.
-    t.rt.decide_make_request(&request.id, MakeDecision::Refuse)
+    t.rt.decide_make_request(&request.id, MakeDecision::Refuse, None)
         .await
         .unwrap();
     assert!(matches!(
@@ -504,7 +508,7 @@ async fn a_viewer_sees_the_card_and_why_it_cannot_allow() {
     assert_eq!(card.blocked.as_deref(), Some(why));
     assert_eq!(t.rt.waiting_make_requests().await.unwrap(), [card]);
     for decision in [MakeDecision::Allow, MakeDecision::Without] {
-        match t.rt.decide_make_request(&request.id, decision).await {
+        match t.rt.decide_make_request(&request.id, decision, None).await {
             Err(Error::NotAllowed(text)) => assert_eq!(text, why),
             other => panic!("expected NotAllowed, got {other:?}"),
         }
@@ -514,7 +518,8 @@ async fn a_viewer_sees_the_card_and_why_it_cannot_allow() {
     assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
 
     a.become_(3, "member").await;
-    let after = t.rt.decide_make_request(&request.id, MakeDecision::Allow);
+    let after =
+        t.rt.decide_make_request(&request.id, MakeDecision::Allow, None);
     assert_eq!(after.await.unwrap().status, RequestStatus::Allowed);
     assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
     t.rt.shutdown();
@@ -550,7 +555,7 @@ async fn the_topics_cards_tell_a_make_a_job_an_ask_a_change_and_a_delete() {
     let asking = cards(&t, &run).await;
     let waiting_card = t.rt.make_request_card(&change.id).await.unwrap();
     // Allow, then a change within reach.
-    t.rt.decide_make_request(&change.id, MakeDecision::Allow)
+    t.rt.decide_make_request(&change.id, MakeDecision::Allow, None)
         .await
         .unwrap();
     // The person gives the maker the browser too, so the dot holds nothing beyond its reach
@@ -1039,7 +1044,7 @@ async fn a_deleted_maker_leaves_nothing_dangling() {
         Err(Error::NotFound(_))
     ));
     assert!(matches!(
-        t.rt.decide_make_request(&request.id, MakeDecision::Allow)
+        t.rt.decide_make_request(&request.id, MakeDecision::Allow, None)
             .await,
         Err(Error::NotFound(_))
     ));
@@ -1103,7 +1108,7 @@ async fn an_ask_is_always_announced_and_a_made_dot_says_whether_the_person_typed
     );
     assert_eq!(said[0]["name"], "One");
     // The dot the person's own answer makes is not announced: they made it happen.
-    t.rt.decide_make_request(&asked.id, MakeDecision::Allow)
+    t.rt.decide_make_request(&asked.id, MakeDecision::Allow, None)
         .await
         .unwrap();
     assert!(notices(&mut rx).is_empty());
@@ -1185,4 +1190,6 @@ async fn the_inbox_names_a_renamed_dot_as_its_card_does() {
     assert_eq!(item.title, card.title);
     assert_eq!(item.lines, card.lines);
     assert_eq!(item.lines, ["The browser"]);
+    // And by its name now.
+    assert_eq!(item.name, "Feeds");
 }

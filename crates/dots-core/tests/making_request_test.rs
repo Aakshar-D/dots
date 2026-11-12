@@ -149,10 +149,13 @@ async fn request(t: &T, run: &Run, ask: MakeDot) -> MakeRequest {
     }
 }
 
-/// The person's answer, which must be taken.
+/// The person's answer to the card they see, which must be taken: it sends back the card's
+/// limit line, as the UI does.
 async fn decide(t: &T, request: &MakeRequest, decision: MakeDecision) -> MakeRequest {
-    t.rt.makers()
-        .decide_request(&request.id, decision)
+    let makers = t.rt.makers();
+    let card = makers.request_card(&request.id).await.unwrap();
+    makers
+        .decide_request(&request.id, decision, card.limit.as_deref())
         .await
         .unwrap()
 }
@@ -402,7 +405,7 @@ async fn a_limit_alone_stores_a_request_that_only_allow_or_refuse_can_answer() {
     // There is nothing to make it without.
     let err =
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Without)
+            .decide_request(&request.id, MakeDecision::Without, None)
             .await
             .unwrap_err();
     match err {
@@ -737,7 +740,11 @@ async fn a_request_cannot_be_answered_twice() {
             MakeDecision::Refuse,
         ] {
             assert_eq!(
-                conflict(t.rt.makers().decide_request(&request.id, decision).await),
+                conflict(
+                    t.rt.makers()
+                        .decide_request(&request.id, decision, None)
+                        .await
+                ),
                 "That request was already answered."
             );
         }
@@ -755,7 +762,7 @@ async fn a_request_cannot_be_answered_twice() {
     // A request that does not exist.
     let err =
         t.rt.makers()
-            .decide_request("no-such-request", MakeDecision::Allow)
+            .decide_request("no-such-request", MakeDecision::Allow, None)
             .await
             .unwrap_err();
     assert!(matches!(err, Error::NotFound(_)), "{err:?}");
@@ -769,8 +776,8 @@ async fn two_answers_at_once_make_one_dot() {
     let request = request(&t, &run, ask_browser("Blog Watcher")).await;
     let makers = t.rt.makers();
     let (a, b) = tokio::join!(
-        makers.decide_request(&request.id, MakeDecision::Allow),
-        makers.decide_request(&request.id, MakeDecision::Allow)
+        makers.decide_request(&request.id, MakeDecision::Allow, None),
+        makers.decide_request(&request.id, MakeDecision::Allow, None)
     );
     let (taken, late) = match (a, b) {
         (Ok(taken), late @ Err(_)) | (late @ Err(_), Ok(taken)) => (taken, late),
@@ -828,7 +835,11 @@ async fn a_library_item_gone_since_leaves_only_dont_make_it() {
     );
     for decision in [MakeDecision::Allow, MakeDecision::Without] {
         assert_eq!(
-            conflict(t.rt.makers().decide_request(&request.id, decision).await),
+            conflict(
+                t.rt.makers()
+                    .decide_request(&request.id, decision, None)
+                    .await
+            ),
             format!("{gone} Only \"Don't make it\" is left.")
         );
     }
@@ -864,7 +875,7 @@ async fn a_variable_gone_since_is_found_when_the_person_answers() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow)
+                .decide_request(&request.id, MakeDecision::Allow, None)
                 .await
         ),
         format!("{gone} Only \"Don't make it\" is left.")
@@ -896,7 +907,11 @@ async fn a_name_taken_since_leaves_only_dont_make_it() {
     assert_eq!(card.request.status, RequestStatus::Gone);
     for decision in [MakeDecision::Allow, MakeDecision::Without] {
         assert_eq!(
-            conflict(t.rt.makers().decide_request(&request.id, decision).await),
+            conflict(
+                t.rt.makers()
+                    .decide_request(&request.id, decision, None)
+                    .await
+            ),
             format!("{gone} Only \"Don't make it\" is left.")
         );
     }
@@ -1038,7 +1053,7 @@ async fn deleting_the_maker_discards_its_requests() {
     ));
     assert!(matches!(
         makers
-            .decide_request(&request.id, MakeDecision::Allow)
+            .decide_request(&request.id, MakeDecision::Allow, None)
             .await,
         Err(Error::NotFound(_))
     ));
@@ -1161,7 +1176,12 @@ async fn a_person_without_the_rights_cannot_allow() {
     assert_eq!(card.blocked.as_deref(), Some(why));
     assert_eq!(card.request.status, RequestStatus::Waiting);
     for decision in [MakeDecision::Allow, MakeDecision::Without] {
-        match t.rt.makers().decide_request(&request.id, decision).await {
+        match t
+            .rt
+            .makers()
+            .decide_request(&request.id, decision, None)
+            .await
+        {
             Err(Error::NotAllowed(text)) => assert_eq!(text, why),
             other => panic!("expected NotAllowed, got {other:?}"),
         }
@@ -1259,7 +1279,7 @@ async fn the_maker_narrowed_since_the_ask_blocks_allow() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow)
+                .decide_request(&request.id, MakeDecision::Allow, None)
                 .await
         ),
         SHRANK
@@ -1297,7 +1317,7 @@ async fn a_limit_reached_while_a_request_waits_is_shown_before_allow() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow)
+                .decide_request(&request.id, MakeDecision::Allow, None)
                 .await
         ),
         reached
@@ -1311,9 +1331,11 @@ async fn a_limit_reached_while_a_request_waits_is_shown_before_allow() {
         ["The browser", "2nd made dot kept; the limit is 1"]
     );
     assert_eq!(
-        card.request.over,
-        Some(OverLimit::Total { nth: 2, limit: 1 })
+        card.limit.as_deref(),
+        Some("2nd made dot kept; the limit is 1")
     );
+    // Reading the card wrote nothing: the request keeps the limit it was stored with.
+    assert_eq!(stored(&t, &request).await.over, None);
     assert!(card.can_allow);
     let after = decide(&t, &request, MakeDecision::Allow).await;
     assert_eq!(after.status, RequestStatus::Allowed);
@@ -1336,7 +1358,7 @@ async fn a_limit_raised_while_a_request_waits_leaves_the_card() {
     t.rt.update_dot(&maker.id, raised).await.unwrap();
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
     assert!(card.lines.is_empty(), "{:?}", card.lines);
-    assert_eq!(card.request.over, None);
+    assert_eq!(card.limit, None);
     assert!(card.can_allow);
     decide(&t, &request, MakeDecision::Allow).await;
     assert_eq!(dot_names(&t).await, ["One", "Researcher", "Two"]);
@@ -1363,7 +1385,7 @@ async fn an_outside_folder_gone_since_leaves_only_dont_make_it() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow)
+                .decide_request(&request.id, MakeDecision::Allow, None)
                 .await
         ),
         format!("{gone} Only \"Don't make it\" is left.")
@@ -1445,4 +1467,71 @@ async fn the_card_carries_the_new_dots_instructions_and_schedule() {
     let inbox = t.rt.inbox().await.unwrap();
     assert_eq!(inbox.make_requests[0].title, card.title);
     assert_eq!(inbox.make_requests[0].lines, card.lines);
+}
+
+// ---- fix 14b part 2b: the answer carries the card's limit line; Without names what it left out
+
+#[tokio::test]
+async fn allow_on_an_open_card_after_another_reader_computed_a_new_limit_is_refused() {
+    let t = start().await;
+    let maker = maker_with(&t, 3, 1).await;
+    let run = live_run(&t, &maker).await;
+    let request = request(&t, &run, ask_browser("Blog Watcher")).await;
+    // The person opens the card: it shows no limit.
+    let open = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(open.limit, None);
+    // The maker takes the last place, and the tray's count and the Inbox read the card again.
+    make(&t, &run, "One").await;
+    t.rt.inbox_count().await.unwrap();
+    t.rt.inbox().await.unwrap();
+    assert_eq!(stored(&t, &request).await.over, None);
+
+    // Allow on the card still open is refused: it did not show the limit.
+    let reached = "A limit was reached since the card was shown: it would be the 2nd made dot \
+                   kept; the limit is 1. Look at the card again, and answer again if you still \
+                   want this dot.";
+    let answer =
+        t.rt.makers()
+            .decide_request(&request.id, MakeDecision::Allow, open.limit.as_deref());
+    assert_eq!(conflict(answer.await), reached);
+    assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
+    // The card read again shows it, and Allow on that card is taken.
+    let again = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        again.limit.as_deref(),
+        Some("2nd made dot kept; the limit is 1")
+    );
+    let after =
+        t.rt.makers()
+            .decide_request(&request.id, MakeDecision::Allow, again.limit.as_deref())
+            .await
+            .unwrap();
+    assert_eq!(after.status, RequestStatus::Allowed);
+    assert_eq!(dot_names(&t).await, ["Blog Watcher", "One", "Researcher"]);
+}
+
+#[tokio::test]
+async fn without_tells_the_maker_what_was_left_out_as_it_stood_then() {
+    let t = start().await;
+    add_github(&t).await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let mut wanted = ask_browser("Blog Watcher");
+    wanted.wanted.uses = Some(uses_github());
+    let request = request(&t, &run, wanted).await;
+    assert_eq!(request.extras.len(), 2, "{:?}", request.extras);
+    // The person gives the maker the server: only the browser is beyond its reach now.
+    let mut spec = maker.spec.clone();
+    spec.uses = uses_github();
+    t.rt.update_dot(&maker.id, spec).await.unwrap();
+
+    decide(&t, &request, MakeDecision::Without).await;
+
+    assert_eq!(
+        wakes(&t).await,
+        [
+            "The person chose to make \"Blog Watcher\" without what was beyond your reach. It \
+             was made without: The browser."
+        ]
+    );
 }

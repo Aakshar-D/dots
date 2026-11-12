@@ -11,7 +11,7 @@ use common::fake_dot;
 use dots_core::context_rules::ContextRules;
 use dots_core::library::{LibraryKind, Uses};
 use dots_core::making::reach::{
-    reach_change, reach_new, real_path, Extra, Reach, Wanted, WantedPermissions,
+    held_extras, reach_change, reach_new, real_path, Extra, Reach, Wanted, WantedPermissions,
 };
 use dots_core::model::{Dot, DotSpec, EngineKind, Making, WorkspaceMode};
 use dots_core::policy::{Action, Policy, Preset, Rule};
@@ -1770,4 +1770,60 @@ fn uses_with_a_group_it_does_not_have_is_refused_by_name() {
     assert_eq!(w.uses.unwrap().apps, names(&["board"]));
     let w: Wanted = serde_json::from_value(serde_json::json!({"uses": null})).unwrap();
     assert_eq!(w.uses, None);
+}
+
+// ---- fix 14b part 2b: what a made dot holds beyond its maker
+
+#[test]
+fn a_dot_in_a_worktree_makers_own_folder_holds_more_unless_it_works_in_copies_too() {
+    let place = place();
+    let worktree_maker = maker(&place, WorkspaceMode::Worktree);
+    let mut made = worktree_maker.spec.clone();
+    made.making = Making::default();
+    made.workspace_mode = WorkspaceMode::Worktree;
+    assert_eq!(held_extras(&worktree_maker, &made, false), []);
+    // Working in the folder itself, it writes the checkout its maker only works in copies of.
+    made.workspace_mode = WorkspaceMode::Folder;
+    assert_eq!(
+        held_extras(&worktree_maker, &made, false),
+        [Extra::Folder {
+            path: text(&place.maker_dir),
+            below_maker: true
+        }]
+    );
+    // A folder-mode maker's own folder is within reach.
+    let folder_maker = maker(&place, WorkspaceMode::Folder);
+    assert_eq!(held_extras(&folder_maker, &made, false), []);
+}
+
+#[test]
+fn a_made_dot_that_may_make_dots_holds_more_than_its_maker() {
+    let place = place();
+    let maker = maker(&place, WorkspaceMode::Folder);
+    let mut made = maker.spec.clone();
+    made.making = Making {
+        on: false,
+        per_run: 9,
+        total: 50,
+    };
+    // Its limits do nothing while it may not make dots.
+    assert_eq!(held_extras(&maker, &made, false), []);
+    made.making.on = true;
+    let held = held_extras(&maker, &made, false);
+    assert_eq!(
+        held,
+        [Extra::Making {
+            per_run: 9,
+            total: 50
+        }]
+    );
+    assert_eq!(
+        held[0].line("Researcher"),
+        "Can make dots itself (9 in one run, 50 kept)"
+    );
+    let json = serde_json::to_value(&held[0]).unwrap();
+    assert_eq!(
+        json,
+        serde_json::json!({"kind": "making", "per_run": 9, "total": 50})
+    );
 }

@@ -100,7 +100,8 @@ impl Tool {
                 "Give a job to a dot you made: a message that starts a run of it. It returns \
                  at once. Do not wait for the job: carry on or end your turn, and you are woken \
                  in this conversation with how the job ended and the dot's final text. At most \
-                 {MAX_JOBS_BETWEEN_TYPED} jobs between two messages of the person."
+                 {MAX_JOBS_BETWEEN_TYPED} jobs between two messages of the person. A job for a dot \
+                 that has more than you have waits for the person's say-so first."
             ),
             Tool::ListMadeDots => "List the dots you made: each with its purpose, its schedule, \
                  whether it is running and how its last run ended, and your requests that wait \
