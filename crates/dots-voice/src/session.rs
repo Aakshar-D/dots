@@ -1600,6 +1600,7 @@ impl Worker {
             After::Ask if cut => {
                 self.trouble(QUESTION_CUT);
                 self.enter(State::Idle);
+                self.owed = Some(QUESTION_CUT.into());
             }
             After::Ask => self.ask(),
         }
@@ -2847,6 +2848,9 @@ mod tests {
             }
         );
         r.expect_state(State::Idle, false);
+        // Shown and said: the speaker works.
+        r.said_alone(QUESTION_CUT, false);
+        r.nothing_more();
         // Words cut by the cap before a whole question do not stop it being asked.
         let turn = r.hear();
         r.session.say_delta(turn, &"More words here. ".repeat(50));

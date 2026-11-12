@@ -130,6 +130,8 @@ struct Inner {
     gap: bool,
     /// Closed (Esc) and not opened since: a `Heard` already queued starts nothing.
     closed: bool,
+    /// A trouble shown that is also said once the session rests (a newer turn drops it).
+    owed: Option<&'static str>,
 }
 
 impl Inner {
@@ -292,6 +294,7 @@ impl Bridge {
     pub fn close(&self) {
         let mut s = self.lock();
         s.closed = true;
+        s.owed = None;
         self.session.close();
         self.mind.cancel();
         let lapsed = self.lapse();
@@ -351,6 +354,7 @@ impl Bridge {
             }
             s.live = Some(turn);
             s.gap = false;
+            s.owed = None;
             // a card left from an older turn is no longer cleared on that turn's clock
             s.shown += 1;
             self.session.thinking();
@@ -379,6 +383,12 @@ impl Bridge {
         }
         if s.live.is_some() || self.mind.pending() {
             self.drop_live(&mut s);
+        }
+        // The session says it only while resting and with a working speaker.
+        if let Some(line) = s.owed.take() {
+            if !off {
+                self.session.notice(line);
+            }
         }
         // A card with no question left showing (what needs you): cleared after a while, so
         // the stage does not stay up and notices are not held back for good.
@@ -539,11 +549,13 @@ impl Bridge {
         }
     }
 
-    /// The mind call for `turn` panicked: the turn ends, and the person is told.
+    /// The mind call for `turn` panicked: the turn ends, and the person is told (shown now,
+    /// said once the session rests after what it was still saying).
     fn broke(&self, turn: u64) {
         let mut s = self.lock();
         if s.live == Some(turn) {
             self.end(&mut s, turn, After::Rest);
+            s.owed = Some(WENT_WRONG);
             self.send(VoiceEvent::Trouble {
                 message: WENT_WRONG.into(),
             });
@@ -1648,6 +1660,31 @@ mod tests {
                 },
             ]
         );
+        // Said too, once the session rests (the words before it are spoken first), and once.
+        state(&r, State::Idle);
+        state(&r, State::Idle);
+        let notices: Vec<_> = r
+            .session
+            .calls()
+            .into_iter()
+            .filter(|c| matches!(c, Call::Notice(_)))
+            .collect();
+        assert_eq!(notices, vec![Call::Notice(WENT_WRONG.into())]);
+        // A newer turn before the rest: the line is no longer owed.
+        r.mind.script(vec![Step::Panic]);
+        r.heard("break", 2);
+        settle().await;
+        r.mind.script(vec![say("Fine."), end(Then::Rest)]);
+        r.heard("hello", 3);
+        settle().await;
+        state(&r, State::Idle);
+        let notices = r
+            .session
+            .calls()
+            .into_iter()
+            .filter(|c| matches!(c, Call::Notice(_)))
+            .count();
+        assert_eq!(notices, 1);
     }
 
     #[tokio::test]
