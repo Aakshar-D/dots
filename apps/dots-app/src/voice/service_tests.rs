@@ -163,6 +163,7 @@ impl SessionPort for FakeSession {
     fn thinking(&self) {}
     fn say(&self, _turn: u64, _text: &str, _then: dots_voice::After) {}
     fn say_delta(&self, _turn: u64, _delta: &str) {}
+    fn question(&self, _turn: u64, _text: &str) {}
     fn end_of_reply(&self, _turn: u64, _then: dots_voice::After) {}
     fn filler(&self, _turn: u64, _text: &str) {}
     fn answered(&self, _text: &str) -> Option<u64> {
@@ -1592,4 +1593,43 @@ async fn a_resume_cancelled_by_the_person_stores_voice_off() {
     assert!(!status.enabled, "{status:?}");
     assert_eq!(status.trouble, None);
     assert!(!r.stored().voice_enabled, "stored off");
+}
+
+/// The wake phrase's model is loaded only when the spotter is first fed, which the session
+/// does only while "Hey Dot" is on; a reset before that loads nothing.
+#[test]
+fn the_wake_model_loads_only_when_first_fed() {
+    struct Hears;
+    impl WakeSpotter for Hears {
+        fn heard(&mut self, frame16k: &[f32]) -> Option<dots_voice::WakeWord> {
+            (frame16k[0] > 1.0).then_some(dots_voice::WakeWord::HeyDot)
+        }
+        fn reset(&mut self) {}
+    }
+    let loads = Arc::new(AtomicUsize::new(0));
+    let counted = loads.clone();
+    let mut wake = LazyWake::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        Some(Box::new(Hears) as Box<dyn WakeSpotter>)
+    });
+    wake.reset();
+    assert_eq!(wake.after_word(), 0);
+    assert_eq!(
+        loads.load(Ordering::SeqCst),
+        0,
+        "loaded before it was needed"
+    );
+    assert_eq!(wake.heard(&[0.0; 512]), None);
+    assert_eq!(wake.heard(&[2.0; 512]), Some(dots_voice::WakeWord::HeyDot));
+    assert_eq!(loads.load(Ordering::SeqCst), 1);
+    // a model that will not load hears nothing, and is not tried again
+    let tries = Arc::new(AtomicUsize::new(0));
+    let counted = tries.clone();
+    let mut broken = LazyWake::new(move || {
+        counted.fetch_add(1, Ordering::SeqCst);
+        None
+    });
+    assert_eq!(broken.heard(&[2.0; 512]), None);
+    assert_eq!(broken.heard(&[2.0; 512]), None);
+    assert_eq!(tries.load(Ordering::SeqCst), 1);
 }

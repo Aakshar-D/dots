@@ -17,7 +17,7 @@ use dots_core::Runtime;
 use dots_voice::{
     CpalMic, CpalSink, EarSettings, Ears, EngineError, Manifest, Mic, ModelError, ModelPaths,
     Parts, Recognizer, Session, SessionEvent, SessionSettings, SherpaDetector, SherpaRecognizer,
-    SherpaSpeaker, SherpaWake, Sink, Speaker, State, Voice, WakeSpotter,
+    SherpaSpeaker, SherpaWake, Sink, Speaker, State, Voice, WakeSpotter, WakeWord,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
@@ -695,6 +695,13 @@ impl Service {
                 tracing::info!("voice: session built in {} ms", began.elapsed().as_millis());
                 let bridge = Bridge::new(built.session.clone(), self.host.mind(), self.ui.clone());
                 bridge.set_view(s.view.clone());
+                // A card left at rest cleared itself: what waits may be said now.
+                let me = self.me.clone();
+                bridge.on_rest(Arc::new(move || {
+                    if let Some(me) = me.upgrade() {
+                        me.kick_notices();
+                    }
+                }));
                 let ended = Ended::new();
                 s.state = built.session.state();
                 self.saw_state(s.state);
@@ -1377,10 +1384,15 @@ impl SessionFactory for RealFactory {
             recognizer,
             EarSettings::short_answer(),
         );
-        let wake: Option<Box<dyn WakeSpotter>> = match SherpaWake::load(&paths) {
-            Ok(w) => Some(Box::new(w)),
-            Err(_) => None,
-        };
+        // Loaded only once "Hey Dot" is on and the spotter is first fed.
+        let wake: Option<Box<dyn WakeSpotter>> = paths.wake_dir().is_dir().then(|| {
+            let paths = paths.clone();
+            Box::new(LazyWake::new(move || {
+                SherpaWake::load(&paths)
+                    .ok()
+                    .map(|w| Box::new(w) as Box<dyn WakeSpotter>)
+            })) as Box<dyn WakeSpotter>
+        });
         let out = spec.speaker.clone();
         let sink = (self.open_sink)(out.as_deref()).map_err(|_| NO_SPEAKER.to_string())?;
         let (voice_tx, voice_events) = unbounded_channel();
@@ -1415,6 +1427,40 @@ impl SessionFactory for RealFactory {
 
     fn speakers(&self) -> Vec<VoiceDevice> {
         dots_voice::speakers().into_iter().map(device).collect()
+    }
+}
+
+/// A wake phrase spotter whose model is loaded the first time it is fed: the session feeds
+/// it only while "Hey Dot" is on, so with it off the model is never loaded. A model that will
+/// not load leaves it deaf (it hears no wake phrase), as a missing one did before.
+struct LazyWake<L> {
+    load: Option<L>,
+    spotter: Option<Box<dyn WakeSpotter>>,
+}
+
+impl<L> LazyWake<L> {
+    fn new(load: L) -> Self {
+        Self {
+            load: Some(load),
+            spotter: None,
+        }
+    }
+}
+
+impl<L: FnOnce() -> Option<Box<dyn WakeSpotter>> + Send> WakeSpotter for LazyWake<L> {
+    fn heard(&mut self, frame16k: &[f32]) -> Option<WakeWord> {
+        if let Some(load) = self.load.take() {
+            self.spotter = load();
+        }
+        self.spotter.as_mut()?.heard(frame16k)
+    }
+    fn reset(&mut self) {
+        if let Some(spotter) = &mut self.spotter {
+            spotter.reset();
+        }
+    }
+    fn after_word(&self) -> usize {
+        self.spotter.as_ref().map_or(0, |s| s.after_word())
     }
 }
 

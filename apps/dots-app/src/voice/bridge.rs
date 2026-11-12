@@ -29,6 +29,8 @@ pub trait SessionPort: Send + Sync {
     fn thinking(&self);
     fn say(&self, turn: u64, text: &str, then: After);
     fn say_delta(&self, turn: u64, delta: &str);
+    /// A question Dots built, said as a reply of its own after the words so far.
+    fn question(&self, turn: u64, text: &str);
     fn end_of_reply(&self, turn: u64, then: After);
     fn filler(&self, turn: u64, text: &str);
     /// A click on an option: the new turn's id, or `None` when the session is off.
@@ -56,6 +58,9 @@ impl SessionPort for Session {
     }
     fn say_delta(&self, turn: u64, delta: &str) {
         Session::say_delta(self, turn, delta);
+    }
+    fn question(&self, turn: u64, text: &str) {
+        Session::question(self, turn, text);
     }
     fn end_of_reply(&self, turn: u64, then: After) {
         Session::end_of_reply(self, turn, then);
@@ -118,6 +123,9 @@ struct Inner {
     asking: bool,
     /// Options or a card are showing.
     showing: bool,
+    /// Counts every change to what shows: a card left at rest is cleared only if nothing
+    /// changed since.
+    shown: u64,
     /// What was spoken this turn ends in a word: a question spoken next needs a space.
     gap: bool,
     /// Closed (Esc) and not opened since: a `Heard` already queued starts nothing.
@@ -129,6 +137,7 @@ impl Inner {
         self.options.clear();
         self.asking = false;
         self.showing = false;
+        self.shown += 1;
     }
 }
 
@@ -141,6 +150,8 @@ struct Job {
 
 pub struct Bridge {
     session: Arc<dyn SessionPort>,
+    /// Called when a card left at rest was cleared: the stage is now at rest.
+    on_rest: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     mind: Arc<dyn MindPort>,
     ui: UnboundedSender<VoiceEvent>,
     inner: Mutex<Inner>,
@@ -152,6 +163,10 @@ pub struct Bridge {
 
 /// Said when a mind call breaks.
 const WENT_WRONG: &str = "Something went wrong. Try again.";
+
+/// A card (a list, with no question waiting) stays this long after Dot rests, then clears:
+/// the stage closes and spoken notices may be said again.
+pub const CARD_LINGER: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// A level the UI can read: anything not finite is 0.
 fn finite(level: f32) -> f32 {
@@ -171,6 +186,7 @@ impl Bridge {
         let (jobs, rx) = unbounded_channel();
         Arc::new(Bridge {
             session,
+            on_rest: Mutex::new(None),
             mind,
             ui,
             inner: Mutex::new(Inner::default()),
@@ -232,6 +248,11 @@ impl Bridge {
     pub fn at_rest(&self) -> bool {
         let s = self.lock();
         s.live.is_none() && !s.showing && !s.asking
+    }
+
+    /// What to call once a card left at rest was cleared (the service looks for notices).
+    pub fn on_rest(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        *self.on_rest.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook);
     }
 
     /// The account, workspace and screen the next turns see.
@@ -325,6 +346,8 @@ impl Bridge {
             }
             s.live = Some(turn);
             s.gap = false;
+            // a card left from an older turn is no longer cleared on that turn's clock
+            s.shown += 1;
             self.session.thinking();
             self.send(VoiceEvent::Heard { text: text.clone() });
             let input = match s.picks.remove(&turn) {
@@ -344,7 +367,7 @@ impl Bridge {
     /// The session rested (Idle) or stopped (Off). A turn in flight was given up by the
     /// session (its think limit, a failure, a close), and a step still waiting has lapsed
     /// (its asking time ran out): both are dropped, with what they showed.
-    fn rested(&self, off: bool) {
+    fn rested(self: &Arc<Self>, off: bool) {
         let mut s = self.lock();
         if off {
             s.picks.clear();
@@ -352,6 +375,37 @@ impl Bridge {
         if s.live.is_some() || self.mind.pending() {
             self.drop_live(&mut s);
         }
+        // A card with no question left showing (what needs you): cleared after a while, so
+        // the stage does not stay up and notices are not held back for good.
+        if s.showing && !s.asking {
+            self.clear_later(s.shown);
+        }
+    }
+
+    /// Clears the card showing `CARD_LINGER` from now, unless what shows changed or a turn
+    /// began meanwhile.
+    fn clear_later(self: &Arc<Self>, shown: u64) {
+        let weak = Arc::downgrade(self);
+        tokio::spawn(async move {
+            tokio::time::sleep(CARD_LINGER).await;
+            let Some(bridge) = weak.upgrade() else { return };
+            let hook = {
+                let mut s = bridge.lock();
+                if s.shown != shown || s.live.is_some() || !s.showing || s.asking {
+                    return;
+                }
+                s.forget();
+                bridge.send(VoiceEvent::Cleared);
+                bridge
+                    .on_rest
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone()
+            };
+            if let Some(hook) = hook {
+                hook();
+            }
+        });
     }
 
     /// `mind.lapse` (it ends the turn in flight and drops a step that waits); the live turn
@@ -404,16 +458,13 @@ impl Bridge {
                 let seq = s.seq;
                 s.asking = true;
                 s.showing = true;
-                // The mind sends the question only here: it is spoken once, after the words.
+                s.shown += 1;
+                // The mind sends the question only here: it is spoken once, after the words,
+                // as a reply of its own that their length cap cannot cut.
                 let spoken = question.trim();
                 if !spoken.is_empty() {
-                    let spoken = if s.gap {
-                        format!(" {spoken}")
-                    } else {
-                        spoken.to_string()
-                    };
-                    s.gap = true;
-                    self.session.say_delta(turn, &spoken);
+                    s.gap = false;
+                    self.session.question(turn, spoken);
                 }
                 // Resting, the session speaks nothing more (its speech failed): the question
                 // is written instead, and clicks still answer it.
@@ -431,6 +482,7 @@ impl Bridge {
             MindEvent::SayEnd { then } => self.end(&mut s, turn, after(then)),
             MindEvent::Card { card } => {
                 s.showing = true;
+                s.shown += 1;
                 self.send(VoiceEvent::Card { card });
             }
             MindEvent::Open { target } => self.send(VoiceEvent::Open { target }),
@@ -595,6 +647,7 @@ mod tests {
         Thinking,
         Say(u64, String, After),
         Delta(u64, String),
+        Question(u64, String),
         End(u64, After),
         Filler(u64, String),
         Answered(String),
@@ -604,9 +657,11 @@ mod tests {
     impl Call {
         fn turn(&self) -> Option<u64> {
             match self {
-                Call::Say(t, ..) | Call::Delta(t, _) | Call::End(t, _) | Call::Filler(t, _) => {
-                    Some(*t)
-                }
+                Call::Say(t, ..)
+                | Call::Delta(t, _)
+                | Call::Question(t, _)
+                | Call::End(t, _)
+                | Call::Filler(t, _) => Some(*t),
                 _ => None,
             }
         }
@@ -655,6 +710,9 @@ mod tests {
         }
         fn say_delta(&self, turn: u64, delta: &str) {
             self.push(Call::Delta(turn, delta.into()));
+        }
+        fn question(&self, turn: u64, text: &str) {
+            self.push(Call::Question(turn, text.into()));
         }
         fn end_of_reply(&self, turn: u64, then: After) {
             self.push(Call::End(turn, then));
@@ -895,6 +953,118 @@ mod tests {
         assert_eq!(asked_seqs(&mut r), vec![1, 2, 3]);
     }
 
+    /// Dots' question never shares the model's words' reply (and so their length cap): after
+    /// 590 bytes of words it is handed to the session whole, as a question of its own.
+    #[tokio::test]
+    async fn a_question_is_handed_over_whole_after_long_words() {
+        let mut r = rig();
+        let words = "This is a sentence of words. ".repeat(21);
+        let words = &words[..590];
+        r.mind.script(vec![
+            say(words),
+            ask(
+                "Research wants to use Bash. Approve this request?",
+                &["Yes", "No"],
+            ),
+            Step::Pending(true),
+            end(Then::Ask),
+        ]);
+        r.heard("approve it", 1);
+        settle().await;
+        assert_eq!(
+            r.session.calls(),
+            vec![
+                Call::Thinking,
+                Call::Delta(1, words.into()),
+                Call::Question(
+                    1,
+                    "Research wants to use Bash. Approve this request?".into()
+                ),
+                Call::End(1, After::Ask),
+            ]
+        );
+        assert!(r.ui().contains(&ask_ev(
+            "Research wants to use Bash. Approve this request?",
+            &["Yes", "No"],
+            1
+        )));
+    }
+
+    /// A list card ("what needs you") with no question waiting clears itself `CARD_LINGER`
+    /// after Dot rests: the stage closes, and the bridge is at rest for spoken notices again
+    /// (the service is told, to say what waits).
+    #[tokio::test(start_paused = true)]
+    async fn a_list_card_clears_after_the_rest_and_notices_may_speak() {
+        let mut r = rig();
+        let told = Arc::new(AtomicU64::new(0));
+        let t = told.clone();
+        r.bridge.on_rest(Arc::new(move || {
+            t.fetch_add(1, Ordering::SeqCst);
+        }));
+        let card = || {
+            Step::Send(MindEvent::Card {
+                card: Card::List {
+                    title: "What needs you".into(),
+                    lines: vec!["Research wants to use Bash".into()],
+                },
+            })
+        };
+        r.mind.script(vec![
+            say("One thing needs you."),
+            card(),
+            end(Then::FollowUp),
+        ]);
+        r.heard("what needs me", 1);
+        settle().await;
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Idle,
+            mic_open: false,
+        });
+        r.ui();
+        assert!(!r.bridge.at_rest(), "the card shows");
+        tokio::time::sleep(CARD_LINGER - std::time::Duration::from_secs(1)).await;
+        settle().await;
+        assert!(!r.bridge.at_rest());
+        assert!(!r.ui().contains(&VoiceEvent::Cleared));
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        settle().await;
+        assert!(r.bridge.at_rest(), "the card is still up");
+        assert_eq!(r.ui(), vec![VoiceEvent::Cleared]);
+        assert_eq!(told.load(Ordering::SeqCst), 1);
+        // A newer turn before the time is up keeps its own card: the old clock is void.
+        r.mind.script(vec![
+            say("One thing needs you."),
+            card(),
+            end(Then::FollowUp),
+        ]);
+        r.heard("what needs me", 2);
+        settle().await;
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Idle,
+            mic_open: false,
+        });
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        r.mind.script(vec![
+            say("One thing needs you."),
+            card(),
+            end(Then::FollowUp),
+        ]);
+        r.heard("and now", 3);
+        settle().await;
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Idle,
+            mic_open: false,
+        });
+        r.ui();
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        settle().await;
+        assert!(!r.bridge.at_rest(), "cleared on the older turn's clock");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        settle().await;
+        assert!(r.bridge.at_rest());
+        assert_eq!(told.load(Ordering::SeqCst), 2);
+    }
+
     #[tokio::test]
     async fn a_pick_with_the_current_seq_is_taken() {
         let mut r = rig();
@@ -1071,7 +1241,7 @@ mod tests {
             vec![
                 Call::Thinking,
                 Call::Delta(1, "Okay.".into()),
-                Call::Delta(1, " Approve it?".into()),
+                Call::Question(1, "Approve it?".into()),
                 Call::End(1, After::Ask),
             ]
         );
@@ -1090,7 +1260,7 @@ mod tests {
         assert!(r
             .session
             .calls()
-            .contains(&Call::Delta(2, "Which dot?".into())));
+            .contains(&Call::Question(2, "Which dot?".into())));
     }
 
     #[tokio::test]
