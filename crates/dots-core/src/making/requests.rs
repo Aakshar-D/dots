@@ -707,6 +707,13 @@ impl Makers {
             RequestStatus::Waiting => match self.change_stands(&maker, &request).await? {
                 Stands::Gone(reason) => {
                     request = self.mark_gone(&request, &reason).await?;
+                    // The dot's name now, while it exists, as on every later read.
+                    if let Some(dot_id) = &request.dot_id {
+                        if let Ok(dot) = self.parts.store.get_dot(dot_id).await {
+                            title = change_title(&maker_name, &dot.spec.name);
+                            dot_name = dot.spec.name;
+                        }
+                    }
                     blocked = Some(reason);
                 }
                 Stands::Yes(standing) => {

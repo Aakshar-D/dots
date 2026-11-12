@@ -1784,12 +1784,20 @@ fn a_dot_in_a_worktree_makers_own_folder_holds_more_unless_it_works_in_copies_to
     assert_eq!(held_extras(&worktree_maker, &made, false), []);
     // Working in the folder itself, it writes the checkout its maker only works in copies of.
     made.workspace_mode = WorkspaceMode::Folder;
+    let held = held_extras(&worktree_maker, &made, false);
     assert_eq!(
-        held_extras(&worktree_maker, &made, false),
-        [Extra::Folder {
-            path: text(&place.maker_dir),
-            below_maker: true
+        held,
+        [Extra::MakersFolder {
+            path: text(&place.maker_dir)
         }]
+    );
+    // It is the maker's folder itself, not one inside it.
+    assert_eq!(
+        held[0].line("Researcher"),
+        format!(
+            "The folder {}, Researcher's own folder (Researcher itself works only in copies of it)",
+            text(&place.maker_dir)
+        )
     );
     // A folder-mode maker's own folder is within reach.
     let folder_maker = maker(&place, WorkspaceMode::Folder);

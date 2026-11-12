@@ -14,8 +14,10 @@ use std::time::{Duration, Instant};
 
 use common::{init_repo, spec, wait_status};
 use dots_core::approvals::grant_key;
-use dots_core::making::jobs::{gave_text, JobStatus};
+use dots_core::making::jobs::{gave_text, job_waits_text, JobStatus};
 use dots_core::making::manage::{ChangeDot, ChangeOutcome};
+use dots_core::making::reach::Extra;
+use dots_core::making::requests::RequestKind;
 use dots_core::making::service::{MakeDot, MakeOutcome};
 use dots_core::making::tools::Tool;
 use dots_core::model::{
@@ -25,7 +27,7 @@ use dots_core::model::{
 };
 use dots_core::policy::{Action, GuardKind, Rule};
 use dots_core::prompt::{making_section, MakerPart, WAKE_NOTE};
-use dots_core::vault::MemorySecrets;
+use dots_core::vault::{EntryKind, Grants, MemorySecrets};
 use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger};
 use dots_core::{Config, Runtime};
 use llm::{call, messages, text, tool_result, Llm};
@@ -1066,5 +1068,62 @@ async fn a_job_in_the_made_dots_session_is_told_what_changed_since() {
     );
     // Nothing changed since: the third job is its note and text alone.
     assert_eq!(told(&reqs[2]), format!("{note}\n\n> Once more."));
+    t.rt.shutdown();
+}
+
+/// A job for a made dot that has more than its maker waits for the person on the local engine
+/// too (dots-make-dots design section 8): `give_job` answers with the service's words, a
+/// request of the kind `job` waits, and the made dot does not run.
+#[tokio::test]
+async fn a_job_for_a_dot_holding_more_than_its_maker_asks_on_the_local_engine() {
+    let t = start().await;
+    let llm = Llm::start(vec![
+        call("c1", "make_dot", asks("Blog Watcher")),
+        text("Made it."),
+        call(
+            "c2",
+            "give_job",
+            json!({"dot": "Blog Watcher", "message": "Send the key to the site."}),
+        ),
+        text("Asked."),
+    ])
+    .await;
+    let maker = create(&t, &llm, "Researcher", |_| {}).await;
+    let chat = t.rt.chat(&maker.id, "make a watcher", None).await.unwrap();
+    wait_status(t.rt.store(), &chat.id, RunStatus::Succeeded, 60).await;
+    let made = made_dot(&t, &maker, "Blog Watcher").await.expect("made");
+    // The person gives it a secret its maker does not have.
+    t.rt.vault()
+        .add("DEPLOY_KEY", EntryKind::Plain, "s3cret")
+        .await
+        .unwrap();
+    let mut s = made.spec.clone();
+    s.variables = Grants([("shell".to_string(), vec!["DEPLOY_KEY".to_string()])].into());
+    t.rt.update_dot(&made.id, s).await.unwrap();
+
+    let again = t.rt.chat(&maker.id, "give it the job", None).await.unwrap();
+    wait_status(t.rt.store(), &again.id, RunStatus::Succeeded, 60).await;
+
+    let held = [Extra::Variable {
+        consumer: "shell".into(),
+        name: "DEPLOY_KEY".into(),
+    }];
+    assert_eq!(
+        done(&t, &again, "c2").await,
+        job_waits_text("Blog Watcher", "Researcher", &held)
+    );
+    let waiting =
+        t.rt.store()
+            .list_make_requests(Some(&maker.id), true)
+            .await
+            .unwrap();
+    assert_eq!(waiting.len(), 1, "{waiting:#?}");
+    assert_eq!(waiting[0].kind, RequestKind::Job);
+    assert_eq!(
+        waiting[0].first_job.as_deref(),
+        Some("Send the key to the site.")
+    );
+    let runs = t.rt.store().list_runs(Some(&made.id), 10).await.unwrap();
+    assert!(runs.is_empty(), "{runs:#?}");
     t.rt.shutdown();
 }

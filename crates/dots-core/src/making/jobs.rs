@@ -194,6 +194,23 @@ pub(crate) fn unattended(thread: &[Run]) -> bool {
     !thread.iter().any(is_typed) && root.is_some_and(run_is_background)
 }
 
+/// What a job for the made dot named `name` is refused with while `earlier`, the last job from
+/// the same topic of the maker to that dot, has not ended: a topic is one line of runs, so the
+/// next job cannot be queued behind it. `None` when there is none or it ended.
+fn still_open(name: &str, earlier: Option<&MakingJob>) -> Option<Error> {
+    match earlier.map(|job| job.status) {
+        Some(JobStatus::Working) => Some(Error::Invalid(format!(
+            "\"{name}\" is still working on the last job from this conversation. You will be \
+             woken when it ends."
+        ))),
+        Some(JobStatus::WaitingAnswer) => Some(Error::Invalid(format!(
+            "\"{name}\" is waiting for the person's answer on the last job from this \
+             conversation. You will be woken when it ends."
+        ))),
+        Some(JobStatus::Ended) | None => None,
+    }
+}
+
 /// An open job whose queued run may wait for a cap or for Claude's usage limit: what one pass of
 /// `settle_jobs` gathers, so the maker is told after the pass with the facts read once
 /// (`Makers::tell_held`).
@@ -278,12 +295,17 @@ impl Makers {
     ///
     /// An error, with a sentence the model can act on: what `make_dot` refuses a run for, a
     /// dot the maker did not make (the same sentence for any other dot), a job that is not 1 to
-    /// 4,000 characters, a made dot that is switched off, and what `start_job` refuses.
+    /// 4,000 characters, a made dot that is switched off, a job while the last one from this
+    /// conversation to the dot has not ended (before any request is stored), and what
+    /// `start_job` refuses. The maker is judged as it is once the service's lock is held.
     pub async fn give_job(&self, run_id: &str, dot_name: &str, message: &str) -> Result<String> {
         let p = &self.parts;
-        let (run, maker) = self.caller(run_id).await?;
+        self.caller(run_id).await?;
         // With the makes: two jobs of one run cannot both take the last place of the guard.
         let _one_at_a_time = p.one_at_a_time.lock().await;
+        // As they are once the lock is held: the run may have ended, the switch turned off, or
+        // the person narrowed the maker while this call waited, as for `change_dot`.
+        let (run, maker) = self.caller(run_id).await?;
         let made = self.made_dot(&maker, dot_name).await?;
         let message = message.trim();
         if message.is_empty() || message.chars().count() > MAX_JOB {
@@ -296,6 +318,15 @@ impl Makers {
                 "\"{}\" is switched off. The person turns it on.",
                 made.spec.name
             )));
+        }
+        // Before a request is stored: a job that could not start when the person allows it
+        // gets no card. `start_job` checks again under the thread lock.
+        let earlier = p
+            .store
+            .latest_making_job(&run.root_run_id, &made.id)
+            .await?;
+        if let Some(refusal) = still_open(&made.spec.name, earlier.as_ref()) {
+            return Err(refusal);
         }
         let held = self.held_now(&maker, &made).await?;
         if !held.is_empty() {
@@ -404,20 +435,8 @@ impl Makers {
             .store
             .latest_making_job(maker_root_run_id, &made.id)
             .await?;
-        match earlier.as_ref().map(|job| job.status) {
-            Some(JobStatus::Working) => {
-                return Err(Error::Invalid(format!(
-                    "\"{name}\" is still working on the last job from this conversation. You \
-                     will be woken when it ends."
-                )))
-            }
-            Some(JobStatus::WaitingAnswer) => {
-                return Err(Error::Invalid(format!(
-                    "\"{name}\" is waiting for the person's answer on the last job from this \
-                     conversation. You will be woken when it ends."
-                )))
-            }
-            _ => {}
+        if let Some(refusal) = still_open(name, earlier.as_ref()) {
+            return Err(refusal);
         }
         let mut new = match self.topic_to_go_on(made, earlier.as_ref()).await? {
             Some((first, end)) => {

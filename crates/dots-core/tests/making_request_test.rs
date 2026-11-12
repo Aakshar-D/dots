@@ -19,6 +19,7 @@ use dots_core::accounts::identity;
 use dots_core::events::RuntimeEvent;
 use dots_core::library::{LibraryConfig, McpServerConfig, Uses};
 use dots_core::making::log::{MakingEvent, MakingEventKind};
+use dots_core::making::manage::{ChangeDot, ChangeOutcome};
 use dots_core::making::reach::{real_path, Extra, Wanted, WantedPermissions};
 use dots_core::making::requests::{
     MakeDecision, MakeRequest, RequestKind, RequestStatus, MAX_WAITING_REQUESTS,
@@ -1534,4 +1535,45 @@ async fn without_tells_the_maker_what_was_left_out_as_it_stood_then() {
              was made without: The browser."
         ]
     );
+}
+
+/// A waiting change whose Library item went since, on the first read that finds it gone, names
+/// the made dot as it is called now: the person renamed it after the maker asked.
+#[tokio::test]
+async fn a_change_found_gone_names_the_dot_as_it_is_called_now() {
+    let t = start().await;
+    let github = add_github(&t).await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    let ask = ChangeDot {
+        dot: "Blog Watcher".into(),
+        purpose: None,
+        wanted: Wanted {
+            uses: Some(uses_github()),
+            ..Wanted::default()
+        },
+    };
+    let outcome = t.rt.makers().change_dot(&run.id, ask).await.unwrap();
+    assert!(
+        matches!(outcome, ChangeOutcome::Waiting { .. }),
+        "{outcome:?}"
+    );
+    let mut s = t.rt.store().get_dot(&made.id).await.unwrap().spec;
+    s.name = "Feed Watcher".into();
+    t.rt.update_dot(&made.id, s).await.unwrap();
+    t.rt.store().remove_library_item(&github).await.unwrap();
+    let waiting =
+        t.rt.store()
+            .list_make_requests(Some(&maker.id), true)
+            .await
+            .unwrap();
+
+    let card = t.rt.makers().request_card(&waiting[0].id).await.unwrap();
+
+    assert_eq!(card.request.status, RequestStatus::Gone);
+    assert_eq!(card.name, "Feed Watcher");
+    assert!(card.title.contains("Feed Watcher"), "{}", card.title);
+    let inbox = t.rt.inbox().await.unwrap();
+    assert_eq!(inbox.make_requests[0].name, "Feed Watcher");
 }

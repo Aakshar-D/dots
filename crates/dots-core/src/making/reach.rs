@@ -184,6 +184,10 @@ pub enum Extra {
         #[serde(default)]
         below_maker: bool,
     },
+    /// The maker's own folder, for a dot that works in it directly while the maker works only
+    /// in worktree copies of it: the dot would write the checkout the maker never writes.
+    /// `path` is the real path.
+    MakersFolder { path: String },
     /// A folder below the maker's that is, or is inside, git's or Claude's own folder (`.git`,
     /// `.claude`), whose settings and hooks run code. `path` is the real path.
     SettingsFolder { path: String },
@@ -258,6 +262,10 @@ impl Extra {
                 below_maker: true,
             } => format!(
                 "The folder {path}, inside {maker}'s folder ({maker} itself works in copies of it)"
+            ),
+            Self::MakersFolder { path } => format!(
+                "The folder {path}, {maker}'s own folder ({maker} itself works only in copies of \
+                 it)"
             ),
             Self::SettingsFolder { path } => format!(
                 "The folder {path}, inside {maker}'s folder, where git or Claude keep their own \
@@ -843,12 +851,16 @@ pub(super) fn spec_holds(spec: &DotSpec, extra: &Extra) -> bool {
         Extra::Item { item_kind, name } => spec.uses.names(*item_kind).contains(name),
         Extra::Variable { consumer, name } => grants(&spec.variables, consumer, name),
         Extra::Preset { preset, .. } => spec.policy.preset == *preset,
-        Extra::Folder { path, .. } | Extra::SettingsFolder { path } => same_folder(path),
+        Extra::Folder { path, .. }
+        | Extra::MakersFolder { path }
+        | Extra::SettingsFolder { path } => same_folder(path),
         Extra::Browser => spec.browser,
         Extra::UserSettings => spec.use_user_settings,
         Extra::MaxTurns { wanted, .. } => spec.max_turns >= *wanted,
         Extra::Timeout { wanted_secs, .. } => spec.timeout_secs >= *wanted_secs,
-        Extra::Making { .. } => spec.making.on,
+        Extra::Making { per_run, total } => {
+            spec.making.on && spec.making.per_run >= *per_run && spec.making.total >= *total
+        }
     }
 }
 
@@ -945,10 +957,7 @@ fn held_folder(maker: &Dot, made: &DotSpec) -> Option<Extra> {
     if anchored && key == makers_key {
         let copies = maker.spec.workspace_mode == WorkspaceMode::Worktree
             && made.workspace_mode != WorkspaceMode::Worktree;
-        return copies.then_some(Extra::Folder {
-            path,
-            below_maker: true,
-        });
+        return copies.then_some(Extra::MakersFolder { path });
     }
     if anchored && key.starts_with(&makers_key) && !dangling_link(&real) {
         let settings = key.strip_prefix(&makers_key).is_ok_and(|tail| {

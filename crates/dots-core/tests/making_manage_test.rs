@@ -342,6 +342,7 @@ async fn the_list_shows_only_this_makers_dots_with_their_state() {
         running: false,
         last_run: None,
         waiting_change: false,
+        waiting_job: false,
         job: None,
     };
     let ended = failed.ended_at.clone().expect("the run ended");

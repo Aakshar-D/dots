@@ -115,7 +115,7 @@ export function inboxWaiting(inbox: Inbox | undefined, messages: Message[] | und
       inbox.instructions.length +
       inbox.app_reviews.length +
       inbox.team_scope.length +
-      // A dot asking to make or change a dot beyond its reach.
+      // A dot asking to make, change or give a job to a dot beyond its reach.
       (inbox.make_requests?.length ?? 0) +
       // A workflow run waiting on the person: a check, a limit or a failed step.
       inbox.workflows.length

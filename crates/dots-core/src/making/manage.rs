@@ -43,6 +43,9 @@ pub struct MadeDotLine {
     pub last_run: Option<String>,
     /// A change this maker asked for it waits for the person.
     pub waiting_change: bool,
+    /// A job this maker gave it waits for the person's say-so (design section 8).
+    #[serde(default)]
+    pub waiting_job: bool,
     /// What it does for the conversation that lists it (design section 8): `JOB_WORKING` while
     /// a job given in this chat topic of the maker has not ended, `JOB_WAITING` while that job
     /// waits for the person's answer; `None` otherwise.
@@ -189,8 +192,8 @@ pub fn schedule_words(schedule: &Schedule) -> String {
 /// What `list_made_dots` tells the maker's run (design section 9): one line per made dot, then
 /// one line per request for a new dot that waits for the person, or that the maker has made no
 /// dots yet. `maker` is the maker's name; of `waiting_makes`, the maker's requests the person
-/// has not answered, only those for a new dot are named, since a waiting change shows on its
-/// dot's line.
+/// has not answered, only those for a new dot are named, since a waiting change or job shows on
+/// its dot's line.
 pub fn made_dots_text(maker: &str, lines: &[MadeDotLine], waiting_makes: &[MakeRequest]) -> String {
     let mut text: Vec<String> = Vec::new();
     if lines.is_empty() {
@@ -214,6 +217,9 @@ pub fn made_dots_text(maker: &str, lines: &[MadeDotLine], waiting_makes: &[MakeR
         });
         if line.waiting_change {
             parts.push("a change is waiting for the person".to_string());
+        }
+        if line.waiting_job {
+            parts.push("a job is waiting for the person".to_string());
         }
         parts.extend(line.job.clone());
         text.push(format!("\"{}\": {}", line.name, parts.join("; ")));
@@ -438,6 +444,17 @@ pub(super) fn same_thing(now: &Extra, seen: &Extra) -> bool {
         (Extra::Folder { path: a, .. }, Extra::Folder { path: b, .. }) => a == b,
         (Extra::MaxTurns { wanted: a, .. }, Extra::MaxTurns { wanted: b, .. }) => a == b,
         (Extra::Timeout { wanted_secs: a, .. }, Extra::Timeout { wanted_secs: b, .. }) => a == b,
+        // Making limits no higher than the card showed give no more than it showed.
+        (
+            Extra::Making {
+                per_run: a,
+                total: b,
+            },
+            Extra::Making {
+                per_run: c,
+                total: d,
+            },
+        ) => a <= c && b <= d,
         (now, seen) => now == seen,
     }
 }
@@ -632,6 +649,10 @@ impl Makers {
                 last_run,
                 waiting_change: waiting.iter().any(|request| {
                     request.kind == RequestKind::Change
+                        && request.dot_id.as_deref() == Some(dot.id.as_str())
+                }),
+                waiting_job: waiting.iter().any(|request| {
+                    request.kind == RequestKind::Job
                         && request.dot_id.as_deref() == Some(dot.id.as_str())
                 }),
                 job,

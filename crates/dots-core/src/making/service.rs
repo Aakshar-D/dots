@@ -326,6 +326,13 @@ impl Makers {
         }
     }
 
+    /// Holds the lock every make, change, job and answer takes (`one_at_a_time`) until the guard
+    /// is dropped, for tests: a call made meanwhile waits for it, as it would behind a slow one.
+    #[doc(hidden)]
+    pub async fn hold_makes(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.parts.one_at_a_time.lock().await
+    }
+
     pub(crate) fn downgrade(&self) -> WeakMakers {
         WeakMakers(Arc::downgrade(&self.parts))
     }
