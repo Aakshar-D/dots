@@ -391,7 +391,7 @@ async fn a_workflow_step_run_is_refused() {
     drop(conn);
     assert_eq!(
         refused(&t, &run, ask("Blog Watcher")).await,
-        "A run that is a workflow step cannot make dots."
+        "A run that is a workflow step cannot use the tools for making dots."
     );
     assert_eq!(dot_names(&t).await, ["Researcher"]);
 }
@@ -407,7 +407,7 @@ async fn a_finished_run_is_refused() {
         .unwrap();
     assert_eq!(
         refused(&t, &run, ask("Blog Watcher")).await,
-        "This run has ended, so it cannot make a dot."
+        "This run has ended, so it cannot use the tools for making dots."
     );
     // A run that does not exist is no run of a maker either.
     let err =

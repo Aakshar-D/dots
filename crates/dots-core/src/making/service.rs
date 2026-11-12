@@ -29,10 +29,11 @@ pub const MAX_JOB: usize = 4000;
 pub const PURPOSE_RULE: &str = "The purpose is one line of 1 to 200 characters.";
 /// What is said of a first job that is not 1 to `MAX_JOB` characters.
 pub const FIRST_JOB_RULE: &str = "The first job is 1 to 4000 characters.";
-/// What a workflow step's run is told (design section 5).
-pub const NOT_IN_A_STEP: &str = "A run that is a workflow step cannot make dots.";
-/// What a run that has ended is told.
-pub const RUN_ENDED: &str = "This run has ended, so it cannot make a dot.";
+/// What a workflow step's run is told by every tool for making dots (design section 5).
+pub const NOT_IN_A_STEP: &str =
+    "A run that is a workflow step cannot use the tools for making dots.";
+/// What a run that has ended is told by every tool for making dots.
+pub const RUN_ENDED: &str = "This run has ended, so it cannot use the tools for making dots.";
 
 /// What a maker's run asks for with `make_dot` (design section 7.1). In JSON it is one flat
 /// object: `purpose`, `first_job` and the fields of `Wanted`. A field none of them has is
@@ -189,7 +190,7 @@ pub(super) struct Parts {
     pub(super) dot_admin: DotAdmin,
     pub(super) vault: Vault,
     /// Where runs' worktree copies are made (`RunnerConfig::worktrees_dir`).
-    worktrees_root: PathBuf,
+    pub(super) worktrees_root: PathBuf,
     /// For the thread lock every writer that continues a chat holds, and the chats that are
     /// adding an app: a wake continues the maker's chat (design section 8).
     pub(super) follow_ups: Arc<FollowUps>,
@@ -329,13 +330,7 @@ impl Makers {
         over: Option<&OverLimit>,
     ) -> Result<MakeRequest> {
         let p = &self.parts;
-        if p.store.count_waiting_make_requests(&maker.id).await? >= MAX_WAITING_REQUESTS {
-            return Err(Error::Invalid(format!(
-                "{} already has {MAX_WAITING_REQUESTS} requests waiting for the person. Wait to \
-                 be woken with an answer before asking for more.",
-                maker.spec.name
-            )));
-        }
+        self.check_may_ask(maker).await?;
         let create_folder = reach
             .create_folder
             .as_ref()
@@ -355,27 +350,61 @@ impl Makers {
                 over,
                 create_folder: create_folder.as_deref(),
                 first_job: ask.first_job.as_deref().map(str::trim),
+                ask: None,
             })
             .await?;
+        self.log_asked(&request, None, &request.name).await;
+        Ok(request)
+    }
+
+    /// Refuses one more request of `maker` while it has `MAX_WAITING_REQUESTS` that the person
+    /// has not answered (design section 7.2). Requests for a new dot and for a change count
+    /// alike.
+    pub(super) async fn check_may_ask(&self, maker: &Dot) -> Result<()> {
+        let waiting = self
+            .parts
+            .store
+            .count_waiting_make_requests(&maker.id)
+            .await?;
+        if waiting >= MAX_WAITING_REQUESTS {
+            return Err(Error::Invalid(format!(
+                "{} already has {MAX_WAITING_REQUESTS} requests waiting for the person. Wait to \
+                 be woken with an answer before asking for more.",
+                maker.spec.name
+            )));
+        }
+        Ok(())
+    }
+
+    /// Writes the `asked` entry of the log for `request`, which was just stored, so the ask
+    /// card shows in the topic in order with the other cards, and publishes `MakingUpdated`.
+    /// `dot_id` and `dot_name` are the made dot a change is asked for, or `None` and the name
+    /// asked for a new dot.
+    pub(super) async fn log_asked(
+        &self,
+        request: &MakeRequest,
+        dot_id: Option<&str>,
+        dot_name: &str,
+    ) {
         // The request waits whether or not its entry could be written, so a failure here is
         // logged and the ask still stands.
-        let logged = p
+        let logged = self
+            .parts
             .store
             .add_making_event(&NewMakingEvent {
-                maker_dot_id: &maker.id,
-                run_id: &run.id,
-                root_run_id: &run.root_run_id,
+                maker_dot_id: &request.maker_dot_id,
+                run_id: &request.run_id,
+                root_run_id: &request.root_run_id,
                 kind: MakingEventKind::Asked,
-                dot_id: None,
-                dot_name: &request.name,
+                dot_id,
+                dot_name,
                 detail: json!({ "request_id": request.id }),
             })
             .await;
         if let Err(e) = logged {
-            tracing::error!(request = %request.id, run = %run.id, "the request was not logged: {e}");
+            tracing::error!(request = %request.id, run = %request.run_id, "the request was not logged: {e}");
         }
-        self.updated(&maker.id, &run.root_run_id);
-        Ok(request)
+        self.updated(&request.maker_dot_id, &request.root_run_id);
     }
 
     /// Refuses what `spec`, a dot a maker asks for, names that does not exist (design section
@@ -551,8 +580,9 @@ impl Makers {
 }
 
 /// Whether `run`, a run of `maker`, may use the tools for making dots (design section 5): the
-/// dot's switch is on, the run is no workflow step's, and it has not ended. What the dot's
-/// policy says of `MakeDots` is checked where the tool is called.
+/// dot's switch is on, the run is no workflow step's, and it has not ended. The same for every
+/// one of the tools: making a dot, giving it a job, and listing, changing and deleting the dots
+/// it made. What the dot's policy says of `MakeDots` is checked where the tool is called.
 pub(crate) fn may_make(maker: &Dot, run: &Run) -> Result<()> {
     if !maker.spec.making.on {
         return Err(Error::Invalid(format!(

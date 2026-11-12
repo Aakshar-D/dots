@@ -5,14 +5,15 @@
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
+use super::dots::{dot_from_row, DOT_COLUMNS};
 use super::library::check_uses;
-use super::runs::insert_run;
+use super::runs::{insert_run, run_from_row, RUN_COLUMNS};
 use super::Store;
 use crate::library::{LibraryKind, Uses};
 use crate::making::log::{MakingEvent, MakingEventKind, NewMakingEvent};
 use crate::making::requests::{MakeRequest, NewMakeRequest, RequestKind, RequestStatus};
 use crate::making::wake::MakingWake;
-use crate::model::{NewRun, Run};
+use crate::model::{Dot, NewRun, Run};
 use crate::util::{new_id, now};
 use crate::{Error, Result};
 
@@ -50,10 +51,11 @@ fn wake_from_row(row: &SqliteRow) -> Result<MakingWake> {
 
 const REQUEST_COLUMNS: &str = "id, maker_dot_id, run_id, root_run_id, kind, dot_id, name, \
      purpose, spec, without, extras, over, create_folder, first_job, status, gone_reason, \
-     created_at, decided_at, made_dot_id";
+     created_at, decided_at, made_dot_id, ask";
 
 fn request_from_row(row: &SqliteRow) -> Result<MakeRequest> {
     let over: Option<String> = row.try_get("over")?;
+    let ask: Option<String> = row.try_get("ask")?;
     Ok(MakeRequest {
         id: row.try_get("id")?,
         maker_dot_id: row.try_get("maker_dot_id")?,
@@ -74,6 +76,7 @@ fn request_from_row(row: &SqliteRow) -> Result<MakeRequest> {
         created_at: row.try_get("created_at")?,
         decided_at: row.try_get("decided_at")?,
         made_dot_id: row.try_get("made_dot_id")?,
+        ask: ask.as_deref().map(serde_json::from_str).transpose()?,
     })
 }
 
@@ -106,15 +109,20 @@ impl Store {
             created_at: now(),
             decided_at: None,
             made_dot_id: None,
+            ask: new.ask.cloned(),
         };
         let over = match &request.over {
             Some(over) => Some(serde_json::to_string(over)?),
             None => None,
         };
+        let ask = match &request.ask {
+            Some(ask) => Some(serde_json::to_string(ask)?),
+            None => None,
+        };
         sqlx::query(
             "INSERT INTO make_requests (id, maker_dot_id, run_id, root_run_id, kind, dot_id, \
              name, purpose, spec, without, extras, over, create_folder, first_job, status, \
-             created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             created_at, ask) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&request.id)
         .bind(&request.maker_dot_id)
@@ -132,6 +140,7 @@ impl Store {
         .bind(&request.first_job)
         .bind(request.status.as_str())
         .bind(&request.created_at)
+        .bind(ask)
         .execute(&self.pool)
         .await?;
         Ok(request)
@@ -408,5 +417,61 @@ impl Store {
                 .await?
                 .is_some(),
         )
+    }
+
+    /// Whether a dot other than `id` has `name`, in any letter case: what renaming the dot `id`
+    /// to that name would refuse. A dot may take its own name in another case.
+    pub async fn dot_name_taken_by_another(&self, name: &str, id: &str) -> Result<bool> {
+        Ok(
+            sqlx::query("SELECT 1 FROM dots WHERE name = ? COLLATE NOCASE AND id != ?")
+                .bind(name)
+                .bind(id)
+                .fetch_optional(&self.pool)
+                .await?
+                .is_some(),
+        )
+    }
+}
+
+/// The dots a maker made, as its tools name and show them (dots-make-dots design section 9).
+impl Store {
+    /// The dot named `name`, in any letter case, whose recorded maker is `maker_id`; `None`
+    /// when no dot has that name or the dot is not one this maker made.
+    pub async fn made_dot_named(&self, maker_id: &str, name: &str) -> Result<Option<Dot>> {
+        let row = sqlx::query(&format!(
+            "SELECT {DOT_COLUMNS} FROM dots WHERE name = ? COLLATE NOCASE AND made_by_dot_id = ?"
+        ))
+        .bind(name)
+        .bind(maker_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(dot_from_row).transpose()
+    }
+
+    /// Writes the maker's one line on what the made dot `dot_id` is for. Who made it stays as
+    /// it is. `NotFound` for an unknown dot.
+    pub async fn set_made_purpose(&self, dot_id: &str, purpose: &str) -> Result<()> {
+        let res = sqlx::query("UPDATE dots SET made_purpose = ? WHERE id = ?")
+            .bind(purpose)
+            .bind(dot_id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("dot {dot_id}")));
+        }
+        Ok(())
+    }
+
+    /// The run of `dot_id` that ended last, if any has ended.
+    pub async fn last_ended_run(&self, dot_id: &str) -> Result<Option<Run>> {
+        let row = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE dot_id = ? \
+             AND status IN ('succeeded', 'failed', 'cancelled') AND ended_at IS NOT NULL \
+             ORDER BY ended_at DESC, id DESC LIMIT 1"
+        ))
+        .bind(dot_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(run_from_row).transpose()
     }
 }

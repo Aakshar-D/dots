@@ -14,6 +14,13 @@ str_enum!(MakingEventKind {
     // The person answered a make request. `dot_id` is the dot the answer made, if any.
     // `detail`: `{"request_id": .., "decision": "allow" | "without" | "refuse", "dot_name": ..}`.
     Answered => "answered",
+    // The maker's run changed a dot it made, or the person's answer to a change request did
+    // (design section 9). `dot_name` is the dot's name after the change.
+    // `detail`: `{"what": [..]}`, the settings that changed, in plain words.
+    Changed => "changed",
+    // The maker's run deleted a dot it made (design section 9). `dot_id` is `None`: the dot is
+    // gone. `detail`: `{}`.
+    Deleted => "deleted",
 });
 
 /// One thing a maker's run did: one card of the maker's chat topic (design section 11).
