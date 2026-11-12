@@ -339,8 +339,9 @@ async fn a_job_starts_a_run_of_the_made_dot_that_says_who_sent_it() {
     let prompt = prompt(&made, &its);
     assert!(
         prompt.contains(
-            "## Job\n\nJob from Researcher (the dot that made you). When you finish, your final \
-             message goes back to Researcher.\n\nRead the blogs now.\n\n"
+            "## Job\n\nJob from Researcher (the dot that made you). This is not a message from \
+             the person. When you finish, your final message goes back to Researcher.\n\n> Read \
+             the blogs now.\n\n"
         ),
         "{prompt}"
     );
@@ -398,7 +399,7 @@ async fn the_maker_is_woken_once_with_the_final_text_when_the_job_ends() {
     assert_eq!(its.dot_id, made.id);
     assert_eq!(job.ended_how, Some(JobEnd::Succeeded));
     assert!(job.ended_at.is_some());
-    let said = "\"Blog Watcher\" finished the job.\n\nIts final message:\nfake done";
+    let said = "\"Blog Watcher\" finished the job.\n\nIts final message:\n> fake done";
     assert_eq!(wakes(&t).await, [said]);
     let wake_id = job.wake_id.clone().expect("the job names its wake");
     let wake = t.rt.store().get_making_wake(&wake_id).await.unwrap();
@@ -482,7 +483,7 @@ async fn a_failed_job_and_a_stopped_job_wake_the_maker_and_say_how() {
         said,
         [
             "\"Alpha\" failed. The error: engine exited without a result\n\nIts final \
-             message:\nI read two of three.",
+             message:\n> I read two of three.",
             "\"Beta\" was stopped.\n\nIt left no final message.",
             "\"Gamma\" was stopped by a spend cap.\n\nIt left no final message.",
         ]
@@ -526,7 +527,7 @@ async fn a_long_final_text_is_cut_at_8000_with_a_note() {
     assert_eq!(
         said[0],
         format!(
-            "\"Alpha\" finished the job.\n\nIts final message:\n{}\n[cut: the full text is in \
+            "\"Alpha\" finished the job.\n\nIts final message:\n> {}\n[cut: the full text is in \
              the run]",
             "é".repeat(8000)
         )
@@ -534,7 +535,7 @@ async fn a_long_final_text_is_cut_at_8000_with_a_note() {
     assert_eq!(
         said[1],
         format!(
-            "\"Beta\" finished the job.\n\nIts final message:\n{}",
+            "\"Beta\" finished the job.\n\nIts final message:\n> {}",
             "é".repeat(8000)
         )
     );
@@ -564,8 +565,8 @@ async fn jobs_from_one_conversation_go_to_one_topic_of_the_made_dot() {
     // A run that goes on in a session sends only its message, which still says who sent it.
     assert_eq!(
         prompt(&made, &its),
-        "Job from Researcher (the dot that made you). When you finish, your final message goes \
-         back to Researcher.\n\nNow sum them up."
+        "Job from Researcher (the dot that made you). This is not a message from the person. \
+         When you finish, your final message goes back to Researcher.\n\n> Now sum them up."
     );
     let thread = t.rt.store().list_thread(&its.root_run_id).await.unwrap();
     assert_eq!(thread.len(), 2, "{thread:#?}");
@@ -622,7 +623,7 @@ async fn a_job_for_a_busy_made_dot_waits_behind_its_run() {
     assert!(its.started_at >= other.ended_at, "{its:#?} {other:#?}");
     assert_eq!(
         wakes(&t).await,
-        ["\"Blog Watcher\" finished the job.\n\nIts final message:\nfake done"]
+        ["\"Blog Watcher\" finished the job.\n\nIts final message:\n> fake done"]
     );
     t.rt.shutdown();
 }
@@ -717,7 +718,7 @@ async fn a_job_that_needs_an_approval_ends_after_the_resumed_run_not_before() {
     assert_eq!(now.last_run_id.as_deref(), Some(child.id.as_str()));
     assert_eq!(
         wakes(&t).await,
-        ["\"Blog Watcher\" finished the job.\n\nIts final message:\nAll read."]
+        ["\"Blog Watcher\" finished the job.\n\nIts final message:\n> All read."]
     );
     let events = log(&t, &run).await;
     assert_eq!(events[2].kind, MakingEventKind::JobEnded);
@@ -751,7 +752,7 @@ async fn a_job_whose_approval_is_refused_ends_with_the_parked_run() {
     assert_eq!(stored(&t, &job).await.status, JobStatus::Ended);
     assert_eq!(
         wakes(&t).await,
-        ["\"Blog Watcher\" finished the job.\n\nIts final message:\nI need the web."]
+        ["\"Blog Watcher\" finished the job.\n\nIts final message:\n> I need the web."]
     );
 }
 
@@ -835,7 +836,7 @@ async fn a_job_that_ends_on_a_question_waits_and_the_answer_carries_it_on() {
     assert_eq!(now.ended_how, Some(JobEnd::Succeeded));
     assert_eq!(
         wakes(&t).await,
-        ["\"Blog Watcher\" finished the job.\n\nIts final message:\nRead the first."]
+        ["\"Blog Watcher\" finished the job.\n\nIts final message:\n> Read the first."]
     );
     assert_eq!(
         kinds(&t, &run).await,
@@ -899,7 +900,7 @@ async fn a_job_whose_answer_run_asks_again_waits_again() {
     assert_eq!(stored(&t, &job).await.status, JobStatus::Ended);
     assert_eq!(
         wakes(&t).await,
-        ["\"Blog Watcher\" finished the job.\n\nIts final message:\nBoth read."]
+        ["\"Blog Watcher\" finished the job.\n\nIts final message:\n> Both read."]
     );
 }
 
@@ -934,7 +935,7 @@ async fn stopping_a_job_that_waits_for_an_answer_wakes_the_maker() {
     assert_eq!(now.ended_how, Some(JobEnd::Cancelled));
     assert_eq!(
         wakes(&t).await,
-        ["\"Blog Watcher\" was stopped.\n\nIts final message:\nWhich first?"]
+        ["\"Blog Watcher\" was stopped.\n\nIts final message:\n> Which first?"]
     );
     let events = log(&t, &run).await;
     let last = events.last().unwrap();
@@ -973,7 +974,7 @@ async fn a_follow_up_the_made_dot_schedules_is_not_part_of_the_job() {
     // The job has ended: the maker does not wait for the follow-up.
     let ended = stored(&t, &job).await;
     assert_eq!(ended.status, JobStatus::Ended);
-    let said = "\"Blog Watcher\" finished the job.\n\nIts final message:\nRead; I look again \
+    let said = "\"Blog Watcher\" finished the job.\n\nIts final message:\n> Read; I look again \
                 later.";
     assert_eq!(wakes(&t).await, [said]);
 
@@ -1537,7 +1538,7 @@ async fn a_job_open_at_startup_whose_run_ended_is_settled() {
     let wake = t.rt.store().get_making_wake(&wake_id).await.unwrap();
     assert_eq!(
         wake.message,
-        "\"Blog Watcher\" finished the job.\n\nIts final message:\nThree new posts."
+        "\"Blog Watcher\" finished the job.\n\nIts final message:\n> Three new posts."
     );
     t.rt.shutdown();
 }
@@ -1592,7 +1593,7 @@ async fn a_job_run_interrupted_by_a_restart_goes_on_in_the_run_that_sends_it_aga
     assert_eq!(stored(&t, &job).await.status, JobStatus::Ended);
     assert_eq!(
         wakes(&t).await,
-        ["\"Blog Watcher\" finished the job.\n\nIts final message:\nThree new posts."]
+        ["\"Blog Watcher\" finished the job.\n\nIts final message:\n> Three new posts."]
     );
     t.rt.shutdown();
 }

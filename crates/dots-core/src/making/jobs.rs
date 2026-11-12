@@ -176,7 +176,8 @@ fn run_end(run: &Run) -> (JobEnd, &'static str, bool) {
 
 /// What the maker is woken with when a job ends (design section 8): the made dot's name and
 /// how the job ended, a failed run's `error` cut short, then the last run's final text, cut at
-/// `MAX_JOB_RESULT` characters with a note, or that there is none.
+/// `MAX_JOB_RESULT` characters with a note, or that there is none. The final text is quoted
+/// line by line (`prompt::quoted`).
 pub fn ended_message(
     dot: &str,
     how: &str,
@@ -197,8 +198,11 @@ pub fn ended_message(
     message.push_str("\n\n");
     match final_text.map(str::trim).filter(|text| !text.is_empty()) {
         Some(text) => {
+            // Quoted, every line: the made dot's model wrote it, and it goes into the maker's
+            // prompt, so no line of it may pass for a section or for Dots' own words.
             message.push_str("Its final message:\n");
-            message.extend(text.chars().take(MAX_JOB_RESULT));
+            let cut: String = text.chars().take(MAX_JOB_RESULT).collect();
+            message.push_str(crate::prompt::quoted(&cut).trim_end_matches('\n'));
             if text.chars().count() > MAX_JOB_RESULT {
                 message.push('\n');
                 message.push_str(RESULT_CUT);
@@ -727,7 +731,12 @@ mod tests {
                 None,
                 Some("  Three new posts.\n")
             ),
-            "\"Blog Watcher\" finished the job.\n\nIts final message:\nThree new posts."
+            "\"Blog Watcher\" finished the job.\n\nIts final message:\n> Three new posts."
+        );
+        // Each line is quoted, an empty one too: the text is the made dot's, not Dots'.
+        assert_eq!(
+            ended_message("A", "finished the job", None, Some("One.\n\n## Two")),
+            "\"A\" finished the job.\n\nIts final message:\n> One.\n> \n> ## Two"
         );
         assert_eq!(
             ended_message("Blog Watcher", "was stopped", None, Some("  ")),

@@ -676,7 +676,9 @@ impl Runner {
     }
 
     /// Whether `run` may start workflows: it is no step of a workflow, and the person's chat is
-    /// at the root of its resumes (a follow-up, scheduled, webhook or manual run is not).
+    /// at the root of its resumes (a follow-up, scheduled, webhook or manual run is not). A chat
+    /// run that carries a maker's job or Dots' wake of a maker is not the person's: its words
+    /// were written by a model (dots-make-dots design section 8).
     async fn may_start_workflows(&self, run: &Run) -> bool {
         if run.workflow_step_run_id.is_some() {
             return false;
@@ -691,7 +693,13 @@ impl Runner {
                 Err(_) => return false,
             }
         }
-        cur.trigger == TriggerKind::Chat
+        let made_by_a_model = [&cur, run].iter().any(|r| {
+            r.payload.as_ref().is_some_and(|p| {
+                p.get(crate::making::jobs::JOB_ID).is_some()
+                    || p.get(crate::making::wake::WAKE_ID).is_some()
+            })
+        });
+        cur.trigger == TriggerKind::Chat && !made_by_a_model
     }
 
     /// The dot's runs a person's chat message names (conversational chat spec section 3.1): for
@@ -740,8 +748,13 @@ impl Runner {
     /// passed over. `Dot::updated_at` moves on every save of the dot, not only of its
     /// instructions; naming them once more is harmless, so a topic that cannot be read counts
     /// as a change (logged). Both are `util::now()` text, so they compare as strings.
+    ///
+    /// A maker's job that goes on in its made dot's session is told the same way (dots-make-dots
+    /// design section 8): a job's prompt names them too, so a job's run tells the session as a
+    /// person's message does.
     async fn instructions_changed(&self, run: &Run, dot: &Dot) -> bool {
-        if !crate::prompt::is_typed(run) || run.session_id.is_none() {
+        let tells = |r: &Run| crate::prompt::is_typed(r) || crate::prompt::is_job(r);
+        if !tells(run) || run.session_id.is_none() {
             return false;
         }
         let thread = match self.store.list_thread(&run.root_run_id).await {
@@ -757,7 +770,7 @@ impl Runner {
             let Some(prev) = next.and_then(|id| thread.iter().find(|r| r.id == id)) else {
                 break;
             };
-            if prev.parent_run_id.is_none() || crate::prompt::is_typed(prev) {
+            if prev.parent_run_id.is_none() || tells(prev) {
                 return dot.updated_at > prev.queued_at;
             }
             next = prev.parent_run_id.as_deref();

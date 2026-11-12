@@ -12,8 +12,8 @@ use std::time::Duration;
 
 use common::{init_repo, spec, wait_status};
 use dots_core::model::{
-    Dot, DotSpec, EngineKind, MemberSpec, ProjectSpec, RunStatus, TeamSpec, WaitingOn, WorkflowRun,
-    WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
+    Dot, DotSpec, EngineKind, MemberSpec, NewRun, ProjectSpec, RunStatus, TeamSpec, TriggerKind,
+    WaitingOn, WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::policy::{Action, Policy, Preset, Rule, APP_TOOLS, WORKFLOW_RULE, WORKFLOW_TOOL};
 use dots_core::store::Store;
@@ -462,6 +462,43 @@ async fn a_claude_helper_starts_it_through_dots_own_server() {
     assert_eq!(runs.len(), 1, "{runs:#?}");
     assert_eq!(runs[0].origin_run_id.as_deref(), Some(chat.id.as_str()));
     assert_eq!(runs[0].task, "Fix the icon.");
+    t.rt.shutdown();
+}
+
+/// A chat run that carries Dots' report to a maker (a wake) or a maker's job for a dot it made
+/// (dots-make-dots design section 8) holds words a model wrote, not the person's: it may not
+/// start workflows, though a chat trigger names its dot.
+#[tokio::test]
+async fn a_wake_or_a_job_run_may_not_start_workflows() {
+    let t = start(json!([])).await;
+    let llm = Llm::start(vec![text("Woken."), text("Job done.")]).await;
+    let helper =
+        t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None, None)
+            .await
+            .unwrap();
+    team_of(&t, &helper).await;
+    let payloads = [
+        json!({"message": "\"Fixer\" finished the job.", "wake_id": "W1"}),
+        json!({"message": "Fix the icon.", "job_id": "J1", "job_from": "Researcher"}),
+    ];
+    for (n, payload) in payloads.into_iter().enumerate() {
+        let mut new = NewRun::new(&helper.id, TriggerKind::Chat);
+        new.payload = Some(payload);
+        let run = t.rt.store().create_run(&new).await.unwrap();
+        wait_status(t.rt.store(), &run.id, RunStatus::Succeeded, 30).await;
+        let reqs = llm.requests();
+        assert_eq!(reqs.len(), n + 1);
+        let last = &reqs[n];
+        assert!(
+            !tool_names(last).contains(&"start_workflow".to_string()),
+            "{n}"
+        );
+        assert!(
+            !prompt(last).contains("## Workflows you can start"),
+            "{}",
+            prompt(last)
+        );
+    }
     t.rt.shutdown();
 }
 
