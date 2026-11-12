@@ -126,7 +126,7 @@ fn ask_browser(name: &str) -> MakeDot {
 /// Makes the dot, which must be within reach and within the limits.
 async fn make(t: &T, run: &Run, name: &str) -> Dot {
     match t.rt.makers().make_dot(&run.id, ask(name)).await.unwrap() {
-        MakeOutcome::Made { dot } => dot,
+        MakeOutcome::Made { dot, .. } => dot,
         other => panic!("{name} was not made: {other:?}"),
     }
 }
@@ -483,12 +483,13 @@ async fn allow_makes_the_dot_as_asked_and_the_extras_are_that_dots_alone() {
         [
             MakingEventKind::Asked,
             MakingEventKind::Made,
+            MakingEventKind::JobStarted,
             MakingEventKind::Answered
         ]
     );
     assert_eq!(events[1].dot_id.as_deref(), Some(dot_id.as_str()));
     assert_eq!(events[1].run_id, run.id);
-    let answered = &events[2];
+    let answered = &events[3];
     assert_eq!(answered.maker_dot_id, maker.id);
     assert_eq!(answered.run_id, run.id);
     assert_eq!(answered.root_run_id, run.root_run_id);
@@ -506,7 +507,7 @@ async fn allow_makes_the_dot_as_asked_and_the_extras_are_that_dots_alone() {
     assert_eq!(
         thread[1].payload.as_ref().unwrap()["message"],
         "The person allowed it: the dot \"Blog Watcher\" was made as you asked. Its first job \
-         has not been started."
+         has started; you will be woken with the result."
     );
 }
 

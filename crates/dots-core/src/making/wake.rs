@@ -167,6 +167,11 @@ impl Makers {
     /// of each run, which is what frees a topic. After a pass that failed, or that left a wake
     /// waiting for a topic that is adding an app, the next comes after `ERROR_WAIT` at the
     /// latest. It does not keep the makers alive.
+    ///
+    /// Each pass first follows the jobs (`settle_jobs`, design section 8): the end of a run is
+    /// what moves or ends a job, the person's answer to a question carries a waiting job on,
+    /// and a dismissed question ends it. At start that settles the jobs whose runs ended
+    /// while Dots was closed; the runtime has failed the interrupted runs by then.
     pub(crate) fn spawn_wakes(&self, shutdown: CancellationToken) -> JoinHandle<()> {
         let makers = self.downgrade();
         // Subscribed before the first pass, so no end of a run is missed.
@@ -174,8 +179,15 @@ impl Makers {
         tokio::spawn(async move {
             loop {
                 let Some(this) = makers.upgrade() else { break };
+                let jobs_failed = match this.settle_jobs().await {
+                    Ok(()) => false,
+                    Err(e) => {
+                        tracing::error!("job loop error: {e}");
+                        true
+                    }
+                };
                 let again = match this.wake_pass().await {
-                    Ok(again) => again,
+                    Ok(again) => again || jobs_failed,
                     Err(e) => {
                         tracing::error!("wake loop error: {e}");
                         true
@@ -200,12 +212,18 @@ impl Makers {
     }
 }
 
-/// Returns `true` when a run has ended (its `RunUpdated`) or when events were lost and one may
-/// have; `false` when no more events come.
+/// Returns `true` when a run has ended (its `RunUpdated`), when a question was answered or
+/// dismissed (its `MessageUpdated`: a job may wait on it), or when events were lost and one of
+/// these may have happened; `false` when no more events come.
 async fn run_ended(events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) -> bool {
     loop {
         match events.recv().await {
             Ok(RuntimeEvent::RunUpdated { run }) if run.status.is_terminal() => return true,
+            Ok(RuntimeEvent::MessageUpdated { message })
+                if message.answered_at.is_some() || message.dismissed_at.is_some() =>
+            {
+                return true
+            }
             Ok(_) => {}
             Err(RecvError::Lagged(_)) => return true,
             Err(RecvError::Closed) => return false,

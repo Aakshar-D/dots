@@ -104,7 +104,7 @@ fn ask(name: &str) -> MakeDot {
 /// Makes the dot, which must be within reach and within the limits.
 async fn make(t: &T, run: &Run, name: &str) -> Dot {
     match t.rt.makers().make_dot(&run.id, ask(name)).await.unwrap() {
-        MakeOutcome::Made { dot } => dot,
+        MakeOutcome::Made { dot, .. } => dot,
         other => panic!("{name} was not made: {other:?}"),
     }
 }
@@ -219,7 +219,7 @@ async fn a_dot_within_reach_is_made_at_once() {
             .make_dot(&run.id, ask("Blog Watcher"))
             .await
             .unwrap();
-    let MakeOutcome::Made { dot } = outcome else {
+    let MakeOutcome::Made { dot, .. } = outcome else {
         panic!("not made: {outcome:?}");
     };
     // It exists, on, and may not itself make dots.
@@ -290,7 +290,7 @@ async fn a_schedule_given_is_kept_and_its_state_row_made() {
     let mut asked = ask("Blog Watcher");
     asked.wanted.schedule = Some(Some(every(60)));
     let outcome = t.rt.makers().make_dot(&run.id, asked).await.unwrap();
-    let MakeOutcome::Made { dot } = outcome else {
+    let MakeOutcome::Made { dot, .. } = outcome else {
         panic!("not made: {outcome:?}");
     };
     assert!(dot.spec.schedule.is_some());
@@ -311,7 +311,7 @@ async fn a_subfolder_that_does_not_exist_is_created() {
     let mut asked = ask("Blog Watcher");
     asked.wanted.folder = Some("notes/blogs".into());
     let outcome = t.rt.makers().make_dot(&run.id, asked).await.unwrap();
-    let MakeOutcome::Made { dot } = outcome else {
+    let MakeOutcome::Made { dot, .. } = outcome else {
         panic!("not made: {outcome:?}");
     };
     let folder = real_path(&t.work()).join("notes").join("blogs");
@@ -453,7 +453,7 @@ async fn a_dot_that_is_not_valid_is_a_plain_error() {
     asked.purpose = format!(" {} ", "p".repeat(200));
     asked.first_job = Some("j".repeat(4000));
     let outcome = t.rt.makers().make_dot(&run.id, asked).await.unwrap();
-    let MakeOutcome::Made { dot } = outcome else {
+    let MakeOutcome::Made { dot, .. } = outcome else {
         panic!("not made: {outcome:?}");
     };
     assert_eq!(dot.made.unwrap().purpose, "p".repeat(200));
@@ -721,7 +721,7 @@ async fn a_made_dots_grants_are_exactly_what_was_asked() {
     let mut asked = ask("Plain");
     asked.wanted.uses = Some(uses_github());
     let outcome = t.rt.makers().make_dot(&run.id, asked).await.unwrap();
-    let MakeOutcome::Made { dot } = outcome else {
+    let MakeOutcome::Made { dot, .. } = outcome else {
         panic!("not made: {outcome:?}");
     };
     assert_eq!(dot.spec.uses, uses_github());
@@ -731,7 +731,7 @@ async fn a_made_dots_grants_are_exactly_what_was_asked() {
     asked.wanted.uses = Some(uses_github());
     asked.wanted.variables = Some(grants("mcp:github", "GITHUB_TOKEN"));
     let outcome = t.rt.makers().make_dot(&run.id, asked).await.unwrap();
-    let MakeOutcome::Made { dot } = outcome else {
+    let MakeOutcome::Made { dot, .. } = outcome else {
         panic!("not made: {outcome:?}");
     };
     assert_eq!(dot.spec.variables, grants("mcp:github", "GITHUB_TOKEN"));

@@ -1,6 +1,6 @@
 //! The makers' log, what a make is checked against before anything is saved, the make requests
-//! that wait for the person, and the makers' wakes (dots-make-dots design sections 7.1, 7.2, 8,
-//! 10 and 11).
+//! that wait for the person, the makers' wakes, and the jobs makers give to the dots they made
+//! (dots-make-dots design sections 7.1, 7.2, 8, 10 and 11).
 
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
@@ -10,10 +10,11 @@ use super::library::check_uses;
 use super::runs::{insert_run, run_from_row, RUN_COLUMNS};
 use super::Store;
 use crate::library::{LibraryKind, Uses};
+use crate::making::jobs::{JobEnd, JobStatus, MakingJob, NewMakingJob};
 use crate::making::log::{MakingEvent, MakingEventKind, NewMakingEvent};
 use crate::making::requests::{MakeRequest, NewMakeRequest, RequestKind, RequestStatus};
 use crate::making::wake::MakingWake;
-use crate::model::{Dot, NewRun, Run};
+use crate::model::{Dot, Message, NewRun, Run};
 use crate::util::{new_id, now};
 use crate::{Error, Result};
 
@@ -338,6 +339,275 @@ impl Store {
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() > 0)
+    }
+}
+
+const JOB_COLUMNS: &str = "id, maker_dot_id, maker_run_id, maker_root_run_id, dot_id, \
+     dot_root_run_id, first_run_id, last_run_id, message, status, ended_how, created_at, \
+     ended_at, wake_id";
+
+fn job_from_row(row: &SqliteRow) -> Result<MakingJob> {
+    let ended_how: Option<String> = row.try_get("ended_how")?;
+    Ok(MakingJob {
+        id: row.try_get("id")?,
+        maker_dot_id: row.try_get("maker_dot_id")?,
+        maker_run_id: row.try_get("maker_run_id")?,
+        maker_root_run_id: row.try_get("maker_root_run_id")?,
+        dot_id: row.try_get("dot_id")?,
+        dot_root_run_id: row.try_get("dot_root_run_id")?,
+        first_run_id: row.try_get("first_run_id")?,
+        last_run_id: row.try_get("last_run_id")?,
+        message: row.try_get("message")?,
+        status: JobStatus::parse(&row.try_get::<String, _>("status")?)?,
+        ended_how: ended_how.as_deref().map(JobEnd::parse).transpose()?,
+        created_at: row.try_get("created_at")?,
+        ended_at: row.try_get("ended_at")?,
+        wake_id: row.try_get("wake_id")?,
+    })
+}
+
+/// The jobs makers give to the dots they made (dots-make-dots design section 8).
+impl Store {
+    /// Starts a job: stores `run`, the made dot's run that carries it, the job itself, at that
+    /// run and `working`, and the `job_started` entry of the maker's log, in one transaction.
+    /// So a job has its run from the start, and the log, which the loop guard counts, has every
+    /// job that was started. `new.id` is the job's id, which the run's payload names already;
+    /// `dot_name` is the made dot's name, for the log. Returns the job and its run.
+    pub async fn start_making_job(
+        &self,
+        new: &NewMakingJob<'_>,
+        dot_name: &str,
+        run: &NewRun,
+    ) -> Result<(MakingJob, Run)> {
+        let created_at = now();
+        let mut tx = self.pool.begin().await?;
+        let run_id = insert_run(&mut tx, run).await?;
+        let root = run.root_run_id.clone().unwrap_or_else(|| run_id.clone());
+        sqlx::query(&format!(
+            "INSERT INTO making_jobs ({JOB_COLUMNS}) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL, NULL)"
+        ))
+        .bind(new.id)
+        .bind(new.maker_dot_id)
+        .bind(new.maker_run_id)
+        .bind(new.maker_root_run_id)
+        .bind(new.dot_id)
+        .bind(&root)
+        .bind(&run_id)
+        .bind(&run_id)
+        .bind(new.message)
+        .bind(JobStatus::Working.as_str())
+        .bind(&created_at)
+        .execute(&mut *tx)
+        .await?;
+        let detail = serde_json::json!({
+            "job_id": new.id,
+            "message": new.message,
+            "run_id": run_id,
+        });
+        sqlx::query(&format!(
+            "INSERT INTO making_events ({COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        ))
+        .bind(new_id())
+        .bind(new.maker_dot_id)
+        .bind(new.maker_run_id)
+        .bind(new.maker_root_run_id)
+        .bind(MakingEventKind::JobStarted.as_str())
+        .bind(new.dot_id)
+        .bind(dot_name)
+        .bind(detail.to_string())
+        .bind(&created_at)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok((
+            self.get_making_job(new.id).await?,
+            self.get_run(&run_id).await?,
+        ))
+    }
+
+    /// The job `id`, ended or not.
+    pub async fn get_making_job(&self, id: &str) -> Result<MakingJob> {
+        let row = sqlx::query(&format!(
+            "SELECT {JOB_COLUMNS} FROM making_jobs WHERE id = ?"
+        ))
+        .bind(id)
+        .fetch_optional(&self.pool)
+        .await?
+        .ok_or_else(|| Error::NotFound(format!("job {id}")))?;
+        job_from_row(&row)
+    }
+
+    /// The jobs given in the maker's chat topic `maker_root_run_id`, oldest first; of two
+    /// stored in the same millisecond, the one stored first comes first (`rowid`).
+    pub async fn making_jobs_of_topic(&self, maker_root_run_id: &str) -> Result<Vec<MakingJob>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {JOB_COLUMNS} FROM making_jobs WHERE maker_root_run_id = ? \
+             ORDER BY created_at, rowid"
+        ))
+        .bind(maker_root_run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(job_from_row).collect()
+    }
+
+    /// The jobs that have not ended, of every maker, oldest first; with `dot_id`, only those
+    /// given to that made dot.
+    pub async fn open_making_jobs(&self, dot_id: Option<&str>) -> Result<Vec<MakingJob>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {JOB_COLUMNS} FROM making_jobs \
+             WHERE status != 'ended' AND (?1 IS NULL OR dot_id = ?1) ORDER BY created_at, rowid"
+        ))
+        .bind(dot_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(job_from_row).collect()
+    }
+
+    /// The newest job given to the made dot `dot_id` in the maker's chat topic
+    /// `maker_root_run_id`, ended or not: the next job from that topic goes on in its topic of
+    /// the made dot (dots-make-dots design section 8).
+    pub async fn latest_making_job(
+        &self,
+        maker_root_run_id: &str,
+        dot_id: &str,
+    ) -> Result<Option<MakingJob>> {
+        let row = sqlx::query(&format!(
+            "SELECT {JOB_COLUMNS} FROM making_jobs WHERE maker_root_run_id = ? AND dot_id = ? \
+             ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        ))
+        .bind(maker_root_run_id)
+        .bind(dot_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(job_from_row).transpose()
+    }
+
+    /// How many jobs were started in the maker's chat topic `maker_root_run_id` at or after
+    /// `since`, or ever with `None`: what the loop guard counts (dots-make-dots design section
+    /// 8). It counts the log, not the jobs, so a job whose made dot was deleted still counts.
+    pub async fn count_jobs_started(
+        &self,
+        maker_root_run_id: &str,
+        since: Option<&str>,
+    ) -> Result<u32> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM making_events WHERE root_run_id = ?1 \
+             AND kind = 'job_started' AND (?2 IS NULL OR created_at >= ?2)",
+        )
+        .bind(maker_root_run_id)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n as u32)
+    }
+
+    /// Moves the open job `id` on from its run `from` to the run `to`, which continues it, and
+    /// marks it `working`. `false`, with nothing written, when the job has ended or is no
+    /// longer at `from`.
+    pub async fn move_making_job(&self, id: &str, from: &str, to: &str) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE making_jobs SET last_run_id = ?, status = 'working' \
+             WHERE id = ? AND status != 'ended' AND last_run_id = ?",
+        )
+        .bind(to)
+        .bind(id)
+        .bind(from)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Marks the working job `id` as waiting for the person's answer. `false`, with nothing
+    /// written, when it was not `working`.
+    pub async fn set_making_job_waiting(&self, id: &str) -> Result<bool> {
+        let res = sqlx::query(
+            "UPDATE making_jobs SET status = 'waiting_answer' WHERE id = ? AND status = 'working'",
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Ends the open job `id` as `how` and stores the wake that tells its maker, `message`
+    /// for the maker's topic the job was given in, in one transaction: a job that has ended
+    /// has exactly one wake. The guarded update goes first, so of two that end one job the
+    /// second finds it ended. `None`, with nothing written, when the job had ended or is gone.
+    pub async fn end_making_job(
+        &self,
+        id: &str,
+        how: JobEnd,
+        message: &str,
+    ) -> Result<Option<MakingJob>> {
+        let ended_at = now();
+        let wake_id = new_id();
+        let mut tx = self.pool.begin().await?;
+        let res = sqlx::query(
+            "UPDATE making_jobs SET status = 'ended', ended_how = ?, ended_at = ?, wake_id = ? \
+             WHERE id = ? AND status != 'ended'",
+        )
+        .bind(how.as_str())
+        .bind(&ended_at)
+        .bind(&wake_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        if res.rows_affected() == 0 {
+            tx.rollback().await?;
+            return Ok(None);
+        }
+        sqlx::query(
+            "INSERT INTO making_wakes (id, maker_dot_id, root_run_id, message, created_at) \
+             SELECT ?, maker_dot_id, maker_root_run_id, ?, ? FROM making_jobs WHERE id = ?",
+        )
+        .bind(&wake_id)
+        .bind(message)
+        .bind(&ended_at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        self.get_making_job(id).await.map(Some)
+    }
+
+    /// The run that goes on with the work of the ended run `run_id` in the same turn, if there
+    /// is one: the run that resumes it after an approval (`resume_parked` stores it as it
+    /// closes the parked run), or the run that sends its message again (`retry_of`). The
+    /// newest, when a message was sent again more than once.
+    pub async fn run_continued_by(&self, run_id: &str) -> Result<Option<Run>> {
+        let row = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs \
+             WHERE (parent_run_id = ?1 AND trigger_kind = 'resume') OR retry_of = ?1 \
+             ORDER BY queued_at DESC, id DESC LIMIT 1"
+        ))
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.as_ref().map(run_from_row).transpose()
+    }
+
+    /// The newest question a run of the chat topic `root_run_id` asked the person, among the
+    /// runs queued at or after `since`: the question a job that runs in that topic since then
+    /// waits on, answered, dismissed or open.
+    pub async fn latest_question_since(
+        &self,
+        root_run_id: &str,
+        since: &str,
+    ) -> Result<Option<Message>> {
+        let id: Option<String> = sqlx::query_scalar(
+            "SELECT m.id FROM messages m JOIN runs r ON r.id = m.run_id \
+             WHERE m.kind = 'question' AND r.root_run_id = ? AND r.queued_at >= ? \
+             ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
+        )
+        .bind(root_run_id)
+        .bind(since)
+        .fetch_optional(&self.pool)
+        .await?;
+        match id {
+            Some(id) => self.get_message(&id).await.map(Some),
+            None => Ok(None),
+        }
     }
 }
 

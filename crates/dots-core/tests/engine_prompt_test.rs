@@ -428,6 +428,45 @@ fn chat_runs_dots_makes_keep_the_task_framing() {
     }
 }
 
+/// A job a maker gave (dots-make-dots design section 8): the made dot is told who sent it, in
+/// a first prompt and in one that goes on in a session, and only a chat run carries a job.
+#[test]
+fn a_job_from_a_maker_says_who_sent_it() {
+    let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);
+    let payload = json!({"message": "Read the blogs.", "job_id": "J1", "job_from": "Researcher"});
+    let note = "Job from Researcher (the dot that made you). When you finish, your final message \
+                goes back to Researcher.";
+    assert_eq!(dots_core::prompt::job_note("Researcher"), note);
+
+    let first = fake_run(TriggerKind::Chat, Some(payload.clone()), None);
+    let p = build_prompt(&dot, &first, Path::new("C:/ws"), at(), "", &[]);
+    assert!(p.starts_with("Do the thing.\n\n---\n\n## Job\n\n"), "{p}");
+    assert!(
+        p.contains(&format!(
+            "## Job\n\n{note}\n\nRead the blogs.\n\n## Standing rules"
+        )),
+        "{p}"
+    );
+    assert!(!p.contains("## Message from the user"), "{p}");
+    assert!(!p.contains("## Chat with the person"), "{p}");
+    assert!(
+        p.contains("- End with a short summary: what you did"),
+        "{p}"
+    );
+
+    let next = fake_run(TriggerKind::Chat, Some(payload.clone()), Some("s"));
+    assert_eq!(
+        build_prompt(&dot, &next, Path::new("C:/ws"), at(), "", &[]),
+        format!("{note}\n\nRead the blogs.")
+    );
+
+    // A webhook's payload may hold any key: it names no maker.
+    let webhook = fake_run(TriggerKind::Webhook, Some(payload), None);
+    let p = build_prompt(&dot, &webhook, Path::new("C:/ws"), at(), "", &[]);
+    assert!(!p.contains("## Job"), "{p}");
+    assert!(!p.contains("the dot that made you"), "{p}");
+}
+
 #[test]
 fn a_person_s_resumed_chat_message_is_only_the_message() {
     let dot = fake_dot("d", Path::new("C:/repo"), WorkspaceMode::Folder);

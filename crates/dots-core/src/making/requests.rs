@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::jobs::FirstJob;
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::manage::{ChangeDot, Standing, Stands};
 use super::reach::Extra;
@@ -34,9 +35,6 @@ pub const NOTHING_BEYOND_REACH: &str =
 pub const ONLY_REFUSE_LEFT: &str = "Only \"Don't make it\" is left.";
 /// What the card says of a request marked gone whose reason was not kept.
 pub const SOMETHING_GONE: &str = "Something this request names no longer exists.";
-/// What a wake adds when the dot was made and a first job was given with the request. The
-/// first job is not started here; where it is, this sentence changes (design section 7.2).
-pub const FIRST_JOB_NOT_STARTED: &str = " Its first job has not been started.";
 /// What follows the reason when a change request that names something that has gone is
 /// allowed.
 pub const ONLY_REFUSE_CHANGE_LEFT: &str = "Only \"Don't change it\" is left.";
@@ -225,8 +223,15 @@ fn change_answer_message(request: &MakeRequest, decision: MakeDecision, maker: &
 }
 
 /// What the maker is woken with after the person's answer `decision` to `request` (design
-/// sections 7.2 and 9). `maker` is the maker's name.
-pub fn answer_message(request: &MakeRequest, decision: MakeDecision, maker: &str) -> String {
+/// sections 7.2 and 9). `maker` is the maker's name. `first_job` is what came of the first job
+/// given with the request, when the answer made the dot: the message ends with its sentence
+/// (`FirstJob::sentence`).
+pub fn answer_message(
+    request: &MakeRequest,
+    decision: MakeDecision,
+    maker: &str,
+    first_job: Option<&FirstJob>,
+) -> String {
     if request.kind == RequestKind::Change {
         return change_answer_message(request, decision, maker);
     }
@@ -250,8 +255,8 @@ pub fn answer_message(request: &MakeRequest, decision: MakeDecision, maker: &str
             )
         }
     };
-    if request.first_job.is_some() {
-        message.push_str(FIRST_JOB_NOT_STARTED);
+    if let Some(first_job) = first_job {
+        message.push_str(&first_job.sentence());
     }
     message
 }
@@ -573,13 +578,13 @@ impl Makers {
         request_id: &str,
         decision: MakeDecision,
     ) -> Result<MakeRequest> {
-        let (request, maker_name) = {
+        let (request, maker_name, first_job) = {
             // With `make_dot`: two answers, or an answer and a make, cannot both pass.
             let _one_at_a_time = self.parts.one_at_a_time.lock().await;
             self.answer(request_id, decision).await?
         };
         // After every lock is released: `wake` takes the thread lock itself.
-        let message = answer_message(&request, decision, &maker_name);
+        let message = answer_message(&request, decision, &maker_name, first_job.as_ref());
         if let Err(e) = self
             .wake(&request.maker_dot_id, &request.root_run_id, &message)
             .await
@@ -590,12 +595,14 @@ impl Makers {
     }
 
     /// `decide_request` without the wake, under the service's lock: the request as it is
-    /// after, and the maker's name.
+    /// after, the maker's name, and what came of the first job given with the request, when
+    /// the answer made the dot (design section 7.2): it starts once the dot is made, as the
+    /// job of the run that asked, in that run's topic.
     async fn answer(
         &self,
         request_id: &str,
         decision: MakeDecision,
-    ) -> Result<(MakeRequest, String)> {
+    ) -> Result<(MakeRequest, String, Option<FirstJob>)> {
         let p = &self.parts;
         let request = p.store.get_make_request(request_id).await?;
         match (request.status, decision) {
@@ -608,7 +615,8 @@ impl Makers {
             _ => return Err(Error::Conflict(ALREADY_ANSWERED.into())),
         }
         if request.kind == RequestKind::Change {
-            return self.answer_change(request, decision).await;
+            let (request, maker_name) = self.answer_change(request, decision).await?;
+            return Ok((request, maker_name, None));
         }
         if decision == MakeDecision::Without && request.extras.is_empty() {
             return Err(Error::Invalid(NOTHING_BEYOND_REACH.into()));
@@ -647,11 +655,25 @@ impl Makers {
                 Some(dot)
             }
         };
+        // The dot is made whatever comes of its first job (design section 8).
+        let first_job = match &made {
+            Some(dot) => {
+                self.start_first_job(
+                    &maker,
+                    &request.run_id,
+                    &request.root_run_id,
+                    dot,
+                    request.first_job.as_deref(),
+                )
+                .await
+            }
+            None => None,
+        };
         let made_id = made.as_ref().map(|dot| dot.id.as_str());
         self.record_answer(&request, decision, made_id, made_id, &request.name)
             .await?;
         let request = p.store.get_make_request(&request.id).await?;
-        Ok((request, maker.spec.name))
+        Ok((request, maker.spec.name, first_job))
     }
 
     /// `Ok` when this PC may create `spec` in the maker's account and workspace (design

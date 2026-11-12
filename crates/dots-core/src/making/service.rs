@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
+use super::jobs::FirstJob;
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::reach::{reach_new, Reach, Wanted};
 use super::requests::{MakeRequest, NewMakeRequest, RequestKind, MAX_WAITING_REQUESTS};
@@ -44,8 +45,8 @@ pub struct MakeDot {
     pub purpose: String,
     #[serde(flatten)]
     pub wanted: Wanted,
-    /// A first job for the new dot (design section 8), 1 to 4,000 characters when given. It is
-    /// checked here and not started yet.
+    /// A first job for the new dot (design section 8), 1 to 4,000 characters when given. It
+    /// starts when the dot is made: at once, or when the person allows the request.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_job: Option<String>,
 }
@@ -80,8 +81,12 @@ impl<'de> Deserialize<'de> for MakeDot {
 #[derive(Debug, Clone, PartialEq)]
 #[allow(clippy::large_enum_variant)]
 pub enum MakeOutcome {
-    /// Created at once.
-    Made { dot: Dot },
+    /// Created at once. `first_job` is what came of the first job, when one was given with
+    /// the dot (design section 8).
+    Made {
+        dot: Dot,
+        first_job: Option<FirstJob>,
+    },
     /// Stored for the person; nothing was created (design section 7.1): something of it is
     /// beyond the maker's reach (`request.extras`), or a limit would be passed
     /// (`request.over`), or both. `maker_name` is the maker's name, for the words of the
@@ -96,13 +101,16 @@ impl MakeOutcome {
     /// What the tool tells the maker's run (design section 7.1), the same on both engines.
     pub fn tool_text(&self) -> String {
         match self {
-            Self::Made { dot } => {
+            Self::Made { dot, first_job } => {
                 let mut text = format!(
                     "Made the dot \"{}\". It is on and ready; give it a job with give_job.",
                     dot.spec.name
                 );
                 if dot.spec.schedule.is_some() {
                     text.push_str(" It will also run on its schedule.");
+                }
+                if let Some(first_job) = first_job {
+                    text.push_str(&first_job.sentence());
                 }
                 text
             }
@@ -200,6 +208,10 @@ pub(super) struct Parts {
     /// cannot both take the last place; and while the person's answer to a make request is
     /// carried out, so two answers, or an answer and a make, cannot both pass.
     pub(super) one_at_a_time: Mutex<()>,
+    /// Held by the pass that follows the jobs (`Makers::settle_jobs`), so one runs at a time,
+    /// and while a maker deletes a made dot whose open jobs it ends. Taken after
+    /// `one_at_a_time` when both are held.
+    pub(super) settling: Mutex<()>,
 }
 
 /// Everything a maker does to other dots, for the tools of both engines. Cheap to clone; the
@@ -240,6 +252,7 @@ impl Makers {
                 follow_ups,
                 runner,
                 one_at_a_time: Mutex::new(()),
+                settling: Mutex::new(()),
             }),
         }
     }
@@ -259,7 +272,8 @@ impl Makers {
     ///
     /// `Made` when everything asked is within the maker's reach and its limits: the dot
     /// exists, in the maker's account and workspace, with who made it recorded, and the
-    /// topic's log has a `made` entry. `Waiting` when something is beyond reach or a limit
+    /// topic's log has a `made` entry; a first job given with it has started, or the outcome
+    /// says why not (`FirstJob`). `Waiting` when something is beyond reach or a limit
     /// would be passed: nothing was created, a make request is stored for the person, and the
     /// topic's log has an `asked` entry. At most `MAX_WAITING_REQUESTS` of one maker wait; a
     /// further one is refused (`Invalid`).
@@ -311,9 +325,17 @@ impl Makers {
                 create_folder,
             )
             .await?;
-        // The first job is not started here: `ask.first_job` is checked above and goes no
-        // further yet (design section 8).
-        Ok(MakeOutcome::Made { dot })
+        // The dot is made whatever comes of its first job (design section 8).
+        let first_job = self
+            .start_first_job(
+                &maker,
+                &run.id,
+                &run.root_run_id,
+                &dot,
+                ask.first_job.as_deref(),
+            )
+            .await;
+        Ok(MakeOutcome::Made { dot, first_job })
     }
 
     /// Stores the make request for a dot that is beyond reach or over a limit, writes the

@@ -3988,7 +3988,7 @@ impl Runtime {
         if run.status != RunStatus::Queued
             || run.hold_released
             || dot.spec.engine != crate::model::EngineKind::Claude
-            || !crate::limits::is_background(run.trigger)
+            || !crate::limits::run_is_background(&run)
         {
             return Err(Error::Invalid(crate::limits::NOT_HELD.into()));
         }
@@ -4005,7 +4005,7 @@ impl Runtime {
         let run = self.store.get_run(run_id).await?;
         let dot = self.store.get_dot(&run.dot_id).await?;
         self.require_dot(&dot, Permission::RunDots).await?;
-        if crate::limits::is_background(run.trigger) {
+        if crate::limits::run_is_background(&run) {
             return Err(Error::Invalid(crate::spend::BACKGROUND_WAITS.into()));
         }
         let Some(hit) = self.runner.cap_hold(&run).await? else {

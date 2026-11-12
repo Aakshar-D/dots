@@ -13,6 +13,27 @@ use crate::policy::Action;
 /// (conversational chat spec section 3). Chat runs Dots makes itself carry no such key.
 pub const TYPED: &str = "typed";
 
+/// The key `Makers::start_job` sets in a chat run's payload: the run carries a job a maker gave
+/// the dot (dots-make-dots design section 8), and the value is the maker's name.
+pub const JOB_FROM: &str = "job_from";
+
+/// The line that opens a job's message for the made dot (dots-make-dots design section 8): who
+/// the job comes from, by name, and where its answer goes.
+pub fn job_note(maker: &str) -> String {
+    format!(
+        "Job from {maker} (the dot that made you). When you finish, your final message goes back \
+         to {maker}."
+    )
+}
+
+/// The name of the maker whose job the chat run `run` carries, if it carries one.
+fn job_from(run: &Run) -> Option<&str> {
+    if run.trigger != TriggerKind::Chat {
+        return None;
+    }
+    run.payload.as_ref()?.get(JOB_FROM)?.as_str()
+}
+
 /// What a person's chat message's first prompt tells the dot (conversational chat spec section
 /// 3): a chat is a conversation, not a run of its instructions.
 pub const CONVERSATION: &str = "## Chat with the person\n\n\
@@ -257,7 +278,13 @@ pub fn build_prompt_full(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let with_files = with_attachments(run, workspace, text);
-    let message = with_files.as_str();
+    // A job says who sent it, in a first prompt and in one that goes on in a session.
+    let maker = job_from(run);
+    let with_note = match maker {
+        Some(maker) => format!("{}\n\n{with_files}", job_note(maker)),
+        None => with_files,
+    };
+    let message = with_note.as_str();
     // A person's message that resumes its topic names the runs that ended since the topic's
     // last one (conversational chat spec section 3.1).
     if is_typed(run) && run.session_id.is_some() && (instructions_changed || !recent.is_empty()) {
@@ -337,7 +364,12 @@ pub fn build_prompt_full(
         out.push_str(&conversation_so_far(so_far));
         out.push('\n');
     }
-    if run.trigger == TriggerKind::Chat {
+    if maker.is_some() {
+        // A job a maker gave (dots-make-dots design section 8): not the person's message.
+        out.push_str("## Job\n\n");
+        out.push_str(message);
+        out.push_str("\n\n");
+    } else if run.trigger == TriggerKind::Chat {
         out.push_str("## Message from the user\n\n");
         out.push_str(message);
         out.push_str("\n\n");

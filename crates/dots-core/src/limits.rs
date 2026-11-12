@@ -11,7 +11,7 @@ use chrono::{DateTime, Local, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::events::{Bus, RuntimeEvent};
-use crate::model::{EngineKind, TriggerKind};
+use crate::model::{EngineKind, Run, TriggerKind};
 use crate::scheduler::Clock;
 use crate::settings::Settings;
 use crate::store::Store;
@@ -91,6 +91,25 @@ pub fn is_background(t: TriggerKind) -> bool {
     )
 }
 
+/// The key of a chat run's payload that marks it background: a job a maker gave in a run that
+/// was itself background (dots-make-dots design section 8). Only Dots writes a chat run's
+/// payload, so no one outside can set it.
+pub const BACKGROUND: &str = "background";
+
+/// Whether the usage holds, the role hold and the spending caps treat `run` as background: by
+/// its trigger (`is_background`), or a chat run that carries a job given by a background run
+/// (`BACKGROUND`), which counts as that run did.
+pub fn run_is_background(run: &Run) -> bool {
+    is_background(run.trigger)
+        || (run.trigger == TriggerKind::Chat
+            && run
+                .payload
+                .as_ref()
+                .and_then(|p| p.get(BACKGROUND))
+                .and_then(serde_json::Value::as_bool)
+                == Some(true))
+}
+
 /// The person's hold settings.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct HoldShares {
@@ -143,6 +162,8 @@ pub enum HoldChange {
 pub struct QueuedRun {
     pub id: String,
     pub trigger: TriggerKind,
+    /// The run counts as background (`run_is_background`): the holds are for these.
+    pub background: bool,
     pub engine: EngineKind,
     pub hold_released: bool,
     pub queued_at: String,
@@ -232,7 +253,7 @@ impl Inner {
         if self.rejected(now).is_some() {
             return Admit::Rejected;
         }
-        if !is_background(run.trigger) || run.hold_released {
+        if !run.background || run.hold_released {
             return Admit::Go;
         }
         if self.over_share(now).is_some() {
@@ -252,7 +273,7 @@ impl Inner {
         for run in queued {
             match self.admit(run, running, now) {
                 Admit::Go => {
-                    if run.engine == EngineKind::Claude && is_background(run.trigger) {
+                    if run.engine == EngineKind::Claude && run.background {
                         running += 1;
                     }
                 }
@@ -272,7 +293,7 @@ impl Inner {
             && queued
                 .iter()
                 .filter(claude)
-                .any(|r| is_background(r.trigger) && !r.hold_released)
+                .any(|r| r.background && !r.hold_released)
     }
 
     fn state(&self, queued: &[QueuedRun], running: usize, now: DateTime<Utc>) -> LimitsState {
@@ -396,7 +417,7 @@ impl Limits {
             let holding = inner.holding(queued, now);
             let waiting = queued
                 .iter()
-                .any(|r| r.engine == EngineKind::Claude && is_background(r.trigger));
+                .any(|r| r.engine == EngineKind::Claude && r.background);
             let change = match (inner.holding, holding) {
                 (false, true) => {
                     let (window, utilization) = match inner.over_share(now) {

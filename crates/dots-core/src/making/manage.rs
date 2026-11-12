@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 
+use super::jobs::{deleted_message, JobEnd, JobStatus, JOB_WAITING, JOB_WORKING};
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::reach::{reach_change, Extra, Reach, Wanted};
 use super::requests::{MakeRequest, NewMakeRequest, RequestKind, SOMETHING_GONE};
@@ -36,6 +37,11 @@ pub struct MadeDotLine {
     pub last_run: Option<String>,
     /// A change this maker asked for it waits for the person.
     pub waiting_change: bool,
+    /// What it does for the conversation that lists it (design section 8): `JOB_WORKING` while
+    /// a job given in this chat topic of the maker has not ended, `JOB_WAITING` while that job
+    /// waits for the person's answer; `None` otherwise.
+    #[serde(default)]
+    pub job: Option<String>,
 }
 
 /// What a maker's run asks for with `change_dot` (design section 9). In JSON it is one flat
@@ -196,6 +202,7 @@ pub fn made_dots_text(maker: &str, lines: &[MadeDotLine], waiting_makes: &[MakeR
         if line.waiting_change {
             parts.push("a change is waiting for the person".to_string());
         }
+        parts.extend(line.job.clone());
         text.push(format!("\"{}\": {}", line.name, parts.join("; ")));
     }
     for request in waiting_makes {
@@ -348,7 +355,7 @@ fn not_made(maker: &Dot, name: &str) -> Error {
 impl Makers {
     /// The run `run_id` and its dot, the maker, when the run may use the tools for making dots
     /// (`may_make`).
-    async fn caller(&self, run_id: &str) -> Result<(Run, Dot)> {
+    pub(super) async fn caller(&self, run_id: &str) -> Result<(Run, Dot)> {
         let store = &self.parts.store;
         let run = store.get_run(run_id).await?;
         let maker = store.get_dot(&run.dot_id).await?;
@@ -357,7 +364,7 @@ impl Makers {
     }
 
     /// The dot named `name`, in any letter case, that `maker` made (design section 9).
-    async fn made_dot(&self, maker: &Dot, name: &str) -> Result<Dot> {
+    pub(super) async fn made_dot(&self, maker: &Dot, name: &str) -> Result<Dot> {
         self.parts
             .store
             .made_dot_named(&maker.id, name.trim())
@@ -370,11 +377,18 @@ impl Makers {
     /// workflow step's run and a run that has ended.
     pub async fn list_made_dots(&self, run_id: &str) -> Result<Vec<MadeDotLine>> {
         let store = &self.parts.store;
-        let (_, maker) = self.caller(run_id).await?;
+        let (run, maker) = self.caller(run_id).await?;
         // One marked gone still stands before the person, so it still waits.
         let waiting = store.list_make_requests(Some(&maker.id), true).await?;
         let mut lines = Vec::new();
         for dot in store.list_made_dots(&maker.id).await? {
+            // The job this conversation gave it last, while it has not ended.
+            let job = store.latest_making_job(&run.root_run_id, &dot.id).await?;
+            let job = match job.map(|job| job.status) {
+                Some(JobStatus::Working) => Some(JOB_WORKING.to_string()),
+                Some(JobStatus::WaitingAnswer) => Some(JOB_WAITING.to_string()),
+                Some(JobStatus::Ended) | None => None,
+            };
             let last_run = store.last_ended_run(&dot.id).await?.map(|run| {
                 let ended = run.ended_at.unwrap_or_default();
                 format!("{} at {ended}", run.status.as_str())
@@ -388,6 +402,7 @@ impl Makers {
                     request.kind == RequestKind::Change
                         && request.dot_id.as_deref() == Some(dot.id.as_str())
                 }),
+                job,
                 purpose: dot.made.map(|made| made.purpose).unwrap_or_default(),
                 name: dot.spec.name,
             });
@@ -679,7 +694,10 @@ impl Makers {
     /// as the person's delete takes it, history included, through `DotAdmin::delete`. Returns
     /// what the tool tells the run. The topic's log has a `deleted` entry that keeps the dot's
     /// name. A place in the maker's total is free again; the run's own count is not (section
-    /// 10). Dots the deleted dot made itself stay, with its name as who made them.
+    /// 10). Dots the deleted dot made itself stay, with its name as who made them. A job of the
+    /// dot that waits for the person's answer ends with it: a question that waits is no run
+    /// going, so the delete is not refused, and the job's maker topic gets a `job_ended` entry
+    /// (`deleted`) and is woken with `jobs::deleted_message` (section 8).
     ///
     /// Refused while the dot has a run queued, running or awaiting approval (`Conflict`, in
     /// words for the model: the store's own sentence says to cancel the runs, which a maker
@@ -687,9 +705,14 @@ impl Makers {
     pub async fn delete_dot(&self, run_id: &str, dot_name: &str) -> Result<String> {
         let p = &self.parts;
         let (run, maker) = self.caller(run_id).await?;
+        // A job of the dot whose run has ended is settled first, so its result is not lost
+        // with the dot.
+        if let Err(e) = self.settle_jobs().await {
+            tracing::warn!(run = %run.id, "settling the jobs before a delete failed: {e}");
+        }
         // With the answers: no answer to a change request for the dot is carried out while
         // the dot goes.
-        let _one_at_a_time = p.one_at_a_time.lock().await;
+        let one_at_a_time = p.one_at_a_time.lock().await;
         let made = self.made_dot(&maker, dot_name).await?;
         let name = made.spec.name.as_str();
         let busy = || {
@@ -700,11 +723,26 @@ impl Makers {
         if p.store.latest_run(&made.id, true).await?.is_some() {
             return Err(busy());
         }
+        // The jobs of the dot that are open now, which can only wait for the person's answer:
+        // their rows go with the dot, so their maker is told here (design section 8). No pass
+        // ends one of them in between.
+        let settling = p.settling.lock().await;
+        let open_jobs = p.store.open_making_jobs(Some(&made.id)).await?;
         match p.dot_admin.delete(&made.id).await {
             Ok(()) => {}
             // A run of it was queued in between (`Store::delete_dot_if_idle`).
             Err(Error::Conflict(_)) => return Err(busy()),
             Err(e) => return Err(e),
+        }
+        drop(settling);
+        for job in &open_jobs {
+            let detail = json!({
+                "job_id": job.id,
+                "run_id": job.last_run_id,
+                "how": JobEnd::Deleted.as_str(),
+            });
+            self.log_job(job, MakingEventKind::JobEnded, None, name, detail)
+                .await;
         }
         // The dot is gone whether or not its entry could be written, so a failure here is
         // logged and the delete still succeeds.
@@ -724,6 +762,20 @@ impl Makers {
             tracing::error!(dot = %made.id, run = %run.id, "the delete was not logged: {e}");
         }
         self.updated(&maker.id, &run.root_run_id);
+        // After the service's lock is released: `wake` takes the thread lock itself.
+        drop(one_at_a_time);
+        for job in &open_jobs {
+            let woken = self
+                .wake(
+                    &job.maker_dot_id,
+                    &job.maker_root_run_id,
+                    &deleted_message(name),
+                )
+                .await;
+            if let Err(e) = woken {
+                tracing::warn!(job = %job.id, "the maker was not woken for a deleted dot's job: {e}");
+            }
+        }
         Ok(format!("Deleted the dot \"{name}\" and its history."))
     }
 }

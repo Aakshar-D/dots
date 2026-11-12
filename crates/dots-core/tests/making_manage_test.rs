@@ -111,7 +111,7 @@ fn ask(name: &str) -> MakeDot {
 /// Makes the dot, which must be within reach and within the limits.
 async fn make(t: &T, run: &Run, name: &str) -> Dot {
     match t.rt.makers().make_dot(&run.id, ask(name)).await.unwrap() {
-        MakeOutcome::Made { dot } => dot,
+        MakeOutcome::Made { dot, .. } => dot,
         other => panic!("{name} was not made: {other:?}"),
     }
 }
@@ -337,6 +337,7 @@ async fn the_list_shows_only_this_makers_dots_with_their_state() {
         running: false,
         last_run: None,
         waiting_change: false,
+        job: None,
     };
     let ended = failed.ended_at.clone().expect("the run ended");
     assert_eq!(
@@ -658,7 +659,7 @@ async fn dropping_a_server_drops_its_grants_and_nothing_else() {
     let mut asked = ask("One");
     asked.wanted.uses = Some(uses_github());
     asked.wanted.variables = Some(both.clone());
-    let MakeOutcome::Made { dot: one } = t.rt.makers().make_dot(&run.id, asked).await.unwrap()
+    let MakeOutcome::Made { dot: one, .. } = t.rt.makers().make_dot(&run.id, asked).await.unwrap()
     else {
         panic!("not made")
     };

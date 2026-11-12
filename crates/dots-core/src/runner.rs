@@ -20,7 +20,7 @@ use crate::delivery::{wait_reason, WaitFacts};
 use crate::engine::claude::once::OnceUsage;
 use crate::engine::{Engine, EngineEvent, PassUsage, RunContext};
 use crate::events::{Bus, RuntimeEvent};
-use crate::limits::{is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
+use crate::limits::{run_is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
 use crate::model::{
     effective_quiet_limit, ApprovalStatus, Delivery, Dot, EngineKind, NewRun, Run, RunStatus,
     TriggerKind, WorkspaceMode,
@@ -308,7 +308,7 @@ impl Runner {
     /// Manual and chat runs are refused when the person asks, so none is held here. `None` when
     /// the run may start, or is no run of an account's dot.
     pub async fn role_hold(&self, run: &Run) -> Result<Option<(String, String)>> {
-        if !is_background(run.trigger) {
+        if !run_is_background(run) {
             return Ok(None);
         }
         let dot = match self.store.get_dot(&run.dot_id).await {
@@ -934,7 +934,7 @@ impl Runner {
         // The spending caps, read once for the pass (spend caps design).
         let mut ledger: Option<crate::spend::Ledger> = None;
         for (run, engine) in self.store.queued_with_engine(true).await? {
-            let background_claude = engine == EngineKind::Claude && is_background(run.trigger);
+            let background_claude = engine == EngineKind::Claude && run_is_background(&run);
             // A role that may not run dots keeps a background run queued, unstarted, until the
             // role returns (members spec section 6.3); the next pass looks again.
             if self.role_hold(&run).await?.is_some() {
@@ -2440,7 +2440,7 @@ impl Runner {
             (RunStatus::AwaitingApproval, error)
         } else if let Some(e) = error {
             let stopped_by_limit =
-                saw_rejected && dot.spec.engine == EngineKind::Claude && is_background(run.trigger);
+                saw_rejected && dot.spec.engine == EngineKind::Claude && run_is_background(run);
             // Back to the queue only while Dots knows when the limit resets: without that the
             // run would start again at once, and be refused again.
             let resets_known = self
@@ -2938,6 +2938,7 @@ fn queued_run(run: &Run, engine: EngineKind) -> QueuedRun {
     QueuedRun {
         id: run.id.clone(),
         trigger: run.trigger,
+        background: run_is_background(run),
         engine,
         hold_released: run.hold_released,
         queued_at: run.queued_at.clone(),

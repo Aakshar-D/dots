@@ -21,6 +21,19 @@ str_enum!(MakingEventKind {
     // The maker's run deleted a dot it made (design section 9). `dot_id` is `None`: the dot is
     // gone. `detail`: `{}`.
     Deleted => "deleted",
+    // The maker gave a job to a dot it made, or a first job started with the dot (design
+    // section 8): "<made dot> is working". `run_id` is the maker's run that gave it.
+    // `detail`: `{"job_id": .., "message": .., "run_id": ..}`, where `run_id` is the made dot's
+    // run. The loop guard counts these entries of a topic.
+    JobStarted => "job_started",
+    // The job's run ended with a question waiting for the person: "<made dot> is waiting for
+    // your answer". `detail`: `{"job_id": .., "run_id": ..}`, the made dot's run that asked or
+    // ended last.
+    JobWaiting => "job_waiting",
+    // The job ended: "<made dot> finished", failed or was stopped. `dot_id` is `None` when the
+    // dot was deleted. `detail`: `{"job_id": .., "run_id": .., "how": ..}`, the made dot's last
+    // run and how the job ended (`JobEnd`).
+    JobEnded => "job_ended",
 });
 
 /// One thing a maker's run did: one card of the maker's chat topic (design section 11).
