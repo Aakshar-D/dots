@@ -34,13 +34,20 @@ fn workflow_follows_memory_asked_by_sandboxed_and_custom_and_the_cli_never_sees_
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
         // The app rules come after it (app library spec section 6).
-        let tail: Vec<&str> = p.rules[p.rules.len() - 5..]
+        let tail: Vec<&str> = p.rules[p.rules.len() - 6..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
         assert_eq!(
             tail,
-            ["Memory", "Workflow", "App", "ProposeApp", "Instructions"],
+            [
+                "Memory",
+                "Workflow",
+                "App",
+                "ProposeApp",
+                "Instructions",
+                "MakeDots"
+            ],
             "{preset:?}"
         );
         let want = match preset {
@@ -157,6 +164,7 @@ async fn migration_0015_gives_every_policy_that_is_not_custom_its_workflow_rule(
             r.tool != "Workflow"
                 && !APP_TOOLS.contains(&r.tool.as_str())
                 && r.tool != "Instructions"
+                && r.tool != "MakeDots"
         });
         p
     };
@@ -164,6 +172,7 @@ async fn migration_0015_gives_every_policy_that_is_not_custom_its_workflow_rule(
         p.rules
             .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
         p.rules.push(Rule::new("Instructions", Action::Allow));
+        p.rules.push(Rule::new("MakeDots", Action::Allow));
         p
     };
     let mut denies = old(Preset::Sandboxed);

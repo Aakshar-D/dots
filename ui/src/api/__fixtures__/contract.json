@@ -140,6 +140,10 @@
             {
               "action": "allow",
               "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
             }
           ]
         },
@@ -2213,6 +2217,10 @@
         {
           "action": "allow",
           "tool": "Instructions"
+        },
+        {
+          "action": "allow",
+          "tool": "MakeDots"
         }
       ]
     },
@@ -2412,6 +2420,10 @@
           {
             "action": "allow",
             "tool": "Instructions"
+          },
+          {
+            "action": "allow",
+            "tool": "MakeDots"
           }
         ]
       },
@@ -2624,6 +2636,10 @@
         {
           "action": "allow",
           "tool": "Instructions"
+        },
+        {
+          "action": "allow",
+          "tool": "MakeDots"
         }
       ]
     },
@@ -5094,6 +5110,10 @@
         {
           "action": "allow",
           "tool": "Instructions"
+        },
+        {
+          "action": "allow",
+          "tool": "MakeDots"
         }
       ]
     },
@@ -7701,6 +7721,10 @@
             {
               "action": "allow",
               "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
             }
           ]
         },
@@ -7889,6 +7913,10 @@
             {
               "action": "allow",
               "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
             }
           ]
         },

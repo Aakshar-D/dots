@@ -99,6 +99,7 @@ impl Store {
         upgrade::finish_0015(&store.pool).await?;
         upgrade::finish_0016(&store.pool).await?;
         upgrade::finish_0018(&store.pool).await?;
+        upgrade::finish_0047(&store.pool).await?;
         store.sync_search_index().await?;
         Ok(store)
     }

@@ -116,14 +116,25 @@ pub const INSTRUCTIONS_TOOL: &str = crate::instructions::POLICY_NAME;
 /// The refusal of a rule `Instructions(...)`.
 pub const INSTRUCTIONS_RULE: &str = "an Instructions rule names no argument";
 
+/// Dots' own tools for making dots (`make_dot`, `give_job`, `list_made_dots`, `change_dot`,
+/// `delete_dot`) by their one policy name (dots-make-dots design section 5): treated as `Memory`
+/// is. The dot's "Can make dots" switch is the gate, so every preset allows it; a person's ask
+/// or deny rule decides otherwise. A rule names it alone: `MakeDots(...)` is refused.
+pub const MAKE_DOTS_TOOL: &str = "MakeDots";
+
+/// The refusal of a rule `MakeDots(...)`.
+pub const MAKE_DOTS_RULE: &str =
+    "a MakeDots rule takes no argument: the rule MakeDots covers every tool for making dots";
+
 /// A tool whose ask rule wins over an allow rule: the check-in tools, `Memory`, `Workflow`,
-/// the app tools and `Instructions`.
+/// the app tools, `Instructions` and `MakeDots`.
 fn ask_wins(tool: &str) -> bool {
     CHECK_IN_TOOLS.contains(&tool)
         || tool == MEMORY_TOOL
         || tool == WORKFLOW_TOOL
         || APP_TOOLS.contains(&tool)
         || tool == INSTRUCTIONS_TOOL
+        || tool == MAKE_DOTS_TOOL
 }
 
 /// A `Workflow` call of a step's `report_outcome` or `send_back` (`team_tools::Tool::for_input`):
@@ -271,6 +282,10 @@ impl Policy {
         // And propose new instructions for itself from a chat: the card is the proposal's gate
         // (conversational chat spec section 4).
         rules.push(Rule::new(INSTRUCTIONS_TOOL, Action::Allow));
+        // And make dots, give them jobs, and change and delete the dots it made: the dot's "Can
+        // make dots" switch is the gate, and what a made dot may hold is checked against the
+        // maker's reach (dots-make-dots design sections 5 and 6).
+        rules.push(Rule::new(MAKE_DOTS_TOOL, Action::Allow));
         Policy {
             preset,
             rules,
@@ -408,6 +423,7 @@ impl Policy {
                 MEMORY_TOOL,
                 WORKFLOW_TOOL,
                 INSTRUCTIONS_TOOL,
+                MAKE_DOTS_TOOL,
                 crate::graph::POLICY_NAME,
             ]
             .iter()
@@ -461,6 +477,9 @@ impl Policy {
                 }
                 if tool == INSTRUCTIONS_TOOL {
                     return Err(invalid(INSTRUCTIONS_RULE));
+                }
+                if tool == MAKE_DOTS_TOOL {
+                    return Err(invalid(MAKE_DOTS_RULE));
                 }
                 if matches!(tool, "Browser" | "BrowserRisky") {
                     crate::browser::sites::check_site(spec).map_err(|e| invalid(&e))?;

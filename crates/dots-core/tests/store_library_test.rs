@@ -591,6 +591,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("App", Action::Allow),
             Rule::new("ProposeApp", Action::Allow),
             Rule::new("Instructions", Action::Allow),
+            Rule::new("MakeDots", Action::Allow),
         ]
     );
     assert_eq!(d1.policy.mcp_default, Action::Ask);
@@ -608,6 +609,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("App", Action::Allow),
             Rule::new("ProposeApp", Action::Allow),
             Rule::new("Instructions", Action::Allow),
+            Rule::new("MakeDots", Action::Allow),
         ]
     );
     let d4 = dot("D4").await;
@@ -631,6 +633,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("App", Action::Allow),
             Rule::new("ProposeApp", Action::Allow),
             Rule::new("Instructions", Action::Allow),
+            Rule::new("MakeDots", Action::Allow),
         ]
     );
     assert_eq!(d4.policy.mcp_default, Action::Ask);
@@ -647,6 +650,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("App", Action::Allow),
             Rule::new("ProposeApp", Action::Allow),
             Rule::new("Instructions", Action::Allow),
+            Rule::new("MakeDots", Action::Allow),
         ]
     );
     assert_eq!(d6.uses, Uses::default());
@@ -696,6 +700,7 @@ async fn migration_0006_moves_each_dots_servers_into_the_library() {
             Rule::new("App", Action::Allow),
             Rule::new("ProposeApp", Action::Allow),
             Rule::new("Instructions", Action::Allow),
+            Rule::new("MakeDots", Action::Allow),
         ]
     );
 }
@@ -763,6 +768,7 @@ async fn migration_0006_keeps_credentials_apart_and_erases_them_from_the_file() 
         Rule::new("App", Action::Allow),
         Rule::new("ProposeApp", Action::Allow),
         Rule::new("Instructions", Action::Allow),
+        Rule::new("MakeDots", Action::Allow),
     ];
     let with_tail = |first: Rule| [vec![first], tail.to_vec()].concat();
     assert_eq!(
@@ -858,6 +864,7 @@ async fn migration_0006_allows_skill_unless_a_rule_names_it() {
             Rule::new("App", Action::Allow),
             Rule::new("ProposeApp", Action::Allow),
             Rule::new("Instructions", Action::Allow),
+            Rule::new("MakeDots", Action::Allow),
         ]
     );
     assert_eq!(
@@ -868,6 +875,7 @@ async fn migration_0006_allows_skill_unless_a_rule_names_it() {
             Rule::new("App", Action::Allow),
             Rule::new("ProposeApp", Action::Allow),
             Rule::new("Instructions", Action::Allow),
+            Rule::new("MakeDots", Action::Allow),
         ]
     );
     assert_eq!(
@@ -878,6 +886,7 @@ async fn migration_0006_allows_skill_unless_a_rule_names_it() {
             Rule::new("App", Action::Allow),
             Rule::new("ProposeApp", Action::Allow),
             Rule::new("Instructions", Action::Allow),
+            Rule::new("MakeDots", Action::Allow),
         ]
     );
 }
