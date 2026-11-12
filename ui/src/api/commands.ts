@@ -200,6 +200,13 @@ export const commands = {
   /// What this PC may not do with the dot (change, run, answer its approvals), in the core's
   /// words; null is allowed.
   dotAccess: (dotId: string) => call(T.DotAccess, "dot_access", { dotId }),
+  /// The dot's policy ceiling: the highest preset this PC may use in its workspace, why each
+  /// preset or its own policy can't be used, and the text its runs are held with.
+  dotCeiling: (dotId: string) => call(T.PolicyCeiling, "dot_ceiling", { dotId }),
+  /// The policy ceiling of a workspace for a dot not yet made (`orgId` null: Personal), with
+  /// `policy` judged when given.
+  policyCeiling: (orgId: string | null, workspaceId: string, policy: Policy | null = null) =>
+    call(T.PolicyCeiling, "policy_ceiling", { orgId, workspaceId, policy }),
   /// The workspaces of `scope` (`personal`, or an org's id) this PC may see.
   workspaceList: (scope: string) => call(T.WorkspaceView.array(), "workspace_list", { scope }),
   personalWorkspaceAdd: (name: string) =>
@@ -346,6 +353,10 @@ export const commands = {
   /// What the send-and-delete guard finds in the call (null when it neither sends nor
   /// deletes), and whether the dot's switch makes it always ask.
   approvalGuard: (id: string) => call(T.ApprovalGuard.nullable(), "approval_guard", { id }),
+  /// What the guardrails of the dot's workspace find in the call (null when it hits none): with
+  /// `needs_admin` this PC can't approve it; either way no rule can be saved with it.
+  approvalGuardrail: (id: string) =>
+    call(T.ApprovalGuardrail.nullable(), "approval_guardrail", { id }),
   /// Gives every pending approval of one run the same answer, in the order they were asked.
   /// Answers the approvals it decided.
   /// Decides only `ids`, the calls of the run the person was shown: a snoozed call of the same
@@ -502,6 +513,26 @@ export const commands = {
   memberEdit: (orgId: string, baseSeq: number, edit: T.RosterEdit) =>
     call(T.EditOutcome, "member_edit", { orgId, baseSeq, edit }),
   rosterDraftRetry: (orgId: string) => call(T.EditOutcome, "roster_draft_retry", { orgId }),
+  // Guardrails (guardrails spec §7).
+  /// A workspace's guardrails for the Guardrails tab, with what this PC may do to them.
+  workspaceGuardrails: (orgId: string, workspaceId: string) =>
+    call(T.GuardrailsView, "workspace_guardrails", { orgId, workspaceId }),
+  /// Sets a workspace's guardrails (null removes them): signed with this PC's Dots ID and
+  /// published, or kept as a draft. `baseSeq` is the view's `seq`.
+  workspaceGuardrailsSet: (
+    orgId: string,
+    baseSeq: number,
+    workspaceId: string,
+    guardrails: T.Guardrails | null,
+  ) =>
+    call(T.EditOutcome, "workspace_guardrails_set", {
+      orgId,
+      baseSeq,
+      workspaceId,
+      guardrails,
+    }),
+  /// What each role can do, as the core checks it.
+  roleMatrix: () => call(T.RoleRow.array(), "role_matrix"),
   rosterDraftDiscard: (orgId: string) => call(nothing, "roster_draft_discard", { orgId }),
   orgRequestAccess: (orgId: string) => call(T.OrgSummary, "org_request_access", { orgId }),
   /// Leaves the org; its dots stay, "org removed". The UI confirms first.

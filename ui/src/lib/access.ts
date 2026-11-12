@@ -126,3 +126,16 @@ export function useScopeRefusal(p: Action): string | undefined {
   const scope = useCurrentScope();
   return useWorkspaceRefusal(scope?.account, scope?.workspace, p);
 }
+
+/// Why Run now is off for the dot `dotId`, in the core's words: its role refuses running it
+/// (`dot_access`), or its runs are held because its policy is past the workspace's ceiling
+/// (`dot_ceiling`, guardrails spec section 4.3). Undefined while it may run or while that loads.
+export function useRunBlocker(dotId: string | undefined): string | undefined {
+  const access = useDotAccess(dotId);
+  const held = useQuery({
+    queryKey: keys.dotCeiling(dotId ?? ""),
+    queryFn: () => commands.dotCeiling(dotId ?? ""),
+    enabled: dotId !== undefined,
+  }).data?.held;
+  return access?.run ?? held ?? undefined;
+}

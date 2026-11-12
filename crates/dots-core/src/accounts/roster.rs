@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 
+use super::guardrails::Guardrails;
 use crate::vault::org::signed::verify_with_any;
 use crate::vault::org::UseRules;
 
@@ -53,6 +54,10 @@ pub struct Workspace {
     pub name: String,
     #[serde(rename = "use", default, skip_serializing_if = "Option::is_none")]
     pub use_rules: Option<UseRules>,
+    /// What the workspace protects, and the highest policy a Member's dot may use there
+    /// (guardrails spec §3). None: no guardrails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guardrails: Option<Guardrails>,
 }
 
 /// One person on the list. `keys` are their Dots IDs, one per PC.
@@ -152,7 +157,7 @@ pub fn parse_roster(text: &str, org_id: &str) -> Result<Roster, RosterError> {
         return Err(unknown_field(unknown));
     }
     for (list, known) in [
-        ("workspaces", &["id", "name", "use"][..]),
+        ("workspaces", &["id", "name", "use", "guardrails"][..]),
         (
             "members",
             &[
@@ -204,6 +209,14 @@ pub fn parse_roster(text: &str, org_id: &str) -> Result<Roster, RosterError> {
                 "workspace id '{}' is listed twice",
                 workspace.id
             )));
+        }
+        if let Some(guardrails) = &workspace.guardrails {
+            guardrails.check().map_err(|why| {
+                invalid(format!(
+                    "the guardrails of workspace '{}': {why}",
+                    workspace.id
+                ))
+            })?;
         }
     }
     if !raw.workspaces.iter().any(|w| w.id == "default") {

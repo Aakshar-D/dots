@@ -113,6 +113,8 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
         keys.scope,
         keys.dots,
         keys.overview,
+        // A role change or new guardrails decide whether a waiting approval needs an Admin.
+        ["approval-guardrail"],
       ]) {
         invalidate(qc, queryKey);
       }

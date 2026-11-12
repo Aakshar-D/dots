@@ -539,6 +539,52 @@ describe("commands", () => {
     });
   });
 
+  it("sends the guardrails commands as the core names them", async () => {
+    const [view] = fixture.GuardrailsView;
+    const defaults = T.Guardrails.parse(view.defaults);
+    const policy = T.Policy.parse(fixture.DotSpec.policy);
+    reply = async () => view;
+    expect(await commands.workspaceGuardrails("acme-eng", "platform")).toEqual(view);
+    reply = async () => fixture.EditOutcome[0];
+    await commands.workspaceGuardrailsSet("acme-eng", 7, "platform", defaults);
+    await commands.workspaceGuardrailsSet("acme-eng", 8, "platform", null);
+    reply = async () => fixture.RoleRow;
+    expect(await commands.roleMatrix()).toEqual(fixture.RoleRow);
+    reply = async () => fixture.PolicyCeiling[0];
+    expect((await commands.dotCeiling("d1")).max_preset).toBe("sandboxed");
+    await commands.policyCeiling("acme-eng", "platform");
+    await commands.policyCeiling(null, "default", policy);
+    reply = async () => fixture.ApprovalGuardrail[0];
+    expect((await commands.approvalGuardrail("a1"))?.needs_admin).toBe(true);
+    reply = async () => null;
+    expect(await commands.approvalGuardrail("a2")).toBeNull();
+    expect(calls).toEqual([
+      ["workspace_guardrails", { orgId: "acme-eng", workspaceId: "platform" }],
+      [
+        "workspace_guardrails_set",
+        { orgId: "acme-eng", baseSeq: 7, workspaceId: "platform", guardrails: defaults },
+      ],
+      [
+        "workspace_guardrails_set",
+        { orgId: "acme-eng", baseSeq: 8, workspaceId: "platform", guardrails: null },
+      ],
+      ["role_matrix", undefined],
+      ["dot_ceiling", { dotId: "d1" }],
+      ["policy_ceiling", { orgId: "acme-eng", workspaceId: "platform", policy: null }],
+      ["policy_ceiling", { orgId: null, workspaceId: "default", policy }],
+      ["approval_guardrail", { id: "a1" }],
+      ["approval_guardrail", { id: "a2" }],
+    ]);
+  });
+
+  it("refuses guardrails in a shape it does not know", async () => {
+    const [view] = fixture.GuardrailsView;
+    reply = async () => ({ ...view, guardrails: { ...view.guardrails, extra: 1 } });
+    expect((await failure(commands.workspaceGuardrails("acme-eng", "platform"))).kind).toBe(
+      "internal",
+    );
+  });
+
   it("invokes exactly the commands the app registers", async () => {
     // A wrapper calls `invoke` before it first waits, so calling each one without arguments
     // lists the names with no backend. Their answers, mostly rejections here, do not matter.

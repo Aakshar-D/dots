@@ -2369,6 +2369,14 @@ pub fn samples() -> Value {
             member_id: "01J0MEM".into(),
             workspaces: BTreeMap::from([("platform".to_string(), WorkspaceRole::Admin)]),
         },
+        RosterEdit::SetGuardrails {
+            workspace_id: "platform".into(),
+            guardrails: Some(dots_core::accounts::Guardrails::defaults()),
+        },
+        RosterEdit::SetGuardrails {
+            workspace_id: "platform".into(),
+            guardrails: None,
+        },
     ]);
     inbox_marks_samples(&mut samples);
     send_later_samples(&mut samples);
@@ -2378,6 +2386,7 @@ pub fn samples() -> Value {
     context_rules_samples(&mut samples);
     samples["ResultCheck"] = result_checks();
     graph_samples(&mut samples);
+    guardrails_samples(&mut samples);
     voice_samples(&mut samples, voice_proposal);
     samples
 }
@@ -2552,6 +2561,120 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
             topic_root: Some("msg_2".into()),
         },
     ]);
+}
+
+/// Workspace guardrails (guardrails spec §7): the Guardrails tab of an Admin who may sign and of
+/// a Member, what each role can do, the ceiling of a Member's Trusted dot and of a workspace
+/// with none, and the approval cards of a protected call.
+fn guardrails_samples(samples: &mut Value) {
+    use dots_core::accounts::guardrails::{preset_label, COMPAT_NOTE};
+    use dots_core::accounts::{
+        role_matrix, ApprovalGuardrail, GitAction, GuardRole, Guardrails, Permission,
+        PolicyCeiling, PresetCeiling,
+    };
+    use dots_core::vault::org::{GitActionView, GuardrailsView};
+    let git_actions: Vec<GitActionView> = GitAction::ALL
+        .iter()
+        .map(|a| GitActionView {
+            action: *a,
+            label: a.label().to_string(),
+        })
+        .collect();
+    let member_refusal =
+        "Acme Engineering: a Member can't change guardrails. Ask an Admin or Owner.";
+    samples["GuardrailsView"] = to([
+        GuardrailsView {
+            org_id: "acme-eng".into(),
+            workspace_id: "platform".into(),
+            workspace_name: "Platform".into(),
+            seq: 7,
+            guardrails: Some(Guardrails::defaults()),
+            defaults: Guardrails::defaults(),
+            git_actions: git_actions.clone(),
+            edit_refusal: None,
+            sign_blocker: None,
+            applies_as: Some(GuardRole::Admin),
+            compat_note: COMPAT_NOTE.into(),
+        },
+        GuardrailsView {
+            org_id: "acme-eng".into(),
+            workspace_id: "default".into(),
+            workspace_name: "Default".into(),
+            seq: 7,
+            guardrails: None,
+            defaults: Guardrails::defaults(),
+            git_actions,
+            edit_refusal: Some(member_refusal.into()),
+            sign_blocker: Some(member_refusal.into()),
+            applies_as: None,
+            compat_note: COMPAT_NOTE.into(),
+        },
+    ]);
+    samples["Guardrails"] = to(Guardrails {
+        protected_paths: vec!["db/**".into()],
+        protected_git: vec![GitAction::ForcePush],
+        protected_commands: vec!["make deploy".into()],
+        member_max_preset: Preset::ReadOnly,
+    });
+    samples["RoleRow"] = to(role_matrix());
+    let too_high = format!(
+        "Acme Engineering: a Member's dot in the Platform workspace may use up to {}, and this policy is Trusted. Ask an Admin or Owner.",
+        preset_label(Preset::Sandboxed)
+    );
+    let preset = |p: Preset, refusal: Option<&str>| PresetCeiling {
+        preset: p,
+        refusal: refusal.map(str::to_string),
+    };
+    samples["PolicyCeiling"] = to([
+        PolicyCeiling {
+            applies_as: Some(GuardRole::Member),
+            workspace_name: Some("Platform".into()),
+            max_preset: Some(Preset::Sandboxed),
+            presets: vec![
+                preset(Preset::ReadOnly, None),
+                preset(Preset::Sandboxed, None),
+                preset(Preset::Trusted, Some(&too_high)),
+                preset(Preset::Custom, None),
+            ],
+            policy_refusal: Some(too_high.clone()),
+            held: Some(
+                "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin."
+                    .into(),
+            ),
+            protected: Some(Guardrails::defaults()),
+        },
+        PolicyCeiling {
+            applies_as: None,
+            workspace_name: None,
+            max_preset: None,
+            presets: [Preset::ReadOnly, Preset::Sandboxed, Preset::Trusted, Preset::Custom]
+                .into_iter()
+                .map(|p| preset(p, None))
+                .collect(),
+            policy_refusal: None,
+            held: None,
+            protected: None,
+        },
+    ]);
+    samples["ApprovalGuardrail"] = to([
+        ApprovalGuardrail {
+            what: "pushing to main or master".into(),
+            workspace_name: "Platform".into(),
+            needs_admin: true,
+            text: "This needs an Admin: pushing to main or master is protected in the Platform workspace."
+                .into(),
+        },
+        ApprovalGuardrail {
+            what: "the file migrations/0001.sql".into(),
+            workspace_name: "Platform".into(),
+            needs_admin: false,
+            text: "The file migrations/0001.sql is protected in the Platform workspace, so it always asks."
+                .into(),
+        },
+    ]);
+    samples["Enums"]["GitAction"] = to(GitAction::ALL);
+    samples["Enums"]["GuardRole"] = to([GuardRole::Member, GuardRole::Admin]);
+    samples["Enums"]["RolePermission"] = to(Permission::ALL);
 }
 
 /// Attachments in chat (attachments spec section 5): a staged file, a chat run with a file,

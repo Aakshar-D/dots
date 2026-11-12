@@ -152,6 +152,28 @@ Your dots are listed in one workspace. Dots you made before workspaces are in De
 
 An account without a member list has only Default, and Personal is not narrowed.
 
+## Guardrails
+
+An Owner or Admin can put guardrails on a workspace. They mark what is critical there: paths like
+`.github/**` or `**/migrations/**`, git actions like pushing to `main`, and commands like
+`rm -rf` or `terraform apply`. They also set the highest tool policy a Member's dot may use there,
+Sandboxed by default.
+
+What they do depends on your role in the dot's workspace:
+
+- **Member**: your dot can't do a protected thing. Dots refuses the call and tells the dot "This
+  needs an Admin: pushing to main or master is protected in the Payments workspace." You can't
+  approve such a call or save a rule that allows it. Your dots can't use a policy above the
+  workspace's ceiling: **Save** and **Run now** are refused with the reason, for example "a
+  Member's dot in the Payments workspace may use up to Sandboxed, and this policy is Trusted". A
+  dot that was already above it waits in the Inbox under **Waiting to run** until you lower its
+  policy, or your role rises.
+- **Owner** or **Admin**: your dot always asks before a protected thing, even when its policy
+  would allow it, and no rule can be saved for it. There is no ceiling.
+- **Viewer**: nothing changes, since a Viewer's dots don't run.
+
+Personal, an account without a member list, and a workspace without guardrails have none.
+
 ## API keys
 
 An API key lets an app or a script on this PC list a workspace's dots, run one, and read how a run

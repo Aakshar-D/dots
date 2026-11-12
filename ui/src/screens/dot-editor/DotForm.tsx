@@ -3,7 +3,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { useState, type ReactNode } from "react";
 
 import { commands } from "@/api/commands";
-import { EngineKind, WorkspaceMode, type Dot, type DotSpec } from "@/api/types";
+import {
+  EngineKind,
+  WorkspaceMode,
+  type Dot,
+  type DotSpec,
+  type PolicyCeiling,
+} from "@/api/types";
 import { Field } from "@/components/Field";
 import { ContextRulesFields } from "@/components/ContextMeter";
 import { ModelPicker, useModels } from "@/components/ModelPicker";
@@ -219,6 +225,10 @@ export function DotForm(props: {
   endpoints: string[];
   schedule: SchedulePreview;
   onEnabled?: (enabled: boolean) => void;
+  /// The workspace's policy ceiling for the policy as typed, once known.
+  ceiling?: PolicyCeiling;
+  /// Why the stored dot's runs wait: its policy is past the ceiling.
+  held?: string;
 }) {
   const { draft, errors } = props;
   const { spec } = draft;
@@ -433,6 +443,8 @@ export function DotForm(props: {
           engine={spec.engine}
           onChange={(policy) => set("policy", policy)}
           error={errors.policy}
+          ceiling={props.ceiling}
+          held={props.held}
         />
       </Section>
 

@@ -374,6 +374,7 @@ impl Runtime {
         }
         let bus = new_bus();
         let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
+        hub.set_orgs(orgs.clone());
         // Check-ins and follow-ups (check-ins spec): made before the engines, which offer the
         // check-in tools, and before the runner, which the follow-up loop starts runs on.
         let follow_ups = FollowUps::new(store.clone(), bus.clone(), cfg.clock.clone());
@@ -2085,6 +2086,13 @@ impl Runtime {
         let workspace_id = workspace_id.as_str();
         self.require_in(org_id.as_deref(), workspace_id, Permission::EditDots)
             .await?;
+        self.require_ceiling(
+            org_id.as_deref(),
+            workspace_id,
+            &spec.policy,
+            spec.use_user_settings,
+        )
+        .await?;
         if !spec.variables.0.is_empty() {
             self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
                 .await?;
@@ -2302,6 +2310,13 @@ impl Runtime {
         self.require_dot(&dot, Permission::EditDots).await?;
         self.require_in(dot.org_id.as_deref(), workspace_id, Permission::EditDots)
             .await?;
+        self.require_ceiling(
+            dot.org_id.as_deref(),
+            workspace_id,
+            &dot.spec.policy,
+            dot.spec.use_user_settings,
+        )
+        .await?;
         if let Some(team_id) = self.store.teams_of_dot(dot_id).await?.first() {
             let team = self.store.get_team(team_id).await?;
             return Err(Error::Invalid(format!(
@@ -2472,6 +2487,17 @@ impl Runtime {
         if spec.variables != old.spec.variables {
             self.require_dot(&old, Permission::GrantEntries).await?;
         }
+        // Only a new policy (or settings choice) past the ceiling is refused: a dot held for
+        // one can still be renamed or switched off (guardrails spec §4.3).
+        if spec.policy != old.spec.policy || spec.use_user_settings != old.spec.use_user_settings {
+            self.require_ceiling(
+                old.org_id.as_deref(),
+                &old.workspace_id,
+                &spec.policy,
+                spec.use_user_settings,
+            )
+            .await?;
+        }
         // Only a change to the mode or the folder is refused: a stored dot whose repository
         // has gone can still have its other fields edited.
         if spec.workspace_mode == WorkspaceMode::Worktree
@@ -2483,6 +2509,8 @@ impl Runtime {
         }
         let was_enabled = old.spec.enabled;
         let dot = self.store.update_dot(id, &spec).await?;
+        // A run held past the policy ceiling may start now (guardrails spec §4.3).
+        self.runner.nudge();
         if dot.spec.name != old.spec.name {
             self.teams.dot_renamed(id).await;
         }
@@ -3177,7 +3205,82 @@ impl Runtime {
         {
             return Ok(Vec::new());
         }
+        // Nor for a call the workspace's guardrails protect: it always asks, or needs an Admin.
+        if self.approval_guardrail(approval_id).await?.is_some() {
+            return Ok(Vec::new());
+        }
         Ok(allow_candidates(&approval.tool, &approval.input, workspace))
+    }
+
+    /// What the guardrails of the dot's workspace find in the call of this approval (guardrails
+    /// spec §4.2): what it hits, and whether this PC is a Member there and can't approve it.
+    /// `None` when the dot has no guardrails or the call hits none.
+    pub async fn approval_guardrail(
+        &self,
+        approval_id: &str,
+    ) -> Result<Option<crate::accounts::ApprovalGuardrail>> {
+        let approval = self.store.get_approval(approval_id).await?;
+        let run = self.store.get_run(&approval.run_id).await?;
+        let dot = self.store.get_dot(&run.dot_id).await?;
+        let Some(rails) = crate::accounts::enforced_rails(Some(&self.orgs), &dot) else {
+            return Ok(None);
+        };
+        let workspace = run.workspace_path.as_deref().map(Path::new);
+        let found = rails.hit(&approval.tool, &approval.input, workspace);
+        Ok(found.map(|hit| crate::accounts::ApprovalGuardrail::new(&rails, &hit)))
+    }
+
+    /// The policy ceiling of the workspace `workspace_id` of `org_id` (`None`: Personal) on
+    /// this PC, for `policy` when given (guardrails spec §7): for the editor of a new dot.
+    pub async fn policy_ceiling(
+        &self,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        policy: Option<&crate::policy::Policy>,
+    ) -> Result<crate::accounts::PolicyCeiling> {
+        let rails = crate::accounts::rails_in(Some(&self.orgs), org_id, workspace_id);
+        let account = crate::accounts::account_label(Some(&self.orgs), org_id).await;
+        Ok(crate::accounts::PolicyCeiling::new(
+            rails.as_ref(),
+            &account,
+            policy,
+            false,
+            false,
+        ))
+    }
+
+    /// The policy ceiling of the dot `dot_id`, its own policy judged, and the text its runs
+    /// are held with when it is past the ceiling (guardrails spec §4.3).
+    pub async fn dot_ceiling(&self, dot_id: &str) -> Result<crate::accounts::PolicyCeiling> {
+        let dot = self.store.get_dot(dot_id).await?;
+        let rails = crate::accounts::dot_rails(Some(&self.orgs), &dot);
+        let account = crate::accounts::account_label(Some(&self.orgs), dot.org_id.as_deref()).await;
+        Ok(crate::accounts::PolicyCeiling::new(
+            rails.as_ref(),
+            &account,
+            Some(&dot.spec.policy),
+            dot.spec.use_user_settings,
+            true,
+        ))
+    }
+
+    /// `Ok` unless this PC is a Member in the workspace and `policy` reaches past its ceiling
+    /// (guardrails spec §4.3): then `NotAllowed` with why.
+    async fn require_ceiling(
+        &self,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        policy: &crate::policy::Policy,
+        own_settings: bool,
+    ) -> Result<()> {
+        let Some(rails) = crate::accounts::rails_in(Some(&self.orgs), org_id, workspace_id) else {
+            return Ok(());
+        };
+        let account = crate::accounts::account_label(Some(&self.orgs), org_id).await;
+        match rails.ceiling_refusal(&account, policy, own_settings) {
+            Some(text) => Err(Error::NotAllowed(text)),
+            None => Ok(()),
+        }
     }
 
     /// What the send-and-delete guard finds in the call of this approval (it sends or deletes,
@@ -3386,6 +3489,17 @@ impl Runtime {
         let run_id = self.store.get_approval(id).await?.run_id;
         self.require_for_run(&run_id, Permission::AnswerApprovals)
             .await?;
+        // A call the workspace's guardrails protect needs an Admin when this PC is a Member
+        // there, and never takes a rule (guardrails spec §4.2).
+        let guardrail = self.approval_guardrail(id).await?;
+        if let Some(g) = guardrail.as_ref().filter(|g| approved && g.needs_admin) {
+            return Err(Error::NotAllowed(g.text.clone()));
+        }
+        if approved && allow_rule.is_some() && guardrail.is_some() {
+            return Err(Error::Invalid(
+                crate::accounts::guardrails::GUARDRAIL_REFUSAL.into(),
+            ));
+        }
         let rule = match allow_rule {
             None => None,
             Some(_) if !approved => {
@@ -3414,6 +3528,20 @@ impl Runtime {
                 Some(Rule::new(&pattern, Action::Allow))
             }
         };
+        // A rule must not take a Member's dot past the workspace's ceiling (§4.3).
+        if let Some(rule) = &rule {
+            let run = self.store.get_run(&run_id).await?;
+            let dot = self.store.get_dot(&run.dot_id).await?;
+            let mut widened = dot.spec.policy.clone();
+            widened.rules.push(rule.clone());
+            self.require_ceiling(
+                dot.org_id.as_deref(),
+                &dot.workspace_id,
+                &widened,
+                dot.spec.use_user_settings,
+            )
+            .await?;
+        }
         match self.hub.decide_with_rule(id, approved, note, rule).await? {
             DecideEffect::Live(a) => Ok(a),
             DecideEffect::Parked(a) => {
@@ -3454,9 +3582,21 @@ impl Runtime {
         let mut parked = false;
         let mut failure = None;
         let pending = self.store.pending_for_run(run_id).await?;
-        let shown = pending
+        let shown: Vec<Approval> = pending
             .into_iter()
-            .filter(|a| only.is_none_or(|ids| ids.contains(&a.id)));
+            .filter(|a| only.is_none_or(|ids| ids.contains(&a.id)))
+            .collect();
+        // A call a Member can't approve (guardrails spec §4.2) refuses the whole answer before
+        // any is decided.
+        if approved {
+            for a in &shown {
+                if let Some(g) = self.approval_guardrail(&a.id).await? {
+                    if g.needs_admin {
+                        return Err(Error::NotAllowed(g.text));
+                    }
+                }
+            }
+        }
         for pending in shown {
             match self.hub.decide(&pending.id, approved, note.clone()).await {
                 Ok(DecideEffect::Live(a)) => decided.push(a),
@@ -3593,7 +3733,18 @@ impl Runtime {
         if let Some(text) = self.vault.org_removed(dot) {
             return Err(Error::Conflict(text));
         }
-        self.require_dot(dot, Permission::RunDots).await
+        self.require_dot(dot, Permission::RunDots).await?;
+        let account = crate::accounts::account_label(Some(&self.orgs), dot.org_id.as_deref()).await;
+        if let Some(text) = crate::accounts::unknown_rails(Some(&self.orgs), &account, dot) {
+            return Err(Error::NotAllowed(text));
+        }
+        self.require_ceiling(
+            dot.org_id.as_deref(),
+            &dot.workspace_id,
+            &dot.spec.policy,
+            dot.spec.use_user_settings,
+        )
+        .await
     }
 
     /// `require_dot` on the dot of the run `run_id`.
@@ -3675,6 +3826,31 @@ impl Runtime {
         let outcome = self.orgs.edit_members(org_id, base_seq, edit).await?;
         self.org_updated(org_id);
         Ok(outcome)
+    }
+
+    /// The guardrails of a workspace of the org, for the Guardrails tab (guardrails spec §7).
+    pub async fn workspace_guardrails(
+        &self,
+        org_id: &str,
+        workspace_id: &str,
+    ) -> Result<crate::vault::org::GuardrailsView> {
+        self.orgs.guardrails_view(org_id, workspace_id).await
+    }
+
+    /// Sets (or, with `None`, removes) the guardrails of a workspace of the org: a member-list
+    /// edit, signed with this PC's Dots ID and published like the others (guardrails spec §6).
+    pub async fn workspace_guardrails_set(
+        &self,
+        org_id: &str,
+        base_seq: u64,
+        workspace_id: &str,
+        guardrails: Option<crate::accounts::Guardrails>,
+    ) -> Result<EditOutcome> {
+        let edit = RosterEdit::SetGuardrails {
+            workspace_id: workspace_id.to_string(),
+            guardrails,
+        };
+        self.member_edit(org_id, base_seq, edit).await
     }
 
     /// Publishes the org's waiting signed list again.
@@ -4137,6 +4313,9 @@ impl Runtime {
         let dot = self.store.get_dot(&run.dot_id).await?;
         // A run waiting for a role is not Run anyway's to release.
         if run.status == RunStatus::Queued {
+            if let Some((_, text)) = self.runner.ceiling_hold(&dot).await {
+                return Err(Error::NotAllowed(text));
+            }
             if let Some((account, _)) = self.runner.role_hold(&run).await? {
                 return Err(Error::NotAllowed(format!(
                     "this run waits for {account} to let you run dots again"
