@@ -275,6 +275,16 @@ pub fn firm_for_another(heard: &str, kind: ConfirmKind) -> bool {
             .any(|k| k.own_words().contains(&j.as_str()))
 }
 
+/// Whether the whole utterance is some kind of step's own verb ("approve it", "deny that",
+/// "run it", "create it", "send it"). With nothing waiting on a yes or no it is no answer but
+/// a request for that deed ("Approve it" with an approval in the Inbox), and goes to the model.
+pub fn asks_for_a_deed(heard: &str) -> bool {
+    let j = joined(heard);
+    ConfirmKind::ALL
+        .iter()
+        .any(|k| k.own_words().contains(&j.as_str()))
+}
+
 /// Words too common to name a dot: articles, pronouns, common verbs and the words of asking a
 /// dot something. With `FILLER_WORDS`, the quick tables and the position words, they never
 /// point at a dot by its name.

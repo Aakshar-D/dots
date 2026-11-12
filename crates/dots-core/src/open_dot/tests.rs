@@ -390,6 +390,36 @@ async fn asking_to_approve(t: &T) -> Approval {
     approval
 }
 
+/// "Approve it" with nothing asked yet asks the model for the deed (the spec's "Approve it"
+/// decides an approval); a plain "yes" still has nothing to answer.
+#[tokio::test]
+async fn approve_it_with_nothing_asked_goes_to_the_model() {
+    let t = T::start().await;
+    let dot = t.dot("Research").await;
+    let approval = t.approval(&dot, "ls -la").await;
+    let got = t.hear("yes").await;
+    assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
+    for words in ["Approve it.", "deny that", "run it", "create it", "send it"] {
+        let calls = t.fake.calls();
+        t.fake.push(says("Which one?"));
+        let got = t.hear(words).await;
+        assert_eq!(t.fake.calls(), calls + 1, "{words}");
+        assert_eq!(said(&got), "Which one?", "{words}");
+    }
+    t.fake.push(approve_a1());
+    let got = t.hear("Approve it.").await;
+    assert_eq!(
+        asks(&got),
+        Some((
+            "Research wants to use Bash on ls -la. Approve it?".into(),
+            yes_no()
+        ))
+    );
+    assert_eq!(said(&t.hear("yes").await), "Approved.");
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Approved);
+    t.rt.shutdown();
+}
+
 #[tokio::test]
 async fn stop_and_cancel_clear_pending() {
     let t = T::start().await;

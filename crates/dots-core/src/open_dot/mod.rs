@@ -37,7 +37,8 @@ use act::{
 use picture::{clean, Picture, View, NAME_BYTES};
 use prompt::{prompt, Turn, INSTRUCTIONS};
 use quick::{
-    common_word, firm_for_another, firm_yes, quick, unclear_yes, words_of, ConfirmKind, Quick,
+    asks_for_a_deed, common_word, firm_for_another, firm_yes, quick, unclear_yes, words_of,
+    ConfirmKind, Quick,
 };
 use reply::{read_reply, SpeechGate, Wish};
 use think::{cap_hit, Thinker};
@@ -1063,7 +1064,8 @@ impl Mind {
                 return self.setup(rt, id, req, &heard, view, o, cancel).await;
             }
             None => {
-                if matches!(quick, Some(Quick::Yes) | Some(Quick::No)) {
+                // "Approve it" or "deny that" with nothing asked is a request, not an answer.
+                if matches!(quick, Some(Quick::Yes) | Some(Quick::No)) && !asks_for_a_deed(&heard) {
                     self.finish(o, &heard, NOTHING_WAITING, Then::Rest);
                     return "nothing waiting";
                 }
