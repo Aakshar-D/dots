@@ -60,6 +60,11 @@ pub trait SpeechDetector: Send {
 pub trait WakeSpotter: Send {
     fn heard(&mut self, frame16k: &[f32]) -> Option<WakeWord>;
     fn reset(&mut self);
+    /// Of the samples fed up to the word `heard` just returned, how many came after that
+    /// word ended (the spotter answers a little late). 0 when not known.
+    fn after_word(&self) -> usize {
+        0
+    }
 }
 
 /// Convert `clip` to `rate` by linear interpolation. Going down, each output sample

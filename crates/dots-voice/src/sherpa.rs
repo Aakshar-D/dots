@@ -215,7 +215,17 @@ impl SpeechDetector for SherpaDetector {
 pub struct SherpaWake {
     spotter: KeywordSpotter,
     stream: OnlineStream,
+    /// Samples fed since the stream was last reset: the spotter's times count from there.
+    fed: usize,
+    /// Of the samples fed up to the last word spotted, how many came after it ended.
+    after: usize,
 }
+
+/// The spotter times a word by its last token, but late: measured on the ten voices, words
+/// said straight after "Hey Dot" begin up to 0.2 s before the time it gives for the "t" of
+/// "Dot". The words after the wake phrase are taken from this long before that time; the bit
+/// of "Dot" this may include is not heard as a word by the recogniser.
+const WORD_END_LEAD_SECS: f32 = 0.25;
 
 impl SherpaWake {
     pub fn load(paths: &ModelPaths) -> Result<Self, EngineError> {
@@ -238,13 +248,31 @@ impl SherpaWake {
         cfg.keywords_buf = Some(WAKE_KEYWORDS.to_owned());
         let spotter = KeywordSpotter::create(&cfg).ok_or_else(|| failed("the wake phrase"))?;
         let stream = spotter.create_stream();
-        Ok(Self { spotter, stream })
+        Ok(Self {
+            spotter,
+            stream,
+            fed: 0,
+            after: 0,
+        })
     }
+}
+
+/// Of `fed` samples, how many came after a word whose last token the spotter timed at
+/// `last_token` seconds (counted from the same reset); 0 when the time makes no sense.
+fn samples_after(fed: usize, last_token: Option<f32>) -> usize {
+    let Some(at) = last_token.filter(|t| t.is_finite() && *t >= 0.0) else {
+        return 0;
+    };
+    // Rounded down to whole samples on purpose; `as` saturates for huge values.
+    let end = ((at - WORD_END_LEAD_SECS).max(0.0) * EAR_RATE as f32) as usize;
+    fed.saturating_sub(end)
 }
 
 impl WakeSpotter for SherpaWake {
     fn heard(&mut self, frame16k: &[f32]) -> Option<WakeWord> {
         self.stream.accept_waveform(EAR_RATE as i32, frame16k);
+        self.fed += frame16k.len();
+        self.after = 0;
         while self.spotter.is_ready(&self.stream) {
             self.spotter.decode(&self.stream);
             let Some(result) = self.spotter.get_result(&self.stream) else {
@@ -255,7 +283,9 @@ impl WakeSpotter for SherpaWake {
                 "DOT_STOP" => WakeWord::DotStop,
                 _ => continue,
             };
-            self.spotter.reset(&self.stream);
+            let last = result.timestamps.last().map(|t| result.start_time + t);
+            self.after = samples_after(self.fed, last);
+            self.reset();
             return Some(word);
         }
         None
@@ -263,6 +293,11 @@ impl WakeSpotter for SherpaWake {
 
     fn reset(&mut self) {
         self.spotter.reset(&self.stream);
+        self.fed = 0;
+    }
+
+    fn after_word(&self) -> usize {
+        self.after
     }
 }
 
@@ -290,6 +325,20 @@ mod tests {
         for speed in [f32::NAN, 0.0, -1.0, f32::INFINITY, f32::NEG_INFINITY] {
             assert!(checked_request("Hi.", speed).is_err(), "{speed}");
         }
+    }
+
+    #[test]
+    fn the_samples_after_a_spotted_word_are_counted_from_its_last_token() {
+        // 1.6 s fed, the last token timed at 1.2 s: what follows is taken from 0.95 s.
+        let after = samples_after(25_600, Some(1.2));
+        assert!((10_399..=10_401).contains(&after), "{after}");
+        // A token timed near the start takes everything fed.
+        assert_eq!(samples_after(3_200, Some(0.1)), 3_200);
+        // A time past the last sample fed, or no time at all: none.
+        assert_eq!(samples_after(16_000, Some(1.5)), 0);
+        assert_eq!(samples_after(16_000, None), 0);
+        assert_eq!(samples_after(16_000, Some(f32::NAN)), 0);
+        assert_eq!(samples_after(16_000, Some(-1.0)), 0);
     }
 
     #[test]

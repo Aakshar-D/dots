@@ -4,6 +4,7 @@
 //! Nothing here logs. Heard and spoken text leave only through the events; audio never
 //! leaves memory.
 
+use std::collections::VecDeque;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -14,7 +15,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::audio::{Mic, MicFrame};
 use crate::ears::{level, EarEvent, Ears};
-use crate::engine::{EngineError, WakeSpotter, WakeWord};
+use crate::engine::{EngineError, WakeSpotter, WakeWord, FRAME};
 use crate::tone::{listen_tone, TONE_RATE};
 use crate::voice::{Sink, Voice, VoiceEvent};
 
@@ -38,6 +39,14 @@ const MIC_RETRY: Duration = Duration::from_secs(5);
 /// The longest the ears wait for the listening tone to finish sounding (it is 155 ms long);
 /// a sink still not quiet by then is stopped.
 const TONE_LIMIT: Duration = Duration::from_secs(2);
+/// After "Hey Dot" the ears are open at once; the tone answers only a person who pauses this
+/// long without starting to speak (waiting to be acknowledged).
+const TONE_WAIT: Duration = Duration::from_millis(300);
+/// Once the tone has stopped sounding, the ears wait this much longer before they hear: the
+/// tone is short and soft, so its echo dies far sooner than speech's `reopen_after_ms`.
+const TONE_TAIL: Duration = Duration::from_millis(60);
+/// Idle frames kept for the ears (about a second): the spotter answers at most this late.
+const RECENT_FRAMES: usize = 32;
 
 const NO_REPLY: &str = "No reply came back.";
 const VOICE_STUCK: &str = "The voice stopped responding.";
@@ -123,10 +132,12 @@ pub struct SessionSettings {
     pub follow_up_secs: u32,
     /// How long after speech ends before the ears hear again, so Dot's own echo is not heard.
     pub reopen_after_ms: u32,
-    /// Play a soft tone when listening starts from rest (`open` while `Idle`, or "Hey Dot").
-    /// Not on a follow-up, an ask, an interruption or a click. The ears open only once the
-    /// tone has finished sounding and `reopen_after_ms` has passed, so it is never heard as
-    /// speech; with no working speaker there is no tone and the ears open at once.
+    /// Play a soft tone when listening starts from rest. On `open` while `Idle` it sounds at
+    /// once and the ears open once it has finished sounding and a 60 ms tail has passed, so
+    /// it is never heard as speech. After "Hey Dot" the ears open at once and the tone sounds
+    /// only if no speech starts within 300 ms (the person paused, waiting); the ears are deaf
+    /// only while it sounds plus the same 60 ms tail. Not on a follow-up, an ask, an
+    /// interruption or a click; with no working speaker there is no tone.
     pub tone: bool,
 }
 
@@ -506,6 +517,12 @@ struct Worker {
     /// The listening tone is sounding: the ears hear nothing until the sink is quiet (then
     /// `deaf_until` takes over for the tail), or until this limit, when it is stopped.
     tone_until: Option<Instant>,
+    /// Listening after "Hey Dot" with the tone on and no speech yet: the tone is played then,
+    /// unless speech starts first.
+    tone_due: Option<Instant>,
+    /// Idle with the wake phrase on: the last frames the spotter heard, newest last, so the
+    /// words said after "Hey Dot" but before the spotter answered reach the ears.
+    recent: VecDeque<Vec<f32>>,
     /// Stop handling frames for the rest of this pass.
     halt_frames: bool,
     /// Frames were left waiting at the end of the last pass.
@@ -570,6 +587,8 @@ impl Worker {
             clip_started: now,
             deaf_until: None,
             tone_until: None,
+            tone_due: None,
+            recent: VecDeque::new(),
             halt_frames: false,
             frames_left: false,
             voice_heard_at: now,
@@ -858,11 +877,39 @@ impl Worker {
 
     // ---- states --------------------------------------------------------------------------
 
-    /// Listening starts from rest (`open` while `Idle`, or "Hey Dot"): with the tone on, it
-    /// sounds first and the ears wait for it to end.
+    /// Listening starts from rest by `open` while `Idle` (hotkey, click, tray): with the tone
+    /// on, it sounds first and the ears wait for it to end.
     fn listen_from_rest(&mut self) {
         self.listen(LISTEN_AFTER_OPEN);
         self.play_tone();
+    }
+
+    /// "Hey Dot" while `Idle`: the ears open at once, so words said in the same breath are
+    /// heard whole (nothing captured after the wake phrase is thrown away). With the tone on,
+    /// it sounds only if no speech has started `TONE_WAIT` after the wake.
+    fn woke(&mut self) {
+        let after = self.wake.as_ref().map_or(0, |spotter| spotter.after_word());
+        let recent = std::mem::take(&mut self.recent);
+        self.send(SessionEvent::Woke);
+        self.listen(LISTEN_AFTER_OPEN);
+        if self.state != State::Listening {
+            return;
+        }
+        if self.settings.tone {
+            self.tone_due = Some(self.clock.now() + TONE_WAIT);
+        }
+        // The spotter answers a little after the word ends: what was said in between is
+        // given to the ears first, so the sentence starts where the wake phrase ended.
+        let keep = after.div_ceil(FRAME).min(recent.len());
+        let now = self.clock.now();
+        for frame in recent.range(recent.len() - keep..) {
+            for event in self.ears.push(frame) {
+                if !self.state.hears() {
+                    return;
+                }
+                self.ear_event(event, now);
+            }
+        }
     }
 
     /// Plays the listening tone through the sink speech uses, and keeps the ears deaf while it
@@ -882,6 +929,7 @@ impl Worker {
         self.in_speech = false;
         self.deaf_until = None;
         self.tone_until = None;
+        self.tone_due = None;
         self.quiet_since = self.clock.now();
         self.listen_limit = limit;
         self.enter(State::Listening);
@@ -892,6 +940,7 @@ impl Worker {
         self.in_speech = false;
         self.deaf_until = None;
         self.tone_until = None;
+        self.tone_due = None;
         self.quiet_since = self.clock.now();
         self.listen_limit = ASK_LIMIT;
         self.enter(State::Asking);
@@ -907,6 +956,8 @@ impl Worker {
                 });
             }
             self.last_level = None;
+            self.tone_due = None;
+            self.recent.clear();
             if !new.hears() {
                 self.ears.reset();
                 self.short_ears.reset();
@@ -985,6 +1036,7 @@ impl Worker {
         self.mic = Some(MicStream { frames, _mic: mic });
         self.mic_broken = false;
         self.mic_owed = false;
+        self.recent.clear();
         // A fresh stream: nothing heard on the old one joins what the new one hears.
         if let Some(spotter) = &mut self.wake {
             spotter.reset();
@@ -1056,11 +1108,12 @@ impl Worker {
                 if !quiet {
                     self.sink.stop();
                 }
-                // The tone has stopped sounding: the tail after it is waited out as after
-                // speech, and then the frames captured meanwhile are thrown away.
+                // The tone has stopped sounding: a short tail after it is waited out, then the
+                // frames captured until then are thrown away and every later one is kept. The
+                // listen limit counts from the moment the ears open.
                 self.tone_until = None;
-                let tail = Duration::from_millis(u64::from(self.settings.reopen_after_ms));
-                self.deaf_until = Some(now + tail);
+                self.deaf_until = Some(now + TONE_TAIL);
+                self.quiet_since = now + TONE_TAIL;
             }
         }
         if self.deaf_until.is_some_and(|at| self.clock.now() >= at) {
@@ -1123,13 +1176,22 @@ impl Worker {
 
     fn frame(&mut self, frame: &[f32]) {
         let now = self.clock.now();
+        // The spotter hears every frame, the listening tone's too. Nothing is done about the
+        // tone: it is two pure notes with no words in them, so it cannot match "Hey Dot" or
+        // "Dot, stop" (the spotter needs the keywords' sounds in order), and keeping the
+        // spotter fed means "Dot, stop" said over the tone still closes.
         let word = self.spot(frame);
         match self.state {
             State::Off => {}
             State::Idle => {
+                if self.wake.is_some() && self.settings.wake_phrase {
+                    if self.recent.len() >= RECENT_FRAMES {
+                        self.recent.pop_front();
+                    }
+                    self.recent.push_back(frame.to_vec());
+                }
                 if word == Some(WakeWord::HeyDot) {
-                    self.send(SessionEvent::Woke);
-                    self.listen_from_rest();
+                    self.woke();
                 }
             }
             State::Thinking => {
@@ -1182,6 +1244,7 @@ impl Worker {
             EarEvent::Started => {
                 self.in_speech = true;
                 self.clip_started = now;
+                self.tone_due = None; // the person kept talking after "Hey Dot": no tone
             }
             EarEvent::Partial(text) => self.send(SessionEvent::Hearing { text }),
             EarEvent::Final(text) => {
@@ -1264,6 +1327,13 @@ impl Worker {
         self.retry_mic(now);
         match self.state {
             State::Listening | State::Asking => {
+                if self.tone_due.is_some_and(|at| now >= at) {
+                    // A pause after "Hey Dot": the person waits to be acknowledged.
+                    self.tone_due = None;
+                    if !self.in_speech {
+                        self.play_tone();
+                    }
+                }
                 if !self.in_speech
                     && now.saturating_duration_since(self.quiet_since) >= self.listen_limit
                 {
@@ -1349,6 +1419,9 @@ mod tests {
     const QUIET: f32 = -0.001;
     const HEY_DOT: f32 = 2.0;
     const DOT_STOP: f32 = 3.0;
+    /// "Hey Dot" spotted late: this frame (speech to the detector) and the two before it came
+    /// after the wake phrase.
+    const HEY_DOT_LATE: f32 = 4.0;
 
     // ---- fakes ---------------------------------------------------------------------------
 
@@ -1529,11 +1602,18 @@ mod tests {
         }
     }
 
-    struct Spotter;
+    struct Spotter {
+        after: usize,
+    }
 
     impl WakeSpotter for Spotter {
         fn heard(&mut self, frame16k: &[f32]) -> Option<WakeWord> {
+            self.after = 0;
             if frame16k[0] == HEY_DOT {
+                Some(WakeWord::HeyDot)
+            } else if frame16k[0] == HEY_DOT_LATE {
+                // Heard three frames late: this frame and the two before came after the word.
+                self.after = 3 * FRAME;
                 Some(WakeWord::HeyDot)
             } else if frame16k[0] == DOT_STOP {
                 Some(WakeWord::DotStop)
@@ -1542,6 +1622,9 @@ mod tests {
             }
         }
         fn reset(&mut self) {}
+        fn after_word(&self) -> usize {
+            self.after
+        }
     }
 
     /// The test's side of the microphone: it feeds frames into whichever stream is open.
@@ -1713,7 +1796,7 @@ mod tests {
                 opened.lock().unwrap().push(fresh.clone());
                 Ok(fresh as Arc<dyn Sink>)
             }),
-            wake: Some(Box::new(Spotter)),
+            wake: Some(Box::new(Spotter { after: 0 })),
             open_mic: Box::new(move || feed.open_mic()),
         };
         let settings = SessionSettings {
@@ -1824,6 +1907,11 @@ mod tests {
         /// A sentence while already listening.
         fn hear_sentence(&mut self) -> u64 {
             self.sentence();
+            self.hear_sentence_already_said()
+        }
+
+        /// The events of a sentence already fed.
+        fn hear_sentence_already_said(&mut self) -> u64 {
             assert_eq!(
                 self.next(),
                 SessionEvent::Hearing {
@@ -1944,10 +2032,10 @@ mod tests {
         r.mic.send(SPEECH, 6);
         r.nothing_more();
         assert_eq!(r.seen(), 0);
-        // The tone has finished: the usual tail after Dot's own sound is waited out too.
+        // The tone has finished: a short tail after it is waited out too.
         r.sink.sounding(false);
         r.sync();
-        r.clock.advance(249);
+        r.clock.advance(59);
         r.mic.send(SPEECH, 6);
         r.nothing_more();
         assert_eq!(r.seen(), 0, "a tail frame reached the ears");
@@ -1975,18 +2063,123 @@ mod tests {
     }
 
     #[test]
-    fn woke_plays_the_tone() {
+    fn the_listen_limit_counts_from_when_the_ears_open() {
+        let mut r = toned(false);
+        r.expect_state(State::Idle, false);
+        r.sink.hold_next.store(true, Ordering::SeqCst);
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        deaf_during_the_tone(&mut r);
+        // A slow tone: a second before the sink is quiet, then the short tail.
+        r.clock.advance(1_000);
+        r.sync();
+        r.sink.sounding(false);
+        r.sync();
+        r.clock.advance(60);
+        r.sync();
+        // Eight quiet seconds from here, not from the `open`.
+        r.clock.advance(7_999);
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Listening);
+        r.clock.advance(1);
+        r.expect_state(State::Idle, false);
+    }
+
+    /// "Hey Dot" fed on a toned rig with the wake phrase on.
+    fn woken() -> Rig {
         let mut r = toned(true);
         r.expect_state(State::Idle, true);
-        r.sink.hold_next.store(true, Ordering::SeqCst);
         r.mic.send(HEY_DOT, 1);
         assert_eq!(r.next(), SessionEvent::Woke);
         r.expect_state(State::Listening, true);
+        r
+    }
+
+    #[test]
+    fn speech_right_after_the_wake_phrase_is_heard_whole() {
+        let mut r = toned(true);
+        r.expect_state(State::Idle, true);
+        // "Hey Dot, read me the first message" in one breath: no frame between.
+        r.mic.send(HEY_DOT, 1);
+        r.mic.send(SPEECH, 3);
+        r.mic.send(QUIET, 2);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        r.hear_sentence_already_said();
+        // Every speech frame reached the clip, and no tone was played for this wake.
+        let lens = r.recognizer.lens.lock().unwrap().clone();
+        assert_eq!(lens.last().copied(), Some(5 * FRAME), "clips: {lens:?}");
+        r.clock.advance(1_000);
+        r.nothing_more();
+        assert_eq!(r.sink.tones(), 0);
+    }
+
+    #[test]
+    fn words_said_before_the_spotter_answers_are_kept() {
+        let mut r = toned(true);
+        r.expect_state(State::Idle, true);
+        // The person goes on talking; the spotter answers on the third frame after the word.
+        r.mic.send(QUIET, 4);
+        r.mic.send(SPEECH, 2);
+        r.mic.send(HEY_DOT_LATE, 1);
+        r.mic.send(QUIET, 2);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        r.hear_sentence_already_said();
+        // The three frames after the word, then the two quiet ones that ended the sentence.
+        let lens = r.recognizer.lens.lock().unwrap().clone();
+        assert_eq!(lens.last().copied(), Some(5 * FRAME), "clips: {lens:?}");
+        assert_eq!(r.sink.tones(), 0);
+    }
+
+    #[test]
+    fn a_pause_after_the_wake_phrase_gets_the_tone() {
+        let mut r = woken();
+        // The ears are open at once: quiet frames reach them.
+        let seen = r.seen();
+        r.mic.send(QUIET, 2);
+        r.nothing_more();
+        assert_eq!(r.seen(), seen + 2);
+        r.clock.advance(299);
+        r.nothing_more();
+        assert_eq!(r.sink.tones(), 0, "the tone came before the pause");
+        // A pause of 300 ms: the tone answers it, and the ears are deaf while it sounds.
+        r.sink.hold_next.store(true, Ordering::SeqCst);
+        r.clock.advance(1);
         deaf_during_the_tone(&mut r);
         r.sink.sounding(false);
         r.sync();
-        r.past_tail();
+        // Then only the short tail.
+        r.clock.advance(59);
+        let seen = r.seen();
+        r.mic.send(SPEECH, 6);
+        r.nothing_more();
+        assert_eq!(r.seen(), seen, "a tail frame reached the ears");
+        r.clock.advance(1);
+        r.sync();
         r.hear_sentence();
+        assert_eq!(r.sink.tones(), 1);
+    }
+
+    #[test]
+    fn no_tone_when_the_person_keeps_talking() {
+        let mut r = woken();
+        // Speech begins within the 300 ms (after a short breath).
+        r.mic.send(QUIET, 1);
+        r.clock.advance(200);
+        r.mic.send(SPEECH, 3);
+        assert_eq!(
+            r.next(),
+            SessionEvent::Hearing {
+                text: "hello".into()
+            }
+        );
+        r.clock.advance(500);
+        r.nothing_more();
+        assert_eq!(r.sink.tones(), 0);
+        r.mic.send(QUIET, 2);
+        assert!(matches!(r.next(), SessionEvent::Heard { .. }));
+        assert_eq!(r.sink.tones(), 0);
     }
 
     #[test]
