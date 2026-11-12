@@ -88,7 +88,9 @@ where
             return Err(CmdError::cancelled("the Edge program was not changed"));
         }
     }
-    Ok(rt.update_settings(settings).await?)
+    // `voice_enabled` is the stored one at the moment of saving, not the one sent: only the
+    // Voice switch changes it, and a dialog can stay open for minutes while it does.
+    Ok(rt.update_settings_keeping_voice(settings).await?)
 }
 
 /// The question to ask before Dots runs or stores what a Library `config` names, or `None`
@@ -1629,6 +1631,49 @@ mod tests {
             claude_path: Some(path.into()),
             ..settings.clone()
         }
+    }
+
+    #[tokio::test]
+    async fn voice_turned_on_while_the_dialog_is_open_stays_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let rt = runtime(&dir).await;
+        // The form's copy: voice off, a new program and another voice.
+        let sent = Settings {
+            voice_id: 4,
+            ..with_program(&rt.settings().await, PROGRAM)
+        };
+        assert!(!sent.voice_enabled);
+        let saved = save_settings_confirmed(&rt, sent, |_title, _message| {
+            // While the dialog is open, the Voice switch turns voice on.
+            let rt = &rt;
+            async move {
+                let mut on = rt.settings().await;
+                on.voice_enabled = true;
+                rt.update_settings(on).await.unwrap();
+                true
+            }
+        })
+        .await
+        .unwrap();
+        assert!(saved.settings.voice_enabled, "the turn-on was undone");
+        assert_eq!(saved.settings.voice_id, 4);
+        assert_eq!(saved.settings.claude_path.as_deref(), Some(PROGRAM));
+        assert_eq!(rt.settings().await, saved.settings);
+        // And the other way: voice turned off (a failed download) while it is open.
+        let sent = with_program(&saved.settings, "C:\\other\\claude.exe");
+        let saved = save_settings_confirmed(&rt, sent, |_title, _message| {
+            let rt = &rt;
+            async move {
+                let mut off = rt.settings().await;
+                off.voice_enabled = false;
+                rt.update_settings(off).await.unwrap();
+                true
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!saved.settings.voice_enabled, "the turn-off was undone");
+        rt.shutdown();
     }
 
     #[tokio::test]

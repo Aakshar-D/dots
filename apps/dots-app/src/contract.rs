@@ -40,7 +40,7 @@ use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
-use dots_core::store::{HistoryRow, HistoryState, PhoneAction, PhoneDevice};
+use dots_core::store::{HistoryRow, HistoryState, OpenDotUsage, PhoneAction, PhoneDevice};
 use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::audit::{AuditView, Event as AuditEvent, SendState};
 use dots_core::vault::org::{
@@ -843,7 +843,7 @@ fn claude_usage() -> Vec<ClaudeUsage> {
     ]
 }
 
-/// The Usage page's week: a Claude dot and a local one.
+/// The Usage page's week: a Claude dot and a local one, and Open Dot's requests.
 fn usage_summary() -> UsageSummary {
     UsageSummary {
         period: UsagePeriod::Week,
@@ -888,6 +888,12 @@ fn usage_summary() -> UsageSummary {
                 }],
             },
         ],
+        open_dot: Some(OpenDotUsage {
+            requests: 38,
+            tokens_in: 152_000,
+            tokens_out: 4_100,
+            cost_usd: Some(0.21),
+        }),
     }
 }
 
@@ -2004,6 +2010,7 @@ pub fn samples() -> Value {
             skip: true,
         },
     ]);
+    let voice_proposal = proposal.clone();
     samples["SetupAnswer"] = to([
         SetupAnswer::Questions {
             questions: vec!["Which folder?".into(), "How often?".into()],
@@ -2380,7 +2387,180 @@ pub fn samples() -> Value {
     samples["ResultCheck"] = result_checks();
     graph_samples(&mut samples);
     guardrails_samples(&mut samples);
+    voice_samples(&mut samples, voice_proposal);
     samples
+}
+
+/// Open Dot's voice (Open Dot design spec, step 3): every `voice` event kind, each card and
+/// deed and place to open, the status off and ready, the devices and the view.
+fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
+    use crate::voice::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceStatus};
+    use dots_core::open_dot::act::{Deed, OpenTarget};
+    use dots_core::open_dot::picture::View;
+    use dots_core::open_dot::Card;
+    use dots_voice::State;
+
+    let off = VoiceStatus {
+        enabled: false,
+        installed: false,
+        downloading: false,
+        ready: false,
+        state: State::Off,
+        mic_open: false,
+        download_bytes: dots_voice::Manifest::pinned().total_bytes(),
+        hotkey_error: None,
+        trouble: None,
+    };
+    let ready = VoiceStatus {
+        enabled: true,
+        installed: true,
+        ready: true,
+        state: State::Listening,
+        mic_open: true,
+        hotkey_error: Some("Another app uses Ctrl+Shift+Space.".into()),
+        trouble: Some("The speaker could not be opened. Check your sound settings.".into()),
+        ..off.clone()
+    };
+    let deeds = [
+        Deed::Approve {
+            approval_id: "ap_1".into(),
+            dot_name: "Research".into(),
+            tool: "Bash".into(),
+            target: "ls -la".into(),
+        },
+        Deed::Deny {
+            approval_id: "ap_1".into(),
+            dot_name: "Research".into(),
+            tool: "Bash".into(),
+            target: "ls -la".into(),
+        },
+        Deed::Run {
+            dot_id: "dot_1".into(),
+            dot_name: "Deploy watcher".into(),
+        },
+        Deed::Answer {
+            message_id: "msg_1".into(),
+            dot_name: "Release helper".into(),
+            text: "main".into(),
+        },
+        Deed::Send {
+            dot_id: "dot_1".into(),
+            dot_name: "Research".into(),
+            text: "look at the build".into(),
+            topic_root: Some("msg_2".into()),
+        },
+        Deed::Send {
+            dot_id: "dot_1".into(),
+            dot_name: "Research".into(),
+            text: "and the tests".into(),
+            topic_root: None,
+        },
+    ];
+    let targets = [
+        OpenTarget::Dot {
+            dot_id: "dot_1".into(),
+        },
+        OpenTarget::Approval {
+            approval_id: "ap_1".into(),
+        },
+        OpenTarget::Inbox,
+        OpenTarget::Settings,
+        OpenTarget::Usage,
+        OpenTarget::Home,
+    ];
+    let mut events = vec![
+        VoiceEvent::State {
+            state: State::Idle,
+            mic_open: false,
+        },
+        VoiceEvent::Level {
+            mic: 0.5,
+            voice: 0.0,
+        },
+        VoiceEvent::Hearing {
+            text: "what needs".into(),
+        },
+        VoiceEvent::Heard {
+            text: "what needs me".into(),
+        },
+        VoiceEvent::Saying {
+            text: "One question.".into(),
+        },
+        VoiceEvent::Ask {
+            question: "Approve it?".into(),
+            options: vec!["Yes".into(), "No".into()],
+            seq: 1,
+        },
+        VoiceEvent::Ask {
+            question: "What should it be called?".into(),
+            options: vec![],
+            seq: 2,
+        },
+        VoiceEvent::Card {
+            card: Card::Proposal { proposal },
+        },
+        VoiceEvent::Card {
+            card: Card::List {
+                title: "What needs you".into(),
+                lines: vec!["Research asks: which branch?".into()],
+            },
+        },
+        VoiceEvent::Cleared,
+        VoiceEvent::Woke,
+        VoiceEvent::Trouble {
+            message: "Open Dot is off. Turn it on in Settings, under Voice.".into(),
+        },
+        VoiceEvent::Download {
+            done_bytes: 1_000_000,
+            total_bytes: 258_311_120,
+        },
+        VoiceEvent::Status {
+            status: off.clone(),
+        },
+    ];
+    for state in [
+        State::Off,
+        State::Listening,
+        State::Thinking,
+        State::Speaking,
+        State::Asking,
+    ] {
+        events.push(VoiceEvent::State {
+            state,
+            mic_open: true,
+        });
+    }
+    events.extend(deeds.map(|deed| VoiceEvent::Card {
+        card: Card::Confirm { deed },
+    }));
+    events.extend(targets.map(|target| VoiceEvent::Open { target }));
+    samples["VoiceEvent"] = to(events);
+    samples["VoiceStatus"] = to([off, ready]);
+    samples["VoiceDevices"] = to([
+        VoiceDevices::default(),
+        VoiceDevices {
+            microphones: vec![VoiceDevice {
+                id: "{0.0.1.00000000}.{mic}".into(),
+                name: "Desk microphone".into(),
+                default: true,
+            }],
+            speakers: vec![VoiceDevice {
+                id: "{0.0.0.00000000}.{out}".into(),
+                name: "Speakers".into(),
+                default: false,
+            }],
+        },
+    ]);
+    samples["View"] = to([
+        View::default(),
+        View {
+            account: "personal".into(),
+            workspace: "default".into(),
+            screen: "dot".into(),
+            dot_id: Some("dot_1".into()),
+            topic_root: Some("msg_2".into()),
+        },
+    ]);
 }
 
 /// Workspace guardrails (guardrails spec §7): the Guardrails tab of an Admin who may sign and of

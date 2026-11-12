@@ -1285,7 +1285,18 @@
     "graph_search",
     "graph_rebuild",
     "graph_export",
-    "graph_reveal"
+    "graph_reveal",
+    "voice_status",
+    "voice_enable",
+    "voice_download_cancel",
+    "voice_remove",
+    "voice_open",
+    "voice_close",
+    "voice_stop",
+    "voice_pick",
+    "voice_view",
+    "voice_preview",
+    "voice_devices"
   ],
   "ConnectorEntry": [
     {
@@ -7951,6 +7962,7 @@
     ],
     "max_concurrent_runs": 2,
     "notify_on_notes": true,
+    "open_dot_model": "haiku",
     "phone_enabled": false,
     "phone_port": 47323,
     "port": 47321,
@@ -7960,7 +7972,17 @@
     "spend_daily_tokens": null,
     "spend_daily_usd": 10.0,
     "spend_monthly_usd": 200.0,
-    "tested_claude_version": "2.1.295"
+    "tested_claude_version": "2.1.295",
+    "voice_enabled": false,
+    "voice_hotkey": "CmdOrCtrl+Shift+Space",
+    "voice_id": 0,
+    "voice_interrupt_by_talking": false,
+    "voice_mic": null,
+    "voice_notices": false,
+    "voice_speaker": null,
+    "voice_speed": 1.0,
+    "voice_tone": true,
+    "voice_wake_phrase": false
   },
   "SettingsSaved": {
     "restart_required": true,
@@ -7992,6 +8014,7 @@
       ],
       "max_concurrent_runs": 2,
       "notify_on_notes": true,
+      "open_dot_model": "haiku",
       "phone_enabled": false,
       "phone_port": 47323,
       "port": 47321,
@@ -8001,7 +8024,17 @@
       "spend_daily_tokens": null,
       "spend_daily_usd": 10.0,
       "spend_monthly_usd": 200.0,
-      "tested_claude_version": "2.1.295"
+      "tested_claude_version": "2.1.295",
+      "voice_enabled": false,
+      "voice_hotkey": "CmdOrCtrl+Shift+Space",
+      "voice_id": 0,
+      "voice_interrupt_by_talking": false,
+      "voice_mic": null,
+      "voice_notices": false,
+      "voice_speaker": null,
+      "voice_speed": 1.0,
+      "voice_tone": true,
+      "voice_wake_phrase": false
     }
   },
   "SetupAnswer": [
@@ -8898,6 +8931,12 @@
     }
   ],
   "UsageSummary": {
+    "open_dot": {
+      "cost_usd": 0.21,
+      "requests": 38,
+      "tokens_in": 152000,
+      "tokens_out": 4100
+    },
     "period": "week",
     "rows": [
       {
@@ -8945,6 +8984,22 @@
     ],
     "since": "2026-10-09T12:00:00.000Z"
   },
+  "View": [
+    {
+      "account": "",
+      "dot_id": null,
+      "screen": "",
+      "topic_root": null,
+      "workspace": ""
+    },
+    {
+      "account": "personal",
+      "dot_id": "dot_1",
+      "screen": "dot",
+      "topic_root": "msg_2",
+      "workspace": "default"
+    }
+  ],
   "ViewNode": [
     {
       "community": 0,
@@ -8972,6 +9027,303 @@
       "label": "tokio",
       "line": 0,
       "weight": 8
+    }
+  ],
+  "VoiceDevices": [
+    {
+      "microphones": [],
+      "speakers": []
+    },
+    {
+      "microphones": [
+        {
+          "default": true,
+          "id": "{0.0.1.00000000}.{mic}",
+          "name": "Desk microphone"
+        }
+      ],
+      "speakers": [
+        {
+          "default": false,
+          "id": "{0.0.0.00000000}.{out}",
+          "name": "Speakers"
+        }
+      ]
+    }
+  ],
+  "VoiceEvent": [
+    {
+      "kind": "state",
+      "mic_open": false,
+      "state": "idle"
+    },
+    {
+      "kind": "level",
+      "mic": 0.5,
+      "voice": 0.0
+    },
+    {
+      "kind": "hearing",
+      "text": "what needs"
+    },
+    {
+      "kind": "heard",
+      "text": "what needs me"
+    },
+    {
+      "kind": "saying",
+      "text": "One question."
+    },
+    {
+      "kind": "ask",
+      "options": [
+        "Yes",
+        "No"
+      ],
+      "question": "Approve it?",
+      "seq": 1
+    },
+    {
+      "kind": "ask",
+      "options": [],
+      "question": "What should it be called?",
+      "seq": 2
+    },
+    {
+      "card": {
+        "kind": "proposal",
+        "proposal": {
+          "extras": [
+            "web",
+            "mcp:github"
+          ],
+          "first_message": "Start with today's new files.",
+          "folder": "C:/Users/me/Dots/downloads-digest",
+          "instructions": "Read the Downloads folder and tell me what is new.",
+          "name": "Downloads digest",
+          "notes": "Runs on weekdays at 9.",
+          "preset": "read-only",
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 9 * * 1-5",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "uses": {
+            "apps": [],
+            "context": [],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [],
+            "skills": []
+          }
+        }
+      },
+      "kind": "card"
+    },
+    {
+      "card": {
+        "kind": "list",
+        "lines": [
+          "Research asks: which branch?"
+        ],
+        "title": "What needs you"
+      },
+      "kind": "card"
+    },
+    {
+      "kind": "cleared"
+    },
+    {
+      "kind": "woke"
+    },
+    {
+      "kind": "trouble",
+      "message": "Open Dot is off. Turn it on in Settings, under Voice."
+    },
+    {
+      "done_bytes": 1000000,
+      "kind": "download",
+      "total_bytes": 258311120
+    },
+    {
+      "kind": "status",
+      "status": {
+        "download_bytes": 258311120,
+        "downloading": false,
+        "enabled": false,
+        "hotkey_error": null,
+        "installed": false,
+        "mic_open": false,
+        "ready": false,
+        "state": "off",
+        "trouble": null
+      }
+    },
+    {
+      "kind": "state",
+      "mic_open": true,
+      "state": "off"
+    },
+    {
+      "kind": "state",
+      "mic_open": true,
+      "state": "listening"
+    },
+    {
+      "kind": "state",
+      "mic_open": true,
+      "state": "thinking"
+    },
+    {
+      "kind": "state",
+      "mic_open": true,
+      "state": "speaking"
+    },
+    {
+      "kind": "state",
+      "mic_open": true,
+      "state": "asking"
+    },
+    {
+      "card": {
+        "deed": {
+          "approval_id": "ap_1",
+          "dot_name": "Research",
+          "kind": "approve",
+          "target": "ls -la",
+          "tool": "Bash"
+        },
+        "kind": "confirm"
+      },
+      "kind": "card"
+    },
+    {
+      "card": {
+        "deed": {
+          "approval_id": "ap_1",
+          "dot_name": "Research",
+          "kind": "deny",
+          "target": "ls -la",
+          "tool": "Bash"
+        },
+        "kind": "confirm"
+      },
+      "kind": "card"
+    },
+    {
+      "card": {
+        "deed": {
+          "dot_id": "dot_1",
+          "dot_name": "Deploy watcher",
+          "kind": "run"
+        },
+        "kind": "confirm"
+      },
+      "kind": "card"
+    },
+    {
+      "card": {
+        "deed": {
+          "dot_name": "Release helper",
+          "kind": "answer",
+          "message_id": "msg_1",
+          "text": "main"
+        },
+        "kind": "confirm"
+      },
+      "kind": "card"
+    },
+    {
+      "card": {
+        "deed": {
+          "dot_id": "dot_1",
+          "dot_name": "Research",
+          "kind": "send",
+          "text": "look at the build",
+          "topic_root": "msg_2"
+        },
+        "kind": "confirm"
+      },
+      "kind": "card"
+    },
+    {
+      "card": {
+        "deed": {
+          "dot_id": "dot_1",
+          "dot_name": "Research",
+          "kind": "send",
+          "text": "and the tests",
+          "topic_root": null
+        },
+        "kind": "confirm"
+      },
+      "kind": "card"
+    },
+    {
+      "kind": "open",
+      "target": {
+        "dot_id": "dot_1",
+        "kind": "dot"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "approval_id": "ap_1",
+        "kind": "approval"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "inbox"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "settings"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "usage"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "home"
+      }
+    }
+  ],
+  "VoiceStatus": [
+    {
+      "download_bytes": 258311120,
+      "downloading": false,
+      "enabled": false,
+      "hotkey_error": null,
+      "installed": false,
+      "mic_open": false,
+      "ready": false,
+      "state": "off",
+      "trouble": null
+    },
+    {
+      "download_bytes": 258311120,
+      "downloading": false,
+      "enabled": true,
+      "hotkey_error": "Another app uses Ctrl+Shift+Space.",
+      "installed": true,
+      "mic_open": true,
+      "ready": true,
+      "state": "listening",
+      "trouble": "The speaker could not be opened. Check your sound settings."
     }
   ],
   "WatchHours": {

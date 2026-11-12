@@ -38,6 +38,10 @@
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": { "installMode": "currentUser" }
+    },
+    "macOS": {
+      "infoPlist": "Info.plist",
+      "entitlements": "Entitlements.plist"
     }
   },
   "plugins": {

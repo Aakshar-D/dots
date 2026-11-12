@@ -240,6 +240,14 @@ pub async fn default_folder(root: &Path, name: &str, used: &[PathBuf]) -> Result
     )))
 }
 
+/// `chat`'s refusal of a follow-up while a run of the thread waits for an approval.
+pub const CHAT_AWAITS_APPROVAL: &str =
+    "this chat is waiting for an approval; answer it, then send your message again";
+/// `chat`'s refusal of a follow-up while a run of the thread is still working.
+pub const CHAT_STILL_WORKING: &str =
+    "the dot is still working on this chat; wait until it has finished, then send your message \
+     again";
+
 pub struct Runtime {
     store: Store,
     bus: Bus,
@@ -252,6 +260,8 @@ pub struct Runtime {
     skill_drafts: SkillDrafts,
     /// The setup agent's requests (setup agent spec §9).
     setup_drafts: SetupDrafts,
+    /// Open Dot's mind: one spoken turn in, words and one checked action out.
+    open_dot: crate::open_dot::Mind,
     /// Makes `setup_apply` check a name and create its dot in one step, so a second press of
     /// Run setup meets the first one's dot instead of making a second.
     setup_lock: Mutex<()>,
@@ -706,6 +716,14 @@ impl Runtime {
                 cfg.draft_limit,
                 shutdown.clone(),
             ),
+            open_dot: crate::open_dot::Mind::new(Arc::new(
+                crate::open_dot::think::CliThinker::new(
+                    claude_program.clone(),
+                    cfg.claude_env.clone(),
+                    cfg.data_dir.join(DRAFTS_DIR),
+                    crate::open_dot::think::THINK_LIMIT,
+                ),
+            )),
             setup_lock: Mutex::new(()),
             claude_program,
             claude_version,
@@ -785,11 +803,28 @@ impl Runtime {
     /// and `mark_claude_tested` change them, so a settings form holding an old copy cannot undo
     /// a pause or a "mark as tested".
     pub async fn update_settings(&self, next: Settings) -> Result<SettingsSaved> {
+        self.save_settings(next, false).await
+    }
+
+    /// `update_settings` for the settings form: the stored `voice_enabled` is kept too, read
+    /// under the same lock that stores the rest, so only the Voice switch turns voice on or
+    /// off and a turn-on (or a failed download turning it off) during a slow save is not
+    /// undone by the form's older copy.
+    pub async fn update_settings_keeping_voice(&self, next: Settings) -> Result<SettingsSaved> {
+        self.save_settings(next, true).await
+    }
+
+    async fn save_settings(&self, next: Settings, keep_voice: bool) -> Result<SettingsSaved> {
         let settings = self
             .change_settings(|s| {
                 *s = Settings {
                     schedules_paused: s.schedules_paused,
                     tested_claude_version: std::mem::take(&mut s.tested_claude_version),
+                    voice_enabled: if keep_voice {
+                        s.voice_enabled
+                    } else {
+                        next.voice_enabled
+                    },
                     ..next
                 };
             })
@@ -815,6 +850,7 @@ impl Runtime {
         // As the store keeps it, so the live copy reads the same as the stored one.
         next.default_model = next.default_model.trim().to_string();
         next.checker_model = next.checker_model.trim().to_string();
+        next.open_dot_model = next.open_dot_model.trim().to_string();
         self.store.put_settings(&next).await?;
         self.scheduler.set_paused(next.schedules_paused);
         self.watchers.set_paused(next.schedules_paused);
@@ -1825,9 +1861,35 @@ impl Runtime {
         self.setup_drafts.ask(id, &ctx, &req).await
     }
 
+    /// `setup_ask`, with the usage the CLI reported for the request (`None` when no request
+    /// was made or none was reported). Open Dot asks through this, so its setup rounds count.
+    pub async fn setup_ask_with_usage(
+        &self,
+        id: &str,
+        req: SetupRequest,
+    ) -> (
+        Result<SetupAnswer>,
+        Option<crate::engine::claude::once::OnceUsage>,
+    ) {
+        match self.setup_context().await {
+            Ok(ctx) => self.setup_drafts.ask_with_usage(id, &ctx, &req).await,
+            Err(e) => (Err(e), None),
+        }
+    }
+
     /// Cancels the setup's request, if one is being answered (`setup_cancel`).
     pub fn setup_cancel(&self, id: &str) {
         self.setup_drafts.cancel(id);
+    }
+
+    /// Open Dot's mind, which thinks through the CLI. Its `hear` and `pick` take this runtime.
+    pub fn open_dot(&self) -> &crate::open_dot::Mind {
+        &self.open_dot
+    }
+
+    /// Cancelled when the runtime shuts down; what Open Dot's requests are children of.
+    pub(crate) fn shutdown_token(&self) -> &CancellationToken {
+        &self.shutdown
     }
 
     /// Creates the proposed dot and starts its first chat (`setup_apply`, setup agent spec
@@ -2791,14 +2853,8 @@ impl Runtime {
             if let Some(active) = thread.iter().find(|r| !r.status.is_terminal()) {
                 return Err(Error::Conflict(
                     match active.status {
-                        RunStatus::AwaitingApproval => {
-                            "this chat is waiting for an approval; answer it, then send your \
-                             message again"
-                        }
-                        _ => {
-                            "the dot is still working on this chat; wait until it has \
-                             finished, then send your message again"
-                        }
+                        RunStatus::AwaitingApproval => CHAT_AWAITS_APPROVAL,
+                        _ => CHAT_STILL_WORKING,
                     }
                     .into(),
                 ));
@@ -4224,7 +4280,7 @@ impl Runtime {
         ))
     }
 
-    /// The Usage page: each dot's runs started in the period.
+    /// The Usage page: each dot's runs started in the period, and Open Dot's requests.
     pub async fn usage_summary(
         &self,
         period: crate::model::UsagePeriod,
@@ -4233,6 +4289,7 @@ impl Runtime {
         Ok(crate::model::UsageSummary {
             period,
             rows: self.store.usage_rows(&since).await?,
+            open_dot: self.store.open_dot_usage_since(Some(&since)).await?,
             since,
         })
     }

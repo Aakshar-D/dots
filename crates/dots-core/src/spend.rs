@@ -137,11 +137,11 @@ pub fn thousands(n: u64) -> String {
     out
 }
 
-fn cost_reached(spent: f64, cap: Option<f64>) -> Option<f64> {
+pub(crate) fn cost_reached(spent: f64, cap: Option<f64>) -> Option<f64> {
     cap.filter(|cap| spent + 1e-9 >= *cap)
 }
 
-fn tokens_reached(spent: i64, cap: Option<u64>) -> Option<u64> {
+pub(crate) fn tokens_reached(spent: i64, cap: Option<u64>) -> Option<u64> {
     cap.filter(|cap| spent >= 0 && spent as u64 >= *cap)
 }
 

@@ -168,7 +168,10 @@ function UsageTable(props: { period: UsagePeriod; span: string }) {
   });
   if (summary.isError) return <ErrorNote error={summary.error} />;
   if (!summary.data) return null;
-  if (summary.data.rows.length === 0) {
+  // Open Dot, the voice assistant, makes no runs: its requests to the model are one row of
+  // their own, so the rows add up to the totals above.
+  const openDot = summary.data.open_dot ?? null;
+  if (summary.data.rows.length === 0 && openDot === null) {
     return <p className="text-muted-foreground">No runs in the last {props.span}.</p>;
   }
   const caption = `Dots' runs in the last ${props.span}`;
@@ -201,6 +204,19 @@ function UsageTable(props: { period: UsagePeriod; span: string }) {
           {summary.data.rows.map((row) => (
             <DotRows key={row.dot_id} row={row} />
           ))}
+          {openDot !== null && (
+            <tr className="border-t">
+              <td className="py-1.5 pr-4 pl-[1.125rem]">
+                Open Dot <span className="text-xs text-muted-foreground">(voice)</span>
+              </td>
+              <td className="py-1.5 pr-4 tabular-nums">{count(openDot.requests, "request")}</td>
+              <td className="py-1.5 pr-4 tabular-nums">
+                {formatTokens(openDot.tokens_in + openDot.tokens_out)}
+              </td>
+              <td className="py-1.5 pr-4 tabular-nums">–</td>
+              <td className="py-1.5 tabular-nums">{cost(openDot.cost_usd)}</td>
+            </tr>
+          )}
         </tbody>
       </table>
     </div>

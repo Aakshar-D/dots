@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::claude::once::{OnceFailure, OnceRunner, NO_CLI};
+use crate::engine::claude::once::{OnceFailure, OnceRunner, OnceUsage, NO_CLI};
 use crate::library::{check_name, LibraryKind, Uses};
 use crate::model::Dot;
 use crate::policy::{Action, Policy, Preset, Rule};
@@ -636,6 +636,9 @@ pub fn setup_policy(preset: Preset, extras: &[String]) -> Policy {
     policy
 }
 
+/// The model the setup agent asks.
+pub const SETUP_MODEL: &str = DEFAULT_MODEL;
+
 /// What `Runtime::setup_apply` made: the dot, its first chat run or why that did not start (spec
 /// §9: the dot stays when its first run cannot start), and the notes of its own check. A blank
 /// first message starts no chat.
@@ -682,19 +685,31 @@ impl SetupDrafts {
         ctx: &SetupContext,
         req: &SetupRequest,
     ) -> Result<SetupAnswer> {
+        self.ask_with_usage(id, ctx, req).await.0
+    }
+
+    /// `ask`, with the usage the CLI reported for the request (`None` when it made none or
+    /// reported none), so a caller that counts its requests can record it.
+    pub async fn ask_with_usage(
+        &self,
+        id: &str,
+        ctx: &SetupContext,
+        req: &SetupRequest,
+    ) -> (Result<SetupAnswer>, Option<OnceUsage>) {
         let prompt = match setup_prompt(ctx, req) {
             Ok(prompt) => prompt,
             Err(e) => {
                 self.runner.cancel(id);
-                return Err(e);
+                return (Err(e), None);
             }
         };
         let asked = self
             .runner
-            .run(id, SETUP_INSTRUCTIONS, DEFAULT_MODEL, &prompt)
+            .run_with_usage(id, SETUP_INSTRUCTIONS, SETUP_MODEL, &prompt)
             .await;
-        match asked {
-            Ok(answer) => check_setup_answer(&answer, ctx, req),
+        let usage = asked.as_ref().ok().and_then(|a| a.usage);
+        let answer = match asked {
+            Ok(answer) => check_setup_answer(&answer.text, ctx, req),
             Err(OnceFailure::NoCli) => Err(Error::Other(NO_CLI.into())),
             Err(OnceFailure::Cancelled) => Err(Error::Other("The setup was cancelled.".into())),
             Err(OnceFailure::TimedOut) => Err(Error::Other(
@@ -703,7 +718,8 @@ impl SetupDrafts {
             Err(OnceFailure::Failed(e)) => Err(Error::Other(format!(
                 "Claude could not set up the dot: {e}"
             ))),
-        }
+        };
+        (answer, usage)
     }
 
     /// Cancels the setup's request, if one is being answered (`setup_cancel`).

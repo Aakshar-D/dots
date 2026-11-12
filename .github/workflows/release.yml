@@ -17,6 +17,11 @@ jobs:
   # Nothing is built from code whose tests fail (updates UI spec section 5.4).
   test:
     runs-on: windows-latest
+    # The sherpa-onnx library is built against the static C runtime (/MT); everything else is
+    # linked the same way, or the linker warns of two runtimes (LNK4098). Job-wide, so clippy,
+    # the tests and the build all share one set of flags (tools/voice/README.md).
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -33,6 +38,15 @@ jobs:
       - name: Install the UI's packages
         run: bun install --frozen-lockfile
 
+      # The sherpa-onnx library the voice crate links is downloaded by its build script without
+      # any check. This fetches it first, verified against the hash pinned in the repository
+      # (tools/voice/README.md), unpacks it outside `target` and sets SHERPA_ONNX_LIB_DIR, which
+      # the build script links directly: it downloads nothing and keeps nothing in `target`, so
+      # a restored build cache cannot leave the link pointing at a folder that is gone.
+      - name: Fetch and unpack the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs unpack --target x86_64-pc-windows-msvc --out "$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
+
       - name: Check the formatting
         run: cargo fmt --all --check
 
@@ -43,11 +57,17 @@ jobs:
       - name: Run the core tests
         run: cargo test -p dots-core --locked -- --skip preview_schedule_lists_the_next_fire_times
 
+      - name: Run the voice tests
+        run: cargo test -p dots-voice --locked
+
       - name: Run the app tests
         run: cargo test -p dots-app --locked
 
       - name: Run the release script's tests
         run: node --test tools/release/release.test.mjs
+
+      - name: Run the sherpa-onnx fetch script's tests
+        run: node --test tools/voice/sherpa-lib.test.mjs
 
       - name: Check and test the UI
         working-directory: ui
@@ -82,6 +102,15 @@ jobs:
 
       - name: Install the UI's packages
         run: bun install --frozen-lockfile
+
+      # The sherpa-onnx library the voice crate links is downloaded by its build script without
+      # any check. This fetches it first, verified against the hash pinned in the repository
+      # (tools/voice/README.md), unpacks it outside `target` and sets SHERPA_ONNX_LIB_DIR, which
+      # the build script links directly: it downloads nothing and keeps nothing in `target`, so
+      # a restored build cache cannot leave the link pointing at a folder that is gone.
+      - name: Fetch and unpack the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs unpack --target aarch64-apple-darwin --target x86_64-apple-darwin --out "$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
 
       # Code signing and notarization only when the repository has the Apple secrets; an
       # empty one is unset, so Tauri does not try to sign with nothing.
@@ -132,6 +161,9 @@ jobs:
     # Runs when the tests passed, whether or not the macOS build did.
     if: ${{ !cancelled() && needs.test.result == 'success' }}
     runs-on: windows-latest
+    # The static C runtime, as in the test job.
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
     steps:
       # The whole history, so that a release tag can be checked against master.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -176,6 +208,15 @@ jobs:
 
       - name: Install the UI's packages
         run: bun install --frozen-lockfile
+
+      # The sherpa-onnx library the voice crate links is downloaded by its build script without
+      # any check. This fetches it first, verified against the hash pinned in the repository
+      # (tools/voice/README.md), unpacks it outside `target` and sets SHERPA_ONNX_LIB_DIR, which
+      # the build script links directly: it downloads nothing and keeps nothing in `target`, so
+      # a restored build cache cannot leave the link pointing at a folder that is gone.
+      - name: Fetch and unpack the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs unpack --target x86_64-pc-windows-msvc --out "$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
 
       # No signing key here: the build runs the project's own scripts and packages, which have
       # no need of it. `tauri.conf.json` leaves the updater files off; the next step signs.
