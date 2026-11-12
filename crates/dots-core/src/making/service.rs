@@ -13,7 +13,9 @@ use super::log::{MakingEventKind, NewMakingEvent};
 use super::reach::{reach_new, Reach, Wanted};
 use crate::dot_admin::DotAdmin;
 use crate::events::{Bus, RuntimeEvent};
+use crate::followups::FollowUps;
 use crate::model::{Dot, DotSpec, Made, Making, Run};
+use crate::runner::Runner;
 use crate::store::Store;
 use crate::vault::{Consumer, GrantState, Vault};
 use crate::{Error, Result};
@@ -141,13 +143,18 @@ pub(crate) fn checked_purpose(purpose: &str) -> Result<String> {
     Ok(purpose.to_string())
 }
 
-struct Parts {
-    store: Store,
-    bus: Bus,
+pub(super) struct Parts {
+    pub(super) store: Store,
+    pub(super) bus: Bus,
     dot_admin: DotAdmin,
     vault: Vault,
     /// Where runs' worktree copies are made (`RunnerConfig::worktrees_dir`).
     worktrees_root: PathBuf,
+    /// For the thread lock every writer that continues a chat holds, and the chats that are
+    /// adding an app: a wake continues the maker's chat (design section 8).
+    pub(super) follow_ups: Arc<FollowUps>,
+    /// Announces a wake's run and wakes the dispatcher for it.
+    pub(super) runner: Arc<Runner>,
     /// Held from counting a maker's dots until the new one is stored, so two calls of one run
     /// cannot both take the last place.
     one_at_a_time: Mutex<()>,
@@ -157,7 +164,7 @@ struct Parts {
 /// clones are one service. The runtime makes it once, at start.
 #[derive(Clone)]
 pub struct Makers {
-    parts: Arc<Parts>,
+    pub(super) parts: Arc<Parts>,
 }
 
 /// A `Makers` that does not keep it alive: what the check-ins hold, since the makers hold the
@@ -178,6 +185,8 @@ impl Makers {
         dot_admin: DotAdmin,
         vault: Vault,
         worktrees_root: PathBuf,
+        follow_ups: Arc<FollowUps>,
+        runner: Arc<Runner>,
     ) -> Makers {
         Makers {
             parts: Arc::new(Parts {
@@ -186,6 +195,8 @@ impl Makers {
                 dot_admin,
                 vault,
                 worktrees_root,
+                follow_ups,
+                runner,
                 one_at_a_time: Mutex::new(()),
             }),
         }

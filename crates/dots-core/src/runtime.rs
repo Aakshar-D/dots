@@ -712,8 +712,14 @@ impl Runtime {
             dot_admin.clone(),
             vault.clone(),
             cfg.data_dir.join("worktrees"),
+            follow_ups.clone(),
+            runner.clone(),
         );
         checkins.set_makers(&makers);
+        // Started after interrupted runs were failed, so its first pass sees each topic as it
+        // is and delivers the wakes that waited across the restart (dots-make-dots design
+        // section 8).
+        makers.spawn_wakes(shutdown.clone());
         Ok(Runtime {
             dot_admin,
             makers,
