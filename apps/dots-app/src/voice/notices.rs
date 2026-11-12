@@ -11,7 +11,8 @@
 //! At most one line every `NOTICE_GAP`; what arrives meanwhile is counted, from the Inbox,
 //! once the gap has passed and the session rests. Only what waits on an answer is counted:
 //! pending approvals and unanswered questions, not those of the dot the person is viewing.
-//! After missed events a recount is said only when more waits than at the last notice.
+//! A recount is said only when something waits that was not waiting at the last notice;
+//! what was answered meanwhile is never spoken of.
 //! Nothing spoken is logged, only that a notice was and its kind.
 //!
 //! "The session rests" includes the stage being closed: a question or a card left showing
@@ -19,6 +20,7 @@
 //! stop"), and the mind's own limits (a question's answer time, a turn's think limit) clear
 //! what it showed, so the hold ends with them.
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,6 +41,8 @@ const NAME_BYTES: usize = 80;
 const PLAIN_CHARS: usize = 32;
 /// ...and at most this many words.
 const PLAIN_WORDS: usize = 4;
+/// A name without spaces (some scripts write none) has at most this many characters.
+const PLAIN_CHARS_UNSPACED: usize = 16;
 const PRIVATE: &str = "One private approval is waiting for you.";
 const AN_APPROVAL: &str = "An approval is waiting for you.";
 const A_QUESTION: &str = "A question is waiting for you.";
@@ -148,30 +152,38 @@ pub fn spoken_name(name: &str) -> String {
     out
 }
 
+/// Sentence punctuation, in Latin and other scripts: a name holding one could read as a
+/// sentence of its own.
+const SENTENCE_MARKS: [char; 29] = [
+    '.', '!', '?', ':', ';', '。', '｡', '．', '！', '？', '：', '；', '؟', '؛', '۔', '…', '‼', '⁇',
+    '⁈', '⁉', '।', '॥', '﹒', '﹔', '﹕', '﹖', '﹗', '¡', '¿',
+];
+
 /// The name to say, when it is short and plain: at most 32 characters and 4 words once
-/// cleaned, no line break, no sentence punctuation (`. ! ? : ;`), and nothing that sounds
-/// like the wake or stop phrase. `None` says the nameless line instead.
+/// cleaned (16 characters for a name without spaces, as in scripts written without them),
+/// no line break, no sentence punctuation of any script, and nothing that sounds like the
+/// wake or stop phrase, however spaced. `None` says the nameless line instead.
 pub fn plain_name(name: &str) -> Option<String> {
     if name.contains(['\n', '\r', '\u{2028}', '\u{2029}', '\u{85}']) {
         return None;
     }
     let name = spoken_name(name);
+    let chars = name.chars().count();
     if name.is_empty()
-        || name.chars().count() > PLAIN_CHARS
+        || chars > PLAIN_CHARS
+        || (!name.contains(' ') && chars > PLAIN_CHARS_UNSPACED)
         || name.split(' ').count() > PLAIN_WORDS
-        || name.contains(['.', '!', '?', ':', ';'])
+        || name.contains(SENTENCE_MARKS)
     {
         return None;
     }
-    // Compared as spoken: letters and digits only, words one space apart.
-    let heard = name
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| !w.is_empty())
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase();
-    let heard = format!(" {heard} ");
-    if heard.contains(" hey dot ") || heard.contains(" dot stop ") {
+    // Compared as spoken, run together: letters and digits only, in lower case.
+    let heard: String = name
+        .chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if heard.contains("heydot") || heard.contains("dotstop") {
         return None;
     }
     Some(name)
@@ -234,9 +246,9 @@ fn count_word(n: usize) -> String {
 #[derive(Debug, Default)]
 pub struct Notices {
     last_spoken: Option<Instant>,
-    /// How many things the last notice spoke of; lowered when a recount finds fewer, so
-    /// only something new makes a recount worth saying.
-    last_spoken_count: usize,
+    /// The ids that were waiting when the last notice was said (narrowed to those still
+    /// waiting at each recount): a recount is said only when something else waits.
+    last_spoken_ids: HashSet<String>,
     waiting: Vec<Needs>,
     /// Events were missed (the stream lagged): something may wait that is not in `waiting`.
     missed: bool,
@@ -260,32 +272,33 @@ impl Notices {
         let [only] = self.waiting.as_slice() else {
             return None;
         };
-        let (line, kind) = (only.line(), only.kind());
-        self.spoke(now, kind, 1);
+        let (line, kind, id) = (only.line(), only.kind(), only.id().to_string());
+        self.spoke(now, kind, [id]);
         Some(line)
     }
 
-    /// The session came to rest. Returns the sentence to speak now, if something is still
-    /// waiting. `inbox` is what waits on an answer in the Inbox now.
+    /// The session came to rest. Returns the sentence to speak now, if something waits that
+    /// was not waiting at the last notice. `inbox` is what waits on an answer in the Inbox
+    /// now.
     pub fn rested(&mut self, inbox: &[Waiting], now: Instant) -> Option<String> {
         if !self.pending() || !self.may_speak(now) {
             return None;
         }
-        let count = inbox.len();
-        // Nothing new arrived (only events were missed): said only when more waits than the
-        // last notice spoke of.
-        if self.waiting.is_empty() && count <= self.last_spoken_count {
-            self.last_spoken_count = count;
-            self.clear();
+        // What was answered meanwhile is not spoken of.
+        self.waiting
+            .retain(|need| inbox.iter().any(|item| item.id == need.id()));
+        self.last_spoken_ids
+            .retain(|id| inbox.iter().any(|item| item.id == *id));
+        let new = inbox
+            .iter()
+            .any(|item| !self.last_spoken_ids.contains(&item.id));
+        if !new {
+            // Answered meanwhile, or all of it was said before: nothing to say.
+            self.drop_pending();
             return None;
         }
+        let count = inbox.len();
         let (line, kind) = match inbox {
-            // Answered meanwhile: nothing to say.
-            [] => {
-                self.last_spoken_count = 0;
-                self.clear();
-                return None;
-            }
             // Named only when it is the very thing a notice was about.
             [only] => match self.waiting.iter().find(|need| need.id() == only.id) {
                 Some(need) if only.kind != WaitKind::PrivateApproval => (need.line(), need.kind()),
@@ -296,7 +309,7 @@ impl Notices {
                 "several",
             ),
         };
-        self.spoke(now, kind, count);
+        self.spoke(now, kind, inbox.iter().map(|item| item.id.clone()));
         Some(line)
     }
 
@@ -305,8 +318,15 @@ impl Notices {
         self.missed = true;
     }
 
-    /// Notices turned off, or voice off or not ready: nothing waits.
+    /// Notices turned off, or voice off or not ready: nothing waits, and what the last
+    /// notice spoke of is forgotten.
     pub fn clear(&mut self) {
+        self.drop_pending();
+        self.last_spoken_ids.clear();
+    }
+
+    /// Nothing waits to be said.
+    fn drop_pending(&mut self) {
         self.waiting.clear();
         self.missed = false;
     }
@@ -342,11 +362,11 @@ impl Notices {
             .is_none_or(|at| now.saturating_duration_since(at) >= NOTICE_GAP)
     }
 
-    fn spoke(&mut self, now: Instant, kind: &'static str, count: usize) {
+    fn spoke(&mut self, now: Instant, kind: &'static str, ids: impl IntoIterator<Item = String>) {
         self.last_spoken = Some(now);
-        self.last_spoken_count = count;
+        self.last_spoken_ids = ids.into_iter().collect();
         self.kind = kind;
-        self.clear();
+        self.drop_pending();
     }
 }
 
@@ -778,14 +798,68 @@ mod tests {
         // ...said once.
         n.missed();
         assert_eq!(n.rested(&others(3), t + secs(100)), None);
-        // A single notice counts as one: a lag that finds two says so.
+        // A single notice: a lag that finds only that one says nothing, one that finds
+        // another besides says so.
+        let research = approval("Research");
         let mut n = Notices::new();
-        assert!(n.arrived(approval("Research"), true, t).is_some());
+        assert!(n.arrived(research.clone(), true, t).is_some());
         n.missed();
-        assert_eq!(n.rested(&others(1), t + secs(40)), None);
+        assert_eq!(n.rested(&[item(&research)], t + secs(40)), None);
+        n.missed();
+        let mut two = others(1);
+        two.push(item(&research));
+        assert_eq!(
+            n.rested(&two, t + secs(41)).as_deref(),
+            Some("Two things are waiting for you.")
+        );
+    }
+
+    #[test]
+    fn a_lag_after_everything_said_was_answered_speaks_of_what_is_new() {
+        let t = Instant::now();
+        let mut n = Notices::new();
         n.missed();
         assert_eq!(
-            n.rested(&others(2), t + secs(41)).as_deref(),
+            n.rested(&others(5), t).as_deref(),
+            Some("Five things are waiting for you.")
+        );
+        // All five answered; three new ones arrive while events are missed.
+        let fresh: Vec<Waiting> = (0..3)
+            .map(|i| Waiting {
+                id: format!("new{i}"),
+                kind: WaitKind::Question,
+            })
+            .collect();
+        n.missed();
+        assert_eq!(
+            n.rested(&fresh, t + secs(40)).as_deref(),
+            Some("Three things are waiting for you.")
+        );
+        // Cleared, the ids are forgotten: the same three are said again.
+        n.clear();
+        n.missed();
+        assert_eq!(
+            n.rested(&fresh, t + secs(80)).as_deref(),
+            Some("Three things are waiting for you.")
+        );
+    }
+
+    #[test]
+    fn what_was_answered_before_the_rest_is_not_said_nor_what_was_said_before() {
+        let t = Instant::now();
+        let mut n = Notices::new();
+        let mail = approval("Mail");
+        assert!(n.arrived(mail.clone(), true, t).is_some());
+        // A question arrives mid-turn and is answered before the session rests; only the
+        // approval already spoken of still waits.
+        assert_eq!(n.arrived(question("Research"), false, t + secs(5)), None);
+        assert_eq!(n.rested(&[item(&mail)], t + secs(40)), None);
+        assert!(!n.pending());
+        // Something new besides: counted.
+        n.arrived(question("Research"), false, t + secs(50));
+        assert_eq!(
+            n.rested(&[item(&mail), item(&question("Research"))], t + secs(60))
+                .as_deref(),
             Some("Two things are waiting for you.")
         );
     }
@@ -917,6 +991,27 @@ mod tests {
         ] {
             assert_eq!(said(name), nameless, "{name:?}");
         }
+        // Nor run together, in any case.
+        for name in ["HeyDot", "heydotbot", "DotStop", "Mydotstop", "Hey Do t"] {
+            assert_eq!(said(name), nameless, "{name:?}");
+        }
+        // Sentence punctuation of other scripts.
+        for name in [
+            "研究。",
+            "Hola！",
+            "Qué？",
+            "Note：",
+            "a；b",
+            "متى؟",
+            "Wait…",
+        ] {
+            assert_eq!(said(name), nameless, "{name:?}");
+        }
+        // A name without spaces (as in scripts written without them) has at most 16
+        // characters.
+        let sixteen = "研究助手研究助手研究助手研究助手";
+        assert_eq!(said(sixteen), format!("{sixteen} needs your approval."));
+        assert_eq!(said(&format!("{sixteen}手")), nameless);
         // A word that only holds "dot" is fine.
         assert_eq!(said("Dotty"), "Dotty needs your approval.");
         // The question form, nameless.

@@ -1248,8 +1248,9 @@ impl Service {
     }
 
     /// The session rests (or a notice's gap has passed): says what still waits, counted from
-    /// the Inbox, once 30 seconds have passed since the last notice; before that, a wake-up is
-    /// set for then. Busy, it waits for the next rest.
+    /// the Inbox, once 30 seconds have passed since the last notice and only when something
+    /// waits that did not at that notice; before that, a wake-up is set for then. Busy, it
+    /// waits for the next rest.
     async fn notices_at_rest(&self) {
         match self.rest() {
             Rest::Off => return self.clear_notices(),
