@@ -52,6 +52,9 @@ const RECENT_FRAMES: usize = 32;
 /// this much longer after it goes quiet, on top of `reopen_after_ms` (best effort: a speaker
 /// with a longer delay than this can still be heard).
 const UNKNOWN_DELAY: Duration = Duration::from_millis(350);
+/// The longest output delay a speaker is believed: one that reports more (a clock jump, a
+/// virtual device) would keep the ears shut until the voice is taken for stuck.
+const MAX_DEVICE_DELAY: Duration = Duration::from_secs(2);
 /// The most follow-up listens in a row with no hotkey, click or "Hey Dot" between: speech in
 /// the room (a television, a call) cannot keep Dot taking turns without end.
 const MAX_FOLLOW_UPS: u32 = 5;
@@ -1237,7 +1240,7 @@ impl Worker {
                 // frames captured until then are thrown away and every later one is kept. The
                 // listen limit counts from the moment the ears open.
                 // The device's own output delay, when it tells, is waited out too.
-                let tail = TONE_TAIL + self.sink.still_audible().unwrap_or_default();
+                let tail = TONE_TAIL + self.device_delay().unwrap_or_default();
                 self.tone_until = None;
                 self.deaf_until = Some(now + tail);
                 self.quiet_since = now + tail;
@@ -1470,6 +1473,12 @@ impl Worker {
         }
     }
 
+    /// How long the sound queued so far takes to leave the device, as the speaker reports it,
+    /// at most `MAX_DEVICE_DELAY`. `None` when it cannot tell.
+    fn device_delay(&self) -> Option<Duration> {
+        self.sink.still_audible().map(|d| d.min(MAX_DEVICE_DELAY))
+    }
+
     /// Every reply has been spoken to its end.
     fn speech_done(&self) -> bool {
         self.replies_pending == 0 && self.fillers_pending == 0 && !self.reply_open
@@ -1525,7 +1534,7 @@ impl Worker {
                 if self.reopen_at.is_none() && self.sink.idle() {
                     // The queue is empty, but the sound may not have left the device yet.
                     let tail = Duration::from_millis(u64::from(self.settings.reopen_after_ms));
-                    let still = self.sink.still_audible().unwrap_or(UNKNOWN_DELAY);
+                    let still = self.device_delay().unwrap_or(UNKNOWN_DELAY);
                     self.reopen_at = Some(now + still + tail);
                 }
                 if self.reopen_at.is_some_and(|at| now >= at) {
@@ -2838,9 +2847,10 @@ mod tests {
 
     /// The ears open only once the sound has left the device: the speaker's own delay, as it
     /// reports it, comes on top of `reopen_after_ms`. One that cannot tell gets a longer wait.
+    /// A delay past `MAX_DEVICE_DELAY` (a clock jump, a virtual device) counts as that much.
     #[test]
     fn the_ears_wait_for_the_sound_to_leave_the_speaker() {
-        for (delay, wait) in [(800, 1_050), (u32::MAX, 600)] {
+        for (delay, wait) in [(800, 1_050), (u32::MAX, 600), (60_000, 2_250)] {
             let mut r = rig(Opts::default());
             r.expect_state(State::Idle, false);
             r.sink.delay_ms.store(delay, Ordering::SeqCst);
