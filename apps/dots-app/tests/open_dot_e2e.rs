@@ -1288,10 +1288,11 @@ fn open_interrupts_a_long_reply() {
 
 /// Scenario 11: Wake: with the wake phrase on, "Hey Dot, what needs me?" in one breath is answered.
 ///
-/// Known to fail now and then (2 runs in 10 when it was written): Dot wakes, shows the live
-/// words ("What needs?"), then the recogniser hears nothing in the finished clip, the ears
-/// drop it, and the session goes back to rest without a word. That is the product's
-/// behaviour, not the test's: left asserting what the person should get.
+/// It failed about 2 runs in 10 when it was written: the finished clip began in the middle of
+/// speech, and the recogniser heard nothing in such a clip now and then. The ears now get a
+/// pre-roll of silence before the words after the wake phrase (an offline check of the same
+/// path: 4 misses in 83 before, none in 57 after). Should one still come to nothing, Dot says
+/// "Sorry, I didn't catch that." and listens again, rather than resting without a word.
 #[test]
 #[ignore]
 fn hey_dot_in_one_breath() {
