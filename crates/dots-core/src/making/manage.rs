@@ -10,10 +10,15 @@ use serde_json::{json, Value};
 
 use super::jobs::{deleted_message, JobEnd, JobStatus, MakingJob, JOB_WAITING, JOB_WORKING};
 use super::log::{MakingEventKind, NewMakingEvent};
-use super::reach::{reach_change, Extra, Reach, Wanted};
+use super::reach::{
+    folded, grants, held_extras, preset_label, rank, reach_change, real_path, still_below_maker,
+    time_label, Extra, Reach, Wanted, WantedPermissions,
+};
 use super::requests::{MakeRequest, NewMakeRequest, RequestKind, SOMETHING_GONE};
-use super::service::{checked_purpose, may_make, Makers};
+use super::service::{check_folder_text, checked_purpose, may_make, Makers};
+use crate::library::LibraryKind;
 use crate::model::{Dot, DotSpec, Run};
+use crate::policy::Policy;
 use crate::schedule::{Rule, Schedule, Until};
 use crate::vault::Consumer;
 use crate::{Error, Result};
@@ -92,11 +97,13 @@ pub enum ChangeOutcome {
     /// dot was already as asked and nothing was written.
     Changed { dot: Dot, what: Vec<String> },
     /// Stored for the person; nothing was changed: the change gives the dot more than the
-    /// maker has (`request.extras`). `maker_name` is the maker's name, for the words of the
-    /// extras.
+    /// maker has (`request.extras`), or, with `held`, the dot holds more than the maker has and
+    /// the change is more than taking things away, so the person decides on it (`extras` names
+    /// what it holds too). `maker_name` is the maker's name, for the words of the extras.
     Waiting {
         request: MakeRequest,
         maker_name: String,
+        held: bool,
     },
 }
 
@@ -114,14 +121,19 @@ impl ChangeOutcome {
             Self::Waiting {
                 request,
                 maker_name,
+                held,
             } => {
                 let extras: Vec<String> =
                     request.extras.iter().map(|e| e.line(maker_name)).collect();
+                let why = if *held {
+                    "it has, or the change gives it, more than you have"
+                } else {
+                    "the change gives it more than you have"
+                };
                 format!(
-                    "Not changed yet: \"{}\" needs the person's say-so, because the change gives \
-                     it more than you have ({}). The request is waiting for them. Do not wait \
-                     for it and do not ask again: carry on, and you will be woken with their \
-                     answer.",
+                    "Not changed yet: \"{}\" needs the person's say-so, because {why} ({}). The \
+                     request is waiting for them. Do not wait for it and do not ask again: carry \
+                     on, and you will be woken with their answer.",
                     request.name,
                     extras.join("; ")
                 )
@@ -260,9 +272,166 @@ fn what_changed(before: &Dot, after: &Dot) -> Vec<String> {
     what
 }
 
+/// Whether `after` only takes from `before`, the made dot as it is (design section 9): Library
+/// items or variables removed, the schedule cleared, a limit lowered, a plain preset no
+/// stronger than the dot's own plain preset, the browser or the person's Claude settings
+/// turned off. Any other difference, the name, the instructions, the model, the folder, a
+/// schedule set or anything added, is no narrowing.
+pub(super) fn narrows(before: &DotSpec, after: &DotSpec) -> bool {
+    let mut rest = after.clone();
+    for kind in LibraryKind::ALL {
+        if !after
+            .uses
+            .names(*kind)
+            .iter()
+            .all(|name| before.uses.names(*kind).contains(name))
+        {
+            return false;
+        }
+    }
+    rest.uses = before.uses.clone();
+    let kept = after.variables.0.iter().all(|(consumer, names)| {
+        names
+            .iter()
+            .all(|name| grants(&before.variables, consumer, name))
+    });
+    if !kept {
+        return false;
+    }
+    rest.variables = before.variables.clone();
+    if after.schedule != before.schedule && after.schedule.is_some() {
+        return false;
+    }
+    rest.schedule = before.schedule.clone();
+    if after.max_turns > before.max_turns || after.timeout_secs > before.timeout_secs {
+        return false;
+    }
+    rest.max_turns = before.max_turns;
+    rest.timeout_secs = before.timeout_secs;
+    if after.policy != before.policy {
+        let preset = after.policy.preset;
+        let plain = rank(preset).is_some() && after.policy == Policy::preset(preset);
+        if !plain || rank(before.policy.preset).is_none_or(|has| rank(preset) > Some(has)) {
+            return false;
+        }
+    }
+    rest.policy = before.policy.clone();
+    if (after.browser && !before.browser) || (after.use_user_settings && !before.use_user_settings)
+    {
+        return false;
+    }
+    rest.browser = before.browser;
+    rest.use_user_settings = before.use_user_settings;
+    rest == *before
+}
+
+/// `on` as the card says it.
+fn on_off(on: bool) -> &'static str {
+    if on {
+        "on"
+    } else {
+        "off"
+    }
+}
+
+/// The variable `name` for `consumer` (a key of `Grants`), in plain words.
+fn variable_words(consumer: &str, name: &str) -> String {
+    match Consumer::parse(consumer) {
+        Ok(Consumer::Mcp(server)) => format!("the variable {name} for the server '{server}'"),
+        Ok(Consumer::Shell) => format!("the variable {name} for the shell"),
+        Err(_) => format!("the variable {name} for {consumer}"),
+    }
+}
+
+/// Every setting `ask` names, one short line each, for the ask card of a change (design
+/// section 9): what Allow saves is all on the card, not only what is beyond reach. `before` is
+/// the made dot and `after` the dot with the change on it; the instructions are in the card in
+/// full (`MakeRequestCard::instructions`), so their line only says they are new.
+pub(super) fn change_lines(
+    ask: &ChangeDot,
+    before: &DotSpec,
+    after: &DotSpec,
+    maker: &str,
+) -> Vec<String> {
+    let w = &ask.wanted;
+    let mut lines = Vec::new();
+    if w.name.is_some() {
+        lines.push(format!("Name: {}", after.name));
+    }
+    if let Some(purpose) = &ask.purpose {
+        lines.push(format!("Purpose: {purpose}"));
+    }
+    if w.instructions.is_some() {
+        lines.push("New instructions".to_string());
+    }
+    if w.model.is_some() {
+        lines.push(format!("Model: {}", after.model));
+    }
+    if w.folder.as_deref().is_some_and(|f| !f.trim().is_empty()) {
+        lines.push(format!("Folder: {}", after.workdir));
+    }
+    match w.permissions {
+        Some(WantedPermissions::Maker) => lines.push(format!("Permissions: the same as {maker}'s")),
+        Some(WantedPermissions::Preset(preset)) => {
+            lines.push(format!("Permissions: {}", preset_label(preset)))
+        }
+        None => {}
+    }
+    if w.uses.is_some() {
+        for kind in LibraryKind::ALL {
+            let (old, new) = (before.uses.names(*kind), after.uses.names(*kind));
+            for name in new.iter().filter(|name| !old.contains(name)) {
+                lines.push(format!("Adds the {} '{name}'", kind.label()));
+            }
+            for name in old.iter().filter(|name| !new.contains(name)) {
+                lines.push(format!("Removes the {} '{name}'", kind.label()));
+            }
+        }
+    }
+    if w.variables.is_some() {
+        for (consumer, names) in &after.variables.0 {
+            for name in names
+                .iter()
+                .filter(|n| !grants(&before.variables, consumer, n))
+            {
+                lines.push(format!("Adds {}", variable_words(consumer, name)));
+            }
+        }
+        for (consumer, names) in &before.variables.0 {
+            for name in names
+                .iter()
+                .filter(|n| !grants(&after.variables, consumer, n))
+            {
+                lines.push(format!("Removes {}", variable_words(consumer, name)));
+            }
+        }
+    }
+    if w.browser.is_some() {
+        lines.push(format!("Browser: {}", on_off(after.browser)));
+    }
+    if w.use_user_settings.is_some() {
+        lines.push(format!(
+            "Your Claude settings: {}",
+            on_off(after.use_user_settings)
+        ));
+    }
+    if w.max_turns.is_some() {
+        lines.push(format!("Turn limit: {}", after.max_turns));
+    }
+    if w.timeout_secs.is_some() {
+        lines.push(format!("Time limit: {}", time_label(after.timeout_secs)));
+    }
+    match &w.schedule {
+        Some(Some(schedule)) => lines.push(format!("Schedule: {}", schedule_words(schedule))),
+        Some(None) => lines.push("No schedule".to_string()),
+        None => {}
+    }
+    lines
+}
+
 /// Whether the extra `now` gives the dot the thing the person saw as `seen` on the ask card.
 /// The maker's own setting a line names beside it may differ: the thing given is the same.
-fn same_thing(now: &Extra, seen: &Extra) -> bool {
+pub(super) fn same_thing(now: &Extra, seen: &Extra) -> bool {
     match (now, seen) {
         (Extra::Preset { preset: a, .. }, Extra::Preset { preset: b, .. }) => a == b,
         (Extra::Folder { path: a, .. }, Extra::Folder { path: b, .. }) => a == b,
@@ -272,9 +441,11 @@ fn same_thing(now: &Extra, seen: &Extra) -> bool {
     }
 }
 
-/// Makes `folder` and the folders above it that are missing. Returns those it made, deepest
-/// last, for `remove_folders` when the change is not saved.
-async fn make_folders(folder: Option<&Path>) -> Result<Vec<PathBuf>> {
+/// Makes `folder`, below the folder of `maker`, and the folders above it that are missing.
+/// Returns those it made, deepest last, for `remove_folders` when the change is not saved. Its
+/// real path is checked again once it exists: a link or junction planted in it since the reach
+/// check would lead it outside the maker's folder, and then what was made is removed again.
+async fn make_folders(maker: &Dot, folder: Option<&Path>) -> Result<Vec<PathBuf>> {
     let mut made: Vec<PathBuf> = Vec::new();
     let Some(folder) = folder else {
         return Ok(made);
@@ -289,6 +460,14 @@ async fn make_folders(folder: Option<&Path>) -> Result<Vec<PathBuf>> {
     }
     made.reverse();
     tokio::fs::create_dir_all(folder).await?;
+    if !still_below_maker(maker, folder) {
+        remove_folders(&made).await;
+        return Err(Error::Invalid(format!(
+            "The folder {} no longer lies inside {}'s folder, so the dot was not changed.",
+            folder.display(),
+            maker.spec.name
+        )));
+    }
     Ok(made)
 }
 
@@ -309,9 +488,23 @@ pub(super) struct Standing {
     pub(super) reach: Reach,
     /// The new purpose, when the change names one.
     pub(super) purpose: Option<String>,
+    /// What the card shows now: `reach.extras`, and, with `held`, what the dot holds beyond
+    /// the maker's reach (`Makers::change_extras`).
+    pub(super) extras: Vec<Extra>,
+    /// The dot holds more than the maker has now, and the change is more than taking things
+    /// away: the person decides on the whole of it, so there is nothing to save without it.
+    pub(super) held: bool,
     /// The change would now give the dot something beyond the maker's reach that was not on
     /// the card the person saw: the maker's own settings were narrowed since it asked.
     pub(super) beyond_what_was_seen: bool,
+}
+
+/// A change judged against the maker and the made dot (`Makers::judge_change`).
+struct Judged {
+    reach: Reach,
+    /// What asks the person (`Makers::change_extras`).
+    extras: Vec<Extra>,
+    held: bool,
 }
 
 impl Standing {
@@ -319,6 +512,9 @@ impl Standing {
     /// asked is beyond reach and there is nothing to change without it.
     pub(super) fn without_changes_something(&self) -> bool {
         let purpose_now = self.dot.made.as_ref().map(|made| made.purpose.as_str());
+        if self.held {
+            return false;
+        }
         self.reach.without != self.dot.spec
             || self
                 .purpose
@@ -350,6 +546,35 @@ fn not_made(maker: &Dot, name: &str) -> Error {
         maker.spec.name,
         name.trim()
     ))
+}
+
+/// What a maker is woken with when the made dot named `name`, for which a change it asked waits
+/// for the person, is deleted (design section 9): the request went with the dot.
+pub fn change_went_message(name: &str) -> String {
+    format!(
+        "\"{name}\" was deleted, so the change you asked for it went with it: the person will \
+         not answer it. Do not ask for it again."
+    )
+}
+
+/// Adds `message` to what the topic `topic` of the maker `maker` is woken with, so each topic
+/// is woken once.
+fn push_wake<'a>(
+    wakes: &mut Vec<(&'a str, &'a str, String)>,
+    maker: &'a str,
+    topic: &'a str,
+    message: String,
+) {
+    match wakes
+        .iter_mut()
+        .find(|(m, t, _)| (*m, *t) == (maker, topic))
+    {
+        Some((_, _, text)) => {
+            text.push_str("\n\n");
+            text.push_str(&message);
+        }
+        None => wakes.push((maker, topic, message)),
+    }
 }
 
 impl Makers {
@@ -433,20 +658,43 @@ impl Makers {
     /// this PC's role (`NotAllowed`).
     pub async fn change_dot(&self, run_id: &str, mut ask: ChangeDot) -> Result<ChangeOutcome> {
         let p = &self.parts;
-        let (run, maker) = self.caller(run_id).await?;
+        let (_, maker) = self.caller(run_id).await?;
         ask.purpose = ask.purpose.as_deref().map(checked_purpose).transpose()?;
-        // With the makes and the answers: the dot is read and saved with no answer to a
-        // request for it in between.
-        let _one_at_a_time = p.one_at_a_time.lock().await;
+        check_folder_text(&ask.wanted)?;
         let made = self.made_dot(&maker, &ask.dot).await?;
         if ask.purpose.is_none() && names_nothing(&ask.wanted) {
             return Err(Error::Invalid(NOTHING_TO_CHANGE.into()));
         }
-        let reach = self.reach_of_change(&maker, &made, &ask.wanted).await?;
-        // Before a request is kept: none is kept for what can never be allowed.
-        self.check_exists(&maker, &reach.spec).await?;
+        // Before the lock, which holds every maker's makes: the reach check reads the disk and
+        // `check_exists` the vault.
+        let mut judged = self.judge_change(&maker, &made, &ask).await?;
+        // With the makes and the answers: the dot is read and saved with no answer to a
+        // request for it in between.
+        let _one_at_a_time = p.one_at_a_time.lock().await;
+        // Judged on the run, the maker and the dot as they are once the lock is held: the run
+        // may have ended, and the switch, the maker or the dot changed, while this call waited.
+        let (run, maker_now) = self.caller(run_id).await?;
+        let made_now = match p.store.get_dot(&made.id).await {
+            Ok(dot) => dot,
+            Err(Error::NotFound(_)) => return Err(not_made(&maker_now, &ask.dot)),
+            Err(e) => return Err(e),
+        };
+        let makers = made_now.made.as_ref().and_then(|m| m.by_dot_id.as_deref());
+        if makers != Some(maker_now.id.as_str()) {
+            return Err(not_made(&maker_now, &ask.dot));
+        }
+        if maker_now.spec != maker.spec || made_now.spec != made.spec || made_now.made != made.made
+        {
+            judged = self.judge_change(&maker_now, &made_now, &ask).await?;
+        }
+        let (maker, made) = (maker_now, made_now);
+        let Judged {
+            reach,
+            extras,
+            held,
+        } = judged;
         self.check_new_name_free(&made, &reach.spec.name).await?;
-        if reach.extras.is_empty() {
+        if extras.is_empty() {
             let (dot, what) = self
                 .apply_change(
                     &maker,
@@ -488,11 +736,12 @@ impl Makers {
                 purpose: ask.purpose.as_deref().or(purpose_now).unwrap_or_default(),
                 spec: &reach.spec,
                 without: &reach.without,
-                extras: &reach.extras,
+                extras: &extras,
                 over: None,
                 create_folder: create_folder.as_deref(),
                 first_job: None,
                 ask: Some(&ask),
+                make_ask: None,
             })
             .await?;
         self.log_asked(&request, &maker.spec.name, Some(&made.id), &made.spec.name)
@@ -500,7 +749,72 @@ impl Makers {
         Ok(ChangeOutcome::Waiting {
             request,
             maker_name: maker.spec.name,
+            held,
         })
+    }
+
+    /// `ask` put on `made` against `maker`: what saving it would save, and what asks the
+    /// person (`change_extras`). Refused as `change_dot` says for a dot that would not be valid
+    /// and for what does not exist (`check_exists`): no request is kept for what can never be
+    /// allowed.
+    async fn judge_change(&self, maker: &Dot, made: &Dot, ask: &ChangeDot) -> Result<Judged> {
+        let reach = self.reach_of_change(maker, made, &ask.wanted).await?;
+        self.check_exists(maker, &reach.spec).await?;
+        let (extras, held) = self
+            .change_extras(maker, made, &reach, ask.purpose.as_deref())
+            .await?;
+        Ok(Judged {
+            reach,
+            extras,
+            held,
+        })
+    }
+
+    /// What of the change `reach` to `made`, with the new `purpose`, asks the person (design
+    /// section 9): what it gives the dot beyond the maker's reach, and, when the dot itself
+    /// holds more than the maker has now (`held_extras`) and the change is more than taking
+    /// things away (`narrows`), what the dot holds too: a new prompt, folder or schedule would
+    /// steer what the person allowed it for another purpose. `true` with the second.
+    pub(super) async fn change_extras(
+        &self,
+        maker: &Dot,
+        made: &Dot,
+        reach: &Reach,
+        purpose: Option<&str>,
+    ) -> Result<(Vec<Extra>, bool)> {
+        let mut extras = reach.extras.clone();
+        let purpose_now = made.made.as_ref().map(|m| m.purpose.as_str());
+        let new_purpose = purpose.is_some_and(|p| Some(p) != purpose_now);
+        if !new_purpose && narrows(&made.spec, &reach.spec) {
+            return Ok((extras, false));
+        }
+        let own_folder = self.own_folder(made).await?;
+        let held = held_extras(maker, &made.spec, own_folder);
+        if held.is_empty() {
+            return Ok((extras, false));
+        }
+        for extra in held {
+            if !extras.iter().any(|seen| same_thing(&extra, seen)) {
+                extras.push(extra);
+            }
+        }
+        Ok((extras, true))
+    }
+
+    /// Whether the folder of `made` is the new folder of its own it was made with (design
+    /// section 6), which is within its maker's reach: a folder directly in the folder for new
+    /// dots (`Config::new_dot_root`) that no other dot works in.
+    async fn own_folder(&self, made: &Dot) -> Result<bool> {
+        let workdir = real_path(Path::new(made.spec.workdir.trim()));
+        let root = folded(&real_path(self.parts.dot_admin.new_dot_root()));
+        if workdir.parent().map(folded) != Some(root) {
+            return Ok(false);
+        }
+        let key = folded(&workdir);
+        let dots = self.parts.store.list_dots().await?;
+        Ok(!dots.iter().any(|dot| {
+            dot.id != made.id && folded(&real_path(Path::new(dot.spec.workdir.trim()))) == key
+        }))
     }
 
     /// `reach_change` for what `wanted` names of `made`, with the grants of MCP servers the
@@ -589,7 +903,7 @@ impl Makers {
         if spec == made.spec && purpose.is_none() {
             return Ok((made.clone(), Vec::new()));
         }
-        let new_folders = make_folders(create_folder.as_deref()).await?;
+        let new_folders = make_folders(maker, create_folder.as_deref()).await?;
         // Also when only the purpose changes: the role is checked there.
         let mut dot = match p.dot_admin.update(&made.id, spec, true).await {
             Ok(dot) => dot,
@@ -680,12 +994,17 @@ impl Makers {
         if let Some(reason) = self.gone_in(maker, &reach.spec).await? {
             return Ok(Stands::Gone(reason));
         }
+        let (extras, held) = self
+            .change_extras(maker, &dot, &reach, ask.purpose.as_deref())
+            .await?;
         let seen = |extra: &Extra| request.extras.iter().any(|seen| same_thing(extra, seen));
-        let beyond_what_was_seen = !reach.extras.iter().all(seen);
+        let beyond_what_was_seen = !extras.iter().all(seen);
         Ok(Stands::Yes(Standing {
             dot,
             reach,
             purpose: ask.purpose.clone(),
+            extras,
+            held,
             beyond_what_was_seen,
         }))
     }
@@ -704,7 +1023,7 @@ impl Makers {
     /// cannot do). Refused as `make_dot` is for the run, and for a dot the maker did not make.
     pub async fn delete_dot(&self, run_id: &str, dot_name: &str) -> Result<String> {
         let p = &self.parts;
-        let (run, maker) = self.caller(run_id).await?;
+        let (run, _) = self.caller(run_id).await?;
         // A job of the dot whose run has ended is settled first, so its result is not lost
         // with the dot.
         if let Err(e) = self.settle_jobs().await {
@@ -713,6 +1032,8 @@ impl Makers {
         // With the answers: no answer to a change request for the dot is carried out while
         // the dot goes.
         let one_at_a_time = p.one_at_a_time.lock().await;
+        // As they are once the lock is held: the run may have ended, or the switch turned off.
+        let (run, maker) = self.caller(&run.id).await?;
         let made = self.made_dot(&maker, dot_name).await?;
         let name = made.spec.name.as_str();
         let busy = || {
@@ -723,7 +1044,7 @@ impl Makers {
         if p.store.latest_run(&made.id, true).await?.is_some() {
             return Err(busy());
         }
-        let (open_jobs, topics) = match self.delete_and_tell(&made).await {
+        let (open_jobs, changes, topics) = match self.delete_and_tell(&made).await {
             Ok(gone) => gone,
             // A run of it was queued in between (`Store::delete_dot_if_idle`).
             Err(Error::Conflict(_)) => return Err(busy()),
@@ -756,7 +1077,7 @@ impl Makers {
         }
         // After the service's lock is released: `wake` takes the thread lock itself.
         drop(one_at_a_time);
-        self.wake_for_deleted(&open_jobs, name).await;
+        self.wake_for_deleted(&open_jobs, &changes, name).await;
         Ok(format!("Deleted the dot \"{name}\" and its history."))
     }
 
@@ -783,26 +1104,39 @@ impl Makers {
         // the dot goes.
         let one_at_a_time = p.one_at_a_time.lock().await;
         let dot = p.store.get_dot(dot_id).await?;
-        let (open_jobs, topics) = self.delete_and_tell(&dot).await?;
+        let (open_jobs, changes, topics) = self.delete_and_tell(&dot).await?;
         for (maker_id, topic) in &topics {
             self.updated(maker_id, topic);
         }
         // After the service's lock is released: `wake` takes the thread lock itself.
         drop(one_at_a_time);
-        self.wake_for_deleted(&open_jobs, &dot.spec.name).await;
+        self.wake_for_deleted(&open_jobs, &changes, &dot.spec.name)
+            .await;
         Ok(())
     }
 
     /// Deletes `dot` through `DotAdmin::delete` and ends the jobs given to it that are open,
     /// which can only wait for the person's answer: their rows go with the dot, so each gets
     /// its `job_ended` entry (`deleted`) here (design section 8). No pass ends one of them in
-    /// between. The caller holds the service's lock. Returns those jobs, whose makers the
-    /// caller wakes once the lock is released, and the topics that showed the dot and were
-    /// not told by a job's entry, for the caller to tell (`Store::making_topics_of`).
-    async fn delete_and_tell(&self, dot: &Dot) -> Result<(Vec<MakingJob>, Vec<(String, String)>)> {
+    /// between. A change a maker asked for the dot that waits for the person goes with the dot
+    /// (`dot_id` cascades). The caller holds the service's lock. Returns those jobs and those
+    /// requests, whose makers the caller wakes once the lock is released, and the topics that
+    /// showed the dot and were not told by a job's entry, for the caller to tell
+    /// (`Store::making_topics_of`).
+    async fn delete_and_tell(
+        &self,
+        dot: &Dot,
+    ) -> Result<(Vec<MakingJob>, Vec<MakeRequest>, Vec<(String, String)>)> {
         let p = &self.parts;
         let settling = p.settling.lock().await;
         let open_jobs = p.store.open_making_jobs(Some(&dot.id)).await?;
+        let changes: Vec<MakeRequest> = p
+            .store
+            .list_make_requests(None, true)
+            .await?
+            .into_iter()
+            .filter(|r| r.kind == RequestKind::Change && r.dot_id.as_deref() == Some(&dot.id))
+            .collect();
         let mut topics = p.store.making_topics_of(&dot.id).await?;
         p.dot_admin.delete(&dot.id).await?;
         drop(settling);
@@ -818,22 +1152,34 @@ impl Makers {
                 (maker_id, topic) != (&job.maker_dot_id, &job.maker_root_run_id)
             });
         }
-        Ok((open_jobs, topics))
+        Ok((open_jobs, changes, topics))
     }
 
     /// Wakes the maker of each of `jobs`, which ended because their made dot, named `name`,
-    /// was deleted (design section 8). The caller holds no lock.
-    async fn wake_for_deleted(&self, jobs: &[MakingJob], name: &str) {
+    /// was deleted (design section 8), and the maker of each of `changes`, the changes it
+    /// asked for the dot that went with it (section 9), which it was told it would be woken
+    /// about. A topic is woken once, with all it is told. The caller holds no lock.
+    async fn wake_for_deleted(&self, jobs: &[MakingJob], changes: &[MakeRequest], name: &str) {
+        let mut wakes: Vec<(&str, &str, String)> = Vec::new();
         for job in jobs {
-            let woken = self
-                .wake(
-                    &job.maker_dot_id,
-                    &job.maker_root_run_id,
-                    &deleted_message(name),
-                )
-                .await;
-            if let Err(e) = woken {
-                tracing::warn!(job = %job.id, "the maker was not woken for a deleted dot's job: {e}");
+            push_wake(
+                &mut wakes,
+                &job.maker_dot_id,
+                &job.maker_root_run_id,
+                deleted_message(name),
+            );
+        }
+        for request in changes {
+            push_wake(
+                &mut wakes,
+                &request.maker_dot_id,
+                &request.root_run_id,
+                change_went_message(name),
+            );
+        }
+        for (maker, topic, message) in wakes {
+            if let Err(e) = self.wake(maker, topic, &message).await {
+                tracing::warn!(maker = %maker, topic = %topic, "the maker was not woken for a deleted dot: {e}");
             }
         }
     }

@@ -7,16 +7,16 @@
 //! here too (section 9), as a request of the kind `change`: nothing of it is saved until the
 //! person allows it, changes the dot without the extras, or does not change it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::jobs::FirstJob;
 use super::log::{MakingEventKind, NewMakingEvent};
-use super::manage::{ChangeDot, Standing, Stands};
-use super::reach::Extra;
-use super::service::{Makers, OverLimit};
+use super::manage::{change_lines, same_thing, schedule_words, ChangeDot, Standing, Stands};
+use super::reach::{reach_new, Extra, Reach};
+use super::service::{MakeDot, Makers, OverLimit};
 use crate::accounts::Permission;
 use crate::library::LibraryKind;
 use crate::model::{Dot, DotSpec};
@@ -43,10 +43,76 @@ pub const NOTHING_WITHIN_REACH: &str =
     "Everything this request asks is beyond reach, so there is nothing to change without it. \
      Allow it, or don't change it.";
 
-/// What Allow is told, and the card says, of a change request whose maker was narrowed since
-/// it asked (`Makers::change_stands`). `maker` is the maker's name.
-fn reach_shrank(maker: &str) -> String {
-    format!("{maker}'s own settings changed since it asked. Don't change it, and let it ask again.")
+/// What changing a dot without the extras is told when the dot itself holds more than its maker
+/// has: the change would steer that, so no part of it is saved alone.
+pub const NOTHING_WITHOUT_HELD: &str =
+    "This dot has more than its maker has, so the change cannot be saved without that. Allow \
+     it, or don't change it.";
+
+/// What Allow is told, and the card says, of a request whose maker was narrowed since it asked
+/// (`Makers::make_stands`, `Makers::change_stands`). `maker` is the maker's name.
+fn reach_shrank(kind: RequestKind, maker: &str) -> String {
+    let dont = match kind {
+        RequestKind::Make => "Don't make it",
+        RequestKind::Change => "Don't change it",
+    };
+    format!("{maker}'s own settings changed since it asked. {dont}, and let it ask again.")
+}
+
+/// What an answer that makes the dot is told of a request that passes a limit now that the
+/// card did not show: the card shows it from then on.
+fn limit_reached(over: &OverLimit) -> String {
+    format!(
+        "A limit was reached since the card was shown: it would be the {}. Look at the card \
+         again, and answer again if you still want this dot.",
+        over.line()
+    )
+}
+
+/// The ask card's title for a new dot (design section 7.2), by what is beyond reach.
+fn make_title(maker: &str, extras: &[Extra]) -> String {
+    if extras.is_empty() {
+        format!("{maker} wants to make one more dot")
+    } else {
+        format!("{maker} wants to make a dot with more than it has")
+    }
+}
+
+/// The ask card's lines (design section 7.2): each extra in plain words, then the limit when
+/// one is passed.
+fn card_lines(maker: &str, extras: &[Extra], over: Option<&OverLimit>) -> Vec<String> {
+    let mut lines: Vec<String> = extras.iter().map(|e| e.line(maker)).collect();
+    lines.extend(over.map(OverLimit::line));
+    lines
+}
+
+/// The folder to make before `reach.without` is saved: `create_folder` when the folder asked
+/// for is no extra, so `without` still works in it. When the folder was the extra, `without`
+/// has a blank one and gets a new folder of its own.
+fn without_folder(reach: &Reach) -> Option<PathBuf> {
+    let same =
+        !reach.without.workdir.trim().is_empty() && reach.without.workdir == reach.spec.workdir;
+    reach.create_folder.clone().filter(|_| same)
+}
+
+/// A make request held against the maker as it is now (`Makers::make_stands`).
+struct MakeStanding {
+    /// The dot asked for, put against the maker as it is now: `spec` is what Allow makes,
+    /// `without` what Make it without these makes, and `extras` what the card shows.
+    reach: Reach,
+    /// The limit one more dot of the maker, made by the run that asked, would pass now.
+    over: Option<OverLimit>,
+    /// Allow would give the dot something beyond the maker's reach that the card the person
+    /// saw did not show: the maker's own settings were narrowed since it asked.
+    beyond_what_was_seen: bool,
+}
+
+/// Whether a make request can still be allowed.
+#[allow(clippy::large_enum_variant)]
+enum MakeStands {
+    Yes(MakeStanding),
+    /// What it names that is no longer there, in one sentence for the person.
+    Gone(String),
 }
 
 str_enum!(RequestStatus {
@@ -138,6 +204,12 @@ pub struct MakeRequest {
     /// make.
     #[serde(default)]
     pub ask: Option<ChangeDot>,
+    /// The new dot as the maker asked it, for a request of the kind `make`: the card and the
+    /// answer put it against the maker as it is then (`Makers::make_stands`). `None` for a
+    /// change, and for a request stored before it was kept. The card shows what comes of it,
+    /// so it does not cross to the UI.
+    #[serde(skip)]
+    pub make_ask: Option<MakeDot>,
 }
 
 /// Input for `Store::add_make_request`. The request is stored waiting, as of now.
@@ -157,6 +229,8 @@ pub struct NewMakeRequest<'a> {
     pub first_job: Option<&'a str>,
     /// The change as asked, for a request of the kind `change`.
     pub ask: Option<&'a ChangeDot>,
+    /// The new dot as asked, for a request of the kind `make`.
+    pub make_ask: Option<&'a MakeDot>,
 }
 
 impl MakeRequest {
@@ -167,37 +241,39 @@ impl MakeRequest {
         if self.kind == RequestKind::Change {
             let dot = self.ask.as_ref().map_or(self.name.as_str(), |ask| &ask.dot);
             change_title(maker, dot.trim())
-        } else if self.extras.is_empty() {
-            format!("{maker} wants to make one more dot")
         } else {
-            format!("{maker} wants to make a dot with more than it has")
+            make_title(maker, &self.extras)
         }
     }
 
-    /// The ask card's lines (design section 7.2): each extra in plain words, then the limit
-    /// when one is passed.
+    /// The ask card's lines as the request was stored (design section 7.2): each extra in
+    /// plain words, then the limit when one is passed. The card's own lines are of things as
+    /// they are when it is read (`MakeRequestCard::lines`).
     pub fn lines(&self, maker: &str) -> Vec<String> {
-        let mut lines: Vec<String> = self.extras.iter().map(|e| e.line(maker)).collect();
-        lines.extend(self.over.as_ref().map(OverLimit::line));
-        lines
+        card_lines(maker, &self.extras, self.over.as_ref())
     }
 
-    /// The folder to make before `without` is saved: `create_folder` when the folder asked
-    /// for is no extra, so `without` still works in it. When the folder was the extra,
-    /// `without` has a blank one and gets a new folder of its own.
-    fn without_folder(&self) -> Option<PathBuf> {
-        let same =
-            !self.without.workdir.trim().is_empty() && self.without.workdir == self.spec.workdir;
-        self.create_folder
-            .as_ref()
-            .filter(|_| same)
-            .map(PathBuf::from)
+    /// The request as it was stored, as the reach check gives it.
+    fn stored_reach(&self) -> Reach {
+        Reach {
+            spec: self.spec.clone(),
+            without: self.without.clone(),
+            extras: self.extras.clone(),
+            create_folder: self.create_folder.as_ref().map(PathBuf::from),
+        }
     }
 }
 
 /// The title of the ask card for a change to the made dot named `dot` (design section 9).
 fn change_title(maker: &str, dot: &str) -> String {
     format!("{maker} wants to give {dot} more than it has")
+}
+
+/// The title of the ask card for a change that gives the made dot named `dot` nothing beyond
+/// reach itself, while the dot holds more than its maker has (design section 9): the person
+/// decides what such a dot is told and where it works.
+fn held_title(maker: &str, dot: &str) -> String {
+    format!("{maker} wants to change {dot}, which has more than {maker} has")
 }
 
 /// What the maker is woken with after the person's answer `decision` to `request`, a request
@@ -268,8 +344,23 @@ pub struct MakeRequestCard {
     /// The maker's name now.
     pub maker_name: String,
     pub title: String,
-    /// The extras in plain words, one per line, then the limit when one is passed.
+    /// The extras in plain words, one per line, then the limit when one is passed: as things
+    /// are when the card is read, against the maker as it is then.
     pub lines: Vec<String>,
+    /// For a change, every setting the ask names, one short line each ("New instructions",
+    /// "New name: Feeds", "Adds the skill 'pdf'"), so Allow covers nothing the card did not
+    /// say. Empty for a new dot, whose card shows the dot itself.
+    #[serde(default)]
+    pub asked: Vec<String>,
+    /// The instructions in full: those of the new dot, or the new ones a change gives the dot.
+    /// `None` for a change that does not name them.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// The schedule in plain words (`schedule_words`): that of the new dot, or the one a
+    /// change gives the dot, "no schedule" when it clears it. `None` for a new dot without
+    /// one and for a change that does not name it.
+    #[serde(default)]
+    pub schedule: Option<String>,
     /// Whether Allow for this dot is on.
     pub can_allow: bool,
     /// Whether Make it without these is on. Off when the only problem is a limit.
@@ -306,8 +397,28 @@ pub struct PendingMakeRequest {
 }
 
 impl PendingMakeRequest {
-    /// The Inbox's item for `request`, whose maker is named `maker`.
-    pub fn of(request: &MakeRequest, maker: &str) -> Self {
+    /// The Inbox's item for the ask card `card`: its title and lines are the card's, so the
+    /// Inbox and the card always say the same.
+    pub fn of(card: &MakeRequestCard) -> Self {
+        let request = &card.request;
+        Self {
+            id: request.id.clone(),
+            dot_id: request.maker_dot_id.clone(),
+            dot_name: card.maker_name.clone(),
+            root_run_id: request.root_run_id.clone(),
+            kind: request.kind,
+            name: request.name.clone(),
+            purpose: request.purpose.clone(),
+            title: card.title.clone(),
+            lines: card.lines.clone(),
+            status: request.status,
+            created_at: request.created_at.clone(),
+        }
+    }
+
+    /// The Inbox's item for `request`, whose maker is named `maker`, as it was stored: for
+    /// when its card cannot be read just now.
+    pub fn stored(request: &MakeRequest, maker: &str) -> Self {
         Self {
             id: request.id.clone(),
             dot_id: request.maker_dot_id.clone(),
@@ -341,10 +452,17 @@ impl Makers {
         Ok(cards)
     }
 
-    /// The ask card of a request (design section 7.2). A waiting request is checked again
-    /// against the Library, the vault and the dots as they are now: when something it names has
-    /// gone, or its name is taken, it is marked `gone`, `blocked` says what has gone and only
-    /// Don't make it is left. A request once marked stays so.
+    /// The ask card of a request (design section 7.2), judged against the maker as it is when
+    /// the person looks. A waiting request is checked again against the Library, the vault, the
+    /// folders and the dots as they are now: when something it names has gone, or its name is
+    /// taken, it is marked `gone`, `blocked` says what has gone and only Don't make it is left.
+    /// A request once marked stays so.
+    ///
+    /// What the maker asked is put against the maker as it is now (`make_stands`): the lines,
+    /// the title and Make it without these come from that, and the limit line from the limits
+    /// as they are now, which the request keeps as the one the card showed. When the maker was
+    /// narrowed since it asked, so that Allow would give the dot something the request did not
+    /// show at first, Allow is off and `blocked` says so.
     ///
     /// Allow needs this PC's right to change dots in the maker's account and workspace, and to
     /// give secrets when the dot is given variables; Make it without these needs the same for
@@ -358,46 +476,103 @@ impl Makers {
         if request.kind == RequestKind::Change {
             return self.change_card(request, maker).await;
         }
+        let maker_name = maker.spec.name.clone();
+        let mut asked = request.stored_reach();
+        let (mut can_allow, mut can_without, mut blocked) = (false, false, None);
         if request.status == RequestStatus::Waiting {
-            if let Some(reason) = self.gone_since(&maker, &request).await? {
-                request = self.mark_gone(&request, &reason).await?;
+            match self.make_stands(&maker, &request).await? {
+                MakeStands::Gone(reason) => request = self.mark_gone(&request, &reason).await?,
+                MakeStands::Yes(standing) => {
+                    if standing.over != request.over {
+                        request = self.show_over(&request, standing.over.as_ref()).await?;
+                    }
+                    if standing.beyond_what_was_seen {
+                        blocked = Some(reach_shrank(RequestKind::Make, &maker_name));
+                    } else {
+                        match self.may_answer(&maker, &standing.reach.spec).await {
+                            Ok(()) => can_allow = true,
+                            Err(Error::NotAllowed(why)) => blocked = Some(why),
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    if !standing.reach.extras.is_empty() {
+                        let without = &standing.reach.without;
+                        can_without = match self.may_answer(&maker, without).await {
+                            Ok(()) => true,
+                            Err(Error::NotAllowed(_)) => false,
+                            Err(e) => return Err(e),
+                        };
+                    }
+                    asked = standing.reach;
+                }
             }
         }
-        let (mut can_allow, mut can_without, mut blocked) = (false, false, None);
-        match request.status {
-            RequestStatus::Waiting => {
-                match self.may_answer(&maker, &request.spec).await {
-                    Ok(()) => can_allow = true,
-                    Err(Error::NotAllowed(why)) => blocked = Some(why),
-                    Err(e) => return Err(e),
-                }
-                if !request.extras.is_empty() {
-                    can_without = match self.may_answer(&maker, &request.without).await {
-                        Ok(()) => true,
-                        Err(Error::NotAllowed(_)) => false,
-                        Err(e) => return Err(e),
-                    };
-                }
-            }
-            RequestStatus::Gone => {
-                blocked = Some(
-                    request
-                        .gone_reason
-                        .clone()
-                        .unwrap_or_else(|| SOMETHING_GONE.to_string()),
-                );
-            }
-            _ => {}
+        if request.status == RequestStatus::Gone {
+            blocked = Some(
+                request
+                    .gone_reason
+                    .clone()
+                    .unwrap_or_else(|| SOMETHING_GONE.to_string()),
+            );
         }
         Ok(MakeRequestCard {
-            title: request.title(&maker.spec.name),
-            lines: request.lines(&maker.spec.name),
-            maker_name: maker.spec.name,
+            title: make_title(&maker_name, &asked.extras),
+            lines: card_lines(&maker_name, &asked.extras, request.over.as_ref()),
+            asked: Vec::new(),
+            instructions: Some(asked.spec.instructions.clone()),
+            schedule: asked.spec.schedule.as_ref().map(schedule_words),
+            maker_name,
             request,
             can_allow,
             can_without,
             blocked,
         })
+    }
+
+    /// Holds the make request `request` of `maker` against things as they are now (design
+    /// section 7.2), for its card and for the person's answer: what has gone since it was
+    /// asked (`gone_since`), the dot the maker asked put against the maker as it is now
+    /// (`reach_new`), and the limits as they are now (`over_limit`).
+    ///
+    /// The extras found now are all covered by Allow when each of them was among those the
+    /// request was stored with (`same_thing`). When one is new, because the maker's own
+    /// settings were narrowed since it asked, `beyond_what_was_seen` is set. A request stored
+    /// before the ask itself was kept is held as it was stored.
+    async fn make_stands(&self, maker: &Dot, request: &MakeRequest) -> Result<MakeStands> {
+        if let Some(reason) = self.gone_since(maker, request).await? {
+            return Ok(MakeStands::Gone(reason));
+        }
+        let reach = match &request.make_ask {
+            Some(ask) => match reach_new(maker, &ask.wanted, &self.parts.worktrees_root) {
+                Ok(reach) => reach,
+                // A dot the ask no longer fits, as a folder outside the maker's that went.
+                Err(Error::Invalid(_)) => return Ok(MakeStands::Gone(SOMETHING_GONE.into())),
+                Err(e) => return Err(e),
+            },
+            None => request.stored_reach(),
+        };
+        let over = self.over_limit(maker, &request.run_id).await?;
+        let seen = |extra: &Extra| request.extras.iter().any(|seen| same_thing(extra, seen));
+        let beyond_what_was_seen = !reach.extras.iter().all(seen);
+        Ok(MakeStands::Yes(MakeStanding {
+            reach,
+            over,
+            beyond_what_was_seen,
+        }))
+    }
+
+    /// Keeps `over` as the limit the card of the waiting `request` shows, and says the topic's
+    /// cards changed. Returns the request as it is after.
+    async fn show_over(
+        &self,
+        request: &MakeRequest,
+        over: Option<&OverLimit>,
+    ) -> Result<MakeRequest> {
+        let p = &self.parts;
+        if p.store.set_make_request_over(&request.id, over).await? {
+            self.updated(&request.maker_dot_id, &request.root_run_id);
+        }
+        p.store.get_make_request(&request.id).await
     }
 
     /// The ask card of a change request (design section 9), under the service's lock. Its
@@ -412,6 +587,14 @@ impl Makers {
     async fn change_card(&self, mut request: MakeRequest, maker: Dot) -> Result<MakeRequestCard> {
         let maker_name = maker.spec.name.clone();
         let mut title = request.title(&maker_name);
+        let mut lines = request.lines(&maker_name);
+        // What the ask names, on the dot as it was asked; on the dot as it is now while the
+        // request waits.
+        let named = |ask: Option<&ChangeDot>, before: &DotSpec, after: &DotSpec| match ask {
+            Some(ask) => change_lines(ask, before, after, &maker_name),
+            None => Vec::new(),
+        };
+        let mut asked = named(request.ask.as_ref(), &request.spec, &request.spec);
         let (mut can_allow, mut can_without, mut blocked) = (false, false, None);
         match request.status {
             RequestStatus::Waiting => match self.change_stands(&maker, &request).await? {
@@ -420,9 +603,20 @@ impl Makers {
                     blocked = Some(reason);
                 }
                 Stands::Yes(standing) => {
-                    title = change_title(&maker_name, &standing.dot.spec.name);
+                    let name = &standing.dot.spec.name;
+                    title = if standing.held && standing.reach.extras.is_empty() {
+                        held_title(&maker_name, name)
+                    } else {
+                        change_title(&maker_name, name)
+                    };
+                    lines = card_lines(&maker_name, &standing.extras, None);
+                    asked = named(
+                        request.ask.as_ref(),
+                        &standing.dot.spec,
+                        &standing.reach.spec,
+                    );
                     if standing.beyond_what_was_seen {
-                        blocked = Some(reach_shrank(&maker_name));
+                        blocked = Some(reach_shrank(RequestKind::Change, &maker_name));
                     } else {
                         match self.may_change(&standing.dot, &standing.reach.spec).await {
                             Ok(()) => can_allow = true,
@@ -457,9 +651,18 @@ impl Makers {
                 }
             }
         }
+        let wanted = request.ask.as_ref().map(|ask| &ask.wanted);
+        let instructions = wanted.and_then(|w| w.instructions.clone());
+        let schedule = wanted.and_then(|w| w.schedule.as_ref()).map(|s| match s {
+            Some(schedule) => schedule_words(schedule),
+            None => "no schedule".to_string(),
+        });
         Ok(MakeRequestCard {
             title,
-            lines: request.lines(&maker_name),
+            lines,
+            asked,
+            instructions,
+            schedule,
             maker_name,
             request,
             can_allow,
@@ -514,7 +717,13 @@ impl Makers {
                     }
                 };
                 if decision == MakeDecision::Allow && standing.beyond_what_was_seen {
-                    return Err(Error::Conflict(reach_shrank(&maker.spec.name)));
+                    return Err(Error::Conflict(reach_shrank(
+                        RequestKind::Change,
+                        &maker.spec.name,
+                    )));
+                }
+                if decision == MakeDecision::Without && standing.held {
+                    return Err(Error::Invalid(NOTHING_WITHOUT_HELD.into()));
                 }
                 if decision == MakeDecision::Without && !standing.without_changes_something() {
                     return Err(Error::Invalid(NOTHING_WITHIN_REACH.into()));
@@ -556,16 +765,41 @@ impl Makers {
             MakeDecision::Refuse => None,
             _ => dot.as_ref().map(|d| d.id.as_str()),
         };
+        let changed_id = changed_id.map(str::to_string);
         self.record_answer(
             &request,
             decision,
-            changed_id,
+            changed_id.as_deref(),
             dot.as_ref().map(|d| d.id.as_str()),
             dot_name,
         )
         .await?;
-        let request = p.store.get_make_request(&request.id).await?;
+        let request = self.answered(&request, decision, changed_id).await?;
         Ok((request, maker.spec.name))
+    }
+
+    /// `request` as it is after the person's answer `decision`, which made or changed the dot
+    /// `made_dot_id`. When its row went in between, with its maker, the request as answered is
+    /// built here: the answer was carried out, so it is not reported as not found.
+    async fn answered(
+        &self,
+        request: &MakeRequest,
+        decision: MakeDecision,
+        made_dot_id: Option<String>,
+    ) -> Result<MakeRequest> {
+        match self.parts.store.get_make_request(&request.id).await {
+            Err(Error::NotFound(_)) => Ok(MakeRequest {
+                status: match decision {
+                    MakeDecision::Allow => RequestStatus::Allowed,
+                    MakeDecision::Without => RequestStatus::MadeWithout,
+                    MakeDecision::Refuse => RequestStatus::Refused,
+                },
+                decided_at: Some(crate::util::now()),
+                made_dot_id,
+                ..request.clone()
+            }),
+            stored => stored,
+        }
     }
 
     /// Writes the person's answer `decision` on `request`, then the `answered` entry of the
@@ -626,10 +860,13 @@ impl Makers {
     /// made without anything (`Invalid`). Before a dot is made the request is checked again:
     /// when something it names has gone or its name is taken, it is marked `gone` and the
     /// answer is refused (`Conflict`, saying what has gone); when this PC's role does not allow
-    /// the dot, the answer is refused (`NotAllowed`) and the request still waits. The reach
-    /// check is not run again, and neither are the limits: Allow covers this one dot, also
-    /// past a limit (section 10). When the dot cannot be created the request still waits and
-    /// the error is returned.
+    /// the dot, the answer is refused (`NotAllowed`) and the request still waits. What the maker
+    /// asked is put against the maker as it is now, as the card does (`make_stands`): Allow is
+    /// refused (`Conflict`) when that gives the dot something the request did not show, and
+    /// the request still waits; an answer that makes the dot is refused (`Conflict`) when it
+    /// passes a limit now that the card did not show, which the card shows from then on. Allow
+    /// covers this one dot, also past a limit the card showed (section 10). When the dot cannot
+    /// be created the request still waits and the error is returned.
     ///
     /// The maker's switch is not looked at: when the person turned "Can make dots" off after
     /// the request was stored, Allow and Make it without these still make the dot, since it
@@ -679,23 +916,40 @@ impl Makers {
             let (request, maker_name) = self.answer_change(request, decision).await?;
             return Ok((request, maker_name, None));
         }
-        if decision == MakeDecision::Without && request.extras.is_empty() {
-            return Err(Error::Invalid(NOTHING_BEYOND_REACH.into()));
-        }
         let maker = p.store.get_dot(&request.maker_dot_id).await?;
         let made = match decision {
             MakeDecision::Refuse => None,
             MakeDecision::Allow | MakeDecision::Without => {
-                if let Some(reason) = self.gone_since(&maker, &request).await? {
-                    self.mark_gone(&request, &reason).await?;
-                    return Err(Error::Conflict(format!("{reason} {ONLY_REFUSE_LEFT}")));
+                // Against the maker and the limits as they are now, as the card shows them.
+                let standing = match self.make_stands(&maker, &request).await? {
+                    MakeStands::Yes(standing) => standing,
+                    MakeStands::Gone(reason) => {
+                        self.mark_gone(&request, &reason).await?;
+                        return Err(Error::Conflict(format!("{reason} {ONLY_REFUSE_LEFT}")));
+                    }
+                };
+                if decision == MakeDecision::Without && standing.reach.extras.is_empty() {
+                    return Err(Error::Invalid(NOTHING_BEYOND_REACH.into()));
                 }
+                if decision == MakeDecision::Allow && standing.beyond_what_was_seen {
+                    return Err(Error::Conflict(reach_shrank(
+                        RequestKind::Make,
+                        &maker.spec.name,
+                    )));
+                }
+                // A limit passed now that the card did not show: the card shows it from now
+                // on, and the person answers again.
+                if let Some(over) = &standing.over {
+                    if Some(over) != request.over.as_ref() {
+                        self.show_over(&request, Some(over)).await?;
+                        return Err(Error::Conflict(limit_reached(over)));
+                    }
+                }
+                let without_folder = without_folder(&standing.reach);
+                let reach = standing.reach;
                 let (spec, folder) = match decision {
-                    MakeDecision::Allow => (
-                        request.spec.clone(),
-                        request.create_folder.as_ref().map(PathBuf::from),
-                    ),
-                    _ => (request.without.clone(), request.without_folder()),
+                    MakeDecision::Allow => (reach.spec, reach.create_folder),
+                    _ => (reach.without, without_folder),
                 };
                 self.may_answer(&maker, &spec).await?;
                 // The dot records the run that asked as the run that made it, though that
@@ -733,7 +987,8 @@ impl Makers {
         let made_id = made.as_ref().map(|dot| dot.id.as_str());
         self.record_answer(&request, decision, made_id, made_id, &request.name)
             .await?;
-        let request = p.store.get_make_request(&request.id).await?;
+        let made_id = made_id.map(str::to_string);
+        let request = self.answered(&request, decision, made_id).await?;
         Ok((request, maker.spec.name, first_job))
     }
 
@@ -755,14 +1010,27 @@ impl Makers {
     }
 
     /// What `request` names that is not there now, in one sentence for the person; `None`
-    /// when all of it is (design section 7.2): its name taken by a dot, a Library item, an
-    /// MCP server its variables are for, or a variable.
+    /// when all of it is (design section 7.2): its name taken by a dot, a folder outside the
+    /// maker's that it asked for, a Library item, an MCP server its variables are for, or a
+    /// variable.
     async fn gone_since(&self, maker: &Dot, request: &MakeRequest) -> Result<Option<String>> {
         if self.parts.store.dot_name_taken(request.name.trim()).await? {
             return Ok(Some(format!(
                 "A dot named {:?} exists now.",
                 request.name.trim()
             )));
+        }
+        // A folder outside is never made for a dot: it must still be there.
+        for extra in &request.extras {
+            if let Extra::Folder {
+                path,
+                below_maker: false,
+            } = extra
+            {
+                if !Path::new(path).is_dir() {
+                    return Ok(Some(format!("The folder {path} no longer exists.")));
+                }
+            }
         }
         self.gone_in(maker, &request.spec).await
     }

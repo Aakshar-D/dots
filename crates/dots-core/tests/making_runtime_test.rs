@@ -23,7 +23,7 @@ use dots_core::library::Uses;
 use dots_core::making::cards::{uses_line, CardWhat, JobCard, MakingCard};
 use dots_core::making::jobs::{deleted_message, JobEnd, JobStatus, MakingJob};
 use dots_core::making::log::{MakingEvent, MakingEventKind};
-use dots_core::making::manage::{ChangeDot, ChangeOutcome};
+use dots_core::making::manage::{change_went_message, ChangeDot, ChangeOutcome};
 use dots_core::making::reach::Wanted;
 use dots_core::making::requests::{
     MakeDecision, MakeRequest, PendingMakeRequest, RequestKind, RequestStatus,
@@ -553,6 +553,11 @@ async fn the_topics_cards_tell_a_make_a_job_an_ask_a_change_and_a_delete() {
     t.rt.decide_make_request(&change.id, MakeDecision::Allow)
         .await
         .unwrap();
+    // The person gives the maker the browser too, so the dot holds nothing beyond its reach
+    // and a new purpose is the maker's to give (a dot that holds more asks the person).
+    let mut with_browser = t.rt.store().get_dot(&maker.id).await.unwrap().spec;
+    with_browser.browser = true;
+    t.rt.update_dot(&maker.id, with_browser).await.unwrap();
     let purpose = ChangeDot {
         dot: "Blog Watcher".into(),
         purpose: Some("Reads four feeds".into()),
@@ -876,12 +881,15 @@ async fn a_made_dot_the_person_deletes_ends_its_job_and_takes_its_request_with_i
         t.rt.make_request_card(&change.id).await,
         Err(Error::NotFound(_))
     ));
-    // The job ended with the dot, and the maker is woken for it once.
-    assert_eq!(wakes(&t).await, [deleted_message("Blog Watcher")]);
-    assert_eq!(
-        wakes(&t).await,
-        ["\"Blog Watcher\" was deleted before the job ended."]
+    // The job ended with the dot, and so did the change it waited on: the maker is woken
+    // once, for both.
+    let both = format!(
+        "{}\n\n{}",
+        deleted_message("Blog Watcher"),
+        change_went_message("Blog Watcher")
     );
+    assert_eq!(wakes(&t).await, [both]);
+    assert!(wakes(&t).await[0].starts_with("\"Blog Watcher\" was deleted before the job ended."));
     t.rt.makers().settle_jobs().await.unwrap();
     assert_eq!(wakes(&t).await.len(), 1);
     assert!(t
@@ -1153,4 +1161,28 @@ async fn a_makers_row_counts_the_dots_it_keeps() {
     t.rt.delete_dot(&one.id).await.unwrap();
     let rows = t.rt.dot_overview().await.unwrap();
     assert_eq!(count(&rows, &maker.id), (1, 10));
+}
+
+#[tokio::test]
+async fn the_inbox_names_a_renamed_dot_as_its_card_does() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let one = make(&t, &run, "One").await;
+    let change = change_request(&t, &run, "One").await;
+    // The person renames the dot while the change waits.
+    let mut renamed = t.rt.store().get_dot(&one.id).await.unwrap().spec;
+    renamed.name = "Feeds".into();
+    t.rt.update_dot(&one.id, renamed).await.unwrap();
+
+    let card = t.rt.make_request_card(&change.id).await.unwrap();
+    assert_eq!(
+        card.title,
+        "Researcher wants to give Feeds more than it has"
+    );
+    let inbox = t.rt.inbox().await.unwrap();
+    let item = &inbox.make_requests[0];
+    assert_eq!(item.title, card.title);
+    assert_eq!(item.lines, card.lines);
+    assert_eq!(item.lines, ["The browser"]);
 }

@@ -1118,15 +1118,27 @@ impl Runtime {
                 proposal,
             })
             .collect();
-        // Oldest first in the store; the Inbox lists the newest first.
-        let make_requests = self
+        // Oldest first in the store; the Inbox lists the newest first. Each item is built from
+        // the request's ask card, so the two say the same (dots-make-dots design section 11).
+        let mut make_requests = Vec::new();
+        for request in self
             .store
             .list_make_requests(None, true)
             .await?
             .iter()
             .rev()
-            .map(|request| PendingMakeRequest::of(request, &name(&request.maker_dot_id)))
-            .collect();
+        {
+            match self.makers.request_card(&request.id).await {
+                Ok(card) => make_requests.push(PendingMakeRequest::of(&card)),
+                // Answered, or gone with its maker, since the list was read.
+                Err(Error::NotFound(_)) => {}
+                Err(e) => {
+                    tracing::warn!(request = %request.id, "the ask card could not be read for the Inbox: {e}");
+                    let maker = name(&request.maker_dot_id);
+                    make_requests.push(PendingMakeRequest::stored(request, &maker));
+                }
+            }
+        }
         let inbox = Inbox {
             approvals,
             review_runs,

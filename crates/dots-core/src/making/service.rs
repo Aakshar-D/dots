@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 use super::jobs::FirstJob;
 use super::log::{MakingEventKind, NewMakingEvent};
-use super::reach::{reach_new, Reach, Wanted};
+use super::reach::{reach_new, still_below_maker, Reach, Wanted};
 use super::requests::{MakeRequest, NewMakeRequest, RequestKind, MAX_WAITING_REQUESTS};
 use crate::dot_admin::DotAdmin;
 use crate::events::{Bus, RuntimeEvent};
@@ -31,6 +31,13 @@ pub const MAX_JOB: usize = 4000;
 pub const PURPOSE_RULE: &str = "The purpose is one line of 1 to 200 characters.";
 /// What is said of a first job that is not 1 to `MAX_JOB` characters.
 pub const FIRST_JOB_RULE: &str = "The first job is 1 to 4000 characters.";
+/// What is said of a purpose with a tab, a control character or a mark that turns text around.
+pub const PURPOSE_CHARS: &str = "The purpose is plain text: no tabs, control characters or \
+    marks that change the direction of text.";
+/// What is said of a folder with a line break, a control character or a mark that turns text
+/// around: the ask card shows the folder to the person.
+pub const FOLDER_CHARS: &str = "The folder is plain text: no line breaks, control characters \
+    or marks that change the direction of text.";
 /// What a workflow step's run is told by every tool for making dots (design section 5).
 pub const NOT_IN_A_STEP: &str =
     "A run that is a workflow step cannot use the tools for making dots.";
@@ -183,14 +190,48 @@ impl OverLimit {
     }
 }
 
-/// `purpose` as it is kept, without the spaces around it, or `PURPOSE_RULE`.
+/// Whether `c` breaks a line: so a line of model text on a card cannot become two.
+fn breaks_line(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{0085}' | '\u{2028}' | '\u{2029}')
+}
+
+/// Whether `c` has no place in one line of model text shown to the person: a control
+/// character (tabs and line breaks too), a line or paragraph separator, or a mark that turns
+/// the direction of text, with which a line could pass for another (design section 7.2).
+pub(crate) fn unplain_char(c: char) -> bool {
+    c.is_control()
+        || breaks_line(c)
+        || matches!(
+            c,
+            '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
+/// `purpose` as it is kept, without the spaces around it: `PURPOSE_RULE` for one that is not
+/// one line of 1 to 200 characters, and `PURPOSE_CHARS` for one that is not plain text.
 pub(crate) fn checked_purpose(purpose: &str) -> Result<String> {
     let purpose = purpose.trim();
-    if purpose.is_empty() || purpose.chars().count() > MAX_PURPOSE || purpose.contains(['\n', '\r'])
+    if purpose.is_empty() || purpose.chars().count() > MAX_PURPOSE || purpose.contains(breaks_line)
     {
         return Err(Error::Invalid(PURPOSE_RULE.into()));
     }
+    if purpose.contains(unplain_char) {
+        return Err(Error::Invalid(PURPOSE_CHARS.into()));
+    }
     Ok(purpose.to_string())
+}
+
+/// Refuses a folder the model wrote that is not plain text (`FOLDER_CHARS`): the ask card shows
+/// the part of it that does not exist yet as it was written.
+pub(crate) fn check_folder_text(wanted: &Wanted) -> Result<()> {
+    if wanted
+        .folder
+        .as_deref()
+        .is_some_and(|folder| folder.contains(unplain_char))
+    {
+        return Err(Error::Invalid(FOLDER_CHARS.into()));
+    }
+    Ok(())
 }
 
 pub(super) struct Parts {
@@ -296,10 +337,22 @@ impl Makers {
                 return Err(Error::Invalid(FIRST_JOB_RULE.into()));
             }
         }
-        let reach = reach_new(&maker, &ask.wanted, &p.worktrees_root)?;
-        let _one_at_a_time = p.one_at_a_time.lock().await;
+        check_folder_text(&ask.wanted)?;
+        let mut reach = reach_new(&maker, &ask.wanted, &p.worktrees_root)?;
         // Before the limits and the extras: no request is kept for what can never be made.
+        // Before the lock too: the vault may be slow, and the lock holds every maker's makes.
         self.check_exists(&maker, &reach.spec).await?;
+        // From the count to the dot stored: two calls cannot both take the last place.
+        let _one_at_a_time = p.one_at_a_time.lock().await;
+        // Judged on the run and the maker as they are once the lock is held: the run may have
+        // ended, and the switch or the limits changed, while this call waited for it.
+        let run = p.store.get_run(run_id).await?;
+        let maker_now = p.store.get_dot(&run.dot_id).await?;
+        may_make(&maker_now, &run)?;
+        if maker_now.spec != maker.spec {
+            reach = reach_new(&maker_now, &ask.wanted, &p.worktrees_root)?;
+        }
+        let maker = maker_now;
         self.check_name_free(&reach.spec.name).await?;
         let over = self.over_limit(&maker, &run.id).await?;
         if over.is_some() || !reach.extras.is_empty() {
@@ -384,6 +437,7 @@ impl Makers {
                 create_folder: create_folder.as_deref(),
                 first_job: ask.first_job.as_deref().map(str::trim),
                 ask: None,
+                make_ask: Some(ask),
             })
             .await?;
         self.log_asked(&request, &maker.spec.name, None, &request.name)
@@ -590,6 +644,18 @@ impl Makers {
             }
             new_folders.reverse();
             tokio::fs::create_dir_all(folder).await?;
+            // The real path again, now that it exists: a link or junction planted in it since
+            // the reach check would take the dot outside the maker's folder.
+            if !still_below_maker(maker, folder) {
+                for made in new_folders.iter().rev() {
+                    let _ = tokio::fs::remove_dir(made).await;
+                }
+                return Err(Error::Invalid(format!(
+                    "The folder {} no longer lies inside {}'s folder, so the dot was not made.",
+                    folder.display(),
+                    maker.spec.name
+                )));
+            }
         }
         let made = Made {
             by_dot_id: Some(maker.id.clone()),

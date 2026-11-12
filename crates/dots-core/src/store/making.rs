@@ -13,6 +13,7 @@ use crate::library::{LibraryKind, Uses};
 use crate::making::jobs::{JobEnd, JobStatus, MakingJob, NewMakingJob};
 use crate::making::log::{MakingEvent, MakingEventKind, NewMakingEvent};
 use crate::making::requests::{MakeRequest, NewMakeRequest, RequestKind, RequestStatus};
+use crate::making::service::OverLimit;
 use crate::making::wake::MakingWake;
 use crate::model::{Dot, Message, NewRun, Run};
 use crate::util::{new_id, now};
@@ -52,11 +53,12 @@ fn wake_from_row(row: &SqliteRow) -> Result<MakingWake> {
 
 const REQUEST_COLUMNS: &str = "id, maker_dot_id, run_id, root_run_id, kind, dot_id, name, \
      purpose, spec, without, extras, over, create_folder, first_job, status, gone_reason, \
-     created_at, decided_at, made_dot_id, ask";
+     created_at, decided_at, made_dot_id, ask, make_ask";
 
 fn request_from_row(row: &SqliteRow) -> Result<MakeRequest> {
     let over: Option<String> = row.try_get("over")?;
     let ask: Option<String> = row.try_get("ask")?;
+    let make_ask: Option<String> = row.try_get("make_ask")?;
     Ok(MakeRequest {
         id: row.try_get("id")?,
         maker_dot_id: row.try_get("maker_dot_id")?,
@@ -78,7 +80,22 @@ fn request_from_row(row: &SqliteRow) -> Result<MakeRequest> {
         decided_at: row.try_get("decided_at")?,
         made_dot_id: row.try_get("made_dot_id")?,
         ask: ask.as_deref().map(serde_json::from_str).transpose()?,
+        make_ask: make_ask.as_deref().map(serde_json::from_str).transpose()?,
     })
+}
+
+/// The make requests whose rows could not be read, each logged once.
+static UNREADABLE: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Logs once that the request row `id` could not be read, and why.
+fn log_unreadable(id: &str, e: &Error) {
+    let Ok(mut logged) = UNREADABLE.lock() else {
+        return;
+    };
+    if !logged.iter().any(|seen| seen == id) {
+        logged.push(id.to_string());
+        tracing::error!(request = %id, "a make request could not be read and is left out: {e}");
+    }
 }
 
 /// The statuses of a request the person has not answered: one that waits, and one marked gone,
@@ -111,6 +128,7 @@ impl Store {
             decided_at: None,
             made_dot_id: None,
             ask: new.ask.cloned(),
+            make_ask: new.make_ask.cloned(),
         };
         let over = match &request.over {
             Some(over) => Some(serde_json::to_string(over)?),
@@ -120,10 +138,15 @@ impl Store {
             Some(ask) => Some(serde_json::to_string(ask)?),
             None => None,
         };
+        let make_ask = match &request.make_ask {
+            Some(ask) => Some(serde_json::to_string(ask)?),
+            None => None,
+        };
         sqlx::query(
             "INSERT INTO make_requests (id, maker_dot_id, run_id, root_run_id, kind, dot_id, \
              name, purpose, spec, without, extras, over, create_folder, first_job, status, \
-             created_at, ask) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             created_at, ask, make_ask) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&request.id)
         .bind(&request.maker_dot_id)
@@ -142,6 +165,7 @@ impl Store {
         .bind(request.status.as_str())
         .bind(&request.created_at)
         .bind(ask)
+        .bind(make_ask)
         .execute(&self.pool)
         .await?;
         Ok(request)
@@ -161,7 +185,8 @@ impl Store {
 
     /// The requests of the maker `maker_dot_id`, or of every maker with `None`, oldest first.
     /// With `waiting_only`, those the person has not answered: the ones that wait and the ones
-    /// marked gone, which still need their "Don't make it".
+    /// marked gone, which still need their "Don't make it". A row that cannot be read is left
+    /// out and logged, so it does not hide the others.
     pub async fn list_make_requests(
         &self,
         maker_dot_id: Option<&str>,
@@ -176,7 +201,14 @@ impl Store {
         .bind(maker_dot_id)
         .fetch_all(&self.pool)
         .await?;
-        rows.iter().map(request_from_row).collect()
+        let mut requests = Vec::with_capacity(rows.len());
+        for row in &rows {
+            match request_from_row(row) {
+                Ok(request) => requests.push(request),
+                Err(e) => log_unreadable(&row.try_get::<String, _>("id").unwrap_or_default(), &e),
+            }
+        }
+        Ok(requests)
     }
 
     /// How many requests of the maker the person has not answered: what the limit of waiting
@@ -208,6 +240,25 @@ impl Store {
         .bind(status.as_str())
         .bind(now())
         .bind(made_dot_id)
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Keeps `over` as the limit the card of the waiting request `id` shows: the limit as it
+    /// is when the card is read or answered (dots-make-dots design section 10). `false`, with
+    /// nothing written, when it did not wait or already held that limit.
+    pub async fn set_make_request_over(&self, id: &str, over: Option<&OverLimit>) -> Result<bool> {
+        let over = match over {
+            Some(over) => Some(serde_json::to_string(over)?),
+            None => None,
+        };
+        let res = sqlx::query(
+            "UPDATE make_requests SET over = ?1 \
+             WHERE id = ?2 AND status = 'waiting' AND over IS NOT ?1",
+        )
+        .bind(over)
         .bind(id)
         .execute(&self.pool)
         .await?;
@@ -678,11 +729,15 @@ impl Store {
     }
 
     /// How many dots the run `run_id` made: what a maker's limit for one run counts
-    /// (dots-make-dots design section 10). It counts the log, not the dots, so a made dot that
-    /// was deleted since still counts.
+    /// (dots-make-dots design section 10). It counts the log, so a made dot that was deleted
+    /// since still counts, and the dots that record the run as the one that made them and have
+    /// no entry in the log, so a dot whose entry was never written, because something failed
+    /// after the dot was stored, counts too.
     pub async fn count_made_in_run(&self, run_id: &str) -> Result<u32> {
         let n: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM making_events WHERE run_id = ? AND kind = 'made'",
+            "SELECT (SELECT COUNT(*) FROM making_events WHERE run_id = ?1 AND kind = 'made') \
+             + (SELECT COUNT(*) FROM dots d WHERE d.made_in_run = ?1 AND NOT EXISTS \
+                (SELECT 1 FROM making_events e WHERE e.kind = 'made' AND e.dot_id = d.id))",
         )
         .bind(run_id)
         .fetch_one(&self.pool)

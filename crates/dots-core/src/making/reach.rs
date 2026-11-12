@@ -198,7 +198,7 @@ pub enum Extra {
 }
 
 /// A preset as the person reads it.
-fn preset_label(preset: Preset) -> &'static str {
+pub(super) fn preset_label(preset: Preset) -> &'static str {
     match preset {
         Preset::ReadOnly => "Read-only",
         Preset::Sandboxed => "Sandboxed",
@@ -208,7 +208,7 @@ fn preset_label(preset: Preset) -> &'static str {
 }
 
 /// A time limit as the person reads it: "30 min", "2 h", "1 h 30 min", "45 s".
-fn time_label(secs: u64) -> String {
+pub(super) fn time_label(secs: u64) -> String {
     let (hours, minutes, seconds) = (secs / 3600, secs % 3600 / 60, secs % 60);
     let mut parts = Vec::new();
     if hours > 0 {
@@ -513,7 +513,7 @@ fn place(maker: &Dot, given: &str, worktrees_root: &Path) -> Result<Placed> {
 
 /// A plain preset's place in the order read-only, sandboxed, trusted (design section 6).
 /// `None` for custom, which has no place in it.
-fn rank(preset: Preset) -> Option<u8> {
+pub(super) fn rank(preset: Preset) -> Option<u8> {
     match preset {
         Preset::ReadOnly => Some(0),
         Preset::Sandboxed => Some(1),
@@ -545,7 +545,7 @@ fn names_mut(uses: &mut Uses, kind: LibraryKind) -> &mut Vec<String> {
 }
 
 /// Whether `grants` gives `consumer` (a key of `Grants`) the variable `name`, in any case.
-fn grants(grants: &Grants, consumer: &str, name: &str) -> bool {
+pub(super) fn grants(grants: &Grants, consumer: &str, name: &str) -> bool {
     grants
         .0
         .get(consumer)
@@ -573,9 +573,10 @@ fn check(maker: &Dot, base: &DotSpec, wanted: &Wanted, worktrees_root: &Path) ->
     let mut create_folder = None;
 
     // The maker's to write, or not part of reach.
+    // Kept without the spaces around it, as the name is checked.
     if let Some(name) = &wanted.name {
-        spec.name = name.clone();
-        without.name = name.clone();
+        spec.name = name.trim().to_string();
+        without.name = spec.name.clone();
     }
     if let Some(instructions) = &wanted.instructions {
         spec.instructions = instructions.clone();
@@ -812,4 +813,128 @@ pub fn reach_change(
     worktrees_root: &Path,
 ) -> Result<Reach> {
     check(maker, &made.spec, wanted, worktrees_root)
+}
+
+/// Whether `folder`, a folder just made for a dot below the maker's folder, is still within
+/// the maker's reach by its real path now (design section 6, folder rules): below the maker's
+/// folder, with no dangling link in it, and not in git's or Claude's own folder. A link or
+/// junction planted in its path between the check and the making leads it elsewhere.
+pub fn still_below_maker(maker: &Dot, folder: &Path) -> bool {
+    let own = maker.spec.workdir.trim();
+    if !Path::new(own).is_absolute() {
+        return false;
+    }
+    let (real, makers) = (real_path(folder), real_path(Path::new(own)));
+    let (key, makers_key) = (folded(&real), folded(&makers));
+    if dangling_link(&real) {
+        return false;
+    }
+    key.strip_prefix(&makers_key).is_ok_and(|tail| {
+        !tail
+            .components()
+            .any(|part| settings_part(part.as_os_str()))
+    })
+}
+
+/// What `made`, a dot the maker made, holds that is beyond the maker's reach as the maker is
+/// now (design section 9): what the person allowed it, or gave it since, or what the maker
+/// itself no longer has. `own_folder` is whether the dot's folder is the new folder of its own
+/// it was made with, which is within reach.
+pub fn held_extras(maker: &Dot, made: &DotSpec, own_folder: bool) -> Vec<Extra> {
+    let m = &maker.spec;
+    let mut extras = Vec::new();
+    for kind in LibraryKind::ALL {
+        for name in made.uses.names(*kind) {
+            if !m.uses.names(*kind).contains(name) {
+                extras.push(Extra::Item {
+                    item_kind: *kind,
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    for (consumer, names) in &made.variables.0 {
+        for name in names {
+            if !grants(&m.variables, consumer, name) {
+                extras.push(Extra::Variable {
+                    consumer: consumer.clone(),
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    if made.policy != m.policy {
+        let preset = made.policy.preset;
+        // A plain preset, as a made dot asks for one, no stronger than the maker's.
+        let plain = rank(preset).is_some() && made.policy == Policy::preset(preset);
+        let within = plain
+            && (rank(m.policy.preset).is_some_and(|has| rank(preset) <= Some(has))
+                || (m.policy.preset == Preset::Custom
+                    && preset == Preset::ReadOnly
+                    && allows_all(&m.policy, &made.policy)));
+        if !within {
+            extras.push(Extra::Preset {
+                preset,
+                makers: m.policy.preset,
+            });
+        }
+    }
+    if !own_folder {
+        extras.extend(held_folder(maker, made));
+    }
+    if made.browser && !m.browser {
+        extras.push(Extra::Browser);
+    }
+    if made.use_user_settings && !m.use_user_settings {
+        extras.push(Extra::UserSettings);
+    }
+    if made.max_turns > m.max_turns {
+        extras.push(Extra::MaxTurns {
+            wanted: made.max_turns,
+            makers: m.max_turns,
+        });
+    }
+    if made.timeout_secs > m.timeout_secs {
+        extras.push(Extra::Timeout {
+            wanted_secs: made.timeout_secs,
+            makers_secs: m.timeout_secs,
+        });
+    }
+    extras
+}
+
+/// The folder of `made` as an extra, when it is beyond the maker's reach now: outside the
+/// maker's folder, in git's or Claude's own folder, or below the folder of a maker that works
+/// in worktree copies. The maker's own folder is within reach.
+fn held_folder(maker: &Dot, made: &DotSpec) -> Option<Extra> {
+    let workdir = made.workdir.trim();
+    if workdir.is_empty() {
+        return None;
+    }
+    let own = maker.spec.workdir.trim();
+    let anchored = Path::new(own).is_absolute();
+    let real = real_path(Path::new(workdir));
+    let path = real.to_string_lossy().into_owned();
+    let (key, makers_key) = (folded(&real), folded(&real_path(Path::new(own))));
+    if anchored && key == makers_key {
+        return None;
+    }
+    if anchored && key.starts_with(&makers_key) && !dangling_link(&real) {
+        let settings = key.strip_prefix(&makers_key).is_ok_and(|tail| {
+            tail.components()
+                .any(|part| settings_part(part.as_os_str()))
+        });
+        return if settings {
+            Some(Extra::SettingsFolder { path })
+        } else {
+            (maker.spec.workspace_mode == WorkspaceMode::Worktree).then_some(Extra::Folder {
+                path,
+                below_maker: true,
+            })
+        };
+    }
+    Some(Extra::Folder {
+        path,
+        below_maker: false,
+    })
 }

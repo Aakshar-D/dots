@@ -167,7 +167,9 @@ The person who answers must hold the rights the result needs (`EditDots`, and `G
 
 At most 3 make requests may wait per maker. A further one is refused with a plain error (my call).
 
-A request is checked again when the person answers, against the Library and vault as they are then. If something it names has gone, the card says so and only **Don't make it** stays.
+A request is checked again when the person answers, against the Library and vault as they are then. If something it names has gone (a folder outside the maker's too), the card says so and only **Don't make it** stays.
+
+The card and the answer are judged against the maker as it is when the person looks and when they answer, not as it was when it asked: the request keeps what the maker asked, the reach check and the limits run again, and the card's lines, its title and **Make it without these** come from that. **Allow** is off, and refused, when the maker was narrowed so that the dot would get something the card did not show at first; the person can still make it without these or not make it. An answer that would make a dot past a limit the card did not show is refused, and the card shows the limit from then on. The Inbox item has the card's own title and lines. A card for a change lists every setting the change names, the new instructions in full; a card for a new dot carries its instructions and schedule.
 
 Deleting the maker discards its waiting requests.
 
@@ -195,6 +197,8 @@ The shared spend cap (section 6) is the second guard.
 - `list_made_dots`: the maker's own made dots, each with name, purpose, schedule, whether it is running, and how its last run ended.
 - `change_dot`: takes a made dot and any of the settings `make_dot` takes. Only the settings named change; the rest stay, including anything the person edited and any extras the person allowed. The named settings are checked against the maker's reach at that moment. Extras go through the ask card, worded "<maker> wants to give <dot> more than it has". Removing things never asks.
 - `delete_dot`: takes a made dot. Refused while that dot has a run going or queued. It deletes the dot as the person's delete does, history included, and posts a "<maker> deleted <dot>" card in the maker's topic. The person agreed the maker may delete; that it is final, with no undo, is as today's delete and is listed for their review.
+
+When a made dot holds anything beyond its maker's reach as the maker is now (what the person allowed it or gave it, or what the maker no longer has), every change the maker asks for it that is not pure narrowing goes to the person as a change request, whose card lists what the dot holds; there is nothing to save without that. Pure narrowing is removing Library items or variables, a schedule of none, lower limits, a narrower preset, and switching the browser or the person's Claude settings off; a change of instructions, purpose, name, folder, model or schedule, or adding anything, is not. Deleting a made dot that has a change waiting wakes the maker once to say the request went with the dot.
 
 A maker can do these only to dots whose recorded maker is itself. The person can still open, edit, run and delete any made dot like any other dot; their edits are not held to the maker's reach.
 

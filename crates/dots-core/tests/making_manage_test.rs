@@ -12,7 +12,9 @@ use common::spec;
 use dots_core::events::RuntimeEvent;
 use dots_core::library::{LibraryConfig, McpServerConfig, Uses};
 use dots_core::making::log::{MakingEvent, MakingEventKind};
-use dots_core::making::manage::{made_dots_text, ChangeDot, ChangeOutcome, MadeDotLine};
+use dots_core::making::manage::{
+    change_went_message, made_dots_text, ChangeDot, ChangeOutcome, MadeDotLine,
+};
 use dots_core::making::reach::{Extra, Wanted};
 use dots_core::making::requests::{MakeDecision, MakeRequest, RequestKind, RequestStatus};
 use dots_core::making::service::{MakeDot, MakeOutcome, OverLimit};
@@ -436,10 +438,14 @@ async fn a_maker_with_no_dots_is_told_so() {
 async fn only_the_named_settings_change() {
     let t = start().await;
     add_github(&t).await;
-    let maker = maker(&t).await;
+    // The maker uses the server, so the dot holds nothing beyond its reach after the edit: a
+    // dot that does asks the person for such a change (`a_dot_holding_more_than_its_maker...`).
+    let mut s = maker_spec(&t, "Researcher");
+    s.uses = uses_github();
+    let maker = t.rt.create_dot(s, None, None).await.unwrap();
     let run = live_run(&t, &maker).await;
     let one = make(&t, &run, "One").await;
-    // The person edits it: another turn limit, and a Library item the maker lacks, whose
+    // The person edits it: another turn limit, and a Library item it did not use, whose
     // variable a person's save grants.
     let edited = person_edits(&t, &one, |spec| {
         spec.max_turns = 25;
@@ -897,11 +903,14 @@ async fn an_extra_stores_a_change_request_and_changes_nothing() {
     let ChangeOutcome::Waiting {
         request,
         maker_name,
+        held,
     } = outcome
     else {
         panic!("changed")
     };
     assert_eq!(maker_name, "Researcher");
+    // The dot itself holds nothing beyond the maker's reach.
+    assert!(!held);
     assert_eq!(request.maker_dot_id, maker.id);
     assert_eq!(request.run_id, run.id);
     assert_eq!(request.root_run_id, run.root_run_id);
@@ -1225,6 +1234,14 @@ async fn a_change_request_dies_with_its_dot() {
 
     // The person deletes the dot.
     t.rt.delete_dot(&one.id).await.unwrap();
+    // The maker was told it would be woken with an answer: it is woken once, to say there is
+    // none.
+    assert_eq!(wakes(&t).await, [change_went_message("One")]);
+    let wake = &t.rt.store().waiting_making_wakes().await.unwrap()[0];
+    assert_eq!(
+        (wake.maker_dot_id.as_str(), wake.root_run_id.as_str()),
+        (maker.id.as_str(), run.root_run_id.as_str())
+    );
 
     let store = t.rt.store();
     assert!(matches!(
@@ -1255,7 +1272,8 @@ async fn a_change_request_dies_with_its_dot() {
             Err(Error::NotFound(_))
         ));
     }
-    assert!(wakes(&t).await.is_empty());
+    // The answers that found nothing woke no one.
+    assert_eq!(wakes(&t).await.len(), 1);
     assert_eq!(dot_names(&t).await, ["Researcher"]);
 }
 
@@ -1282,7 +1300,8 @@ async fn the_makers_reach_shrank_since_it_asked() {
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
     assert!(!card.can_allow);
     assert_eq!(card.blocked.as_deref(), Some(why));
-    assert_eq!(card.lines, ["The browser"]);
+    // The card shows what Allow would give now.
+    assert_eq!(card.lines, ["The MCP server 'github'", "The browser"]);
     assert_eq!(card.request.status, RequestStatus::Waiting);
     assert_eq!(
         conflict(
@@ -1551,4 +1570,224 @@ async fn a_workflow_step_run_can_do_none_of_the_three() {
 
     assert_eq!(stored(&t, &one).await, one);
     assert_eq!(kinds(&t, &run).await, [MakingEventKind::Made]);
+}
+
+#[tokio::test]
+async fn a_failed_or_cancelled_run_can_do_none_of_the_three() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    for status in [RunStatus::Failed, RunStatus::Cancelled] {
+        let run = live_run(&t, &maker).await;
+        make(&t, &run, &format!("{status:?}")).await;
+        end(&t, &run, status).await;
+        let makers = t.rt.makers();
+        let ended = "This run has ended, so it cannot use the tools for making dots.";
+        let name = format!("{status:?}");
+        assert_eq!(invalid(makers.list_made_dots(&run.id).await), ended);
+        assert_eq!(
+            invalid(makers.change_dot(&run.id, new_instructions(&name)).await),
+            ended
+        );
+        assert_eq!(invalid(makers.delete_dot(&run.id, &name).await), ended);
+    }
+    assert_eq!(dot_names(&t).await, ["Cancelled", "Failed", "Researcher"]);
+}
+
+// ---- fix 14b part 2: a dot that holds more than its maker, the card's lines, the delete
+
+#[tokio::test]
+async fn a_dot_holding_more_than_its_maker_asks_for_any_change_that_is_not_narrowing() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let one = make(&t, &run, "One").await;
+    // The person gives the dot the browser, which its maker does not have.
+    let edited = person_edits(&t, &one, |spec| spec.browser = true).await;
+
+    // New instructions would steer what the person allowed: the person decides.
+    let outcome =
+        t.rt.makers()
+            .change_dot(&run.id, new_instructions("One"))
+            .await
+            .unwrap();
+    assert_eq!(
+        outcome.tool_text(),
+        "Not changed yet: \"One\" needs the person's say-so, because it has, or the change gives \
+         it, more than you have (The browser). The request is waiting for them. Do not wait for \
+         it and do not ask again: carry on, and you will be woken with their answer."
+    );
+    let ChangeOutcome::Waiting { request, held, .. } = outcome else {
+        panic!("changed")
+    };
+    assert!(held);
+    assert_eq!(request.extras, [Extra::Browser]);
+    assert_eq!(stored(&t, &one).await, edited);
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.title,
+        "Researcher wants to change One, which has more than Researcher has"
+    );
+    assert_eq!(card.lines, ["The browser"]);
+    assert_eq!(card.asked, ["New instructions"]);
+    assert_eq!(
+        card.instructions.as_deref(),
+        Some("List only the posts on Rust.")
+    );
+    assert!(card.can_allow);
+    // There is no part of it to save without what the dot holds.
+    assert!(!card.can_without);
+    assert_eq!(
+        invalid(
+            t.rt.makers()
+                .decide_request(&request.id, MakeDecision::Without)
+                .await
+        ),
+        "This dot has more than its maker has, so the change cannot be saved without that. \
+         Allow it, or don't change it."
+    );
+    let after = decide(&t, &request, MakeDecision::Allow).await;
+    assert_eq!(after.status, RequestStatus::Allowed);
+    let dot = stored(&t, &one).await;
+    assert_eq!(dot.spec.instructions, "List only the posts on Rust.");
+    assert!(dot.spec.browser);
+
+    // Taking things away is saved at once, the browser too; then nothing is held.
+    let (_, what) = changed(
+        &t,
+        &run,
+        change(
+            "One",
+            Wanted {
+                max_turns: Some(10),
+                schedule: Some(None),
+                ..Wanted::default()
+            },
+        ),
+    )
+    .await;
+    assert_eq!(what, ["turn limit"]);
+    let (_, what) = changed(
+        &t,
+        &run,
+        change(
+            "One",
+            Wanted {
+                browser: Some(false),
+                ..Wanted::default()
+            },
+        ),
+    )
+    .await;
+    assert_eq!(what, ["browser"]);
+    let mut asked = new_instructions("One");
+    asked.wanted.instructions = Some("List only the posts on Go.".into());
+    let (_, what) = changed(&t, &run, asked).await;
+    assert_eq!(what, ["instructions"]);
+}
+
+#[tokio::test]
+async fn a_new_purpose_or_folder_of_a_dot_holding_more_asks_too() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "One").await;
+    let one = make(&t, &run, "Two").await;
+    person_edits(&t, &one, |spec| spec.max_turns = 80).await;
+    let mut purpose = change("Two", Wanted::default());
+    purpose.purpose = Some("Sends the posts out".into());
+    let request = change_request(&t, &run, purpose).await;
+    assert_eq!(
+        request.extras,
+        [Extra::MaxTurns {
+            wanted: 80,
+            makers: 40
+        }]
+    );
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(card.asked, ["Purpose: Sends the posts out"]);
+    decide(&t, &request, MakeDecision::Refuse).await;
+    let folder = change(
+        "Two",
+        Wanted {
+            folder: Some("notes".into()),
+            ..Wanted::default()
+        },
+    );
+    let request = change_request(&t, &run, folder).await;
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    let notes = dots_core::making::reach::real_path(&t.work()).join("notes");
+    assert_eq!(card.asked, [format!("Folder: {}", notes.display())]);
+}
+
+#[tokio::test]
+async fn a_change_card_lists_every_setting_the_change_names() {
+    let t = start().await;
+    add_github(&t).await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "One").await;
+    let mut asked = browser_and_instructions("One");
+    asked.purpose = Some("Lists the posts on Rust".into());
+    asked.wanted.name = Some("Feeds".into());
+    asked.wanted.uses = Some(uses_github());
+    asked.wanted.max_turns = Some(50);
+    asked.wanted.schedule = Some(Some(
+        serde_json::from_value(json!({"rule": {"kind": "every", "minutes": 120}})).unwrap(),
+    ));
+    let request = change_request(&t, &run, asked).await;
+
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+
+    assert_eq!(
+        card.lines,
+        [
+            "The MCP server 'github'",
+            "The browser",
+            "A turn limit of 50 (Researcher has 40)"
+        ]
+    );
+    assert_eq!(
+        card.asked,
+        [
+            "Name: Feeds",
+            "Purpose: Lists the posts on Rust",
+            "New instructions",
+            "Adds the MCP server 'github'",
+            "Browser: on",
+            "Turn limit: 50",
+            "Schedule: every 2 hours"
+        ]
+    );
+    assert_eq!(
+        card.instructions.as_deref(),
+        Some("List only the posts on Rust.")
+    );
+    assert_eq!(card.schedule.as_deref(), Some("every 2 hours"));
+    // As it crosses to the UI.
+    let json = serde_json::to_value(&card).unwrap();
+    assert_eq!(json["asked"][2], "New instructions");
+    assert_eq!(json["instructions"], "List only the posts on Rust.");
+    assert!(json["request"].get("make_ask").is_none());
+}
+
+#[tokio::test]
+async fn deleting_a_dot_with_a_waiting_change_wakes_its_maker_once() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "One").await;
+    change_request(&t, &run, browser_and_instructions("One")).await;
+
+    t.rt.makers().delete_dot(&run.id, "One").await.unwrap();
+
+    assert_eq!(wakes(&t).await, [change_went_message("One")]);
+    assert_eq!(
+        change_went_message("One"),
+        "\"One\" was deleted, so the change you asked for it went with it: the person will not \
+         answer it. Do not ask for it again."
+    );
+    // A dot with no change waiting wakes no one.
+    make(&t, &run, "Two").await;
+    t.rt.makers().delete_dot(&run.id, "Two").await.unwrap();
+    assert_eq!(wakes(&t).await.len(), 1);
 }

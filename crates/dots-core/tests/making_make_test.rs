@@ -850,3 +850,205 @@ fn a_passed_limit_says_itself_in_one_line() {
         OverLimit::Total { nth: 11, limit: 10 }
     );
 }
+
+// ---- fix 14b part 2
+
+/// A connection to the runtime's database beside its own pool, for what no API does.
+async fn db(t: &T) -> sqlx::SqliteConnection {
+    SqliteConnectOptions::new()
+        .filename(t.dir.path().join("data").join("dots.db"))
+        .foreign_keys(false)
+        .connect()
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_dot_whose_log_entry_was_lost_still_counts_toward_the_runs_limit() {
+    let t = start().await;
+    let maker = maker_with(&t, 1, 10).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "One").await;
+    // As when the dot was stored and writing its entry failed.
+    let mut conn = db(&t).await;
+    sqlx::query("DELETE FROM making_events WHERE run_id = ? AND kind = 'made'")
+        .bind(&run.id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
+    assert_eq!(t.rt.store().count_made_in_run(&run.id).await.unwrap(), 1);
+    match t.rt.makers().make_dot(&run.id, ask("Two")).await.unwrap() {
+        MakeOutcome::Waiting { request, .. } => {
+            assert_eq!(request.over, Some(OverLimit::PerRun { nth: 2, limit: 1 }))
+        }
+        other => panic!("made past the limit: {other:?}"),
+    }
+    assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
+}
+
+#[tokio::test]
+async fn a_purpose_or_folder_that_is_not_plain_text_is_refused() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let one_line = "The purpose is one line of 1 to 200 characters.";
+    let plain = "The purpose is plain text: no tabs, control characters or marks that change the \
+                 direction of text.";
+    for (purpose, said) in [
+        ("Reads\u{2028}The browser: not needed", one_line),
+        ("Reads\u{2029}feeds", one_line),
+        ("Reads\u{0085}feeds", one_line),
+        ("Reads\tfeeds", plain),
+        ("Reads \u{202E}sdeef", plain),
+        ("Reads \u{2066}feeds\u{2069}", plain),
+        ("Reads \u{200F}feeds", plain),
+        ("Reads \u{0007}feeds", plain),
+    ] {
+        let mut asked = ask("Blog Watcher");
+        asked.purpose = purpose.into();
+        assert_eq!(refused(&t, &run, asked).await, said, "{purpose:?}");
+    }
+    for folder in ["notes\nThe browser", "notes/\u{202E}sgol", "notes\u{2028}x"] {
+        let mut asked = ask("Blog Watcher");
+        asked.wanted.folder = Some(folder.into());
+        assert_eq!(
+            refused(&t, &run, asked).await,
+            "The folder is plain text: no line breaks, control characters or marks that change \
+             the direction of text.",
+            "{folder:?}"
+        );
+    }
+    assert_eq!(dot_names(&t).await, ["Researcher"]);
+    assert!(!t.work().join("notes").exists());
+}
+
+#[tokio::test]
+async fn a_made_dots_name_is_stored_without_the_spaces_around_it() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let dot = make(&t, &run, "  Blog Watcher ").await;
+    assert_eq!(dot.spec.name, "Blog Watcher");
+    assert_eq!(
+        t.rt.store().get_dot(&dot.id).await.unwrap().spec.name,
+        "Blog Watcher"
+    );
+    // So " Blog Watcher" is the same name, not a second dot beside it.
+    assert_eq!(
+        refused(&t, &run, ask(" Blog Watcher")).await,
+        "A dot named \"Blog Watcher\" already exists. Choose another name."
+    );
+}
+
+/// Makes `link` lead to the folder `to`: a symlink, or on Windows a junction where this PC
+/// may not make symlinks. `false` when it can make neither.
+fn link_dir(to: &Path, link: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        if std::os::windows::fs::symlink_dir(to, link).is_ok() {
+            return true;
+        }
+        std::process::Command::new("cmd")
+            .args(["/c", "mklink", "/J"])
+            .arg(link)
+            .arg(to)
+            .output()
+            .is_ok_and(|out| out.status.success())
+    }
+    #[cfg(not(windows))]
+    {
+        std::os::unix::fs::symlink(to, link).is_ok()
+    }
+}
+
+#[tokio::test]
+async fn a_folder_that_leads_outside_once_made_is_removed_and_nothing_is_made() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    // Judged within reach while `notes` was a plain folder that did not exist yet.
+    let reach = dots_core::making::reach::reach_new(
+        &maker,
+        &Wanted {
+            folder: Some("notes/blogs".into()),
+            ..ask("Blog Watcher").wanted
+        },
+        Path::new(""),
+    )
+    .unwrap();
+    assert!(reach.extras.is_empty());
+    // Then a junction to a folder outside is planted where `notes` was to be.
+    let outside = t.dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    if !link_dir(&outside, &t.work().join("notes")) {
+        eprintln!("skipped: this PC can make neither a symlink nor a junction");
+        return;
+    }
+    let err =
+        t.rt.makers()
+            .create_made(
+                &maker,
+                &run.id,
+                &run.root_run_id,
+                reach.spec,
+                "Reads the feeds",
+                reach.create_folder,
+            )
+            .await
+            .unwrap_err();
+    match err {
+        Error::Invalid(text) => assert!(
+            text.contains("no longer lies inside Researcher's folder, so the dot was not made"),
+            "{text}"
+        ),
+        other => panic!("{other:?}"),
+    }
+    // The folder made outside is gone again, and no dot or entry was made.
+    assert!(!outside.join("blogs").exists());
+    assert_eq!(dot_names(&t).await, ["Researcher"]);
+    assert!(log(&t, &run).await.is_empty());
+}
+
+#[tokio::test]
+async fn two_makes_at_once_with_one_place_left_make_one_dot() {
+    let t = start().await;
+    let maker = maker_with(&t, 3, 1).await;
+    let run = live_run(&t, &maker).await;
+    let makers = t.rt.makers();
+    let (a, b) = tokio::join!(
+        makers.make_dot(&run.id, ask("One")),
+        makers.make_dot(&run.id, ask("Two"))
+    );
+    let outcomes = [a.unwrap(), b.unwrap()];
+    let made = outcomes
+        .iter()
+        .filter(|o| matches!(o, MakeOutcome::Made { .. }))
+        .count();
+    assert_eq!(made, 1, "{outcomes:?}");
+    let waiting: Vec<_> = outcomes
+        .iter()
+        .filter_map(|o| match o {
+            MakeOutcome::Waiting { request, .. } => Some(request.over.clone()),
+            MakeOutcome::Made { .. } => None,
+        })
+        .collect();
+    assert_eq!(waiting, [Some(OverLimit::Total { nth: 2, limit: 1 })]);
+    assert_eq!(t.rt.store().count_made_dots(&maker.id).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn the_switch_turned_off_between_two_calls_of_one_run_refuses_the_second() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "One").await;
+    let mut off = maker.spec.clone();
+    off.making.on = false;
+    t.rt.update_dot(&maker.id, off).await.unwrap();
+    assert_eq!(
+        refused(&t, &run, ask("Two")).await,
+        "Researcher may not make dots. The person turns that on in the dot's settings."
+    );
+    assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
+}

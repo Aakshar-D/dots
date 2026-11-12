@@ -1180,3 +1180,269 @@ async fn a_person_without_the_rights_cannot_allow() {
     assert_eq!(dot_names(t).await, ["Blog Watcher", "Researcher"]);
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn a_viewer_may_refuse() {
+    let a = Acme::start().await;
+    let t = &a.t;
+    a.join_as("member").await;
+    let maker =
+        t.rt.create_dot(maker_spec(t), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let run = live_run(t, &maker).await;
+    let request = request(t, &run, ask_browser("Blog Watcher")).await;
+    a.become_(2, "viewer").await;
+    // Not making it needs no right: nothing is created or changed.
+    let after = decide(t, &request, MakeDecision::Refuse).await;
+    assert_eq!(after.status, RequestStatus::Refused);
+    assert_eq!(dot_names(t).await, ["Researcher"]);
+    assert_eq!(wakes(t).await, [REFUSED]);
+    t.rt.shutdown();
+}
+
+// ---- fix 14b part 2: the card and the answer judge against the maker as it is then
+
+/// A connection to the runtime's database beside its own pool, for what no API does.
+async fn db(t: &T) -> sqlx::SqliteConnection {
+    use sqlx::ConnectOptions;
+    sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(t.dir.path().join("data").join("dots.db"))
+        .foreign_keys(false)
+        .connect()
+        .await
+        .unwrap()
+}
+
+const SHRANK: &str =
+    "Researcher's own settings changed since it asked. Don't make it, and let it ask again.";
+
+#[tokio::test]
+async fn the_maker_narrowed_since_the_ask_blocks_allow() {
+    let t = start().await;
+    add_github(&t).await;
+    let mut s = maker_spec(&t);
+    s.uses = uses_github();
+    s.variables = github_token();
+    let maker = t.rt.create_dot(s, None, None).await.unwrap();
+    let run = live_run(&t, &maker).await;
+    // The server and its variable are within the maker's reach when it asks: only the browser
+    // is an extra.
+    let mut wanted = ask_browser("Blog Watcher");
+    wanted.wanted.uses = Some(uses_github());
+    wanted.wanted.variables = Some(github_token());
+    wanted.wanted.permissions = Some(WantedPermissions::Preset(Preset::Sandboxed));
+    let request = request(&t, &run, wanted).await;
+    assert_eq!(request.extras, [Extra::Browser]);
+    // The person takes the server and its variable from the maker, and makes it Read-only.
+    let mut narrowed = maker.spec.clone();
+    narrowed.uses = Uses::default();
+    narrowed.variables = Grants::default();
+    narrowed.policy = dots_core::policy::Policy::preset(Preset::ReadOnly);
+    t.rt.update_dot(&maker.id, narrowed).await.unwrap();
+
+    // The card shows what Allow would give now, and Allow is off.
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.lines,
+        [
+            "The MCP server 'github'",
+            "The variable GITHUB_TOKEN for the server 'github'",
+            "The preset Sandboxed (Researcher has Read-only)",
+            "The browser"
+        ]
+    );
+    assert!(!card.can_allow);
+    assert_eq!(card.blocked.as_deref(), Some(SHRANK));
+    assert!(card.can_without);
+    assert_eq!(card.request.status, RequestStatus::Waiting);
+    assert_eq!(
+        conflict(
+            t.rt.makers()
+                .decide_request(&request.id, MakeDecision::Allow)
+                .await
+        ),
+        SHRANK
+    );
+    assert_eq!(dot_names(&t).await, ["Researcher"]);
+    assert!(wakes(&t).await.is_empty());
+    // Without holds nothing beyond the maker's reach as it is now.
+    let after = decide(&t, &request, MakeDecision::Without).await;
+    let dot =
+        t.rt.store()
+            .get_dot(after.made_dot_id.as_deref().unwrap())
+            .await
+            .unwrap();
+    assert_eq!(dot.spec.uses, Uses::default());
+    assert_eq!(dot.spec.variables, Grants::default());
+    assert_eq!(dot.spec.policy.preset, Preset::ReadOnly);
+    assert!(!dot.spec.browser);
+}
+
+#[tokio::test]
+async fn a_limit_reached_while_a_request_waits_is_shown_before_allow() {
+    let t = start().await;
+    let maker = maker_with(&t, 3, 1).await;
+    let run = live_run(&t, &maker).await;
+    let request = request(&t, &run, ask_browser("Blog Watcher")).await;
+    assert_eq!(request.over, None);
+    // Another dot takes the last place while the request waits.
+    make(&t, &run, "One").await;
+    let mut rx = t.rt.subscribe();
+
+    // The person answers the card they saw, which had no limit line.
+    let reached = "A limit was reached since the card was shown: it would be the 2nd made dot \
+                   kept; the limit is 1. Look at the card again, and answer again if you still \
+                   want this dot.";
+    assert_eq!(
+        conflict(
+            t.rt.makers()
+                .decide_request(&request.id, MakeDecision::Allow)
+                .await
+        ),
+        reached
+    );
+    assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
+    assert!(updated(&mut rx).contains(&(maker.id.clone(), run.root_run_id.clone())));
+    // The card shows the limit now, and the answer to that card is taken.
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.lines,
+        ["The browser", "2nd made dot kept; the limit is 1"]
+    );
+    assert_eq!(
+        card.request.over,
+        Some(OverLimit::Total { nth: 2, limit: 1 })
+    );
+    assert!(card.can_allow);
+    let after = decide(&t, &request, MakeDecision::Allow).await;
+    assert_eq!(after.status, RequestStatus::Allowed);
+    assert_eq!(dot_names(&t).await, ["Blog Watcher", "One", "Researcher"]);
+}
+
+#[tokio::test]
+async fn a_limit_raised_while_a_request_waits_leaves_the_card() {
+    let t = start().await;
+    let maker = maker_with(&t, 1, 10).await;
+    let run = live_run(&t, &maker).await;
+    make(&t, &run, "One").await;
+    let request = request(&t, &run, ask("Two")).await;
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(card.title, "Researcher wants to make one more dot");
+    assert_eq!(card.lines, ["2nd dot in this run; the limit is 1"]);
+    // The person raises the run's limit: the card no longer shows one.
+    let mut raised = maker.spec.clone();
+    raised.making.per_run = 5;
+    t.rt.update_dot(&maker.id, raised).await.unwrap();
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert!(card.lines.is_empty(), "{:?}", card.lines);
+    assert_eq!(card.request.over, None);
+    assert!(card.can_allow);
+    decide(&t, &request, MakeDecision::Allow).await;
+    assert_eq!(dot_names(&t).await, ["One", "Researcher", "Two"]);
+}
+
+#[tokio::test]
+async fn an_outside_folder_gone_since_leaves_only_dont_make_it() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let outside = t.dir.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let path = real_path(&outside).to_string_lossy().into_owned();
+    let mut wanted = ask("Blog Watcher");
+    wanted.wanted.folder = Some(path.clone());
+    let request = request(&t, &run, wanted).await;
+    std::fs::remove_dir(&outside).unwrap();
+
+    let gone = format!("The folder {path} no longer exists.");
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(card.request.status, RequestStatus::Gone);
+    assert_eq!(card.blocked.as_deref(), Some(gone.as_str()));
+    assert!(!card.can_allow && !card.can_without);
+    assert_eq!(
+        conflict(
+            t.rt.makers()
+                .decide_request(&request.id, MakeDecision::Allow)
+                .await
+        ),
+        format!("{gone} Only \"Don't make it\" is left.")
+    );
+    assert!(!outside.exists());
+    assert_eq!(dot_names(&t).await, ["Researcher"]);
+}
+
+#[tokio::test]
+async fn an_answer_that_races_the_makers_delete_says_what_it_did() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let request = request(&t, &run, ask_browser("Blog Watcher")).await;
+    // As when the maker is deleted while the answer makes the dot: the request's row goes
+    // with the maker once the dot is stored.
+    let mut conn = db(&t).await;
+    sqlx::query(
+        "CREATE TRIGGER gone_with_maker AFTER INSERT ON making_events WHEN NEW.kind = 'made' \
+         BEGIN DELETE FROM make_requests; END",
+    )
+    .execute(&mut conn)
+    .await
+    .unwrap();
+    drop(conn);
+
+    let after = decide(&t, &request, MakeDecision::Allow).await;
+
+    assert_eq!(after.id, request.id);
+    assert_eq!(after.status, RequestStatus::Allowed);
+    assert!(after.decided_at.is_some());
+    let made = after.made_dot_id.as_deref().expect("the made dot");
+    assert_eq!(
+        t.rt.store().get_dot(made).await.unwrap().spec.name,
+        "Blog Watcher"
+    );
+}
+
+#[tokio::test]
+async fn a_request_row_that_cannot_be_read_does_not_hide_the_others() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let bad = request(&t, &run, ask_browser("One")).await;
+    let good = request(&t, &run, ask_browser("Two")).await;
+    let mut conn = db(&t).await;
+    sqlx::query("UPDATE make_requests SET kind = 'bogus' WHERE id = ?")
+        .bind(&bad.id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    drop(conn);
+    let store = t.rt.store();
+    for _ in 0..2 {
+        let listed = store.list_make_requests(None, true).await.unwrap();
+        assert_eq!(listed, std::slice::from_ref(&good));
+    }
+    let inbox = t.rt.inbox().await.unwrap();
+    assert_eq!(inbox.make_requests.len(), 1);
+    assert_eq!(inbox.make_requests[0].id, good.id);
+}
+
+#[tokio::test]
+async fn the_card_carries_the_new_dots_instructions_and_schedule() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let mut wanted = ask_browser("Blog Watcher");
+    wanted.wanted.schedule = Some(Some(every(120)));
+    let request = request(&t, &run, wanted).await;
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.instructions.as_deref(),
+        Some("Read the three blogs and list what is new.")
+    );
+    assert_eq!(card.schedule.as_deref(), Some("every 2 hours"));
+    assert!(card.asked.is_empty());
+    // The Inbox item is the card's.
+    let inbox = t.rt.inbox().await.unwrap();
+    assert_eq!(inbox.make_requests[0].title, card.title);
+    assert_eq!(inbox.make_requests[0].lines, card.lines);
+}
