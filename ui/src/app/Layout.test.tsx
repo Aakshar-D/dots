@@ -85,6 +85,25 @@ describe("the app frame", () => {
       team_scope: copies(box.team_scope, 9),
       workflows: copies(box.workflows, 10),
       not_delivered: copies(box.not_delivered, 11),
+      // The contract's Inbox has no make request yet, so the test brings its own.
+      make_requests: copies(
+        [
+          {
+            id: "req-1",
+            dot_id: "dot-maker",
+            dot_name: "Maker",
+            root_run_id: "run-1",
+            kind: "make" as const,
+            name: "Feeds",
+            purpose: "Reads the feeds every morning",
+            title: "Maker asks to make Feeds",
+            lines: ["The browser"],
+            status: "waiting" as const,
+            created_at: "2026-11-12T09:00:00.000Z",
+          },
+        ],
+        12,
+      ),
       // Marks, not items: the items stay in (or leave) their sections.
       back: [],
       snoozed: [],
@@ -103,8 +122,8 @@ describe("the app frame", () => {
     ]);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    // 1 + 2 + 3 + 4 + 5 + 1 (held) + 7 + 8 + 9 + 10 + 11, and 2 messages.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 63 waiting" })).toBeVisible();
+    // 1 + 2 + 3 + 4 + 5 + 1 (held) + 7 + 8 + 9 + 10 + 11 + 12, and 2 messages.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 75 waiting" })).toBeVisible();
   });
 
   it("shows why Dots could not start instead of the app", async () => {
