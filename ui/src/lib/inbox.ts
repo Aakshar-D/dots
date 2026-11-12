@@ -8,6 +8,7 @@ import type {
   PendingAppReview,
   PendingApproval,
   PendingInstructions,
+  PendingMakeRequest,
   ReviewRun,
   TeamScopeIssue,
   ToolsChanged,
@@ -46,6 +47,10 @@ export const teamScopeKey = (t: TeamScopeIssue): InboxKey => ({
   kind: "team_scope",
   id: `${t.team_id}/${t.dot_id}`,
 });
+export const makeRequestKey = (r: PendingMakeRequest): InboxKey => ({
+  kind: "make_request",
+  id: r.id,
+});
 
 /// A key as one string, for sets and React keys.
 export function keyString(k: InboxKey): string {
@@ -54,7 +59,7 @@ export function keyString(k: InboxKey): string {
 
 /// Every item of the Inbox and the waiting messages, in the core's order: messages, approvals,
 /// not delivered, runs to review, attention, tools changed, watchers, held runs, instructions,
-/// apps to review, team scope problems. Only the tests call it: it is the contract check's
+/// apps to review, team scope problems, make requests. Only the tests call it: it is the contract check's
 /// entry point (spec section 8), which compares these keys with the core's `InboxKeys`, so the
 /// per-kind key functions the screen uses cannot drift from the core. Not dead code.
 export function inboxKeys(inbox: Inbox, messages: Message[]): InboxKey[] {
@@ -70,6 +75,7 @@ export function inboxKeys(inbox: Inbox, messages: Message[]): InboxKey[] {
     ...inbox.instructions.map(instructionsKey),
     ...inbox.app_reviews.map(appReviewKey),
     ...inbox.team_scope.map(teamScopeKey),
+    ...(inbox.make_requests ?? []).map(makeRequestKey),
   ];
 }
 

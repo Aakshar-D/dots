@@ -3517,7 +3517,24 @@
         }
       }
     ],
-    "make_requests": [],
+    "make_requests": [
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "dot_name": "Researcher",
+        "id": "01J0MRQ",
+        "kind": "make",
+        "lines": [
+          "The browser",
+          "4th dot in this run; the limit is 3"
+        ],
+        "name": "Blog Watcher",
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "status": "waiting",
+        "title": "Researcher wants to make a dot with more than it has"
+      }
+    ],
     "not_delivered": [
       {
         "base_commit": "0123abcd",
@@ -3758,6 +3775,10 @@
     {
       "id": "01J0TEAM/01J0DOT",
       "kind": "team_scope"
+    },
+    {
+      "id": "01J0MRQ",
+      "kind": "make_request"
     }
   ],
   "InboxMark": [

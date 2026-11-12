@@ -1325,6 +1325,7 @@ export const PendingMakeRequest = z.strictObject({
   status: z.enum(["waiting", "allowed", "made_without", "refused", "gone", "discarded"]),
   created_at: z.string(),
 });
+export type PendingMakeRequest = z.infer<typeof PendingMakeRequest>;
 // A member dot that is not in its team's account or workspace, as the Inbox lists it.
 export const TeamScopeIssue = z.strictObject({
   team_id: z.string(),

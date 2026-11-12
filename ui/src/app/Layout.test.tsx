@@ -37,8 +37,8 @@ describe("the app frame", () => {
     // One pending approval, one run to review, one schedule that needs attention, one MCP
     // server whose tools changed, one paused watcher, the runs held for Claude usage, one
     // proposed instruction, one app sent for review, one team scope problem, one message that
-    // did not reach its dot and one waiting workflow run.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
+    // did not reach its dot, one waiting workflow run and one make request.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 12 waiting" })).toBeVisible();
   });
 
   it("has a Usage link that opens the Usage page from the keyboard", async () => {
@@ -65,7 +65,7 @@ describe("the app frame", () => {
     backend.on("dot_overview", () => [{ ...idle, dot: { ...sample.dot, org_id: null } }]);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 12 waiting" })).toBeVisible();
   });
 
   // The rail's count is the tray's (core `inbox_count`): every list of the Inbox, the held runs
@@ -85,7 +85,7 @@ describe("the app frame", () => {
       team_scope: copies(box.team_scope, 9),
       workflows: copies(box.workflows, 10),
       not_delivered: copies(box.not_delivered, 11),
-      // The contract's Inbox has no make request yet, so the test brings its own.
+      // Its own, so its count can differ from the other kinds.
       make_requests: copies(
         [
           {
@@ -455,7 +455,7 @@ describe("the app frame", () => {
     await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
-    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 12 waiting" })).toBeVisible();
   });
 });
 

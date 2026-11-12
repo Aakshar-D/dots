@@ -1541,9 +1541,23 @@ pub fn samples() -> Value {
                 test: false,
                 started_at: TS.into(),
             }],
-            // Empty until the UI lists make requests: `InboxKeys` below is checked against
-            // the UI's own key rules, which do not know the kind yet.
-            make_requests: vec![],
+            // A request for a new dot, as the ask card titles and lines it.
+            make_requests: vec![dots_core::making::requests::PendingMakeRequest {
+                id: "01J0MRQ".into(),
+                dot_id: "01J0DOT".into(),
+                dot_name: "Researcher".into(),
+                root_run_id: "01J0RUN".into(),
+                kind: dots_core::making::requests::RequestKind::Make,
+                name: "Blog Watcher".into(),
+                purpose: "Reads the feeds".into(),
+                title: "Researcher wants to make a dot with more than it has".into(),
+                lines: vec![
+                    "The browser".into(),
+                    "4th dot in this run; the limit is 3".into(),
+                ],
+                status: dots_core::making::requests::RequestStatus::Waiting,
+                created_at: TS.into(),
+            }],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
