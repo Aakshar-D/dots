@@ -460,6 +460,10 @@ export const DotSpend = z.strictObject({
   dot_name: z.string(),
   today: Spend,
   caps: DotCaps,
+  // What counts toward this dot's caps today when that is more than its own runs: with the
+  // dots it made and those below them, deleted ones included (dots-make-dots design section
+  // 6); null for a dot that shares nothing.
+  shared_today: nullable(Spend),
 });
 // Today's spend (local midnight to local midnight) and this month's, against the caps.
 export const SpendToday = z.strictObject({

@@ -147,6 +147,48 @@ async fn clashes_in_case(tx: &mut sqlx::SqliteConnection, name: &str, id: &str) 
     )
 }
 
+/// Keeps what the dot `id`, about to be deleted, spent in the runs started this local month, so
+/// it still counts toward its makers' caps (dots-make-dots design section 6, Spend survives a
+/// delete; migration 0053): one row per run that spent anything for each maker up the chain as
+/// it is now, and one that counts toward the caps for every dot together, since the runs go
+/// with the dot. The runs of the living dots below it are kept for the makers above it too:
+/// those dots have no maker once it is gone, so without this a maker could shed their spend by
+/// deleting the dot between them. A dot with no maker keeps nothing. Rows older than the month
+/// count toward no cap and are removed here.
+async fn keep_spend(tx: &mut sqlx::SqliteConnection, id: &str) -> Result<()> {
+    let (month_start, _) = crate::spend::month_bounds_in(Utc::now(), &Local);
+    sqlx::query("DELETE FROM made_spend_kept WHERE started_at < ?")
+        .bind(&month_start)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "WITH RECURSIVE up(maker, depth) AS ( \
+         SELECT made_by_dot_id, 1 FROM dots WHERE id = ?1 AND made_by_dot_id IS NOT NULL \
+         UNION ALL \
+         SELECT d.made_by_dot_id, up.depth + 1 FROM dots d JOIN up ON d.id = up.maker \
+         WHERE d.made_by_dot_id IS NOT NULL AND up.depth < ?3), \
+         tree(dot, depth) AS ( \
+         SELECT ?1, 0 \
+         UNION ALL \
+         SELECT d.id, tree.depth + 1 FROM dots d JOIN tree ON d.made_by_dot_id = tree.dot \
+         WHERE tree.depth < ?3), \
+         holders(maker) AS ( \
+         SELECT maker FROM up UNION ALL SELECT NULL WHERE EXISTS (SELECT 1 FROM up)) \
+         INSERT INTO made_spend_kept (dot_id, started_at, cost_usd, tokens) \
+         SELECT holders.maker, r.started_at, COALESCE(r.cost_usd, 0.0), \
+         r.tokens_in + r.tokens_out \
+         FROM holders JOIN runs r ON (holders.maker IS NOT NULL OR r.dot_id = ?1) \
+         WHERE r.dot_id IN (SELECT dot FROM tree) AND r.started_at >= ?2 \
+         AND (COALESCE(r.cost_usd, 0.0) > 0 OR r.tokens_in + r.tokens_out > 0)",
+    )
+    .bind(id)
+    .bind(&month_start)
+    .bind(crate::spend::MAKER_DEPTH)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
 impl Store {
     /// `spec`'s grants as a save stores them (`Grants::synced`): a server newly used, alone or
     /// with its plugin, is granted the variables of its config; `before` is what the dot used.
@@ -293,6 +335,26 @@ impl Store {
         rows.iter().map(dot_from_row).collect()
     }
 
+    /// The makers above `dot_id` that exist now, nearest first: the dot that made it, the dot
+    /// that made that one, and so on (dots-make-dots design section 6, Spend). The chain ends at
+    /// a dot a person made or one whose maker is deleted; no chain is followed further than
+    /// `spend::MAKER_DEPTH`.
+    pub async fn makers_of(&self, dot_id: &str) -> Result<Vec<Dot>> {
+        let rows = sqlx::query(&format!(
+            "WITH RECURSIVE up(maker, depth) AS ( \
+             SELECT made_by_dot_id, 1 FROM dots WHERE id = ? AND made_by_dot_id IS NOT NULL \
+             UNION ALL \
+             SELECT d.made_by_dot_id, up.depth + 1 FROM dots d JOIN up ON d.id = up.maker \
+             WHERE d.made_by_dot_id IS NOT NULL AND up.depth < ?) \
+             SELECT {DOT_COLUMNS} FROM dots JOIN up ON dots.id = up.maker ORDER BY up.depth"
+        ))
+        .bind(dot_id)
+        .bind(crate::spend::MAKER_DEPTH)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(dot_from_row).collect()
+    }
+
     /// How many dots `maker_id` made that exist now: what its total limit counts (dots-make-dots
     /// design section 10).
     pub async fn count_made_dots(&self, maker_id: &str) -> Result<u32> {
@@ -433,32 +495,43 @@ impl Store {
         self.get_dot(id).await
     }
 
+    /// Deletes the dot. What a dot with a maker spent this month is kept first, in the same
+    /// transaction (`keep_spend`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        keep_spend(&mut tx, id).await?;
         let res = sqlx::query("DELETE FROM dots WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("dot {id}")));
         }
+        tx.commit().await?;
         Ok(())
     }
 
-    /// Deletes the dot only if it has no queued/running/awaiting runs, atomically.
+    /// Deletes the dot only if it has no queued/running/awaiting runs, atomically. What a dot
+    /// with a maker spent this month is kept first, in the same transaction (`keep_spend`).
     pub async fn delete_dot_if_idle(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        keep_spend(&mut tx, id).await?;
         let res = sqlx::query(
             "DELETE FROM dots WHERE id = ? AND NOT EXISTS (SELECT 1 FROM runs WHERE dot_id = ?              AND status IN ('queued','running','awaiting_approval'))",
         )
         .bind(id)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if res.rows_affected() == 0 {
+            // Nothing was deleted, so nothing is kept.
+            tx.rollback().await?;
             self.get_dot(id).await?;
             return Err(Error::Conflict(
                 "dot has queued, running or awaiting runs; cancel them first".into(),
             ));
         }
+        tx.commit().await?;
         Ok(())
     }
 

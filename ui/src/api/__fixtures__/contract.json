@@ -8060,6 +8060,7 @@
         },
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
+        "shared_today": null,
         "today": {
           "cost_usd": 2.0,
           "tokens": 400000
@@ -8072,6 +8073,7 @@
         },
         "dot_id": "01J0DOT2",
         "dot_name": "local-summarizer",
+        "shared_today": null,
         "today": {
           "cost_usd": 0.0,
           "tokens": 850000

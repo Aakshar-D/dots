@@ -4,8 +4,12 @@
 //! read from the runs themselves: the cost and tokens of every run started since local
 //! midnight, a run still going with what it has reported so far. A run whose cap is reached
 //! waits instead of starting, and one that goes over its cap while it runs is stopped.
+//!
+//! A dot's caps are shared with the dots it made (dots-make-dots design section 6, Spend): what
+//! a made dot spends counts toward its own caps and toward those of each maker up the chain,
+//! and still does for the rest of the day after the made dot is deleted (`made_spend_kept`).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Datelike, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
@@ -34,6 +38,14 @@ pub const NOT_CAPPED: &str = "This run is not waiting for a spending cap.";
 /// **Run once anyway** on a background run: those wait for the cap.
 pub const BACKGROUND_WAITS: &str =
     "A background run waits for the cap: raise the cap or wait for tomorrow.";
+
+/// What follows the words of a maker's reached cap when it holds or stops the run of a dot
+/// below the maker (dots-make-dots design section 6, Spend): "Researcher reached its $2.00
+/// daily cap, shared with the dots it made".
+pub const SHARED_WITH_MADE: &str = ", shared with the dots it made";
+/// How far a chain of makers is followed, up from a dot and down from a maker. A chain cannot
+/// loop (a dot's maker exists before it); this bounds the walk all the same.
+pub const MAKER_DEPTH: i64 = 32;
 
 /// A dot's daily caps; `None` is no cap.
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
@@ -155,26 +167,38 @@ pub fn first_hit(
     all_today: Spend,
     all_month: Spend,
 ) -> Option<CapHit> {
+    dot_hit(dot_name, dot, dot_today).or_else(|| all_hit(global, all_today, all_month))
+}
+
+/// The first of a dot's own caps reached by `today`, if any: its daily cost, then its daily
+/// tokens. `today` is what counts toward them: the dot's spend and that of the dots below it.
+fn dot_hit(dot_name: &str, dot: &DotCaps, today: Spend) -> Option<CapHit> {
     let of_dot = |text: String| CapHit {
         text,
         scope: CapScope::Dot,
     };
-    let of_all = |text: String| CapHit {
-        text,
-        scope: CapScope::All,
-    };
-    if let Some(cap) = cost_reached(dot_today.cost_usd, dot.daily_usd) {
+    if let Some(cap) = cost_reached(today.cost_usd, dot.daily_usd) {
         return Some(of_dot(format!(
             "{dot_name} reached its {} daily cap",
             usd(cap)
         )));
     }
-    if let Some(cap) = tokens_reached(dot_today.tokens, dot.daily_tokens) {
+    if let Some(cap) = tokens_reached(today.tokens, dot.daily_tokens) {
         return Some(of_dot(format!(
             "{dot_name} reached its {}-token daily cap",
             thousands(cap)
         )));
     }
+    None
+}
+
+/// The first of the caps for every dot together that is reached, if any: the daily cost, the
+/// daily tokens, then the monthly cost.
+fn all_hit(global: &GlobalCaps, all_today: Spend, all_month: Spend) -> Option<CapHit> {
+    let of_all = |text: String| CapHit {
+        text,
+        scope: CapScope::All,
+    };
     if let Some(cap) = cost_reached(all_today.cost_usd, global.daily_usd) {
         return Some(of_all(format!(
             "All dots reached the {} daily cap",
@@ -246,31 +270,51 @@ impl Ledger {
         Ok(Self::new(&store.get_settings().await?, Utc::now()))
     }
 
-    /// What `dot_id` spent today.
+    /// What counts toward the caps of `dot_id` today: what it spent, what the dots it made and
+    /// those below them spent, and what was kept of deleted ones (dots-make-dots design section
+    /// 6, Spend). For a dot that made nothing, what it spent.
     pub async fn dot_today(&mut self, store: &Store, dot_id: &str) -> Result<Spend> {
         if let Some(s) = self.dots.get(dot_id) {
             return Ok(*s);
         }
         let s = store
-            .spend_between(Some(dot_id), &self.day.0, &self.day.1)
+            .shared_spend_between(dot_id, &self.day.0, &self.day.1)
             .await?;
         self.dots.insert(dot_id.to_string(), s);
         Ok(s)
     }
 
-    /// The first cap reached for a run of `dot`, if any. Nothing is read for a cap not set.
+    /// The first cap reached for a run of `dot`, if any: the dot's own caps, then those of
+    /// each maker above it, nearest first, then the caps for every dot together. A maker's cap
+    /// is shared by the maker and every dot below it (dots-make-dots design section 6, Spend),
+    /// and its words on another dot's run say so (`SHARED_WITH_MADE`). Nothing is read for a
+    /// cap not set, and no maker is looked for above a dot that has none.
     pub async fn hit(&mut self, store: &Store, dot: &Dot) -> Result<Option<CapHit>> {
         let caps = dot.spec.spend_cap;
-        let dot_today = if caps.is_empty() {
-            Spend::default()
-        } else {
-            self.dot_today(store, &dot.id).await?
-        };
+        if !caps.is_empty() {
+            let today = self.dot_today(store, &dot.id).await?;
+            if let Some(hit) = dot_hit(&dot.spec.name, &caps, today) {
+                return Ok(Some(hit));
+            }
+        }
+        if dot.made.as_ref().is_some_and(|m| m.by_dot_id.is_some()) {
+            for maker in store.makers_of(&dot.id).await? {
+                let caps = maker.spec.spend_cap;
+                if caps.is_empty() {
+                    continue;
+                }
+                let today = self.dot_today(store, &maker.id).await?;
+                if let Some(mut hit) = dot_hit(&maker.spec.name, &caps, today) {
+                    hit.text.push_str(SHARED_WITH_MADE);
+                    return Ok(Some(hit));
+                }
+            }
+        }
         let all_today = match (self.global.has_daily(), self.all_today) {
             (false, _) => Spend::default(),
             (true, Some(s)) => s,
             (true, None) => {
-                let s = store.spend_between(None, &self.day.0, &self.day.1).await?;
+                let s = all_between(store, &self.day.0, &self.day.1).await?;
                 self.all_today = Some(s);
                 s
             }
@@ -279,21 +323,12 @@ impl Ledger {
             (false, _) => Spend::default(),
             (true, Some(s)) => s,
             (true, None) => {
-                let s = store
-                    .spend_between(None, &self.month.0, &self.month.1)
-                    .await?;
+                let s = all_between(store, &self.month.0, &self.month.1).await?;
                 self.all_month = Some(s);
                 s
             }
         };
-        Ok(first_hit(
-            &dot.spec.name,
-            &caps,
-            dot_today,
-            &self.global,
-            all_today,
-            all_month,
-        ))
+        Ok(all_hit(&self.global, all_today, all_month))
     }
 
     /// `hit` for the dot `dot_id`; `None` for a dot that is gone.
@@ -304,6 +339,18 @@ impl Ledger {
             Err(e) => Err(e),
         }
     }
+}
+
+/// What every dot together spent in runs started in `[start, end)`: the runs there are, and
+/// what was kept of deleted made dots, whose runs went with them (dots-make-dots design section
+/// 6, Spend survives a delete).
+async fn all_between(store: &Store, start: &str, end: &str) -> Result<Spend> {
+    let runs = store.spend_between(None, start, end).await?;
+    let kept = store.kept_spend_between(None, start, end).await?;
+    Ok(Spend {
+        cost_usd: runs.cost_usd + kept.cost_usd,
+        tokens: runs.tokens + kept.tokens,
+    })
 }
 
 /// Today's spend against the caps, for Settings, the Usage page and the dot editor.
@@ -325,8 +372,14 @@ pub struct SpendToday {
 pub struct DotSpend {
     pub dot_id: String,
     pub dot_name: String,
+    /// What the dot's own runs spent today.
     pub today: Spend,
     pub caps: DotCaps,
+    /// What counts toward `caps` today when the dot shares them: `today`, what the dots it
+    /// made and those below them spent, and what was kept of deleted ones (dots-make-dots
+    /// design section 6, Spend). `None` for a dot with no made dot and nothing kept today.
+    #[serde(default)]
+    pub shared_today: Option<Spend>,
 }
 
 /// Today's spend of every dot, at `now`.
@@ -339,22 +392,40 @@ pub async fn today(store: &Store, now: DateTime<Utc>) -> Result<SpendToday> {
         .await?
         .into_iter()
         .collect();
+    let all = store.list_dots().await?;
+    // The dots that share their caps today: those with a made dot, and those something was
+    // kept for (dots-make-dots design section 6, Spend).
+    let mut sharing: HashSet<String> = all
+        .iter()
+        .filter_map(|d| d.made.as_ref()?.by_dot_id.clone())
+        .collect();
+    sharing.extend(store.makers_with_kept_spend(&day_start, &day_end).await?);
     let mut dots = Vec::new();
-    for dot in store.list_dots().await? {
+    for dot in all {
         let spent = by_dot.get(&dot.id).copied();
         if spent.is_none() && dot.spec.spend_cap.is_empty() {
             continue;
         }
+        let shared_today = if sharing.contains(&dot.id) {
+            Some(
+                store
+                    .shared_spend_between(&dot.id, &day_start, &day_end)
+                    .await?,
+            )
+        } else {
+            None
+        };
         dots.push(DotSpend {
             dot_id: dot.id,
             dot_name: dot.spec.name,
             today: spent.unwrap_or_default(),
             caps: dot.spec.spend_cap,
+            shared_today,
         });
     }
     Ok(SpendToday {
-        today: store.spend_between(None, &day_start, &day_end).await?,
-        month: store.spend_between(None, &month_start, &month_end).await?,
+        today: all_between(store, &day_start, &day_end).await?,
+        month: all_between(store, &month_start, &month_end).await?,
         caps: (&settings).into(),
         day_start,
         day_end,

@@ -770,6 +770,7 @@ fn spend_today() -> dots_core::spend::SpendToday {
                     daily_usd: Some(2.0),
                     daily_tokens: Some(1_000_000),
                 },
+                shared_today: None,
             },
             DotSpend {
                 dot_id: "01J0DOT2".into(),
@@ -779,6 +780,7 @@ fn spend_today() -> dots_core::spend::SpendToday {
                     tokens: 850_000,
                 },
                 caps: DotCaps::default(),
+                shared_today: None,
             },
         ],
     }
