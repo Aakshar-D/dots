@@ -36,6 +36,9 @@ export type VoiceLive = {
   /// The speech files' download, while one runs.
   download: { done: number; total: number } | null;
   trouble: string | null;
+  /// How many `trouble` events came: the stage opens on each new one, so a problem is seen
+  /// even when nothing else changes (a microphone that will not open leaves Dot resting).
+  troubles: number;
 };
 
 export type SaidLine = { n: number; text: string };
@@ -52,6 +55,7 @@ const quiet: VoiceLive = {
   card: null,
   download: null,
   trouble: null,
+  troubles: 0,
 };
 
 function createStore() {
@@ -223,7 +227,7 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
     case "woke":
       return;
     case "trouble":
-      voiceStore.set({ trouble: event.message });
+      voiceStore.set({ trouble: event.message, troubles: voiceStore.get().troubles + 1 });
       return;
     case "download":
       voiceStore.set({ download: { done: event.done_bytes, total: event.total_bytes } });

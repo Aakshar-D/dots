@@ -13,7 +13,7 @@ import { sample } from "@/test/fixtures";
 
 import { DONE_MS } from "./breath-model";
 import { OpenDotStage } from "./OpenDotStage";
-import { LEAVE_MS, LINGER_MS, type StageCommands } from "./use-stage";
+import { LEAVE_MS, LINGER_MS, TROUBLE_MS, type StageCommands } from "./use-stage";
 
 /// The stage reads the voice status and the shortcut from the query cache, as in the app.
 function render(ui: ReactNode, hotkey = "CmdOrCtrl+Shift+Space") {
@@ -494,6 +494,23 @@ describe("the Open Dot stage", () => {
     expect(stage()).toBeNull();
     // Listening again opens it again.
     show({ state: "listening", micOpen: true });
+    expect(stage()).not.toBeNull();
+  });
+
+  it("opens on a trouble while resting, shows it, and closes after a while", () => {
+    vi.useFakeTimers();
+    render(<OpenDotStage />);
+    expect(stage()).toBeNull();
+    // The hotkey with no microphone: Dot stays idle, and only a trouble comes.
+    show({ trouble: "The microphone could not be opened: no microphone was found", troubles: 1 });
+    expect(stage()).not.toBeNull();
+    expect(stage()).toHaveTextContent("The microphone could not be opened");
+    act(() => void vi.advanceTimersByTime(TROUBLE_MS - 1));
+    expect(stage()).not.toBeNull();
+    act(() => void vi.advanceTimersByTime(1));
+    expect(stage()).toBeNull();
+    // A stage closed by the person opens for the next trouble too.
+    show({ trouble: "I can't hear anything from the microphone.", troubles: 2 });
     expect(stage()).not.toBeNull();
   });
 
