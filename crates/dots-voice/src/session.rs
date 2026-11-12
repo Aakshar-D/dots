@@ -78,6 +78,31 @@ const DIDNT_CATCH: &str = "Sorry, I didn't catch that.";
 /// Shown when a question was not said in full: it is not asked, and nothing waits on it.
 const QUESTION_CUT: &str = "The question could not be said in full, so nothing was done.";
 
+/// How many times in a row a word, or a group of two or three, must come for `babble`.
+const BABBLE_REPEATS: usize = 5;
+
+/// Whether `text` is what a recogniser makes of noise or music: the same word, or the same
+/// two or three words, at least `BABBLE_REPEATS` times in a row ("So, everywhere, everywhere,
+/// everywhere, everywhere, everywhere"). A person's "no, no, no" is not that.
+fn babble(text: &str) -> bool {
+    let words: Vec<String> = text
+        .split(|c: char| !c.is_alphanumeric() && c != '\'')
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    (1..=3).any(|unit| {
+        let mut same = 0;
+        (unit..words.len()).any(|i| {
+            same = if words[i] == words[i - unit] {
+                same + 1
+            } else {
+                0
+            };
+            same >= unit * (BABBLE_REPEATS - 1)
+        })
+    })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum State {
@@ -1409,22 +1434,31 @@ impl Worker {
                 if !self.discard_backlog() {
                     return;
                 }
+                // Noise the recogniser made words of ("everywhere, everywhere, everywhere…")
+                // is not a sentence: nobody is asked about it and nothing acts on it.
+                if babble(&text) {
+                    self.partial_seen = true;
+                    self.nothing_caught(now);
+                    return;
+                }
                 let turn = self.shared.next_turn.fetch_add(1, Ordering::SeqCst) + 1;
                 self.heard(turn, text);
             }
-            EarEvent::Dropped => {
-                // The limit was paused while the clip was open; it is not restarted.
-                self.in_speech = false;
-                self.quiet_since += now.saturating_duration_since(self.clip_started);
-                // Words were shown as they were said, and then nothing came of them: never
-                // in silence. Said once per start from rest, then listened for once more.
-                let missed = std::mem::take(&mut self.partial_seen);
-                if missed && self.may_retry && self.state == State::Listening && !self.sink.failed()
-                {
-                    self.may_retry = false;
-                    self.say_alone(DIDNT_CATCH, After::FollowUp);
-                }
-            }
+            EarEvent::Dropped => self.nothing_caught(now),
+        }
+    }
+
+    /// A clip ended and gave no sentence.
+    fn nothing_caught(&mut self, now: Instant) {
+        // The limit was paused while the clip was open; it is not restarted.
+        self.in_speech = false;
+        self.quiet_since += now.saturating_duration_since(self.clip_started);
+        // Words were shown as they were said, and then nothing came of them: never
+        // in silence. Said once per start from rest, then listened for once more.
+        let missed = std::mem::take(&mut self.partial_seen);
+        if missed && self.may_retry && self.state == State::Listening && !self.sink.failed() {
+            self.may_retry = false;
+            self.say_alone(DIDNT_CATCH, After::FollowUp);
         }
     }
 
@@ -3061,6 +3095,59 @@ mod tests {
         r.clock.advance(6_000);
         r.expect_state(State::Idle, false);
         r.nothing_more();
+    }
+
+    /// Noise heard as the same word over and over is not passed on as a sentence: from rest
+    /// Dot says it did not catch that and listens once more.
+    #[test]
+    fn noise_heard_as_one_word_over_and_over_is_not_a_sentence() {
+        let noise = "So, everywhere, everywhere, everywhere, everywhere, everywhere, everywhere";
+        let mut r = rig(Opts {
+            recognizer: Some(FakeRecognizer::new(noise)),
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, false);
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        r.sentence();
+        assert_eq!(r.next(), SessionEvent::Hearing { text: noise.into() });
+        // No `Heard`: the next thing is Dot's own line.
+        r.expect_state(State::Speaking, false);
+        r.expect_saying(DIDNT_CATCH);
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Listening, true);
+        // again in the same listen: ignored in silence, and the listen runs out
+        r.sentence();
+        assert_eq!(r.next(), SessionEvent::Hearing { text: noise.into() });
+        r.sync();
+        r.clock.advance(6_000);
+        r.expect_state(State::Idle, false);
+        r.nothing_more();
+    }
+
+    #[test]
+    fn babble_is_a_word_or_a_short_group_many_times_in_a_row() {
+        for noise in [
+            "So, everywhere, everywhere, everywhere, everywhere, everywhere",
+            "you you you you you",
+            "Thank you. Thank you. Thank you. Thank you. Thank you.",
+            "I don't know. I don't know. I don't know. I don't know. I don't know.",
+        ] {
+            assert!(babble(noise), "{noise}");
+        }
+        for said in [
+            "",
+            "No, no, no.",
+            "no no no no",
+            "Yes yes yes, do it.",
+            "What needs me?",
+            "Tell it the answer is twenty twenty twenty four",
+            "Thank you. Thank you. Thank you.",
+            "Set up a dot that checks my inbox every morning and tells me what is new",
+        ] {
+            assert!(!babble(said), "{said}");
+        }
     }
 
     // ---- rule 7: stopping ----------------------------------------------------------------------
