@@ -81,8 +81,9 @@ async fn run_graph(
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
 /// on the Claude engine, `context` on the local one, and the check-in tools likewise
 /// (`checkins::Tool::model_name`); a `Memory` call is the memory tool its `input` is for
-/// (`memory::Tool::for_input`) and an `App` call the app tool its input names
-/// (`apps::run::model_name`); every other tool keeps its name.
+/// (`memory::Tool::for_input`), an `App` call the app tool its input names
+/// (`apps::run::model_name`) and a `MakeDots` call the tool for making dots its input names
+/// (`making::tools::Tool::for_input`); every other tool keeps its name.
 fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<'a, str> {
     if tool == "Context" {
         Cow::Borrowed(context_tool_name(engine))
@@ -96,6 +97,12 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
         Cow::Borrowed(crate::team_tools::Tool::for_input(input).model_name(engine))
     } else if tool == crate::instructions::POLICY_NAME {
         Cow::Borrowed(crate::instructions::model_name(engine))
+    } else if tool == crate::making::tools::POLICY_NAME {
+        // The input names which of the tools for making dots it is.
+        match crate::making::tools::Tool::for_input(input) {
+            Some(making) => Cow::Borrowed(making.model_name(engine)),
+            None => Cow::Borrowed(tool),
+        }
     } else if tool == crate::apps::PROPOSE_POLICY {
         // `copy_app` names an app; `propose_app` does not.
         let name = if input.get("app").is_some() {
@@ -2029,6 +2036,18 @@ impl Runner {
                 }
             };
         let tools = tools.with_instructions(proposes);
+        // A run of a dot that may make dots has the tools for it (dots-make-dots design section
+        // 5), where the makers' service would not refuse the run for what it is: not a workflow
+        // step's run. A policy that denies `MakeDots` outright leaves them out, as above.
+        let making_off = dot
+            .spec
+            .policy
+            .resolve(crate::policy::MAKE_DOTS_TOOL, &Value::Null)
+            == crate::policy::Action::Deny;
+        let makes = !making_off
+            && self.checkins().is_some_and(|c| c.makers().is_some())
+            && crate::making::tools::offered(&dot, run);
+        let tools = tools.with_making(makes.then_some(dot.spec.making));
         // The project's code graph (project graph spec section 5): its first build starts now,
         // in the background; the run never waits for it. A policy that denies `Graph` outright
         // leaves the tool out.

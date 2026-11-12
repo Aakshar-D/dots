@@ -54,8 +54,9 @@ pub struct ApprovalGuard {
 }
 
 /// What the guard finds in a call, or `None` when the call neither sends nor deletes as far as
-/// Dots can tell. Dots' own tools and the built-in browser (whose gate asks about its own risky
-/// acts) are never guarded here.
+/// Dots can tell. Of Dots' own tools, an app's tool that deletes and a maker's `delete_dot` are
+/// guarded; the others and the built-in browser (whose gate asks about its own risky acts) are
+/// never guarded here.
 pub fn classify(tool: &str, input: &Value) -> Option<Guarded> {
     let tool = tool.trim();
     if COMMAND_TOOLS.contains(&tool) {
@@ -72,6 +73,16 @@ pub fn classify(tool: &str, input: &Value) -> Option<Guarded> {
         return Some(Guarded {
             kind,
             summary: format!("{phrase} with the app {app} ({name})"),
+        });
+    }
+    // A maker's `delete_dot` deletes a dot with its whole history, for good (dots-make-dots
+    // design section 9): it asks first, as an app's tool that deletes does. The other tools for
+    // making dots neither send nor delete.
+    if tool == crate::policy::MAKE_DOTS_TOOL {
+        let dot = crate::making::tools::deletes(input)?;
+        return Some(Guarded {
+            kind: GuardKind::Delete,
+            summary: format!("delete the dot \"{dot}\" and its history"),
         });
     }
     let rest = tool.strip_prefix("mcp__")?;
