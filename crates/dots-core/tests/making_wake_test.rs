@@ -479,7 +479,7 @@ async fn a_dropped_wake_has_no_run() {
 #[tokio::test]
 async fn a_wake_that_waited_for_an_app_being_added_is_tried_again_after_a_wait() {
     let t = quiet().await;
-    t.rt.makers().set_wake_retry(Duration::from_millis(200));
+    t.rt.makers().set_wake_retry(Duration::from_millis(1500));
     let dot = maker(&t, "Researcher").await;
     let chat = free_topic(&t, &dot).await;
     let adding =
@@ -492,8 +492,15 @@ async fn a_wake_that_waited_for_an_app_being_added_is_tried_again_after_a_wait()
         .await
         .unwrap();
     assert_eq!(waiting(&t).await, ["Blog Watcher finished."]);
-    // The adding fails: no run is made, so no run ends.
+    // The loop's pass that the wake set going finds the topic still adding the app.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(thread(&t, &chat).await.len(), 1);
+    // The adding fails: no run is made, so no run ends, and nothing tries the wake again
+    // before the wait is over.
     drop(adding);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(thread(&t, &chat).await.len(), 1);
+    assert_eq!(waiting(&t).await, ["Blog Watcher finished."]);
 
     let runs = thread_of(&t, &chat, 2).await;
     assert_eq!(message(&runs[1]), "Blog Watcher finished.");
@@ -528,6 +535,68 @@ async fn a_wake_of_a_topic_whose_last_run_has_no_session_stays_in_that_topic() {
     assert_eq!(runs[1].parent_run_id.as_deref(), Some(chat.id.as_str()));
     assert_eq!(runs[1].session_id, None);
     assert_eq!(message(&runs[1]), "Blog Watcher finished.");
+}
+
+/// A wake of a topic whose last run has no session, after an earlier run that has one, goes on
+/// in the topic's session, with the topic's end as its parent (dots-make-dots design section 8):
+/// the woken maker still knows why it gave the job. Both engines see the same history: Claude
+/// resumes that session, and the local engine replays the parent chain, in which the run
+/// without a session left no messages.
+#[tokio::test]
+async fn a_wake_after_a_run_without_a_session_goes_on_in_the_topics_session() {
+    let t = quiet().await;
+    let dot = maker(&t, "Researcher").await;
+    let first = free_topic(&t, &dot).await;
+    let said = json!({"role": "user", "content": "watch three blogs"});
+    t.rt.store()
+        .append_event(
+            &first.id,
+            "message",
+            &json!({"kind": "message", "message": said}),
+        )
+        .await
+        .unwrap();
+    // The person's next message failed before the dot started working: it has no session.
+    let mut new = NewRun::new(&dot.id, TriggerKind::Chat);
+    new.parent_run_id = Some(first.id.clone());
+    new.root_run_id = Some(first.id.clone());
+    new.payload = Some(json!({"message": "and a fourth one", "typed": true}));
+    let failed = t.rt.store().create_run(&new).await.unwrap();
+    let failed =
+        t.rt.store()
+            .finish_run(&failed.id, RunStatus::Failed, None, Some("could not start"))
+            .await
+            .unwrap();
+    assert_eq!(failed.session_id, None);
+
+    t.rt.makers()
+        .wake(&dot.id, &first.id, "Blog Watcher finished.")
+        .await
+        .unwrap();
+
+    let runs = thread(&t, &first).await;
+    assert_eq!(runs.len(), 3, "{runs:#?}");
+    let woken = &runs[2];
+    assert_eq!(woken.root_run_id, first.id);
+    assert_eq!(woken.parent_run_id.as_deref(), Some(failed.id.as_str()));
+    assert_eq!(woken.session_id.as_deref(), Some("session-1"));
+    assert_eq!(woken.workspace_path, first.workspace_path);
+    assert_eq!(woken.branch, first.branch);
+    let history = dots_core::engine::local::history::load(t.rt.store(), &woken.id)
+        .await
+        .unwrap();
+    assert_eq!(history, [said]);
+}
+
+/// The wait before the wakes' loop tries a waiting wake again is never below 50 ms, so a loop
+/// told to wait for nothing does not read the store back to back.
+#[tokio::test]
+async fn the_wakes_retry_wait_is_at_least_50_ms() {
+    let t = quiet().await;
+    t.rt.makers().set_wake_retry(Duration::ZERO);
+    assert_eq!(t.rt.makers().wake_retry(), Duration::from_millis(50));
+    t.rt.makers().set_wake_retry(Duration::from_millis(200));
+    assert_eq!(t.rt.makers().wake_retry(), Duration::from_millis(200));
 }
 
 /// A wake for a maker the person switched off is dropped, with a line in the log: a switched

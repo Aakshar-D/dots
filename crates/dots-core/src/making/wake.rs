@@ -133,7 +133,18 @@ impl Makers {
         let mut tried_topics = HashSet::new();
         let mut again = false;
         let mut failed = None;
-        for wake in self.parts.store.waiting_making_wakes().await? {
+        let waiting = match self.parts.store.waiting_making_wakes().await {
+            Ok(waiting) => waiting,
+            Err(e) => {
+                // Logged here: `wake` logs a failed delivery only at debug.
+                if self.parts.logged.due(WAITING_LIST, Instant::now()) {
+                    tracing::warn!("the waiting wakes could not be read: {e}");
+                }
+                return Err(e);
+            }
+        };
+        self.parts.logged.forget(WAITING_LIST);
+        for wake in waiting {
             match self.deliver_wake(&wake, &mut tried_topics).await {
                 Ok(Tried::Deciding) => again = true,
                 Ok(Tried::Delivered | Tried::Done) => self.parts.logged.forget(&wake.id),
@@ -161,7 +172,8 @@ impl Makers {
     /// A wake for a maker the person switched off, or whose account was removed from this PC,
     /// is dropped with a line in the log: neither runs. The wake's run goes on at the topic's
     /// end; when that run has no session (it ended before the dot started working) it goes on
-    /// without one, in the same topic, so the topic keeps its history and its count of jobs.
+    /// in the same topic, so the topic keeps its history and its count of jobs, in the session
+    /// of the newest run of the topic that has one, or without one when none has.
     /// It is background in an unattended topic (`jobs::unattended`, design section 8).
     async fn deliver_wake(
         &self,
@@ -209,12 +221,22 @@ impl Makers {
         let end = thread.last().unwrap_or(&first);
         let mut new = crate::checkins::continuation(&first, end, wake.message.clone(), None);
         if new.root_run_id.is_none() {
-            // `continuation` starts a new topic after a run without a session; a wake stays.
+            // `continuation` starts a new topic after a run without a session; a wake stays,
+            // after the topic's end, in the session of the newest run of the topic that has
+            // one: the woken maker still knows why it gave the job, and both engines see the
+            // same history (the local engine replays the parent chain, where a run without a
+            // session left no messages).
+            let had = thread
+                .iter()
+                .rev()
+                .find(|run| run.session_id.is_some())
+                .unwrap_or(end);
             new.parent_run_id = Some(end.id.clone());
             new.root_run_id = Some(end.root_run_id.clone());
-            new.workspace_path = end.workspace_path.clone();
-            new.branch = end.branch.clone();
-            new.base_commit = end.base_commit.clone();
+            new.session_id = had.session_id.clone();
+            new.workspace_path = had.workspace_path.clone();
+            new.branch = had.branch.clone();
+            new.base_commit = had.base_commit.clone();
         }
         if let Some(payload) = new.payload.as_mut() {
             payload[WAKE_ID] = wake.id.clone().into();
@@ -316,6 +338,8 @@ impl Makers {
 /// The keys of the loop's own errors in `LogEvery`.
 const JOBS_LOOP: &str = "loop: jobs";
 const WAKES_LOOP: &str = "loop: wakes";
+/// The key in `LogEvery` of reading the waiting wakes.
+const WAITING_LIST: &str = "wakes: waiting list";
 
 /// Returns `true` when a run has ended (its `RunUpdated`), when a question was answered or
 /// dismissed (its `MessageUpdated`: a job may wait on it), or when events were lost and one of

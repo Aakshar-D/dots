@@ -563,10 +563,45 @@ impl Store {
         Ok(res.rows_affected() > 0)
     }
 
+    /// Stores the person's Send again of the run `carry_from`, which carried the job `job_id`
+    /// (dots-make-dots design section 8): `open` while the job has not ended, `ended` once it
+    /// has or is gone, as the job is read in the transaction that stores the run. The files of
+    /// `carry_from` move to it. With `end_making_job`, which does not end a job whose run a
+    /// stored run sends again, the job either goes on in the new run or ended before it.
+    pub async fn create_resent_job_run(
+        &self,
+        open: &NewRun,
+        ended: &NewRun,
+        job_id: &str,
+        carry_from: &str,
+    ) -> Result<Run> {
+        // Immediate: the job is read under the write lock the insert takes.
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let status: Option<String> =
+            sqlx::query_scalar("SELECT status FROM making_jobs WHERE id = ?")
+                .bind(job_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let new = match status.as_deref() {
+            Some(status) if status != JobStatus::Ended.as_str() => open,
+            _ => ended,
+        };
+        let id = insert_run(&mut tx, new).await?;
+        sqlx::query("UPDATE chat_attachments SET run_id = ? WHERE run_id = ?")
+            .bind(&id)
+            .bind(carry_from)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        self.get_run(&id).await
+    }
+
     /// Ends the open job `id` as `how` and stores the wake that tells its maker, `message`
     /// for the maker's topic the job was given in, in one transaction: a job that has ended
     /// has exactly one wake. The guarded update goes first, so of two that end one job the
-    /// second finds it ended. `None`, with nothing written, when the job had ended or is gone.
+    /// second finds it ended. `None`, with nothing written, when the job had ended or is gone,
+    /// and when a run goes on with the work of the job's run (`run_continued_by`), as one the
+    /// person sent again since that run was read: the next pass moves the job to it.
     pub async fn end_making_job(
         &self,
         id: &str,
@@ -578,7 +613,9 @@ impl Store {
         let mut tx = self.pool.begin().await?;
         let res = sqlx::query(
             "UPDATE making_jobs SET status = 'ended', ended_how = ?, ended_at = ?, wake_id = ? \
-             WHERE id = ? AND status != 'ended'",
+             WHERE id = ? AND status != 'ended' AND NOT EXISTS (SELECT 1 FROM runs \
+             WHERE (runs.parent_run_id = making_jobs.last_run_id \
+             AND runs.trigger_kind = 'resume') OR runs.retry_of = making_jobs.last_run_id)",
         )
         .bind(how.as_str())
         .bind(&ended_at)

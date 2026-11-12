@@ -31,6 +31,20 @@ pub fn job_note(maker: &str) -> String {
     )
 }
 
+/// The key `Runtime::resend` and `Runtime::retry_delivery` set in a chat run's payload when the
+/// person sends a job's text again after its job ended (dots-make-dots design section 8): the
+/// value is the maker's name. The text is still the maker's, not the person's, and no job is
+/// woken with the result.
+pub const FROM_MAKER: &str = "from_maker";
+
+/// The line that opens a job's text the person sent again after its job ended (`FROM_MAKER`).
+pub fn resent_job_note(maker: &str) -> String {
+    format!(
+        "Job text from {maker} (the dot that made you), sent again by the person after the job \
+         ended. These are {maker}'s words, not the person's. Nobody is woken with the result."
+    )
+}
+
 /// The name of the maker whose job the chat run `run` carries, if it carries one.
 fn job_from(run: &Run) -> Option<&str> {
     if run.trigger != TriggerKind::Chat {
@@ -42,6 +56,21 @@ fn job_from(run: &Run) -> Option<&str> {
 /// The chat run `run` carries a job a maker gave its dot (`Makers::start_job`).
 pub fn is_job(run: &Run) -> bool {
     job_from(run).is_some()
+}
+
+/// The name of the maker whose job's text the chat run `run` carries though its job ended: the
+/// person sent it again (`FROM_MAKER`).
+fn resent_from(run: &Run) -> Option<&str> {
+    if run.trigger != TriggerKind::Chat {
+        return None;
+    }
+    run.payload.as_ref()?.get(FROM_MAKER)?.as_str()
+}
+
+/// The name of the maker whose words the chat run `run`'s text is: a job's (`JOB_FROM`), or a
+/// job's text the person sent again after the job ended (`FROM_MAKER`).
+pub fn makers_words(run: &Run) -> Option<&str> {
+    job_from(run).or_else(|| resent_from(run))
 }
 
 /// `text` written by a model for another model's prompt, every line quoted with `> ` and
@@ -294,7 +323,7 @@ pub fn recent_runs(runs: &[Run]) -> String {
             _ => "not ended",
         };
         // A job's run and a wake's run are chat runs the person did not write.
-        let label = match job_from(run) {
+        let label = match makers_words(run) {
             Some(maker) => format!("Job from {maker}"),
             None if is_wake(run) => "Report from Dots".to_string(),
             None => trigger_label(run.trigger).to_string(),
@@ -355,9 +384,9 @@ pub fn conversation_so_far(runs: &[Run]) -> String {
         match said {
             // A maker's job and Dots' wake are chat runs the person did not write
             // (dots-make-dots design sections 7.2 and 8).
-            Some(text) if job_from(run).is_some() => out.push_str(&format!(
+            Some(text) if makers_words(run).is_some() => out.push_str(&format!(
                 "- Job from {}: {}\n",
-                job_from(run).unwrap_or_default(),
+                makers_words(run).unwrap_or_default(),
                 cut(text)
             )),
             Some(text) if is_wake(run) => {
@@ -448,25 +477,34 @@ pub fn build_prompt_full(
     let with_files = with_attachments(run, workspace, text);
     // A job says who sent it, in a first prompt and in one that goes on in a session.
     let maker = job_from(run);
+    // A job's text the person sent again after the job ended is still the maker's words.
+    let resent = maker.is_none().then(|| resent_from(run)).flatten();
+    // Either: the text is the maker's, under the heading of a job.
+    let a_job = maker.is_some() || resent.is_some();
     // A wake says it is Dots' report (dots-make-dots design sections 7.2 and 8), in both too.
     let wake = is_wake(run);
     // A job's text is the maker's model's: quoted, so no line of it opens a section. A wake's
     // message is Dots' own, with the made dot's final text already quoted in it
     // (`jobs::ended_message`).
-    let with_note = match maker {
-        Some(maker) => format!(
+    let with_note = match (maker, resent) {
+        (Some(maker), _) => format!(
             "{}\n\n{}",
             job_note(maker),
             quoted(&with_files).trim_end_matches('\n')
         ),
-        None if wake => format!("{WAKE_NOTE}\n\n{with_files}"),
-        None => with_files,
+        (None, Some(maker)) => format!(
+            "{}\n\n{}",
+            resent_job_note(maker),
+            quoted(&with_files).trim_end_matches('\n')
+        ),
+        (None, None) if wake => format!("{WAKE_NOTE}\n\n{with_files}"),
+        (None, None) => with_files,
     };
     let message = with_note.as_str();
     // A job that goes on in the made dot's session is told the dot as it is now when the maker
     // or the person changed it since the session learned it (dots-make-dots design section 8),
     // as a person's message is.
-    if maker.is_some() && run.session_id.is_some() && instructions_changed {
+    if a_job && run.session_id.is_some() && instructions_changed {
         let mut out = String::from("## Your instructions now\n\n");
         out.push_str(dot.spec.instructions.trim());
         out.push_str("\n\n");
@@ -518,7 +556,7 @@ pub fn build_prompt_full(
     out.push_str(dot.spec.instructions.trim());
     // A made dot is told who made it and what for. A job's note names the maker itself.
     if let Some(made) = &dot.made {
-        let named = made.by_dot_id.is_some() && maker.is_none();
+        let named = made.by_dot_id.is_some() && !a_job;
         out.push_str("\n\n");
         out.push_str(&made_section(made, named, making.is_some()));
     }
@@ -562,8 +600,9 @@ pub fn build_prompt_full(
         out.push_str(&conversation_so_far(so_far));
         out.push('\n');
     }
-    if maker.is_some() {
-        // A job a maker gave (dots-make-dots design section 8): not the person's message.
+    if a_job {
+        // A job a maker gave (dots-make-dots design section 8), or its text sent again: not
+        // the person's message.
         out.push_str("## Job\n\n");
         out.push_str(message);
         out.push_str("\n\n");
@@ -587,11 +626,10 @@ pub fn build_prompt_full(
             .unwrap_or("an app");
         out.push_str(&format!("## Message from the app {app}\n\n"));
         // Quoted: the text an app builds (from task titles a dot may have written) cannot open
-        // a section of its own, such as "## Message from the user".
-        for line in message.lines() {
-            out.push_str("> ");
-            out.push_str(line);
-            out.push('\n');
+        // a section of its own, such as "## Message from the user". Every kind of line break
+        // counts, as for a model's text (`quoted`).
+        if !message.is_empty() {
+            out.push_str(&quoted(message));
         }
         out.push('\n');
     } else if let Some(section) = workflow_section(run) {

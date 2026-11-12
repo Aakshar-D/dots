@@ -45,6 +45,8 @@ pub const MODEL_CHARS: &str = "The model is plain text: no line breaks, control 
 /// What a workflow step's run is told by every tool for making dots (design section 5).
 pub const NOT_IN_A_STEP: &str =
     "A run that is a workflow step cannot use the tools for making dots.";
+/// The shortest wait the wakes' loop takes before it tries a waiting wake again.
+const MIN_WAKE_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
 /// What a run that has ended is told by every tool for making dots.
 pub const RUN_ENDED: &str = "This run has ended, so it cannot use the tools for making dots.";
 
@@ -318,11 +320,12 @@ impl Makers {
     }
 
     /// Sets how long the wakes' loop waits before it tries a waiting wake again (`retry_wait`),
-    /// for tests: thirty seconds otherwise.
+    /// for tests: thirty seconds otherwise. Never below `MIN_WAKE_RETRY`, so the loop never
+    /// reads the store back to back while a wake waits.
     #[doc(hidden)]
     pub fn set_wake_retry(&self, wait: std::time::Duration) {
         if let Ok(mut retry_wait) = self.parts.retry_wait.lock() {
-            *retry_wait = wait;
+            *retry_wait = wait.max(MIN_WAKE_RETRY);
         }
     }
 
@@ -331,6 +334,16 @@ impl Makers {
     #[doc(hidden)]
     pub async fn hold_makes(&self) -> tokio::sync::MutexGuard<'_, ()> {
         self.parts.one_at_a_time.lock().await
+    }
+
+    /// How long the wakes' loop waits before it tries a waiting wake again (`set_wake_retry`).
+    #[doc(hidden)]
+    pub fn wake_retry(&self) -> std::time::Duration {
+        self.parts
+            .retry_wait
+            .lock()
+            .map(|wait| *wait)
+            .unwrap_or_default()
     }
 
     pub(crate) fn downgrade(&self) -> WeakMakers {

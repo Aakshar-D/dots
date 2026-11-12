@@ -471,7 +471,7 @@ async fn a_claude_helper_starts_it_through_dots_own_server() {
 #[tokio::test]
 async fn a_wake_or_a_job_run_may_not_start_workflows() {
     let t = start(json!([])).await;
-    let llm = Llm::start(vec![text("Woken."), text("Job done.")]).await;
+    let llm = Llm::start(vec![text("Woken."), text("Job done."), text("Sent again.")]).await;
     let helper =
         t.rt.create_dot(local_spec(&t, &llm.endpoint(), "helper"), None, None)
             .await
@@ -480,6 +480,8 @@ async fn a_wake_or_a_job_run_may_not_start_workflows() {
     let payloads = [
         json!({"message": "\"Fixer\" finished the job.", "wake_id": "W1"}),
         json!({"message": "Fix the icon.", "job_id": "J1", "job_from": "Researcher"}),
+        // A job's text the person sent again after its job ended is still the maker's.
+        json!({"message": "Fix the icon.", "from_maker": "Researcher"}),
     ];
     for (n, payload) in payloads.into_iter().enumerate() {
         let mut new = NewRun::new(&helper.id, TriggerKind::Chat);

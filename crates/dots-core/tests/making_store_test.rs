@@ -8,8 +8,8 @@ mod common;
 use common::{spec, temp_store};
 use dots_core::library::{LibraryConfig, McpServerConfig};
 use dots_core::model::{
-    Dot, DotSpec, Made, Making, MAKE_PER_RUN_DEFAULT, MAKE_PER_RUN_MAX, MAKE_PER_RUN_RULE,
-    MAKE_TOTAL_DEFAULT, MAKE_TOTAL_MAX, MAKE_TOTAL_RULE,
+    Dot, DotSpec, Made, Making, NewRun, RunStatus, TriggerKind, MAKE_PER_RUN_DEFAULT,
+    MAKE_PER_RUN_MAX, MAKE_PER_RUN_RULE, MAKE_TOTAL_DEFAULT, MAKE_TOTAL_MAX, MAKE_TOTAL_RULE,
 };
 use dots_core::store::Store;
 use dots_core::vault::Grants;
@@ -405,5 +405,50 @@ async fn the_making_tables_have_their_indexes_and_the_held_mark() {
     .unwrap();
     assert_eq!(held, 1);
     pool.close().await;
+    store.close().await;
+}
+
+/// A delete of a dot that waits for its runs and the wakes it tells its makers are one step
+/// (dots-make-dots design sections 8 and 9): with a run of the dot queued, nothing is deleted
+/// and no wake is stored; without one, the dot goes and its wakes are stored with it.
+#[tokio::test]
+async fn a_delete_and_its_wakes_are_stored_together_or_not_at_all() {
+    let (_dir, store) = temp_store().await;
+    let maker = maker(&store).await;
+    let made = store
+        .create_dot(&spec("Blog Watcher"), None, "default")
+        .await
+        .unwrap();
+    let said = "\"Blog Watcher\" was deleted before the job ended.";
+    let wakes = [(maker.id.clone(), "topic-1".to_string(), said.to_string())];
+    let queued = store
+        .create_run(&NewRun::new(&made.id, TriggerKind::Schedule))
+        .await
+        .unwrap();
+
+    let refused = store.delete_dot_if_idle_and_wake(&made.id, &wakes).await;
+
+    assert!(matches!(refused, Err(Error::Conflict(_))), "{refused:?}");
+    assert!(store.get_dot(&made.id).await.is_ok());
+    assert!(store.waiting_making_wakes().await.unwrap().is_empty());
+
+    store
+        .finish_run(&queued.id, RunStatus::Cancelled, None, None)
+        .await
+        .unwrap();
+    store
+        .delete_dot_if_idle_and_wake(&made.id, &wakes)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        store.get_dot(&made.id).await,
+        Err(Error::NotFound(_))
+    ));
+    let stored = store.waiting_making_wakes().await.unwrap();
+    assert_eq!(stored.len(), 1, "{stored:#?}");
+    assert_eq!(stored[0].maker_dot_id, maker.id);
+    assert_eq!(stored[0].root_run_id, "topic-1");
+    assert_eq!(stored[0].message, said);
     store.close().await;
 }

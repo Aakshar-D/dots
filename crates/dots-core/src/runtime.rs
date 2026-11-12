@@ -2686,8 +2686,12 @@ impl Runtime {
         self.refuse_at_the_limit(&dot)?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
         new.id = Some(crate::util::new_id());
-        // The person typed it (conversational chat spec section 3).
-        let mut payload = json!({ "message": message, crate::prompt::TYPED: true });
+        // The person typed it (conversational chat spec section 3); a job's text that Retry
+        // sends again is still its maker's words (dots-make-dots design section 8).
+        let mut payload = match &extra.from_maker {
+            Some(maker) => json!({ "message": message, crate::prompt::FROM_MAKER: maker }),
+            None => json!({ "message": message, crate::prompt::TYPED: true }),
+        };
         if let Some(note) = &extra.send_later {
             payload["send_later"] = serde_json::to_value(note)?;
         }
@@ -2846,32 +2850,39 @@ impl Runtime {
         };
         let mut new = NewRun::resend_of(&run, parent.as_ref());
         // Sent by the person: no note that Dots resent it.
+        let mut job = None;
         if let Some(serde_json::Value::Object(payload)) = &mut new.payload {
             payload.remove(crate::model::RESENT);
-            // A maker's job whose job has ended since is no job any more (dots-make-dots design
-            // section 8): nobody is woken with its result, so it does not say so.
-            let job = payload
+            job = payload
                 .get(crate::making::jobs::JOB_ID)
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
-            if let Some(job) = job {
-                let open = match self.store.get_making_job(&job).await {
-                    Ok(job) => job.status != crate::making::jobs::JobStatus::Ended,
-                    Err(Error::NotFound(_)) => false,
-                    Err(e) => return Err(e),
-                };
-                if !open {
-                    payload.remove(crate::making::jobs::JOB_ID);
-                    payload.remove(crate::prompt::JOB_FROM);
-                    payload.remove(crate::limits::BACKGROUND);
-                }
-            }
         }
         // Its files go with it, as a Retry's do (attachments spec section 4.3).
-        let run = self
-            .store
-            .create_chat_run(&new, &[], None, Some(run_id))
-            .await?;
+        let run = match job {
+            // A maker's job goes on in it while the job is open. One that has ended since is
+            // no job any more (dots-make-dots design section 8): nobody is woken with its
+            // result, so it does not say so, and its text stays the maker's words. Which one
+            // is read in the transaction that stores the run.
+            Some(job) => {
+                let mut ended = new.clone();
+                if let Some(serde_json::Value::Object(payload)) = &mut ended.payload {
+                    payload.remove(crate::making::jobs::JOB_ID);
+                    payload.remove(crate::limits::BACKGROUND);
+                    if let Some(maker) = payload.remove(crate::prompt::JOB_FROM) {
+                        payload.insert(crate::prompt::FROM_MAKER.into(), maker);
+                    }
+                }
+                self.store
+                    .create_resent_job_run(&new, &ended, &job, run_id)
+                    .await?
+            }
+            None => {
+                self.store
+                    .create_chat_run(&new, &[], None, Some(run_id))
+                    .await?
+            }
+        };
         self.runner.enqueued(&run);
         Ok(run)
     }
@@ -2976,9 +2987,13 @@ impl Runtime {
                 "this message has no text to send again".into(),
             ));
         };
-        // Its files move to the new message (attachments spec section 4.3).
+        // Its files move to the new message (attachments spec section 4.3). A job's run is
+        // sent as its maker's words, not the person's, and as no job: Retry does not carry the
+        // job on, so the job ends with the run that did not get there (dots-make-dots design
+        // section 8).
         let extra = ChatExtra {
             carry_from: Some(run.id.clone()),
+            from_maker: crate::prompt::makers_words(&run).map(str::to_owned),
             ..ChatExtra::default()
         };
         match self
@@ -4659,6 +4674,7 @@ impl Runtime {
             attachment_ids,
             scheduled_id: Some(message.id.clone()),
             carry_from: None,
+            from_maker: None,
         })
     }
 

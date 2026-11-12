@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
+use tokio::task::JoinHandle;
 
 use super::jobs::{deleted_message, JobEnd, JobStatus, JOB_WAITING, JOB_WORKING};
 use super::log::{MakingEventKind, NewMakingEvent};
@@ -1069,7 +1070,7 @@ impl Makers {
         if p.store.latest_run(&made.id, true).await?.is_some() {
             return Err(busy());
         }
-        let (topics, deleted) = match self.delete_and_tell(&made).await {
+        let (topics, finish) = match self.delete_and_tell(&made).await {
             Ok(gone) => gone,
             // A run of it was queued in between (`Store::delete_dot_if_idle`).
             Err(Error::Conflict(_)) => return Err(busy()),
@@ -1104,7 +1105,7 @@ impl Makers {
         // take a while, and delivering the wakes takes the thread lock.
         drop(one_at_a_time);
         let said = format!("Deleted the dot \"{name}\" and its history.");
-        self.after_delete(deleted).await;
+        finished(finish).await;
         Ok(said)
     }
 
@@ -1126,13 +1127,25 @@ impl Makers {
         // the dot goes.
         let one_at_a_time = p.one_at_a_time.lock().await;
         let dot = p.store.get_dot(dot_id).await?;
-        let (topics, deleted) = self.delete_and_tell(&dot).await?;
+        let (topics, finish) = self.delete_and_tell(&dot).await?;
         for (maker_id, topic) in &topics {
             self.updated(maker_id, topic);
         }
         // After the service's lock is released, as for the maker's delete.
         drop(one_at_a_time);
-        self.after_delete(deleted).await;
+        finished(finish).await;
+        Ok(())
+    }
+
+    /// `delete_and_tell` of the dot `dot_id` alone, under the service's lock, then what the
+    /// delete finishes: for tests, which reach it with no settle of the jobs before it.
+    #[doc(hidden)]
+    pub async fn delete_and_tell_alone(&self, dot_id: &str) -> Result<()> {
+        let one_at_a_time = self.parts.one_at_a_time.lock().await;
+        let dot = self.parts.store.get_dot(dot_id).await?;
+        let (_, finish) = self.delete_and_tell(&dot).await?;
+        drop(one_at_a_time);
+        finished(finish).await;
         Ok(())
     }
 
@@ -1147,16 +1160,24 @@ impl Makers {
     /// topic is woken once, with all it is told.
     ///
     /// Returns the topics that showed the dot and were not told by a job's entry, for the
-    /// caller to tell (`Store::making_topics_of`), and what the caller finishes with
-    /// `after_delete` once it released the service's lock.
-    async fn delete_and_tell(&self, dot: &Dot) -> Result<(Vec<(String, String)>, Deleted)> {
+    /// caller to tell (`Store::making_topics_of`), and the task that finishes the delete
+    /// (`after_delete`). That task starts as soon as the rows are gone and runs on its own, so
+    /// a caller whose call is dropped (an MCP call whose run was stopped, say) cannot leave the
+    /// dot gone with its teams not told, its Edge open or its wakes waiting; the caller awaits
+    /// it once it released the service's lock. When the delete is refused after a settle here
+    /// ended a job, the wakes' loop is told to deliver that job's wake now.
+    async fn delete_and_tell(&self, dot: &Dot) -> Result<(Vec<(String, String)>, JoinHandle<()>)> {
         let p = &self.parts;
         let settling = p.settling.lock().await;
+        let mut settled = false;
         for job in p.store.open_making_jobs(Some(&dot.id)).await? {
             let id = job.id.clone();
             // A job's run that waits is not told here: the dot goes, and the job with it.
-            if let Err(e) = self.settle_job(job, &mut Vec::new()).await {
-                tracing::warn!(job = %id, "settling a job before its dot's delete failed: {e}");
+            match self.settle_job(job, &mut Vec::new()).await {
+                Ok(woke) => settled |= woke,
+                Err(e) => {
+                    tracing::warn!(job = %id, "settling a job before its dot's delete failed: {e}")
+                }
             }
         }
         let open_jobs = p.store.open_making_jobs(Some(&dot.id)).await?;
@@ -1194,7 +1215,20 @@ impl Makers {
             .into_iter()
             .map(|(maker, topic, message)| (maker.to_string(), topic.to_string(), message))
             .collect();
-        let deleted = p.dot_admin.delete_rows(&dot.id, &wakes).await?;
+        let deleted = match p.dot_admin.delete_rows(&dot.id, &wakes).await {
+            Ok(deleted) => deleted,
+            Err(e) => {
+                // The job's wake is stored, and no end of a run may come to deliver it.
+                if settled {
+                    p.retry.notify_one();
+                }
+                return Err(e);
+            }
+        };
+        let finish = {
+            let makers = self.clone();
+            tokio::spawn(async move { makers.after_delete(deleted).await })
+        };
         drop(settling);
         for job in &open_jobs {
             let detail = json!({
@@ -1208,17 +1242,26 @@ impl Makers {
                 (maker_id, topic) != (&job.maker_dot_id, &job.maker_root_run_id)
             });
         }
-        Ok((topics, deleted))
+        Ok((topics, finish))
     }
 
-    /// What a delete finishes once the service's lock is released (`delete_and_tell`): the
-    /// dot's Edge, teams and files (`DotAdmin::after_delete`), then the wakes it stored, and
-    /// those of jobs that ended just before it, are delivered. The caller holds no lock.
+    /// What a delete finishes once its rows are gone (`delete_and_tell`), in a task of its own:
+    /// the dot's Edge, teams and files (`DotAdmin::after_delete`), then the wakes it stored,
+    /// and those of jobs that ended just before it, are delivered. It takes none of the
+    /// service's locks.
     async fn after_delete(&self, deleted: Deleted) {
         self.parts.dot_admin.after_delete(deleted).await;
         if let Err(e) = self.deliver_wakes().await {
             tracing::warn!("the wakes of a delete wait; delivering them failed: {e}");
         }
+    }
+}
+
+/// Waits for the task that finishes a delete (`Makers::after_delete`); one that panicked is
+/// logged, since the dot is gone either way.
+async fn finished(finish: JoinHandle<()>) {
+    if let Err(e) = finish.await {
+        tracing::error!("finishing a dot's delete failed: {e}");
     }
 }
 

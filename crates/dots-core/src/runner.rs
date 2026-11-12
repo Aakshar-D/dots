@@ -678,7 +678,8 @@ impl Runner {
     /// Whether `run` may start workflows: it is no step of a workflow, and the person's chat is
     /// at the root of its resumes (a follow-up, scheduled, webhook or manual run is not). A chat
     /// run that carries a maker's job or Dots' wake of a maker is not the person's: its words
-    /// were written by a model (dots-make-dots design section 8).
+    /// were written by a model (dots-make-dots design section 8). So is a job's text the person
+    /// sent again after its job ended (`prompt::FROM_MAKER`).
     async fn may_start_workflows(&self, run: &Run) -> bool {
         if run.workflow_step_run_id.is_some() {
             return false;
@@ -697,6 +698,7 @@ impl Runner {
             r.payload.as_ref().is_some_and(|p| {
                 p.get(crate::making::jobs::JOB_ID).is_some()
                     || p.get(crate::making::wake::WAKE_ID).is_some()
+                    || p.get(crate::prompt::FROM_MAKER).is_some()
             })
         });
         cur.trigger == TriggerKind::Chat && !made_by_a_model
@@ -753,7 +755,8 @@ impl Runner {
     /// design section 8): a job's prompt names them too, so a job's run tells the session as a
     /// person's message does.
     async fn instructions_changed(&self, run: &Run, dot: &Dot) -> bool {
-        let tells = |r: &Run| crate::prompt::is_typed(r) || crate::prompt::is_job(r);
+        let tells =
+            |r: &Run| crate::prompt::is_typed(r) || crate::prompt::makers_words(r).is_some();
         if !tells(run) || run.session_id.is_none() {
             return false;
         }
