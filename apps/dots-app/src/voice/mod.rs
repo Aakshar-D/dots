@@ -11,6 +11,8 @@ pub mod events;
 pub mod hotkey;
 pub mod notices;
 pub mod service;
+#[doc(hidden)]
+pub mod testing;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -66,7 +68,7 @@ pub fn manage(app: &AppHandle, rt: Option<Arc<Runtime>>, data_dir: Option<PathBu
             let (tx, rx) = unbounded_channel();
             let service = Service::new(
                 Arc::new(RuntimeHost(rt.clone())),
-                Arc::new(RealFactory),
+                Arc::new(RealFactory::devices()),
                 dir.join("voice").join("models"),
                 Manifest::pinned(),
                 tx,

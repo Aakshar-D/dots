@@ -15,9 +15,9 @@ use dots_core::open_dot::picture::View;
 use dots_core::settings::Settings;
 use dots_core::Runtime;
 use dots_voice::{
-    CpalMic, CpalSink, EarSettings, Ears, Manifest, Mic, ModelError, ModelPaths, Parts, Recognizer,
-    Session, SessionEvent, SessionSettings, SherpaDetector, SherpaRecognizer, SherpaSpeaker,
-    SherpaWake, Sink, Speaker, State, Voice, WakeSpotter,
+    CpalMic, CpalSink, EarSettings, Ears, EngineError, Manifest, Mic, ModelError, ModelPaths,
+    Parts, Recognizer, Session, SessionEvent, SessionSettings, SherpaDetector, SherpaRecognizer,
+    SherpaSpeaker, SherpaWake, Sink, Speaker, State, Voice, WakeSpotter,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
@@ -1321,8 +1321,34 @@ fn kind_of(e: &ModelError) -> &'static str {
 
 // ---- the real parts -------------------------------------------------------------------------
 
-/// Sessions on the real models, microphone and speaker (`dots-voice`'s session example).
-pub struct RealFactory;
+/// Opens the microphone with this device id (`None`: the system's default).
+pub type OpenMic = Arc<dyn Fn(Option<&str>) -> Result<Box<dyn Mic>, EngineError> + Send + Sync>;
+/// Opens the speaker with this device id (`None`: the system's default).
+pub type OpenSink = Arc<dyn Fn(Option<&str>) -> Result<Arc<dyn Sink>, EngineError> + Send + Sync>;
+
+/// Sessions on the real models, opening the microphone and the speaker through its openers:
+/// the system's devices in the app (`devices`), fakes in the end-to-end test.
+pub struct RealFactory {
+    open_mic: OpenMic,
+    open_sink: OpenSink,
+}
+
+impl RealFactory {
+    /// The system's microphone and speaker (`dots-voice`'s session example).
+    pub fn devices() -> Self {
+        Self::with_openers(
+            Arc::new(|id: Option<&str>| CpalMic::open(id).map(|m| Box::new(m) as Box<dyn Mic>)),
+            Arc::new(|id: Option<&str>| CpalSink::open(id).map(|s| Arc::new(s) as Arc<dyn Sink>)),
+        )
+    }
+
+    pub fn with_openers(open_mic: OpenMic, open_sink: OpenSink) -> Self {
+        Self {
+            open_mic,
+            open_sink,
+        }
+    }
+}
 
 fn device(d: dots_voice::Device) -> VoiceDevice {
     VoiceDevice {
@@ -1356,24 +1382,20 @@ impl SessionFactory for RealFactory {
             Err(_) => None,
         };
         let out = spec.speaker.clone();
-        let sink: Arc<dyn Sink> =
-            Arc::new(CpalSink::open(out.as_deref()).map_err(|_| NO_SPEAKER.to_string())?);
+        let sink = (self.open_sink)(out.as_deref()).map_err(|_| NO_SPEAKER.to_string())?;
         let (voice_tx, voice_events) = unbounded_channel();
         let voice = Voice::new(speaker, sink.clone(), voice_tx);
         let mic = spec.mic.clone();
+        let (open_sink, open_mic) = (self.open_sink.clone(), self.open_mic.clone());
         let parts = Parts {
             ears,
             short_ears,
             voice,
             voice_events,
             sink,
-            open_sink: Box::new(move || {
-                CpalSink::open(out.as_deref()).map(|s| Arc::new(s) as Arc<dyn Sink>)
-            }),
+            open_sink: Box::new(move || open_sink(out.as_deref())),
             wake,
-            open_mic: Box::new(move || {
-                CpalMic::open(mic.as_deref()).map(|m| Box::new(m) as Box<dyn Mic>)
-            }),
+            open_mic: Box::new(move || open_mic(mic.as_deref())),
         };
         if !wanted() {
             return Ok(None);

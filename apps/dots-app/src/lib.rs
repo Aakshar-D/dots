@@ -17,6 +17,11 @@ pub mod update_service;
 pub mod viewing;
 mod voice;
 
+/// For the end-to-end test of Open Dot only (`tests/open_dot_e2e.rs`): the real voice service
+/// over a runtime, with a microphone and a speaker the test supplies.
+#[doc(hidden)]
+pub use voice::testing;
+
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
 use crate::state::AppState;
