@@ -89,6 +89,8 @@ pub trait MindPort: Send + Sync {
     /// True when a step that waited on the person was dropped.
     fn reset(&self) -> bool;
     fn pending(&self) -> bool;
+    /// The stage took a newer input than the turns in flight: none of them installs a step.
+    fn input_arrived(&self);
 }
 
 /// How a reply ends, in the session's terms.
@@ -333,6 +335,8 @@ impl Bridge {
         };
         match self.session.answered(&text) {
             Some(turn) => {
+                // From now on no turn in flight installs a step this click could answer.
+                self.mind.input_arrived();
                 s.options.clear();
                 s.picks.insert(turn, index);
             }
@@ -355,6 +359,8 @@ impl Bridge {
             s.live = Some(turn);
             s.gap = false;
             s.owed = None;
+            // An older turn's events are dropped from now on: it installs no step either.
+            self.mind.input_arrived();
             // a card left from an older turn is no longer cleared on that turn's clock
             s.shown += 1;
             self.session.thinking();
@@ -780,6 +786,7 @@ mod tests {
         scripts: Mutex<VecDeque<Vec<Step>>>,
         pending: AtomicBool,
         reset_drops: AtomicBool,
+        inputs: AtomicU64,
     }
 
     impl FakeMind {
@@ -833,6 +840,9 @@ mod tests {
         }
         fn pending(&self) -> bool {
             self.pending.load(Ordering::SeqCst)
+        }
+        fn input_arrived(&self) {
+            self.inputs.fetch_add(1, Ordering::SeqCst);
         }
     }
 
@@ -1781,6 +1791,7 @@ mod tests {
         fn pending(&self) -> bool {
             self.pending.lock().unwrap().is_some()
         }
+        fn input_arrived(&self) {}
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2077,6 +2088,20 @@ mod tests {
         // The answer's own reply then listens for a follow-up: nothing waits, nothing lapses.
         state(&r, State::Listening);
         assert!(!r.mind.calls().contains(&MindCall::Lapse));
+    }
+
+    /// The mind is told of every newer input as the stage takes it: a click at once (before
+    /// its `Heard` comes back), a sentence when heard. A turn in flight then installs no step.
+    #[tokio::test]
+    async fn the_mind_is_told_of_each_newer_input_as_it_arrives() {
+        let mut r = rig();
+        asked(&mut r).await;
+        assert_eq!(r.mind.inputs.load(Ordering::SeqCst), 1);
+        r.bridge.pick(0, 1);
+        assert_eq!(r.mind.inputs.load(Ordering::SeqCst), 2, "the click");
+        r.heard("Yes", 101);
+        settle().await;
+        assert_eq!(r.mind.inputs.load(Ordering::SeqCst), 3);
     }
 
     // ---- the wake phrase, the stop phrase and talking over Dot (step 5) ----------------------

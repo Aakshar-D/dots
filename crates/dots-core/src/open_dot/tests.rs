@@ -720,6 +720,39 @@ async fn lapse_during_a_turn_leaves_nothing_pending() {
     t.rt.shutdown();
 }
 
+/// A newer input (a click, a sentence) arrived at the stage while a turn was in flight: that
+/// turn's question is never shown there, so its step is not installed, and a click meant for
+/// the question that did show cannot answer it.
+#[tokio::test]
+async fn a_turn_overtaken_by_a_newer_input_installs_no_step() {
+    let t = T::start().await;
+    let dot = t.dot("Research").await;
+    let approval = t.approval(&dot, "ls -la").await;
+    let hold = Arc::new(tokio::sync::Notify::new());
+    t.fake.push(held(approve_a1(), &hold));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let view = home();
+    let heard = t.mind.hear(&t.rt, "approve the research one", &view, &tx);
+    let clicked = async {
+        while t.fake.calls() == 0 {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        t.mind.input_arrived();
+        hold.notify_one();
+    };
+    let _ = tokio::join!(heard, clicked);
+    drain(&mut rx);
+    assert!(!t.mind.pending());
+    // The click that overtook it (Yes on what showed before) is applied to nothing.
+    t.pick(0).await;
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    // A turn begun after the input installs its step as ever.
+    t.fake.push(approve_a1());
+    t.hear("approve the research one").await;
+    assert!(t.mind.pending());
+    t.rt.shutdown();
+}
+
 #[tokio::test]
 async fn a_stale_confirmation_is_not_passed() {
     let t = T::start().await;

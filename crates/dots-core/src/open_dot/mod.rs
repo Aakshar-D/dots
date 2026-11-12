@@ -205,6 +205,9 @@ struct State {
     deciding: bool,
     /// The kind of the step last taken by a yes: the words that are "that same answer".
     decided_kind: Option<ConfirmKind>,
+    /// How many inputs the stage took (`input_arrived`): a turn in flight when a newer one
+    /// came is not shown there any more, so it installs no step.
+    inputs: u64,
 }
 
 impl State {
@@ -352,6 +355,8 @@ struct Out<'a> {
     ended: AtomicBool,
     /// The idle forget dropped a step that waited as this turn began.
     forgot: bool,
+    /// `State::inputs` when this turn's call was first polled.
+    inputs: u64,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -541,6 +546,14 @@ impl Mind {
         dropped
     }
 
+    /// The stage took a newer input (a click, or a sentence heard) than the turns in flight.
+    /// Their events are no longer shown there, so none of them installs a step: a click on the
+    /// question that did show can never be applied to one nobody saw. Called with no await
+    /// before it, while the stage holds the order of its inputs.
+    pub fn input_arrived(&self) {
+        lock(&self.state).inputs += 1;
+    }
+
     /// Whether a step waits on the person: one asked within the pending limit. An expired one
     /// is dropped by the next turn.
     pub fn pending(&self) -> bool {
@@ -627,9 +640,9 @@ impl Mind {
         tx: &mpsc::UnboundedSender<MindEvent>,
     ) {
         let started = std::time::Instant::now();
-        let (arrived, busy, drops) = {
+        let (arrived, busy, drops, inputs) = {
             let s = lock(&self.state);
-            (s.decided, s.deciding, s.drops)
+            (s.decided, s.deciding, s.drops, s.inputs)
         };
         // An input that is no turn is still the newest turn at the stage, which drops the
         // events of every older one: nothing older may go on to ask or install a step that
@@ -664,6 +677,7 @@ impl Mind {
             done: AtomicBool::new(false),
             ended: AtomicBool::new(false),
             forgot,
+            inputs,
         };
         if forgot {
             o.send(MindEvent::Cleared);
@@ -705,9 +719,10 @@ impl Mind {
         }
     }
 
+    /// Installs the step this turn asked, unless a newer turn or a newer input came meanwhile.
     fn set_pending(&self, o: &Out<'_>, kind: Waiting, view: &View) {
         let mut s = lock(&self.state);
-        if s.turn == o.turn {
+        if s.turn == o.turn && s.inputs == o.inputs {
             s.pending = Some(Pending {
                 kind,
                 account: view.account.clone(),

@@ -1498,6 +1498,9 @@ impl MindPort for RuntimeMind {
     fn pending(&self) -> bool {
         self.0.open_dot().pending()
     }
+    fn input_arrived(&self) {
+        self.0.open_dot().input_arrived();
+    }
 }
 
 /// The runtime's settings (saved the way `update_settings` saves them) and its mind.

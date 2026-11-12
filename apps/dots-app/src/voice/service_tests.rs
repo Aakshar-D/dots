@@ -292,6 +292,7 @@ impl MindPort for QuietMind {
     fn pending(&self) -> bool {
         false
     }
+    fn input_arrived(&self) {}
 }
 
 #[derive(Default)]
