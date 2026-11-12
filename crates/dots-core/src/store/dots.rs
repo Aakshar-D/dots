@@ -573,9 +573,10 @@ impl Store {
     }
 
     /// What the dot has for the person (needs-you spec section 2), as `(needs_you, unread)`:
-    /// its open questions, pending approvals, paused watchers, app proposals waiting for review
-    /// and the workflow runs its chats started that wait for the person (teams spec section
-    /// 10); and those plus its runs that ended and its notes posted after its `seen_at` (none
+    /// its open questions, pending approvals, paused watchers, app proposals waiting for review,
+    /// the workflow runs its chats started that wait for the person (teams spec section 10)
+    /// and, for a maker, its make requests the person has not answered (dots-make-dots design
+    /// section 11); and those plus its runs that ended and its notes posted after its `seen_at` (none
     /// without one). Items the person snoozed or marked done are left out.
     /// `NotFound` for an unknown dot.
     pub async fn dot_counts(&self, id: &str) -> Result<(u32, u32)> {
@@ -599,6 +600,8 @@ impl Store {
               AND {not_delivered}) \
              + (SELECT COUNT(*) FROM workflow_runs w JOIN runs o ON o.id = w.origin_run_id \
               WHERE o.dot_id = d.id AND w.status = 'waiting' AND w.waiting_on IS NOT NULL) \
+             + (SELECT COUNT(*) FROM make_requests mr WHERE mr.maker_dot_id = d.id \
+              AND mr.status IN ('waiting', 'gone') AND {make_request}) \
              AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
@@ -615,6 +618,7 @@ impl Store {
             review = hidden_sql(InboxKind::Review, "r.id"),
             ended_not_delivered = hidden_sql(InboxKind::NotDelivered, "r.id"),
             note = hidden_sql(InboxKind::Message, "m.id"),
+            make_request = hidden_sql(InboxKind::MakeRequest, "mr.id"),
         );
         let row = sqlx::query(&sql)
             .bind(id)

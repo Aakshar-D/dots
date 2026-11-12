@@ -1472,6 +1472,7 @@ pub fn samples() -> Value {
             }),
             needs_you: 0,
             unread: 0,
+            made_dots: 2,
         }),
         "Inbox": to(Inbox {
             approvals: vec![PendingApproval {
@@ -1540,6 +1541,9 @@ pub fn samples() -> Value {
                 test: false,
                 started_at: TS.into(),
             }],
+            // Empty until the UI lists make requests: `InboxKeys` below is checked against
+            // the UI's own key rules, which do not know the kind yet.
+            make_requests: vec![],
         }),
         // What `library_add` takes and the Library commands answer: a config of every kind and
         // transport, and entries of every kind (a plugin's own server among them).
@@ -1812,6 +1816,23 @@ pub fn samples() -> Value {
             to(RuntimeEvent::MakingUpdated {
                 dot_id: "01J0DOT".into(),
                 root_run_id: "01J0RUN".into(),
+            }),
+            to(RuntimeEvent::MakeRequested {
+                request_id: "01J0MAKEREQ".into(),
+                dot_id: "01J0DOT".into(),
+                root_run_id: "01J0RUN".into(),
+                title: "Researcher wants to make a dot with more than it has".into(),
+                name: "Blog Watcher".into(),
+                purpose: "Reads the feeds".into(),
+            }),
+            to(RuntimeEvent::DotMade {
+                dot_id: "01J0DOT".into(),
+                root_run_id: "01J0RUN".into(),
+                maker_name: "Researcher".into(),
+                made_dot_id: "01J0MADE".into(),
+                name: "Blog Watcher".into(),
+                purpose: "Reads the feeds".into(),
+                typed: false,
             }),
             to(RuntimeEvent::WatcherUpdated {
                 dot_id: "01J0DOT".into(),

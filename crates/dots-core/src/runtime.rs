@@ -24,6 +24,8 @@ use crate::followups::FollowUps;
 use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, InboxMark, MarkState};
 use crate::library::LibraryKind;
 use crate::library_service::LibraryService;
+use crate::making::cards::MakingCard;
+use crate::making::requests::{MakeDecision, MakeRequest, MakeRequestCard, PendingMakeRequest};
 use crate::making::service::Makers;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, ConversationFile, DeliveryCounts, Dot, DotOverview,
@@ -887,11 +889,21 @@ impl Runtime {
     }
 
     /// Every dot with its active and last run, where its schedule stands, and what it has for
-    /// the person (needs-you spec section 3). A dot deleted meanwhile is left out.
+    /// the person (needs-you spec section 3), and how many dots it made that exist (dots-make-dots
+    /// design section 11). A dot deleted meanwhile is left out.
     pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
         let now = self.clock.now();
         let mut rows = Vec::new();
-        for dot in self.store.list_dots().await? {
+        let dots = self.store.list_dots().await?;
+        // Counted from the list itself: no further read for each dot.
+        let mut made_by: HashMap<String, u32> = HashMap::new();
+        for maker in dots
+            .iter()
+            .filter_map(|dot| dot.made.as_ref()?.by_dot_id.as_ref())
+        {
+            *made_by.entry(maker.clone()).or_default() += 1;
+        }
+        for dot in dots {
             let (needs_you, unread) = match self.store.dot_counts(&dot.id).await {
                 Ok(counts) => counts,
                 Err(Error::NotFound(_)) => continue,
@@ -903,6 +915,7 @@ impl Runtime {
                 schedule_state: self.schedule_view(&dot, now).await?,
                 needs_you,
                 unread,
+                made_dots: made_by.get(&dot.id).copied().unwrap_or(0),
                 dot,
             });
         }
@@ -1105,6 +1118,15 @@ impl Runtime {
                 proposal,
             })
             .collect();
+        // Oldest first in the store; the Inbox lists the newest first.
+        let make_requests = self
+            .store
+            .list_make_requests(None, true)
+            .await?
+            .iter()
+            .rev()
+            .map(|request| PendingMakeRequest::of(request, &name(&request.maker_dot_id)))
+            .collect();
         let inbox = Inbox {
             approvals,
             review_runs,
@@ -1117,6 +1139,7 @@ impl Runtime {
             team_scope: self.store.team_scope_issues().await?,
             not_delivered,
             workflows: self.store.waiting_workflow_runs().await?,
+            make_requests,
             back: Vec::new(),
             snoozed: Vec::new(),
             done: Vec::new(),
@@ -1192,6 +1215,9 @@ impl Runtime {
         inbox
             .team_scope
             .retain(|t| shown(InboxKind::TeamScope, &format!("{}/{}", t.team_id, t.dot_id)));
+        inbox
+            .make_requests
+            .retain(|r| shown(InboxKind::MakeRequest, &r.id));
         inbox.hidden_messages = messages
             .iter()
             .filter(|m| !shown(InboxKind::Message, &m.id))
@@ -1219,6 +1245,9 @@ impl Runtime {
             + inbox.workflows.len()
             // A chat message that did not reach its dot (snooze and done spec section 3.9.7).
             + inbox.not_delivered.len()
+            // A make request's waiting card counts like an approval (dots-make-dots design
+            // section 11).
+            + inbox.make_requests.len()
             + self.store.count_waiting_messages().await?)
     }
 
@@ -2392,8 +2421,12 @@ impl Runtime {
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`). In an account, the
     /// role must allow changing dots (members spec §6.3), or this PC is waiting for or removed
     /// from the member list, and only cleaning up (`require_cleanup`).
+    ///
+    /// It goes through the makers (`Makers::person_deletes`), so what they show of the dot is
+    /// told (dots-make-dots design section 11): a made dot's waiting job ends and its maker is
+    /// woken, a change request for it goes, and the topics' cards and the Inbox read again.
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
-        self.dot_admin.delete(id).await
+        self.makers.person_deletes(id).await
     }
 
     /// Switches the dot on or off. In an account, the role must allow changing dots (members
@@ -3219,6 +3252,42 @@ impl Runtime {
             .instructions()
             .changed(&decided.id, &decided.dot_id);
         Ok((decided, run))
+    }
+
+    /// The ask card of the make request `id`, waiting or answered (dots-make-dots design
+    /// section 7.2), as `Makers::request_card` builds it: it says whether this PC's role may
+    /// allow the request, and why not. Anyone may read it. `NotFound` once the request is
+    /// gone with its maker, or with the made dot a change was asked for.
+    pub async fn make_request_card(&self, id: &str) -> Result<MakeRequestCard> {
+        self.makers.request_card(id).await
+    }
+
+    /// The ask cards of every request that waits for the person, of every maker, newest first:
+    /// the Inbox's section (dots-make-dots design section 11). `Inbox::make_requests` lists
+    /// the same requests, without the ones the person snoozed or marked done.
+    pub async fn waiting_make_requests(&self) -> Result<Vec<MakeRequestCard>> {
+        self.makers.waiting_cards().await
+    }
+
+    /// The person's answer on the ask card of the make request `id`: allow it, make or change
+    /// the dot without what is beyond the maker's reach, or refuse it (dots-make-dots design
+    /// sections 7.2 and 9). Returns the request as it is after; the maker is woken with the
+    /// answer. The checks are `Makers::decide_request`'s: an answer that makes or changes a
+    /// dot needs this PC's right to change dots in the maker's account and workspace, and to
+    /// give secrets when variables are given (`NotAllowed`, and the request still waits).
+    pub async fn decide_make_request(
+        &self,
+        id: &str,
+        decision: MakeDecision,
+    ) -> Result<MakeRequest> {
+        self.makers.decide_request(id, decision).await
+    }
+
+    /// The making cards of the chat topic `root_run_id`, oldest first (dots-make-dots design
+    /// section 11): made, working and finished, the ask, changed and deleted, each with what
+    /// it shows (`Makers::cards`). Empty for a topic of a dot that makes none.
+    pub async fn making_cards(&self, root_run_id: &str) -> Result<Vec<MakingCard>> {
+        self.makers.cards(root_run_id).await
     }
 
     /// Decides an approval. With `allow_rule`, an approval also saves that allow rule to the

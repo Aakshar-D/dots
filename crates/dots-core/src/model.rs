@@ -950,6 +950,10 @@ pub struct DotOverview {
     pub needs_you: u32,
     /// `needs_you`, plus its runs that ended and its notes posted after `dot.seen_at`.
     pub unread: u32,
+    /// How many dots it made that exist now: the "2" of a maker's "can make dots · 2 of 10",
+    /// whose "10" is `dot.spec.making.total` (dots-make-dots design section 11).
+    #[serde(default)]
+    pub made_dots: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1052,6 +1056,11 @@ pub struct Inbox {
     /// failed step), newest first (teams spec section 10).
     #[serde(default)]
     pub workflows: Vec<WaitingWorkflowRun>,
+    /// Requests of makers that wait for the person: a dot beyond the maker's reach or over a
+    /// limit, or a change that gives a made dot more than its maker has, newest first
+    /// (dots-make-dots design section 11). A waiting card counts like an approval.
+    #[serde(default)]
+    pub make_requests: Vec<crate::making::requests::PendingMakeRequest>,
 }
 
 /// A chat run that did not reach its dot, as the Inbox lists it.

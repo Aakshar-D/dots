@@ -2522,6 +2522,7 @@
       "workflow_step_run_id": null,
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
     },
+    "made_dots": 2,
     "needs_you": 0,
     "schedule_state": {
       "attention": {
@@ -2870,7 +2871,8 @@
       "tools",
       "instructions",
       "app_review",
-      "team_scope"
+      "team_scope",
+      "make_request"
     ],
     "InstructionStatus": [
       "pending",
@@ -3515,6 +3517,7 @@
         }
       }
     ],
+    "make_requests": [],
     "not_delivered": [
       {
         "base_commit": "0123abcd",
@@ -6605,6 +6608,25 @@
       "dot_id": "01J0DOT",
       "root_run_id": "01J0RUN",
       "type": "making_updated"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "purpose": "Reads the feeds",
+      "request_id": "01J0MAKEREQ",
+      "root_run_id": "01J0RUN",
+      "title": "Researcher wants to make a dot with more than it has",
+      "type": "make_requested"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "made_dot_id": "01J0MADE",
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "type": "dot_made",
+      "typed": false
     },
     {
       "dot_id": "01J0DOT",

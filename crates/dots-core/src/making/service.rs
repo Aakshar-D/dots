@@ -16,7 +16,8 @@ use super::requests::{MakeRequest, NewMakeRequest, RequestKind, MAX_WAITING_REQU
 use crate::dot_admin::DotAdmin;
 use crate::events::{Bus, RuntimeEvent};
 use crate::followups::FollowUps;
-use crate::model::{Dot, DotSpec, Made, Making, Run};
+use crate::model::{Dot, DotSpec, Made, Making, Run, TriggerKind};
+use crate::prompt::is_typed;
 use crate::runner::Runner;
 use crate::store::Store;
 use crate::vault::{Consumer, GrantState, Vault};
@@ -325,6 +326,16 @@ impl Makers {
                 create_folder,
             )
             .await?;
+        // For the notification (design section 11): quiet when the person is watching.
+        let _ = p.bus.send(RuntimeEvent::DotMade {
+            dot_id: maker.id.clone(),
+            root_run_id: run.root_run_id.clone(),
+            maker_name: maker.spec.name.clone(),
+            made_dot_id: dot.id.clone(),
+            name: dot.spec.name.clone(),
+            purpose: purpose.clone(),
+            typed: self.started_by_typing(&run).await,
+        });
         // The dot is made whatever comes of its first job (design section 8).
         let first_job = self
             .start_first_job(
@@ -375,7 +386,8 @@ impl Makers {
                 ask: None,
             })
             .await?;
-        self.log_asked(&request, None, &request.name).await;
+        self.log_asked(&request, &maker.spec.name, None, &request.name)
+            .await;
         Ok(request)
     }
 
@@ -399,12 +411,14 @@ impl Makers {
     }
 
     /// Writes the `asked` entry of the log for `request`, which was just stored, so the ask
-    /// card shows in the topic in order with the other cards, and publishes `MakingUpdated`.
-    /// `dot_id` and `dot_name` are the made dot a change is asked for, or `None` and the name
-    /// asked for a new dot.
+    /// card shows in the topic in order with the other cards, and publishes `MakingUpdated`,
+    /// and `MakeRequested` for the notification (design section 11). `maker` is the maker's
+    /// name. `dot_id` and `dot_name` are the made dot a change is asked for, or `None` and the
+    /// name asked for a new dot.
     pub(super) async fn log_asked(
         &self,
         request: &MakeRequest,
+        maker: &str,
         dot_id: Option<&str>,
         dot_name: &str,
     ) {
@@ -427,6 +441,37 @@ impl Makers {
             tracing::error!(request = %request.id, run = %request.run_id, "the request was not logged: {e}");
         }
         self.updated(&request.maker_dot_id, &request.root_run_id);
+        let _ = self.parts.bus.send(RuntimeEvent::MakeRequested {
+            request_id: request.id.clone(),
+            dot_id: request.maker_dot_id.clone(),
+            root_run_id: request.root_run_id.clone(),
+            title: request.title(maker),
+            name: request.name.clone(),
+            purpose: request.purpose.clone(),
+        });
+    }
+
+    /// Whether the person started the turn `run` belongs to by typing a message (design
+    /// section 11): `run` carries a typed message (`prompt::is_typed`), or it resumes, after
+    /// an approval, a run that does. A wake, a job, a scheduled run and an answer to a
+    /// question are not typed.
+    async fn started_by_typing(&self, run: &Run) -> bool {
+        let mut at = run.clone();
+        // A turn has far fewer resumes than this.
+        for _ in 0..50 {
+            if is_typed(&at) {
+                return true;
+            }
+            let parent = match (at.trigger, at.parent_run_id.as_deref()) {
+                (TriggerKind::Resume, Some(parent)) => parent,
+                _ => return false,
+            };
+            at = match self.parts.store.get_run(parent).await {
+                Ok(run) => run,
+                Err(_) => return false,
+            };
+        }
+        false
     }
 
     /// Refuses what `spec`, a dot a maker asks for, names that does not exist (design section

@@ -93,6 +93,31 @@ pub enum Notice {
         run: Box<WorkflowRun>,
         about: WorkflowNotice,
     },
+    /// A maker asked for a dot, or for a change to one it made, that needs the person's answer
+    /// (dots-make-dots design section 11): told like an approval, once per request.
+    MakeAsked {
+        /// The maker.
+        dot_id: String,
+        /// The maker's chat topic, where the ask card shows.
+        root_run_id: String,
+        /// The ask card's title.
+        title: String,
+        /// The dot asked for.
+        name: String,
+        purpose: String,
+    },
+    /// A maker made a dot in a run the person did not start by typing (dots-make-dots design
+    /// section 11). Told like a note: only while Settings say so (`made_notifies`).
+    DotMade {
+        /// The maker.
+        dot_id: String,
+        /// The maker's chat topic, where the made card shows.
+        root_run_id: String,
+        maker_name: String,
+        /// The made dot.
+        name: String,
+        purpose: String,
+    },
 }
 
 /// What a workflow run's notice is about (teams spec section 10.5).
@@ -372,6 +397,38 @@ impl Notifier {
                     message: Box::new(message.clone()),
                 })
             }
+            // The core publishes this once, when the request is stored.
+            RuntimeEvent::MakeRequested {
+                dot_id,
+                root_run_id,
+                title,
+                name,
+                purpose,
+                ..
+            } => Some(Notice::MakeAsked {
+                dot_id: dot_id.clone(),
+                root_run_id: root_run_id.clone(),
+                title: title.clone(),
+                name: name.clone(),
+                purpose: purpose.clone(),
+            }),
+            // Quiet when the person typed the message that started the maker's run: they are
+            // watching that chat (dots-make-dots design section 11).
+            RuntimeEvent::DotMade {
+                dot_id,
+                root_run_id,
+                maker_name,
+                name,
+                purpose,
+                typed: false,
+                ..
+            } => Some(Notice::DotMade {
+                dot_id: dot_id.clone(),
+                root_run_id: root_run_id.clone(),
+                maker_name: maker_name.clone(),
+                name: name.clone(),
+                purpose: purpose.clone(),
+            }),
             _ => None,
         }
     }
@@ -509,6 +566,25 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
         },
         // For a workflow run, the name given is its team's.
         Notice::Workflow { run, about } => workflow_text(run, *about, dot_name),
+        // The ask card's own title, which names the maker; then the dot and what it is for.
+        Notice::MakeAsked {
+            title,
+            name,
+            purpose,
+            ..
+        } => (
+            title.clone(),
+            first_line(Some(format!("{name}: {purpose}").as_str()), name),
+        ),
+        Notice::DotMade {
+            maker_name,
+            name,
+            purpose,
+            ..
+        } => (
+            format!("{maker_name} made a dot: {name}"),
+            first_line(Some(purpose.as_str()), "It is ready."),
+        ),
     }
 }
 
@@ -584,10 +660,14 @@ fn cut(text: &str, max: usize) -> String {
 /// Where a click on the notice goes: the conversation of the run (`/chat/<dot>/<run>`, which
 /// the home opens on the run's topic) for a run or an approval, the dot's conversation
 /// (`/home/<dot>`) for a question, a note or a schedule, the dot's Watchers tab for a
-/// watcher Dots paused, and the run page (`/workflow-runs/<id>`) for a workflow run.
+/// watcher Dots paused, and the run page (`/workflow-runs/<id>`) for a workflow run. An ask of
+/// a maker and a dot it made open the maker's conversation on the topic their card is in.
 pub fn notice_route(notice: &Notice, dot_id: &str) -> String {
     match notice {
         Notice::Workflow { run, .. } => format!("/workflow-runs/{}", run.id),
+        Notice::MakeAsked { root_run_id, .. } | Notice::DotMade { root_run_id, .. } => {
+            format!("/chat/{dot_id}/{root_run_id}")
+        }
         Notice::ApprovalNeeded { run_id, .. } => format!("/chat/{dot_id}/{run_id}"),
         Notice::RunEnded { run } | Notice::NotDelivered { run } => {
             format!("/chat/{dot_id}/{}", run.id)
@@ -625,6 +705,8 @@ pub fn notice_dot(notice: &Notice) -> Option<&str> {
         | Notice::RunQuiet { dot_id, .. } => Some(dot_id),
         Notice::MessagePosted { message } => Some(&message.dot_id),
         Notice::ScheduledNotSent { message } => Some(&message.dot_id),
+        // The maker: nothing is told while the person reads its conversation.
+        Notice::MakeAsked { dot_id, .. } | Notice::DotMade { dot_id, .. } => Some(dot_id),
         // About the Inbox, not one dot: the person asked to be reminded, so never quiet.
         Notice::Hold { .. } | Notice::BackFromSnooze { .. } => None,
         // A workflow run's dot is the one whose chat started it, found from its origin run
@@ -643,6 +725,13 @@ pub fn quiet(dot_id: Option<&str>, viewing: Option<&str>) -> bool {
 /// `notify_on_notes` is on.
 pub fn message_notifies(message: &Message, notify_on_notes: bool) -> bool {
     message.kind == MessageKind::Question || notify_on_notes
+}
+
+/// Whether "<maker> made a dot" shows a notification (dots-make-dots design section 11): it
+/// tells what a dot did, as a note does, so it follows the same setting, `notify_on_notes`.
+/// The ask of a maker always notifies, as an approval and a question do.
+pub fn made_notifies(notify_on_notes: bool) -> bool {
+    notify_on_notes
 }
 
 /// Whether the Inbox count may have changed.
@@ -685,6 +774,11 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
         if !message_notifies(message, rt.settings().await.notify_on_notes) {
             return;
         }
+    }
+    if matches!(notice, Notice::DotMade { .. })
+        && !made_notifies(rt.settings().await.notify_on_notes)
+    {
+        return;
     }
     let dot_id = match notice {
         Notice::ApprovalNeeded { run_id, .. } => rt.get_run(run_id).await.map(|r| r.dot_id).ok(),
@@ -2268,5 +2362,100 @@ mod tests {
         assert!(n
             .decide(&chat(Succeeded, done(Verdict::LooksGood, &[])))
             .is_none());
+    }
+
+    /// The core's event for a dot the maker `d` made in the topic `root`.
+    fn dot_made(typed: bool) -> RuntimeEvent {
+        RuntimeEvent::DotMade {
+            dot_id: "d".into(),
+            root_run_id: "root".into(),
+            maker_name: "Researcher".into(),
+            made_dot_id: "m".into(),
+            name: "Blog Watcher".into(),
+            purpose: "Reads the feeds".into(),
+            typed,
+        }
+    }
+
+    /// Dots-make-dots design section 11: the ask card notifies like an approval, each time
+    /// the core says a request waits.
+    #[test]
+    fn a_makers_ask_always_notifies_and_opens_its_topic() {
+        let mut n = Notifier::default();
+        let ev = RuntimeEvent::MakeRequested {
+            request_id: "q1".into(),
+            dot_id: "d".into(),
+            root_run_id: "root".into(),
+            title: "Researcher wants to make a dot with more than it has".into(),
+            name: "Blog Watcher".into(),
+            purpose: "Reads the feeds\nand more".into(),
+        };
+        let notice = n.decide(&ev).expect("an ask notifies");
+        assert_eq!(
+            notice,
+            Notice::MakeAsked {
+                dot_id: "d".into(),
+                root_run_id: "root".into(),
+                title: "Researcher wants to make a dot with more than it has".into(),
+                name: "Blog Watcher".into(),
+                purpose: "Reads the feeds\nand more".into(),
+            }
+        );
+        // The title is the card's own, whatever name the dot is looked up by.
+        assert_eq!(
+            notice_text(&notice, "A dot"),
+            (
+                "Researcher wants to make a dot with more than it has".into(),
+                "Blog Watcher: Reads the feeds".into()
+            )
+        );
+        assert_eq!(notice_route(&notice, "d"), "/chat/d/root");
+        assert_eq!(click_route(&notice, Some("d")), "/chat/d/root");
+        assert_eq!(notice_dot(&notice), Some("d"));
+        // Quiet only while the person reads the maker's conversation, as an approval is.
+        assert!(quiet(notice_dot(&notice), Some("d")));
+        assert!(!quiet(notice_dot(&notice), Some("other")));
+        assert!(affects_inbox(&ev));
+        // A second request is told too; the log's own event tells nothing.
+        assert!(n.decide(&ev).is_some());
+        let updated = RuntimeEvent::MakingUpdated {
+            dot_id: "d".into(),
+            root_run_id: "root".into(),
+        };
+        assert_eq!(n.decide(&updated), None);
+        assert!(affects_inbox(&updated));
+    }
+
+    /// Dots-make-dots design section 11: "<maker> made a dot: <name>" notifies when the
+    /// maker's run was not started by a message the person just typed, and follows the
+    /// setting a note follows.
+    #[test]
+    fn a_made_dot_notifies_only_when_the_person_did_not_type_and_notes_notify() {
+        let mut n = Notifier::default();
+        assert_eq!(n.decide(&dot_made(true)), None);
+        let notice = n.decide(&dot_made(false)).expect("an untyped run's dot");
+        assert_eq!(
+            notice,
+            Notice::DotMade {
+                dot_id: "d".into(),
+                root_run_id: "root".into(),
+                maker_name: "Researcher".into(),
+                name: "Blog Watcher".into(),
+                purpose: "Reads the feeds".into(),
+            }
+        );
+        assert_eq!(
+            notice_text(&notice, "A dot"),
+            (
+                "Researcher made a dot: Blog Watcher".into(),
+                "Reads the feeds".into()
+            )
+        );
+        assert_eq!(notice_route(&notice, "d"), "/chat/d/root");
+        assert_eq!(notice_dot(&notice), Some("d"));
+        assert!(quiet(notice_dot(&notice), Some("d")));
+        // Silent while notes are switched off in Settings; the ask has no such switch.
+        assert!(made_notifies(true));
+        assert!(!made_notifies(false));
     }
 }

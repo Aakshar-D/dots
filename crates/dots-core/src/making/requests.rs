@@ -279,7 +279,68 @@ pub struct MakeRequestCard {
     pub blocked: Option<String>,
 }
 
+/// A make request, or a request to change a made dot, that waits for the person, as the Inbox
+/// lists it (design section 11): what the Inbox sorts, links and titles it by. The whole card,
+/// with its buttons, is `Makers::request_card`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingMakeRequest {
+    /// The request's id.
+    pub id: String,
+    /// The maker that asked.
+    pub dot_id: String,
+    /// The maker's name.
+    pub dot_name: String,
+    /// The maker's chat topic, where the ask card shows.
+    pub root_run_id: String,
+    pub kind: RequestKind,
+    /// The name of the dot asked for, or of the made dot a change is asked for.
+    pub name: String,
+    pub purpose: String,
+    /// The ask card's title (`MakeRequest::title`).
+    pub title: String,
+    /// The ask card's lines (`MakeRequest::lines`).
+    pub lines: Vec<String>,
+    /// `waiting`, or `gone` for one that only "Don't make it" can still answer.
+    pub status: RequestStatus,
+    pub created_at: String,
+}
+
+impl PendingMakeRequest {
+    /// The Inbox's item for `request`, whose maker is named `maker`.
+    pub fn of(request: &MakeRequest, maker: &str) -> Self {
+        Self {
+            id: request.id.clone(),
+            dot_id: request.maker_dot_id.clone(),
+            dot_name: maker.to_string(),
+            root_run_id: request.root_run_id.clone(),
+            kind: request.kind,
+            name: request.name.clone(),
+            purpose: request.purpose.clone(),
+            title: request.title(maker),
+            lines: request.lines(maker),
+            status: request.status,
+            created_at: request.created_at.clone(),
+        }
+    }
+}
+
 impl Makers {
+    /// The ask cards of every request the person has not answered, of every maker, newest
+    /// first: the Inbox's section (design section 11). Each is checked again as `request_card`
+    /// checks it. A request that went while the list was read is left out.
+    pub async fn waiting_cards(&self) -> Result<Vec<MakeRequestCard>> {
+        let mut cards = Vec::new();
+        let waiting = self.parts.store.list_make_requests(None, true).await?;
+        for request in waiting.iter().rev() {
+            match self.request_card(&request.id).await {
+                Ok(card) => cards.push(card),
+                Err(Error::NotFound(_)) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(cards)
+    }
+
     /// The ask card of a request (design section 7.2). A waiting request is checked again
     /// against the Library, the vault and the dots as they are now: when something it names has
     /// gone, or its name is taken, it is marked `gone`, `blocked` says what has gone and only

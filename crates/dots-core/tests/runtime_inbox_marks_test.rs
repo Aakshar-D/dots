@@ -16,6 +16,8 @@ use dots_core::events::RuntimeEvent;
 use dots_core::inbox::{entries, title_cut, InboxKey, InboxKind};
 use dots_core::instructions::{InstructionProposal, InstructionStatus};
 use dots_core::limits::FIVE_HOUR;
+use dots_core::making::reach::Extra;
+use dots_core::making::requests::{NewMakeRequest, RequestKind};
 use dots_core::model::{
     Approval, ApprovalStatus, Dot, DotSpec, FolderConfig, Message, NewRun, PausedReason, Run,
     RunStatus, ScheduleChange, TriggerKind, WatcherConfig, WorkspaceMode,
@@ -266,6 +268,35 @@ impl T {
         self.store().add_app_proposal(&proposal).await.unwrap();
     }
 
+    /// A request of `dot` for a new dot named `name` with the browser, which waits for the
+    /// person (dots-make-dots design section 7.2): its id.
+    async fn make_request(&self, dot: &Dot, name: &str) -> String {
+        let run = self.queued(dot, TriggerKind::Manual).await;
+        let without = spec(name);
+        let mut asked = without.clone();
+        asked.browser = true;
+        let request = self
+            .store()
+            .add_make_request(&NewMakeRequest {
+                maker_dot_id: &dot.id,
+                run_id: &run.id,
+                root_run_id: &run.root_run_id,
+                kind: RequestKind::Make,
+                dot_id: None,
+                purpose: "Reads the feeds",
+                spec: &asked,
+                without: &without,
+                extras: &[Extra::Browser],
+                over: None,
+                create_folder: None,
+                first_job: None,
+                ask: None,
+            })
+            .await
+            .unwrap();
+        request.id
+    }
+
     async fn snooze(&self, items: &[InboxKey], minutes: i64) {
         self.rt
             .inbox_snooze(items, self.clock.now() + TimeDelta::minutes(minutes))
@@ -304,6 +335,7 @@ async fn every_kind_has_its_key_and_title() {
     let attention = t.attention("nightly").await;
     t.instructions(&dot, "ins1").await;
     t.app_review(&dot, "app1").await;
+    let make_request = t.make_request(&dot, "Blog Watcher").await;
 
     let inbox = t.rt.inbox().await.unwrap();
     let messages = t.store().waiting_messages().await.unwrap();
@@ -350,6 +382,10 @@ async fn every_kind_has_its_key_and_title() {
         (
             key(InboxKind::AppReview, "app1"),
             "courier sent Notes for review".to_string(),
+        ),
+        (
+            key(InboxKind::MakeRequest, &make_request),
+            "courier wants to make a dot with more than it has".to_string(),
         ),
     ];
     // The note and the question were made in order, but maybe in the same millisecond: compare

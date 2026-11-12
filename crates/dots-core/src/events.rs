@@ -116,6 +116,33 @@ pub enum RuntimeEvent {
         dot_id: String,
         root_run_id: String,
     },
+    /// The maker `dot_id` asked for a dot, or for a change to a dot it made, that needs the
+    /// person's answer: a request waits (dots-make-dots design sections 7.2 and 11). Published
+    /// once, when the request is stored, with what the notification says: the ask card's
+    /// `title`, and the `name` and `purpose` of the dot asked for. The app notifies on it, as
+    /// for an approval. A `MakingUpdated` goes with it.
+    MakeRequested {
+        request_id: String,
+        dot_id: String,
+        root_run_id: String,
+        title: String,
+        name: String,
+        purpose: String,
+    },
+    /// A run of the maker `dot_id` made the dot `made_dot_id`, named `name` (dots-make-dots
+    /// design section 11). `typed` says the run was started by a message the person typed, or
+    /// resumes such a run after an approval: the person is watching that chat, so the app
+    /// notifies only when it is `false`. A dot the person's own answer to a request makes is
+    /// not announced. A `MakingUpdated` goes with it.
+    DotMade {
+        dot_id: String,
+        root_run_id: String,
+        maker_name: String,
+        made_dot_id: String,
+        name: String,
+        purpose: String,
+        typed: bool,
+    },
     /// A team, its members or its projects were made, changed or deleted (teams spec
     /// section 11).
     TeamUpdated {

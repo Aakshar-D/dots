@@ -865,6 +865,7 @@ export const InboxKind = z.enum([
   "instructions",
   "app_review",
   "team_scope",
+  "make_request",
 ]);
 export const InboxKey = z.strictObject({ kind: InboxKind, id: z.string() });
 // A mark on an Inbox item, in exactly one state (RFC 3339 UTC times). `dot_id` is null for
@@ -1006,6 +1007,29 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     type: z.literal("making_updated"),
     dot_id: z.string(),
     root_run_id: z.string(),
+  }),
+  // The maker `dot_id` asked for a dot, or a change to one it made, that needs the person's
+  // answer: a request waits. The app notifies, as for an approval.
+  z.strictObject({
+    type: z.literal("make_requested"),
+    request_id: z.string(),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+    title: z.string(),
+    name: z.string(),
+    purpose: z.string(),
+  }),
+  // A run of the maker `dot_id` made a dot. `typed`: the person typed the message that
+  // started the run, so nothing notifies.
+  z.strictObject({
+    type: z.literal("dot_made"),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+    maker_name: z.string(),
+    made_dot_id: z.string(),
+    name: z.string(),
+    purpose: z.string(),
+    typed: z.boolean(),
   }),
   // A watcher of the dot was added, changed, paused, resumed, deleted or had an event.
   z.strictObject({
@@ -1190,6 +1214,9 @@ export const DotOverview = z.strictObject({
   needs_you: z.number().int(),
   // `needs_you`, plus its runs that ended and its notes posted since it was last seen.
   unread: z.number().int(),
+  // How many dots it made that exist now: the "2" of "can make dots · 2 of 10". Optional until
+  // the dots list shows it: the core always sends the count.
+  made_dots: z.number().int().optional(),
 });
 
 export const PendingApproval = z.strictObject({
@@ -1279,6 +1306,24 @@ export const Inbox = z.strictObject({
   // Workflow runs that wait for the person (a check, the budget, the send-back cap or a failed
   // step), newest first.
   workflows: z.array(z.lazy(() => WaitingWorkflowRun)),
+  // Requests of makers that wait for the person, newest first. Optional until the Inbox lists
+  // them: the core always sends the list.
+  make_requests: z.array(z.lazy(() => PendingMakeRequest)).optional(),
+});
+// A make request, or a request to change a made dot, that waits for the person, as the Inbox
+// lists it. `dot_id` and `dot_name` are the maker's; `status` is "waiting" or "gone".
+export const PendingMakeRequest = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  root_run_id: z.string(),
+  kind: z.enum(["make", "change"]),
+  name: z.string(),
+  purpose: z.string(),
+  title: z.string(),
+  lines: z.array(z.string()),
+  status: z.enum(["waiting", "allowed", "made_without", "refused", "gone", "discarded"]),
+  created_at: z.string(),
 });
 // A member dot that is not in its team's account or workspace, as the Inbox lists it.
 export const TeamScopeIssue = z.strictObject({

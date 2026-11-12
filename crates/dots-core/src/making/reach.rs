@@ -299,7 +299,7 @@ pub fn real_path(path: &Path) -> PathBuf {
 
 /// A real path as it is compared: Windows paths ignore case, and a part that does not exist
 /// yet keeps the case it was given in.
-fn folded(path: &Path) -> PathBuf {
+pub(super) fn folded(path: &Path) -> PathBuf {
     if cfg!(windows) {
         PathBuf::from(path.to_string_lossy().to_lowercase())
     } else {

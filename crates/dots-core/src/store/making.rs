@@ -656,6 +656,27 @@ impl Store {
         rows.iter().map(event_from_row).collect()
     }
 
+    /// The makers' chat topics that show something of the dot `dot_id`, each as its maker and
+    /// its first run: the topics whose log names the dot (it was made, changed or given a job
+    /// there, or a change of it was asked), and, when the dot is a maker, its own topics with a
+    /// request the person has not answered. Read before the dot is deleted, they are the
+    /// topics to tell afterwards (dots-make-dots design section 11).
+    pub async fn making_topics_of(&self, dot_id: &str) -> Result<Vec<(String, String)>> {
+        let rows = sqlx::query(&format!(
+            "SELECT maker_dot_id, root_run_id FROM making_events WHERE dot_id = ?1 \
+             UNION \
+             SELECT maker_dot_id, root_run_id FROM make_requests \
+             WHERE (maker_dot_id = ?1 OR dot_id = ?1) AND {UNANSWERED} \
+             ORDER BY 1, 2"
+        ))
+        .bind(dot_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| Ok((row.try_get("maker_dot_id")?, row.try_get("root_run_id")?)))
+            .collect()
+    }
+
     /// How many dots the run `run_id` made: what a maker's limit for one run counts
     /// (dots-make-dots design section 10). It counts the log, not the dots, so a made dot that
     /// was deleted since still counts.
