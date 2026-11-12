@@ -108,6 +108,12 @@ pub enum RuntimeEvent {
         id: String,
         dot_id: String,
     },
+    /// The makers' log of one chat topic of the maker `dot_id` changed: it made a dot
+    /// (dots-make-dots design section 11). The topic's cards read it again.
+    MakingUpdated {
+        dot_id: String,
+        root_run_id: String,
+    },
     /// A team, its members or its projects were made, changed or deleted (teams spec
     /// section 11).
     TeamUpdated {

@@ -25,6 +25,7 @@ mod intents;
 mod invites;
 mod library;
 mod limits;
+mod making;
 mod memories;
 mod messages;
 mod orgs;

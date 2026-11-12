@@ -1807,6 +1807,10 @@ pub fn samples() -> Value {
                 id: "01J0INSTRUCTIONS".into(),
                 dot_id: "01J0DOT".into(),
             }),
+            to(RuntimeEvent::MakingUpdated {
+                dot_id: "01J0DOT".into(),
+                root_run_id: "01J0RUN".into(),
+            }),
             to(RuntimeEvent::WatcherUpdated {
                 dot_id: "01J0DOT".into(),
                 watcher_id: "01J0WAT1".into(),

@@ -24,6 +24,7 @@ use crate::followups::FollowUps;
 use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, InboxMark, MarkState};
 use crate::library::LibraryKind;
 use crate::library_service::LibraryService;
+use crate::making::service::Makers;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, ConversationFile, DeliveryCounts, Dot, DotOverview,
     DotSpec, EngineKind, FileSource, Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run,
@@ -305,6 +306,8 @@ pub struct Runtime {
     /// Creates, changes and deletes dots, for the person and for a run's tools alike
     /// (dots-make-dots design section 12).
     dot_admin: DotAdmin,
+    /// What a maker's run does (dots-make-dots design sections 7 to 10).
+    makers: Makers,
     shutdown: CancellationToken,
 }
 
@@ -701,8 +704,19 @@ impl Runtime {
             viewing: viewing.clone(),
         });
         checkins.set_dot_admin(&dot_admin);
+        // What a maker's run does. The check-ins hold it weakly, as they hold the dot admin:
+        // the runtime keeps it alive (dots-make-dots design section 12).
+        let makers = Makers::new(
+            store.clone(),
+            bus.clone(),
+            dot_admin.clone(),
+            vault.clone(),
+            cfg.data_dir.join("worktrees"),
+        );
+        checkins.set_makers(&makers);
         Ok(Runtime {
             dot_admin,
+            makers,
             library: LibraryService::new(store.clone(), bus.clone())
                 .with_skills_dir(cfg.data_dir.join(SKILLS_DIR))
                 .with_vault(vault.clone()),
@@ -1942,6 +1956,13 @@ impl Runtime {
     /// through it, and so do the tools a maker's run has (dots-make-dots design section 12).
     pub fn dot_admin(&self) -> &DotAdmin {
         &self.dot_admin
+    }
+
+    /// What a maker's run does: making a dot within its reach and its limits (dots-make-dots
+    /// design section 7.1). The tools of both engines reach the same service through the
+    /// check-ins.
+    pub fn makers(&self) -> &Makers {
+        &self.makers
     }
 
     /// The follow-ups dots scheduled: what the `follow_up*` commands call.

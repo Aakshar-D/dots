@@ -299,6 +299,9 @@ pub struct CheckIns {
     /// What creates, changes and deletes dots, for the tools for making dots (dots-make-dots
     /// design section 12). Weak: it holds the runner, which holds these.
     dot_admin: Arc<OnceLock<crate::dot_admin::WeakDotAdmin>>,
+    /// What a maker's run does, for the tools for making dots (dots-make-dots design sections
+    /// 7 to 10). Weak: they hold the dot admin, which holds the runner, which holds these.
+    makers: Arc<OnceLock<crate::making::service::WeakMakers>>,
 }
 
 impl CheckIns {
@@ -315,7 +318,20 @@ impl CheckIns {
             follow_ups,
             workflows: Arc::new(OnceLock::new()),
             dot_admin: Arc::new(OnceLock::new()),
+            makers: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Gives the tools for making dots the makers' service. The runtime calls it once, at
+    /// start.
+    pub fn set_makers(&self, makers: &crate::making::service::Makers) {
+        let _ = self.makers.set(makers.downgrade());
+    }
+
+    /// What a maker's run does, once the runtime has set it and while the runtime exists. Both
+    /// engines hold these check-ins, so both reach it here.
+    pub fn makers(&self) -> Option<crate::making::service::Makers> {
+        self.makers.get().and_then(|makers| makers.upgrade())
     }
 
     /// Gives the tools for making dots what creates, changes and deletes dots. The runtime

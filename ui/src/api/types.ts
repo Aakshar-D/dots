@@ -997,6 +997,12 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     id: z.string(),
     dot_id: z.string(),
   }),
+  // The log of what the maker `dot_id` did in one chat topic changed: it made a dot.
+  z.strictObject({
+    type: z.literal("making_updated"),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+  }),
   // A watcher of the dot was added, changed, paused, resumed, deleted or had an event.
   z.strictObject({
     type: z.literal("watcher_updated"),

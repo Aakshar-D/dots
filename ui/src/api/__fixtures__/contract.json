@@ -6603,6 +6603,11 @@
     },
     {
       "dot_id": "01J0DOT",
+      "root_run_id": "01J0RUN",
+      "type": "making_updated"
+    },
+    {
+      "dot_id": "01J0DOT",
       "type": "watcher_updated",
       "watcher_id": "01J0WAT1"
     },
