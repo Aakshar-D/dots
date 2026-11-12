@@ -1,7 +1,7 @@
 # Open Dot, the voice assistant: design
 
 - Date: 2026-11-11
-- Status: steps 1 to 5 are built (ears and voice, the mind, app wiring, the stage and The Breath, wake phrase with interrupting and spoken notices); step 6 (whole-app check by voice, timing, polish) is not
+- Status: all six steps are built (ears and voice, the mind, app wiring, the stage and The Breath, wake phrase with interrupting and spoken notices, the whole chain checked and timed); owed: the hand check on the real app and the first CI run (see "Still owed" under step 6)
 - Builds on: `2026-10-08-dots-design.md` (dots, runs), `2026-11-03-setup-agent-design.md` (describe a task, get a dot), `2026-10-22-needs-you-design.md` (approvals and questions), `2026-10-27-conversational-chat-design.md` (chat topics), `2026-11-04-topic-tools-design.md` (topics), `2026-10-22-deep-teal-design.md` (colours).
 
 ## 1. Intent
@@ -615,3 +615,14 @@ Run 2 shared the machine with the whole core test suite (a short sentence took 2
 - A signed Mac build carries the `com.apple.security.device.audio-input` entitlement (`apps/dots-app/Entitlements.plist`, `bundle.macOS.entitlements`); not tried on a Mac.
 - CI unpacks the verified speech library to `$RUNNER_TEMP` and sets `SHERPA_ONNX_LIB_DIR`, which the `sherpa-onnx-sys` 2.0.1 build script links as it is, so nothing lives in `target` and a restored build cache cannot break the link. The Mac universal build merges the two architectures' libraries with `lipo`. Linking that way was tried on Windows ARM64 only.
 - One name cleaner for speech (`dots_core::open_dot::spoken_name`), used by the notices too; the deed call with no check (`act::outcome`) is crate-private.
+
+**The final review.** The review of the whole branch found 1 critical and 7 important problems (and minor ones). All eight were fixed in the final fix round above; the minors that were not fixed are listed there.
+
+**Still owed (one list).** Nothing below was done here; it needs the real app, a real room or CI.
+
+- The hand check on the real app, with a real microphone and speaker, `docs/open-dot-hand-check.md` (steps 1 to 57), including "Hey Dot" in a room and with music, "Dot, stop" on speakers and on headphones, and the notices.
+- The first CI run on Windows x64 and on a Mac: `crt-static` on x64, the speech library linked from outside `target` via `SHERPA_ONNX_LIB_DIR` (tried on Windows ARM64 only), the `lipo` merge for the universal Mac build, and a second, cache-warm run.
+- The Mac microphone entitlement (`com.apple.security.device.audio-input`) on a signed, notarized build: the permission prompt, then real audio. Not tried on a Mac.
+- Bluetooth (and HDMI) speaker delay: whether the system reports it to the audio layer, so the ears do not reopen on the tail of Dot's own reply. The hand check has no Bluetooth case yet.
+- The person's look at The Breath in each state, in both themes, and the person's choice of voice (ten were built; none was chosen by ear).
+- Timing against the two-second target: the first sound misses it by about 0.8 s and the reply by 2.5 to 5 s with the real model. The kept CLI process (measured in step 2, about 0.5 s off each request, not built) would move it most.
