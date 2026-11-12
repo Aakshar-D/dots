@@ -177,7 +177,8 @@ describe("Settings > Voice", () => {
     const { user } = renderApp("/settings/voice");
     expect(await screen.findByText("Another app uses Ctrl+Shift+Space.")).toBeVisible();
     const hotkey = screen.getByLabelText("Hotkey");
-    expect(hotkey).toHaveValue("CmdOrCtrl+Shift+Space");
+    // The stored "CmdOrCtrl+Shift+Space", as this computer names the keys.
+    expect(hotkey).toHaveValue("Ctrl+Shift+Space");
     expect(screen.getByText("Use names like Ctrl, Shift, Alt and a key, joined with +.")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Clear the hotkey" }));
     expect(hotkey).toHaveValue("");

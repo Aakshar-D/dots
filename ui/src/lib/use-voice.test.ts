@@ -160,6 +160,19 @@ describe("useVoice", () => {
     expect(voiceStore.get().trouble).toBeNull();
   });
 
+  it("forgets a reply's lines once Open Dot listens again", async () => {
+    mount("/home");
+    await hear({ kind: "saying", text: "Nothing needs you." }, () =>
+      expect(voiceStore.get().said.map((l) => l.text)).toEqual(["Nothing needs you."]),
+    );
+    act(() => backend.emit("voice", { kind: "state", state: "listening", mic_open: true }));
+    expect(voiceStore.get().said).toEqual([]);
+    expect(voiceStore.get().saying).toBe("");
+    // The listening ends in silence: nothing of the old reply comes back.
+    act(() => backend.emit("voice", { kind: "state", state: "idle", mic_open: false }));
+    expect(voiceStore.get().said).toEqual([]);
+  });
+
   it("keeps the last three lines of a reply, and starts afresh on what is heard next", async () => {
     mount("/home");
     await hear({ kind: "hearing", text: "what is" }, () =>

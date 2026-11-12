@@ -51,6 +51,8 @@ describe("the Usage page", () => {
     expect(await rows()).toEqual([
       ["nightly-tests", "14", "2.1M", "3h 12m", "$18.40"],
       ["local-summarizer", "22", "300k", "1h 05m", "–"],
+      // Open Dot's requests, after the dots.
+      ["Open Dot (voice)", "38 requests", "156k", "–", "$0.21"],
     ]);
   });
 
@@ -80,9 +82,21 @@ describe("the Usage page", () => {
   });
 
   it("says a deleted dot's runs are not counted, and when a period has no runs", async () => {
-    await open(() => ({ ...week, rows: [] }));
+    await open(() => ({ ...week, rows: [], open_dot: null }));
     expect(await screen.findByText("No runs in the last 5 hours.")).toBeVisible();
     expect(screen.getByText("A deleted dot's runs are deleted with it and not counted.")).toBeVisible();
+  });
+
+  it("lists Open Dot's requests in a row of their own, also when no dot ran", async () => {
+    const openDot = { requests: 7, tokens_in: 30_000, tokens_out: 1_153, cost_usd: 0.04 };
+    const view = await open(() => ({ ...week, open_dot: openDot }));
+    expect((await rows()).at(-1)).toEqual(["Open Dot (voice)", "7 requests", "31k", "–", "$0.04"]);
+    expect(await rows()).toHaveLength(3);
+    view.unmount();
+
+    await open(() => ({ ...week, rows: [], open_dot: { ...openDot, requests: 1, cost_usd: null } }));
+    expect(await rows()).toEqual([["Open Dot (voice)", "1 request", "31k", "–", "–"]]);
+    expect(screen.queryByText("No runs in the last 5 hours.")).toBeNull();
   });
 });
 

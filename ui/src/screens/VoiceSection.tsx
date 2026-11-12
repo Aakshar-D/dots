@@ -15,6 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { takeVoiceStatus, useVoiceLive, useVoiceStatus } from "@/lib/use-voice";
+import { shortcutLabel } from "@/open-dot/RailMark";
 
 function Section(props: { title: string; children: ReactNode }) {
   return (
@@ -333,7 +334,8 @@ export function VoiceSection({
               className="w-64 font-mono"
               placeholder="No hotkey"
               aria-describedby={s?.hotkey_error ? "settings-voice-hotkey-error" : undefined}
-              value={draft.voice_hotkey}
+              // Shown as this computer names the keys ("Ctrl+Shift+Space"), stored as typed.
+              value={shortcutLabel(draft.voice_hotkey)}
               onChange={(e) => set({ voice_hotkey: e.target.value })}
             />
             <Button

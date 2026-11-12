@@ -73,17 +73,23 @@ function micLine(live: {
 /// What it hears while listening, then the reply: two lines at most, the newest strongest.
 /// Only finished things are read out: the reply's lines and the sentence once heard. Words
 /// still coming are shown but kept out of the live region. A newest reply line that only
-/// repeats the question printed below it is left out.
+/// repeats the question printed below it, whole or one sentence of it, is left out.
 function Words({ question }: { question: string | null }) {
   const state = useVoiceLive((live) => live.state);
   const hearing = useVoiceLive((live) => live.hearing);
   const heard = useVoiceLive((live) => live.heard);
   const said = useVoiceLive((live) => live.said);
-  const newest = said.at(-1);
-  const shown =
-    question !== null && newest !== undefined && newest.text.trim() === question.trim()
-      ? said.slice(0, -1)
-      : said;
+  // The question is spoken a sentence at a time, so its lines end the reply: they are dropped
+  // from the end only, and a line before them that merely holds the same words stays.
+  let kept = said.length;
+  if (question !== null) {
+    while (kept > 0) {
+      const text = said[kept - 1]?.text.trim() ?? "";
+      if (text === "" || !question.includes(text)) break;
+      kept -= 1;
+    }
+  }
+  const shown = said.slice(0, kept);
   const reply = state === "listening" ? [] : shown.slice(-2);
   const finished = reply.length === 0 && hearing !== "" && heard;
   const coming = reply.length === 0 && hearing !== "" && !heard;

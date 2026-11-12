@@ -93,8 +93,8 @@ describe("the rail mark", () => {
   ])("goes to the voice settings when voice is %s", async (_, status) => {
     const router = mount(status);
     await waitFor(() => expect(backend.callsTo("voice_status")).toHaveLength(1));
-    await act(async () => {});
-    expect(mark()).toHaveAccessibleName("Set up voice");
+    // The status lands a tick or more after the call, later still on a loaded machine.
+    await waitFor(() => expect(mark()).toHaveAccessibleName("Set up voice"));
     fireEvent.click(mark());
     expect(await screen.findByText("Settings page")).toBeVisible();
     expect(router.state.location.pathname).toBe("/settings/voice");

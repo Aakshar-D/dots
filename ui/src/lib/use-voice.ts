@@ -171,11 +171,12 @@ const VIEW_WAIT_MS = 100;
 function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void): void {
   switch (event.kind) {
     case "state":
-      // Listening again means whatever was wrong is not.
+      // Listening again means whatever was wrong is not, and the reply before it is over: its
+      // lines do not come back when the listening ends in silence.
       voiceStore.set({
         state: event.state,
         micOpen: event.mic_open,
-        ...(event.state === "listening" ? { trouble: null } : {}),
+        ...(event.state === "listening" ? { trouble: null, saying: "", said: [] } : {}),
       });
       {
         const old = qc.getQueryData<VoiceStatus>(keys.voice);

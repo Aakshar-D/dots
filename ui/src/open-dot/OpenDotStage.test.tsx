@@ -332,6 +332,17 @@ describe("the Open Dot stage", () => {
     show({ said: lines("Triage wants to push.", "Allow it?") });
     expect(within(stage()!).getAllByText("Allow it?")).toHaveLength(1);
     expect(within(words()).getByText("Triage wants to push.")).toBeVisible();
+    // A question spoken a sentence at a time: none of its sentences is printed twice, and
+    // what was said before them stays.
+    const long = "Downloads tidy. Runs every day at 08:00. Create this dot?";
+    show({
+      said: lines("Let me set that up.", "Downloads tidy.", "Runs every day at 08:00.", "Create this dot?"),
+      ask: { question: long, options: ["Yes", "No"], seq: 2 },
+    });
+    expect(question()).toHaveTextContent(long);
+    expect(within(words()).queryByText("Create this dot?")).toBeNull();
+    expect(within(words()).queryByText("Runs every day at 08:00.")).toBeNull();
+    expect(within(words()).getByText("Let me set that up.")).toBeVisible();
   });
 
   it("asks an open question with no options", () => {
