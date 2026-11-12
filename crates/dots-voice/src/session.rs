@@ -1330,12 +1330,12 @@ impl Worker {
             }
             State::Thinking => {
                 if word.is_some() {
-                    self.interrupt();
+                    self.wake_over_dot(word);
                 }
             }
             State::Speaking => {
                 if word.is_some() {
-                    self.interrupt();
+                    self.wake_over_dot(word);
                 } else if self.settings.interrupt_by_talking && !self.speech_done() {
                     // Only while the voice is still going: the tail after it is never heard.
                     if self.ears.push(frame).contains(&EarEvent::Started) {
@@ -1373,6 +1373,15 @@ impl Worker {
                 }
             }
         }
+    }
+
+    /// A wake word said while Dot thinks or speaks stops it and listens. "Hey Dot" is a wake
+    /// like one from rest: the follow-up count starts again.
+    fn wake_over_dot(&mut self, word: Option<WakeWord>) {
+        if word == Some(WakeWord::HeyDot) {
+            self.follow_ups = 0;
+        }
+        self.interrupt();
     }
 
     fn ear_event(&mut self, event: EarEvent, now: Instant) {
@@ -2894,6 +2903,42 @@ mod tests {
         let turn = r.hear();
         r.session.say(turn, "Sure.", After::FollowUp);
         r.expect_state(State::Speaking, false);
+        r.expect_saying("Sure.");
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Listening, true);
+    }
+
+    /// "Hey Dot" said over Dot is a wake like any other: the follow-up count starts again.
+    #[test]
+    fn hey_dot_over_dot_starts_the_follow_up_count_again() {
+        let mut r = rig(Opts {
+            wake: true,
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        let mut turn = r.hear();
+        for _ in 0..5 {
+            r.session.say(turn, "Sure.", After::FollowUp);
+            r.expect_state(State::Speaking, true);
+            r.expect_saying("Sure.");
+            r.until_speech_done();
+            r.clock.advance(250);
+            r.expect_state(State::Listening, true);
+            turn = r.hear_sentence();
+        }
+        // The sixth reply would end at rest; "Hey Dot" said over it.
+        r.sink.sounding(true);
+        r.session.say(turn, "Sure.", After::FollowUp);
+        r.expect_state(State::Speaking, true);
+        r.expect_saying("Sure.");
+        r.mic.send(HEY_DOT, 1);
+        r.expect_state(State::Listening, true);
+        r.sink.sounding(false);
+        r.past_tail();
+        let turn = r.hear_sentence();
+        r.session.say(turn, "Sure.", After::FollowUp);
+        r.expect_state(State::Speaking, true);
         r.expect_saying("Sure.");
         r.until_speech_done();
         r.clock.advance(250);
