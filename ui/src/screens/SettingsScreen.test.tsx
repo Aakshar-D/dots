@@ -478,6 +478,7 @@ describe("the Settings tabs", () => {
       "Claude",
       "Runs & server",
       "Phone",
+      "Voice",
       "Local models",
       "Browser",
       "Updates",

@@ -948,9 +948,9 @@ impl Store {
     }
 
     /// What runs started in `[start, end)` spent: their estimated API cost and their tokens,
-    /// in and out, of one dot or, with `None`, of every dot (spend caps design). A run still
-    /// going counts with what it has reported so far. Both bounds are written with
-    /// `util::timestamp`, as stored times are.
+    /// in and out, of one dot or, with `None`, of every dot (spend caps design) and Open Dot's
+    /// requests in the same time too. A run still going counts with what it has reported so
+    /// far. Both bounds are written with `util::timestamp`, as stored times are.
     pub async fn spend_between(
         &self,
         dot_id: Option<&str>,
@@ -966,9 +966,17 @@ impl Store {
         .bind(dot_id)
         .fetch_one(&self.pool)
         .await?;
-        Ok(crate::spend::Spend {
+        let runs = crate::spend::Spend {
             cost_usd: row.try_get("cost")?,
             tokens: row.try_get("tokens")?,
+        };
+        if dot_id.is_some() {
+            return Ok(runs);
+        }
+        let open_dot = self.open_dot_spend_between(start, end).await?;
+        Ok(crate::spend::Spend {
+            cost_usd: runs.cost_usd + open_dot.cost_usd,
+            tokens: runs.tokens + open_dot.tokens,
         })
     }
 

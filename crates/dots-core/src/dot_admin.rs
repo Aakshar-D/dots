@@ -119,6 +119,13 @@ impl DotAdmin {
         let workspace_id = workspace_id.as_str();
         self.require_in(org_id.as_deref(), workspace_id, Permission::EditDots)
             .await?;
+        self.require_ceiling(
+            org_id.as_deref(),
+            workspace_id,
+            &spec.policy,
+            spec.use_user_settings,
+        )
+        .await?;
         if !spec.variables.0.is_empty() {
             self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
                 .await?;
@@ -198,6 +205,17 @@ impl DotAdmin {
         if spec.variables != old.spec.variables {
             self.require_dot(&old, Permission::GrantEntries).await?;
         }
+        // Only a new policy (or settings choice) past the ceiling is refused: a dot held for
+        // one can still be renamed or switched off (guardrails spec §4.3).
+        if spec.policy != old.spec.policy || spec.use_user_settings != old.spec.use_user_settings {
+            self.require_ceiling(
+                old.org_id.as_deref(),
+                &old.workspace_id,
+                &spec.policy,
+                spec.use_user_settings,
+            )
+            .await?;
+        }
         // Only a change to the mode or the folder is refused: a stored dot whose repository
         // has gone can still have its other fields edited.
         if spec.workspace_mode == WorkspaceMode::Worktree
@@ -213,6 +231,8 @@ impl DotAdmin {
         } else {
             p.store.update_dot(id, &spec).await?
         };
+        // A run held past the policy ceiling may start now (guardrails spec §4.3).
+        p.runner.nudge();
         if dot.spec.name != old.spec.name {
             p.teams.dot_renamed(id).await;
         }
@@ -386,6 +406,26 @@ impl DotAdmin {
     /// `require` on `dot`, in its account and workspace.
     pub async fn require_dot(&self, dot: &Dot, p: Permission) -> Result<()> {
         crate::accounts::require_dot(Some(&self.parts.orgs), dot, p).await
+    }
+
+    /// `Ok` unless this PC is a Member in the workspace and `policy` reaches past its ceiling
+    /// (guardrails spec §4.3): then `NotAllowed` with why.
+    pub(crate) async fn require_ceiling(
+        &self,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        policy: &crate::policy::Policy,
+        own_settings: bool,
+    ) -> Result<()> {
+        let orgs = Some(&self.parts.orgs);
+        let Some(rails) = crate::accounts::rails_in(orgs, org_id, workspace_id) else {
+            return Ok(());
+        };
+        let account = crate::accounts::account_label(orgs, org_id).await;
+        match rails.ceiling_refusal(&account, policy, own_settings) {
+            Some(text) => Err(Error::NotAllowed(text)),
+            None => Ok(()),
+        }
     }
 
     /// `require_dot` of `EditDots` for cleaning up `dot`: switching it off or deleting it. A PC

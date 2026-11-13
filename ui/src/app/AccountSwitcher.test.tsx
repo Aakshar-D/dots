@@ -84,6 +84,19 @@ describe("the account switcher", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
+  it("says it took the Escape that closed it, so nothing else closes too", async () => {
+    const { user } = setup();
+    await user.click(await screen.findByRole("button", { name: /^Account:/ }));
+    expect(screen.getByRole("menu")).toBeVisible();
+    let taken: boolean | null = null;
+    const seen = (e: KeyboardEvent) => void (taken = e.defaultPrevented);
+    window.addEventListener("keydown", seen);
+    await user.keyboard("{Escape}");
+    window.removeEventListener("keydown", seen);
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(taken).toBe(true);
+  });
+
   it("marks the current account and returns focus to the button", async () => {
     const { user } = setup("acme-eng");
     const button = await screen.findByRole("button", { name: /^Account:/ });

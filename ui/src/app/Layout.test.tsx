@@ -1,10 +1,14 @@
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { Profiler } from "react";
+import { createMemoryRouter, RouterProvider } from "react-router";
 import { describe, expect, it, vi } from "vitest";
 
 import { Inbox as InboxSchema } from "@/api/types";
 import type { Dot, DotOverview, Inbox, Run, Status, UpdateNote } from "@/api/types";
+import { buildRoutes, routes } from "@/app/routes";
 import { localTime } from "@/lib/format";
-import { keys } from "@/lib/query";
+import { createQueryClient, keys } from "@/lib/query";
 import { backend, later } from "@/test/backend";
 import { quietStatus, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -150,7 +154,10 @@ describe("the app frame", () => {
     renderApp("/dots");
     expect(await screen.findByText(/The local server is not running: could not listen/)).toBeVisible();
     expect(screen.getByText(/The claude CLI was not found/)).toBeVisible();
-    expect(screen.getByText(/Claude CLI 2\.1\.300 has not been tested.*2\.1\.295/)).toBeVisible();
+    // Shown once the dots have loaded too.
+    expect(
+      await screen.findByText(/Claude CLI 2\.1\.300 has not been tested.*2\.1\.295/),
+    ).toBeVisible();
     expect(screen.getByRole("button", { name: "Restart Dots" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Resume schedules" })).toBeVisible();
     expect(screen.getAllByRole("link", { name: "Open Settings" })).toHaveLength(2);
@@ -449,6 +456,76 @@ describe("the app frame", () => {
     expect(backend.callsTo("inbox")).toHaveLength(2);
   });
 
+  it("has the Open Dot mark at the bottom of the rail, above the usage meter", async () => {
+    renderApp("/home");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    const markButton = within(nav).getByRole("button", { name: /^(Talk to Dot|Set up voice)$/ });
+    const meter = await within(nav).findByRole("link", { name: /^Claude usage/i });
+    expect(markButton.compareDocumentPosition(meter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const settings = within(nav).getByRole("link", { name: "Settings" });
+    expect(settings.compareDocumentPosition(markButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("keeps the rail's top and bottom in place and scrolls its links in a short window", async () => {
+    renderApp("/home");
+    const nav = await screen.findByRole("navigation", { name: "Main" });
+    const account = within(nav).getByRole("button", { name: /^Account:/ });
+    const search = within(nav).getByRole("button", { name: /^Search/ });
+    const home = within(nav).getByRole("link", { name: /^Home/ });
+    const markButton = within(nav).getByRole("button", { name: /^(Talk to Dot|Set up voice)$/ });
+    const meter = await within(nav).findByRole("link", { name: /^Claude usage/i });
+
+    const top = account.closest("[data-rail='top']")!;
+    const links = home.closest("[data-rail='links']")!;
+    const bottom = markButton.closest("[data-rail='bottom']")!;
+    expect(top).toContainElement(search);
+    expect(top).toHaveClass("shrink-0");
+    expect(bottom).toContainElement(meter);
+    expect(bottom).toHaveClass("shrink-0");
+    expect(links).toHaveClass("min-h-0", "flex-1", "overflow-y-auto", "no-scrollbar");
+    expect(links).toContainElement(within(nav).getByRole("link", { name: "Settings" }));
+    expect(links).not.toContainElement(markButton);
+  });
+
+  it("shows the Open Dot stage only while it is open", async () => {
+    const { listening } = renderApp("/home");
+    await screen.findByRole("navigation", { name: "Main" });
+    await listening();
+    expect(screen.queryByRole("region", { name: "Open Dot" })).toBeNull();
+    await waitFor(() => {
+      backend.emit("voice", { kind: "state", state: "listening", mic_open: true });
+      expect(screen.getByRole("region", { name: "Open Dot" })).toBeVisible();
+    });
+    backend.on("voice_close", () => null);
+    act(() => void fireEvent.keyDown(document.body, { key: "Escape" }));
+    expect(screen.queryByRole("region", { name: "Open Dot" })).toBeNull();
+  });
+
+  it("does not draw again for a level while the stage is open", async () => {
+    let renders = 0;
+    const queryClient = createQueryClient();
+    const router = createMemoryRouter(routes, { initialEntries: ["/settings/general"] });
+    render(
+      <Profiler id="app" onRender={() => (renders += 1)}>
+        <QueryClientProvider client={queryClient}>
+          <RouterProvider router={router} />
+        </QueryClientProvider>
+      </Profiler>,
+    );
+    await screen.findByRole("navigation", { name: "Main" });
+    await waitFor(() => {
+      backend.emit("voice", { kind: "state", state: "speaking", mic_open: false });
+      expect(screen.getByRole("region", { name: "Open Dot" })).toBeVisible();
+    });
+    await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+    await act(async () => {});
+    const before = renders;
+    act(() => {
+      for (let i = 0; i < 30; i++) backend.emit("voice", { kind: "level", mic: 0, voice: i / 30 });
+    });
+    expect(renders).toBe(before);
+  });
+
   it("updates the inbox count when an approval is requested", async () => {
     const { listening } = renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
@@ -456,6 +533,17 @@ describe("the app frame", () => {
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
     expect(await within(nav).findByRole("link", { name: "Inbox, 12 waiting" })).toBeVisible();
+  });
+});
+
+describe("the Open Dot demo page", () => {
+  const paths = (dev: boolean) => buildRoutes(dev).map((r) => r.path);
+
+  it("is a route only in development", () => {
+    expect(paths(true)).toContain("/__open-dot");
+    expect(paths(false)).not.toContain("/__open-dot");
+    // Outside the frame, which needs the backend.
+    expect(paths(true).indexOf("/__open-dot")).toBeLessThan(paths(true).indexOf("/"));
   });
 });
 

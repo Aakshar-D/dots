@@ -736,6 +736,7 @@ async fn start_by_hand(
         approved_calls: approvals,
         tools: Default::default(),
         autocompact_pct: None,
+        guardrails: None,
     };
     let mut rx = engine.start(ctx).await.unwrap();
     while rx.recv().await.is_some() {}

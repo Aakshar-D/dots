@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleHelp, Send, Trash2 } from "lucide-react";
+import { CircleHelp, Send, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { commands } from "@/api/commands";
 import type { Approval, ApprovalGuard } from "@/api/types";
 import { BrowserApprovalCard } from "@/components/BrowserApprovalCard";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useRunRefusal } from "@/lib/access";
@@ -59,6 +60,16 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
     // A failed check only leaves the sentence out: the core still decides what asks.
     retry: false,
   });
+  // A call the workspace's guardrails protect: on a Member's dot this PC can't approve it, and
+  // on an Admin's it always asks (guardrails spec section 4.2). No rule is saved with it either
+  // way.
+  const guardrail = useQuery({
+    queryKey: keys.approvalGuardrail(approval.id),
+    queryFn: () => commands.approvalGuardrail(approval.id),
+    // A failed check only leaves the line out: the core still refuses what it must.
+    retry: false,
+  }).data;
+  const needsAdmin = guardrail?.needs_admin ? guardrail.text : undefined;
   // The narrowest rule comes first and is the one chosen until the user picks another.
   const chosen = picked ?? offered[0]?.pattern ?? null;
   const decide = useMutation({
@@ -76,6 +87,9 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
   // buttons stay off for that time.
   const refusal = useRunRefusal(approval.run_id, "answer");
   const decided = decide.isPending || decide.isSuccess || refusal !== undefined;
+  // Approving is off for a call that needs an Admin; Deny stays.
+  const approveOff = decided || needsAdmin !== undefined;
+  const approveWhy = refusal ?? needsAdmin;
   const noteId = `approval-note-${approval.id}`;
   const rulesId = `approval-rules-${approval.id}`;
   const tool = callLabel(approval.tool, approval.input);
@@ -91,6 +105,15 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
         </span>
       </header>
       {guard.data && <GuardSentence guard={guard.data} dotName={dotName} />}
+      {guardrail && (
+        <div aria-label="Guardrails" className="flex items-start gap-1.5 text-xs">
+          <ShieldAlert aria-hidden className="mt-0.5 size-3.5 shrink-0 text-needs" />
+          <p className="flex flex-wrap items-center gap-1.5">
+            {guardrail.needs_admin && <Badge variant="outline">Needs an Admin</Badge>}
+            <span>{guardrail.text}</span>
+          </p>
+        </div>
+      )}
       <pre className="max-h-60 overflow-auto rounded-md bg-background/60 p-2 text-xs whitespace-pre-wrap">
         {JSON.stringify(approval.input, null, 2)}
       </pre>
@@ -108,8 +131,8 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
         />
         <Button
           size="sm"
-          disabled={decided}
-          title={refusal}
+          disabled={approveOff}
+          title={approveWhy}
           onClick={onSingleClick(() => decide.mutate({ approved: true, allowRule: null }))}
         >
           Approve
@@ -129,8 +152,8 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
             variant="outline"
             aria-expanded={choosing}
             aria-controls={rulesId}
-            disabled={decided}
-            title={refusal}
+            disabled={approveOff}
+            title={approveWhy}
             onClick={() => setChoosing((open) => !open)}
           >
             Approve and always allow
@@ -179,8 +202,8 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
           <div className="flex gap-2">
             <Button
               size="sm"
-              disabled={decided}
-              title={refusal}
+              disabled={approveOff}
+              title={approveWhy}
               onClick={onSingleClick(() => decide.mutate({ approved: true, allowRule: chosen }))}
             >
               Approve and save rule

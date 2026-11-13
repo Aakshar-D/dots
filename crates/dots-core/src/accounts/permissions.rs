@@ -10,7 +10,8 @@ use crate::vault::org::Orgs;
 use crate::{Error, Result};
 
 /// One row of the §6.3 table.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Permission {
     View,
     EditDots,
@@ -24,9 +25,27 @@ pub enum Permission {
     SignRoster,
     /// Add, change, complete or delete the account's goals (Intents).
     EditGoals,
+    /// Change a workspace's guardrails (guardrails spec §5).
+    ManageGuardrails,
 }
 
 impl Permission {
+    /// Every permission, in the order of the "What each role can do" table.
+    pub const ALL: &'static [Permission] = &[
+        Self::View,
+        Self::EditDots,
+        Self::RunDots,
+        Self::AnswerApprovals,
+        Self::GrantEntries,
+        Self::AddMcp,
+        Self::CreateApiKeys,
+        Self::EditGoals,
+        Self::ManageMembers,
+        Self::ManageWorkspaces,
+        Self::ManageGuardrails,
+        Self::SignRoster,
+    ];
+
     /// What the permission lets a person do, as a refusal names it.
     pub fn action(&self) -> &'static str {
         match self {
@@ -41,6 +60,7 @@ impl Permission {
             Self::ManageWorkspaces => "manage workspaces",
             Self::SignRoster => "sign the member list",
             Self::EditGoals => "change goals",
+            Self::ManageGuardrails => "change guardrails",
         }
     }
 }
@@ -57,10 +77,49 @@ pub fn can(role: Role, p: Permission) -> bool {
         | Permission::AddMcp
         | Permission::CreateApiKeys
         | Permission::EditGoals => role != Role::Viewer,
-        Permission::ManageMembers | Permission::ManageWorkspaces | Permission::SignRoster => {
-            matches!(role, Role::Owner | Role::Admin)
-        }
+        Permission::ManageMembers
+        | Permission::ManageWorkspaces
+        | Permission::ManageGuardrails
+        | Permission::SignRoster => matches!(role, Role::Owner | Role::Admin),
     }
+}
+
+/// One row of the "What each role can do" table (guardrails spec §5): the roles that have the
+/// permission, and a condition some of them have it under.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct RoleRow {
+    pub permission: Permission,
+    pub action: String,
+    pub roles: Vec<Role>,
+    pub note: Option<String>,
+}
+
+/// The §6.3 table as data, from `can`, so the UI never decides a role itself.
+pub fn role_matrix() -> Vec<RoleRow> {
+    let roles = [Role::Owner, Role::Admin, Role::Member, Role::Viewer];
+    Permission::ALL
+        .iter()
+        .map(|&p| {
+            let note = match p {
+                Permission::EditDots => Some(
+                    "A Member's dot stays within the workspace's guardrails: its tool policy goes no higher than the workspace allows, and protected paths, git actions and commands are refused.",
+                ),
+                Permission::AnswerApprovals => Some(
+                    "A Member can't approve a call the workspace's guardrails protect; an Admin's protected calls always ask.",
+                ),
+                Permission::SignRoster => Some(
+                    "An Admin signs once the owner has added their Dots ID to the policy's admins.",
+                ),
+                _ => None,
+            };
+            RoleRow {
+                permission: p,
+                action: p.action().to_string(),
+                roles: roles.into_iter().filter(|r| can(*r, p)).collect(),
+                note: note.map(str::to_string),
+            }
+        })
+        .collect()
 }
 
 /// This PC's standing in a scope: Personal, an account it holds a role in, an account with no

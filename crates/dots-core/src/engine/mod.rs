@@ -143,6 +143,9 @@ pub struct RunContext {
     /// run runs (`CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`, context rules spec section 4); `None`
     /// leaves the CLI's own.
     pub autocompact_pct: Option<u8>,
+    /// The guardrails of the dot's workspace on this PC (guardrails spec §4.2), for the Claude
+    /// CLI's own lists; `ApprovalHub` checks every call against them as well.
+    pub guardrails: Option<crate::accounts::DotRails>,
 }
 
 /// What one extra call of an engine before a run used (context rules spec section 5).

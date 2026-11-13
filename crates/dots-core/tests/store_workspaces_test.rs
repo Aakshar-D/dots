@@ -224,16 +224,19 @@ async fn mirror_replaces_the_orgs_rows_and_moves_vanished_workspaces_dots() {
             id: "default".into(),
             name: "Everyone".into(),
             use_rules: None,
+            guardrails: None,
         },
         Workspace {
             id: "api".into(),
             name: "API platform".into(),
             use_rules: Some(rules.clone()),
+            guardrails: None,
         },
         Workspace {
             id: "ops".into(),
             name: "Ops".into(),
             use_rules: None,
+            guardrails: None,
         },
     ];
     let vanished = store.mirror_workspaces("acme-eng", &roster).await.unwrap();
@@ -377,6 +380,7 @@ async fn mirror_moves_dots_in_a_workspace_it_never_saw() {
         id: "api".into(),
         name: "API".into(),
         use_rules: None,
+        guardrails: None,
     }];
     store.mirror_workspaces("acme-eng", &roster).await.unwrap();
     assert_eq!(

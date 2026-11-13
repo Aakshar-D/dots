@@ -168,6 +168,14 @@
     }
 }
 
+/* Scrolls without showing a scrollbar: the rail's links in a short window. */
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* The working line's phrase: a soft light that sweeps across the words while a dot works. */
 .working-shimmer {
   background: linear-gradient(

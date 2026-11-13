@@ -22,6 +22,8 @@ export function ConfirmButton(props: {
   confirmLabel: string;
   onConfirm: () => void;
   disabled?: boolean;
+  /// The trigger's tooltip: why it is off, when it is.
+  reason?: string;
   /// The trigger's accessible name, when its label alone does not say what it acts on.
   ariaLabel?: string;
   variant?: ComponentProps<typeof Button>["variant"];
@@ -34,6 +36,7 @@ export function ConfirmButton(props: {
           variant={props.variant ?? "outline"}
           size={props.size ?? "sm"}
           disabled={props.disabled}
+          title={props.reason}
           aria-label={props.ariaLabel}
         >
           {props.children}

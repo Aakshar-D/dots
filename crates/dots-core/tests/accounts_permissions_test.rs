@@ -2,9 +2,9 @@
 //! account allows: Personal is Owner, a `legacy` account acts as Member, and a PC that waits or
 //! was removed may do nothing.
 
-use dots_core::accounts::{can, Access, Permission, Role};
+use dots_core::accounts::{can, role_matrix, Access, Permission, Role};
 
-const ALL: [Permission; 11] = [
+const ALL: [Permission; 12] = [
     Permission::View,
     Permission::EditDots,
     Permission::RunDots,
@@ -16,6 +16,7 @@ const ALL: [Permission; 11] = [
     Permission::ManageWorkspaces,
     Permission::SignRoster,
     Permission::EditGoals,
+    Permission::ManageGuardrails,
 ];
 
 #[test]
@@ -34,6 +35,7 @@ fn can_matrix() {
         (ManageWorkspaces, [false, false, true, true]),
         (SignRoster, [false, false, true, true]),
         (EditGoals, [false, true, true, true]),
+        (ManageGuardrails, [false, false, true, true]),
     ];
     assert_eq!(table.len(), ALL.len());
     let roles = [Role::Viewer, Role::Member, Role::Admin, Role::Owner];
@@ -61,6 +63,7 @@ fn each_permission_names_its_action() {
             "manage workspaces",
             "sign the member list",
             "change goals",
+            "change guardrails",
         ]
     );
 }
@@ -76,4 +79,33 @@ fn access_allows_as_its_role() {
             assert_eq!(Access::Role(role).allows(p), can(role, p), "{role:?} {p:?}");
         }
     }
+}
+
+#[test]
+fn the_role_matrix_is_can_as_data() {
+    let rows = role_matrix();
+    assert_eq!(rows.len(), ALL.len());
+    for p in ALL {
+        assert!(Permission::ALL.contains(&p), "{p:?}");
+        let row = rows.iter().find(|r| r.permission == p).unwrap();
+        assert_eq!(row.action, p.action());
+        for role in [Role::Viewer, Role::Member, Role::Admin, Role::Owner] {
+            assert_eq!(row.roles.contains(&role), can(role, p), "{role:?} {p:?}");
+        }
+    }
+    let guard = rows
+        .iter()
+        .find(|r| r.permission == Permission::ManageGuardrails)
+        .unwrap();
+    assert_eq!(guard.roles, [Role::Owner, Role::Admin]);
+    let json = serde_json::to_value(guard).unwrap();
+    assert_eq!(json["permission"], "manage_guardrails");
+    assert_eq!(json["roles"], serde_json::json!(["owner", "admin"]));
+    assert!(rows
+        .iter()
+        .find(|r| r.permission == Permission::AnswerApprovals)
+        .unwrap()
+        .note
+        .as_deref()
+        .is_some_and(|n| n.contains("guardrails")));
 }

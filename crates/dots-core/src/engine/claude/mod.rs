@@ -146,7 +146,7 @@ impl ClaudeEngine {
         let settings_path = args::settings_path(&mcp_path);
         write_private(
             &settings_path,
-            &serde_json::to_vec_pretty(&args::cli_settings())?,
+            &serde_json::to_vec_pretty(&args::cli_settings_for(ctx))?,
         )
         .await?;
         let (mut cmd, _) = self.command(ctx, &mcp_path);
@@ -264,7 +264,7 @@ impl Engine for ClaudeEngine {
         let settings_path = args::settings_path(&mcp_path);
         write_private(
             &settings_path,
-            &serde_json::to_vec_pretty(&args::cli_settings())?,
+            &serde_json::to_vec_pretty(&args::cli_settings_for(&ctx))?,
         )
         .await?;
 

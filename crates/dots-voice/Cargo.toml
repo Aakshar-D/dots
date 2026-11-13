@@ -1,0 +1,31 @@
+[package]
+name = "dots-voice"
+version = "0.4.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+bzip2 = "0.6.1"
+cpal = "0.18"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = [
+    "stream",
+    "rustls-tls-webpki-roots",
+    "rustls-tls-native-roots",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sherpa-onnx = "=2.0.1"
+tar = "0.4.46"
+thiserror = "2"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
+tokio-util = "0.7"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+axum = "0.8"
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

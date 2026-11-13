@@ -388,10 +388,19 @@ export const UsageRow = z.strictObject({
   cost_usd: nullable(z.number()),
   heaviest: z.array(UsageRun),
 });
+// Open Dot's requests in the period, summed; null when it made none. `cost_usd` is null when no
+// request reported a cost.
+export const OpenDotUsage = z.strictObject({
+  requests: z.number().int(),
+  tokens_in: z.number().int(),
+  tokens_out: z.number().int(),
+  cost_usd: nullable(z.number()),
+});
 export const UsageSummary = z.strictObject({
   period: UsagePeriod,
   since: z.string(),
   rows: z.array(UsageRow),
+  open_dot: nullable(OpenDotUsage).optional(),
 });
 // All Claude use from Claude Code's own transcripts (usage tab spec section 7). Tokens on the
 // page are input + cache creation + output; cache reads are shown on their own.
@@ -1154,6 +1163,23 @@ export const Settings = z.strictObject({
   check_results: z.boolean(),
   // The Claude model the result check uses.
   checker_model: z.string(),
+  // The Claude model Open Dot, the voice assistant, thinks with.
+  open_dot_model: z.string(),
+  // Open Dot listens and speaks; off by default, and with it off nothing voice-related runs.
+  voice_enabled: z.boolean(),
+  // Which of the ten voices speaks (0 to 9) and how fast (0.8 to 1.4).
+  voice_id: z.number().int(),
+  voice_speed: z.number(),
+  // The global shortcut that opens Open Dot (Tauri accelerator form); "" is none.
+  voice_hotkey: z.string(),
+  voice_wake_phrase: z.boolean(),
+  voice_interrupt_by_talking: z.boolean(),
+  voice_tone: z.boolean(),
+  // Device ids; null is the system's default.
+  voice_mic: nullable(z.string()),
+  voice_speaker: nullable(z.string()),
+  // Notices are said aloud while Open Dot is idle.
+  voice_notices: z.boolean(),
   // When sessions are compacted or started fresh, unless a dot has its own rules.
   context_rules: ContextRules,
 });
@@ -2301,6 +2327,28 @@ export const RequestPreview = z.strictObject({
   age_recipient: nullable(z.string()),
   problem: nullable(z.string()),
 });
+// A git or GitHub action a workspace's guardrails can protect (guardrails spec §3.1).
+export const GitAction = z.enum([
+  "push_main",
+  "force_push",
+  "delete_branch",
+  "tags",
+  "merge_pr",
+  "release",
+]);
+// How a workspace's guardrails treat this PC's dots: a Member's protected calls are refused and
+// its policy has a ceiling; an Admin's protected calls always ask.
+export const GuardRole = z.enum(["member", "admin"]);
+// A workspace's guardrails, on the signed member list. Every field is required.
+export const Guardrails = z.strictObject({
+  // Globs relative to the dot's folder: `*` within a folder, `**` across folders.
+  protected_paths: z.array(z.string()),
+  protected_git: z.array(GitAction),
+  // Command patterns, like `terraform apply`; `rm -rf` covers every spelling of it.
+  protected_commands: z.array(z.string()),
+  // The highest preset a Member's dot may use: read-only, sandboxed or trusted.
+  member_max_preset: Preset,
+});
 // One change to the member list, sent to `member_edit`.
 export const RosterEdit = z.discriminatedUnion("kind", [
   z.strictObject({
@@ -2319,6 +2367,12 @@ export const RosterEdit = z.discriminatedUnion("kind", [
     kind: z.literal("set_workspaces"),
     member_id: z.string(),
     workspaces: z.record(z.string(), WorkspaceRole),
+  }),
+  // A workspace's guardrails; null removes them.
+  z.strictObject({
+    kind: z.literal("set_guardrails"),
+    workspace_id: z.string(),
+    guardrails: nullable(Guardrails),
   }),
 ]);
 // What this PC may not do in a workspace, or with a dot, each in the core's own refusal; null is
@@ -2401,6 +2455,75 @@ export const WorkspaceView = z.strictObject({
   can_manage: z.boolean(),
   // What this PC may not do with the workspace's dots.
   refusals: Refusals,
+});
+// The Guardrails tab of one workspace (`workspace_guardrails`).
+export const GuardrailsView = z.strictObject({
+  org_id: z.string(),
+  workspace_id: z.string(),
+  workspace_name: z.string(),
+  // The member list's seq: the `baseSeq` of `workspace_guardrails_set`.
+  seq: z.number(),
+  // null: the workspace has none.
+  guardrails: nullable(Guardrails),
+  // What "Use defaults" fills in.
+  defaults: Guardrails,
+  git_actions: z.array(z.strictObject({ action: GitAction, label: z.string() })),
+  // Why this PC's role may not change them; null when it may.
+  edit_refusal: nullable(z.string()),
+  // Why this PC can't sign the member list; null when it can.
+  sign_blocker: nullable(z.string()),
+  // How they treat this PC's dots in the workspace; null when they don't apply.
+  applies_as: nullable(GuardRole),
+  // What an older Dots does with a list that has guardrails: shown before signing.
+  compat_note: z.string(),
+});
+// A role's permission as the core names it, for the "What each role can do" table (Rust
+// `accounts::Permission`; not an app's `Permission`).
+export const RolePermission = z.enum([
+  "view",
+  "edit_dots",
+  "run_dots",
+  "answer_approvals",
+  "grant_entries",
+  "add_mcp",
+  "create_api_keys",
+  "edit_goals",
+  "manage_members",
+  "manage_workspaces",
+  "manage_guardrails",
+  "sign_roster",
+]);
+// One row of the table (`role_matrix`): the roles that have the permission, and a condition.
+export const RoleRow = z.strictObject({
+  permission: RolePermission,
+  action: z.string(),
+  roles: z.array(Role),
+  note: nullable(z.string()),
+});
+// The policy ceiling of a dot (`dot_ceiling`) or of a workspace for a new dot
+// (`policy_ceiling`). Every refusal is the core's own words, to show as they are.
+export const PolicyCeiling = z.strictObject({
+  applies_as: nullable(GuardRole),
+  workspace_name: nullable(z.string()),
+  // The highest preset this PC's dots may use there; null: no ceiling.
+  max_preset: nullable(Preset),
+  // Read-only, Sandboxed, Trusted and Custom, each with why it may not be picked. Custom's
+  // refusal is always null: a custom policy is judged by `policy_refusal`.
+  presets: z.array(z.strictObject({ preset: Preset, refusal: nullable(z.string()) })),
+  // Why the given (or the dot's own) policy can't be saved.
+  policy_refusal: nullable(z.string()),
+  // `dot_ceiling` only: the text the dot's runs are held with.
+  held: nullable(z.string()),
+  // What the workspace protects.
+  protected: nullable(Guardrails),
+});
+// What the guardrails find in an approval's call (`approval_guardrail`). With `needs_admin`,
+// this PC is a Member there and can't approve it; otherwise it always asks.
+export const ApprovalGuardrail = z.strictObject({
+  what: z.string(),
+  workspace_name: z.string(),
+  needs_admin: z.boolean(),
+  text: z.string(),
 });
 // How a member-list edit ended: published (the org's new row), or kept as a draft.
 export const EditOutcome = z.discriminatedUnion("outcome", [
@@ -2775,6 +2898,7 @@ export type LimitsState = z.infer<typeof LimitsState>;
 export type HoldChange = z.infer<typeof HoldChange>;
 export type UsagePeriod = z.infer<typeof UsagePeriod>;
 export type UsageSummary = z.infer<typeof UsageSummary>;
+export type OpenDotUsage = z.infer<typeof OpenDotUsage>;
 export type UsageRow = z.infer<typeof UsageRow>;
 export type UsageRun = z.infer<typeof UsageRun>;
 export type ClaudeTotals = z.infer<typeof ClaudeTotals>;
@@ -2935,6 +3059,14 @@ export type PhoneAction = z.infer<typeof PhoneAction>;
 export type DotAccess = z.infer<typeof DotAccess>;
 export type WorkspaceRole = z.infer<typeof WorkspaceRole>;
 export type EditOutcome = z.infer<typeof EditOutcome>;
+export type GitAction = z.infer<typeof GitAction>;
+export type GuardRole = z.infer<typeof GuardRole>;
+export type Guardrails = z.infer<typeof Guardrails>;
+export type GuardrailsView = z.infer<typeof GuardrailsView>;
+export type RolePermission = z.infer<typeof RolePermission>;
+export type RoleRow = z.infer<typeof RoleRow>;
+export type PolicyCeiling = z.infer<typeof PolicyCeiling>;
+export type ApprovalGuardrail = z.infer<typeof ApprovalGuardrail>;
 export type OrgEntry = z.infer<typeof OrgEntry>;
 export type AuditEvent = z.infer<typeof AuditEvent>;
 export type HistoryRow = z.infer<typeof HistoryRow>;
@@ -3071,3 +3203,117 @@ export type ConnectorState = z.infer<typeof ConnectorState>;
 export type ConnectorEntry = z.infer<typeof ConnectorEntry>;
 export type KeyField = z.infer<typeof KeyField>;
 export type RuntimeCheck = z.infer<typeof RuntimeCheck>;
+
+// Open Dot's voice (Open Dot design spec, step 3): the `voice` event and the voice commands
+// (apps/dots-app/src/voice/events.rs).
+export const VoiceState = z.enum(["off", "idle", "listening", "thinking", "speaking", "asking"]);
+// What Open Dot would do, read from the real records (dots-core open_dot/act.rs).
+export const Deed = z.discriminatedUnion("kind", [
+  z.strictObject({
+    kind: z.literal("approve"),
+    approval_id: z.string(),
+    dot_name: z.string(),
+    tool: z.string(),
+    target: z.string(),
+  }),
+  z.strictObject({
+    kind: z.literal("deny"),
+    approval_id: z.string(),
+    dot_name: z.string(),
+    tool: z.string(),
+    target: z.string(),
+  }),
+  z.strictObject({ kind: z.literal("run"), dot_id: z.string(), dot_name: z.string() }),
+  z.strictObject({
+    kind: z.literal("answer"),
+    message_id: z.string(),
+    dot_name: z.string(),
+    text: z.string(),
+  }),
+  z.strictObject({
+    kind: z.literal("send"),
+    dot_id: z.string(),
+    dot_name: z.string(),
+    text: z.string(),
+    topic_root: nullable(z.string()),
+  }),
+]);
+// Where Open Dot takes the person.
+export const OpenTarget = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("dot"), dot_id: z.string() }),
+  z.strictObject({ kind: z.literal("approval"), approval_id: z.string() }),
+  z.strictObject({ kind: z.literal("inbox") }),
+  z.strictObject({ kind: z.literal("settings") }),
+  z.strictObject({ kind: z.literal("usage") }),
+  z.strictObject({ kind: z.literal("home") }),
+]);
+// What Open Dot shows beside its words.
+export const OpenDotCard = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("proposal"), proposal: SetupProposal }),
+  z.strictObject({ kind: z.literal("confirm"), deed: Deed }),
+  z.strictObject({ kind: z.literal("list"), title: z.string(), lines: z.array(z.string()) }),
+]);
+export const VoiceStatus = z.strictObject({
+  enabled: z.boolean(),
+  installed: z.boolean(),
+  downloading: z.boolean(),
+  // The session is built and running.
+  ready: z.boolean(),
+  state: VoiceState,
+  mic_open: z.boolean(),
+  // The speech files' size in all.
+  download_bytes: z.number().int(),
+  hotkey_error: nullable(z.string()),
+  trouble: nullable(z.string()),
+});
+export const VoiceEvent = z.discriminatedUnion("kind", [
+  z.strictObject({ kind: z.literal("state"), state: VoiceState, mic_open: z.boolean() }),
+  z.strictObject({ kind: z.literal("level"), mic: z.number(), voice: z.number() }),
+  z.strictObject({ kind: z.literal("hearing"), text: z.string() }),
+  z.strictObject({ kind: z.literal("heard"), text: z.string() }),
+  z.strictObject({ kind: z.literal("saying"), text: z.string() }),
+  // `seq` names the question (1, 2, 3, ... per app run, far below 2^53): a pick sends it back.
+  z.strictObject({
+    kind: z.literal("ask"),
+    question: z.string(),
+    options: z.array(z.string()),
+    seq: z.number().int(),
+  }),
+  z.strictObject({ kind: z.literal("card"), card: OpenDotCard }),
+  z.strictObject({ kind: z.literal("open"), target: OpenTarget }),
+  z.strictObject({ kind: z.literal("cleared") }),
+  z.strictObject({ kind: z.literal("woke") }),
+  z.strictObject({ kind: z.literal("trouble"), message: z.string() }),
+  z.strictObject({
+    kind: z.literal("download"),
+    done_bytes: z.number().int(),
+    total_bytes: z.number().int(),
+  }),
+  z.strictObject({ kind: z.literal("status"), status: VoiceStatus }),
+]);
+export const VoiceDevice = z.strictObject({
+  id: z.string(),
+  name: z.string(),
+  default: z.boolean(),
+});
+export const VoiceDevices = z.strictObject({
+  microphones: z.array(VoiceDevice),
+  speakers: z.array(VoiceDevice),
+});
+// What the person is looking at, for Open Dot (dots-core open_dot/picture.rs).
+export const View = z.strictObject({
+  account: z.string(),
+  workspace: z.string(),
+  screen: z.string(),
+  dot_id: nullable(z.string()),
+  topic_root: nullable(z.string()),
+});
+export type VoiceState = z.infer<typeof VoiceState>;
+export type Deed = z.infer<typeof Deed>;
+export type OpenTarget = z.infer<typeof OpenTarget>;
+export type OpenDotCard = z.infer<typeof OpenDotCard>;
+export type VoiceStatus = z.infer<typeof VoiceStatus>;
+export type VoiceEvent = z.infer<typeof VoiceEvent>;
+export type VoiceDevice = z.infer<typeof VoiceDevice>;
+export type VoiceDevices = z.infer<typeof VoiceDevices>;
+export type View = z.infer<typeof View>;

@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
+use crate::accounts::{GitAction, Guardrails};
 use crate::checkins::Tool;
 use crate::engine::RunContext;
 use crate::model::EngineKind;
@@ -34,7 +35,8 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     // `.claude/settings.json` that could widen the allow list) out of headless runs.
     // Accepted by CLI 2.1.295 (probed 2026-10-09).
     a.push("--setting-sources".into());
-    a.push(if spec.use_user_settings {
+    // A dot with guardrails never reads them: a hook or rule there could skip `approve`.
+    a.push(if spec.use_user_settings && ctx.guardrails.is_none() {
         "user,project,local".into()
     } else {
         String::new()
@@ -56,6 +58,18 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
         allow.retain(|rule| {
             let name = rule.split('(').next().unwrap_or(rule).trim();
             !COMMAND_TOOLS.contains(&name)
+        });
+    }
+    // A dot with guardrails sends every shell command to `approve` too, which reads it for the
+    // protected git actions and commands (guardrails spec §4.2). Its protected calls are ask
+    // rules of the CLI (`cli_settings_for`), never deny rules: a CLI deny would refuse a
+    // Member's call in the CLI's words, before Dots could say it needs an Admin.
+    if ctx.guardrails.is_some() {
+        // And every file write: the CLI matches its own allow rules by case and long names,
+        // which a short (8.3) name or another case could pass.
+        allow.retain(|rule| {
+            let name = rule.split('(').next().unwrap_or(rule).trim();
+            !COMMAND_TOOLS.contains(&name) && !crate::policy::rails::WRITE_TOOLS.contains(&name)
         });
     }
     // The gateway checks every call of a run's MCP server (spec section 4), so the CLI does not
@@ -155,6 +169,63 @@ pub fn settings_path(mcp_config_path: &Path) -> PathBuf {
 /// What the run's `--settings` file holds: the CLI's ask rules for the private folders.
 pub fn cli_settings() -> Value {
     json!({ "permissions": { "ask": cli_private_ask_rules() } })
+}
+
+/// `cli_settings` for the run of `ctx`: with guardrails, also ask rules for each protected
+/// path and the shell prefixes the CLI can match, whatever the role (guardrails spec §4.2). Ask
+/// beats allow, so these calls reach `approve`, where a Member's is refused with "This needs an
+/// Admin".
+pub fn cli_settings_for(ctx: &RunContext) -> Value {
+    let mut ask = cli_private_ask_rules();
+    if let Some(rails) = &ctx.guardrails {
+        ask.extend(rails_ask_rules(&rails.guardrails));
+    }
+    json!({ "permissions": { "ask": ask } })
+}
+
+/// The file tools that write.
+const WRITE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit"];
+
+/// `Write(<glob>)` and its kin for each protected path.
+pub fn rails_path_rules(g: &Guardrails) -> Vec<String> {
+    g.protected_paths
+        .iter()
+        .flat_map(|p| {
+            WRITE_TOOLS
+                .iter()
+                .map(move |t| format!("{t}({})", p.trim()))
+        })
+        .collect()
+}
+
+/// The CLI ask rules of a guarded dot (guardrails spec §4.2): the protected paths' write rules
+/// and the shell prefixes the CLI can match. `approve` reads every call either way.
+pub fn rails_ask_rules(g: &Guardrails) -> Vec<String> {
+    let mut prefixes: Vec<String> = Vec::new();
+    for action in &g.protected_git {
+        let words: &[&str] = match action {
+            GitAction::PushMain => &["git push origin main", "git push origin master"],
+            GitAction::ForcePush => &["git push --force", "git push -f"],
+            GitAction::DeleteBranch => &["git push --delete", "git branch -D", "git branch -d"],
+            GitAction::Tags => &["git push --tags"],
+            GitAction::MergePr => &["gh pr merge"],
+            GitAction::Release => &[
+                "gh release create",
+                "gh release edit",
+                "gh release delete",
+                "gh release upload",
+            ],
+        };
+        prefixes.extend(words.iter().map(|w| w.to_string()));
+    }
+    prefixes.extend(g.protected_commands.iter().map(|c| c.trim().to_string()));
+    let mut rules = rails_path_rules(g);
+    for prefix in prefixes {
+        for tool in COMMAND_TOOLS {
+            rules.push(format!("{tool}({prefix}:*)"));
+        }
+    }
+    rules
 }
 
 /// The run's `--mcp-config`: Dots' own `dots` server and, for each MCP session the run has open,

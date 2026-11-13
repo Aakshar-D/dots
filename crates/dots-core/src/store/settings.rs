@@ -90,12 +90,14 @@ impl Store {
         let trimmed;
         let settings = if settings.default_model.trim() == settings.default_model
             && settings.checker_model.trim() == settings.checker_model
+            && settings.open_dot_model.trim() == settings.open_dot_model
         {
             settings
         } else {
             trimmed = Settings {
                 default_model: settings.default_model.trim().to_string(),
                 checker_model: settings.checker_model.trim().to_string(),
+                open_dot_model: settings.open_dot_model.trim().to_string(),
                 ..settings.clone()
             };
             &trimmed

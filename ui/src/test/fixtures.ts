@@ -14,6 +14,9 @@ export const sample = {
   rules: T.RuleCandidate.array().parse(contract.RuleCandidate),
   status: T.Status.parse(contract.Status),
   settings: T.Settings.parse(contract.Settings),
+  /// Voice off, nothing downloaded; and voice on, listening.
+  voiceOff: T.VoiceStatus.parse(contract.VoiceStatus[0]),
+  voiceReady: T.VoiceStatus.parse(contract.VoiceStatus[1]),
   overview: T.DotOverview.parse(contract.DotOverview),
   /// A stdio server with a changed tool list and a missing variable; a plugin's HTTP server; a
   /// skill with a problem; a plugin with every part.
@@ -123,6 +126,20 @@ export const claudeModels = sample.models.filter((m) => m.hint !== "");
 /// What a workspace or a dot refuses when it refuses nothing (`Refusals`, `DotAccess`).
 export const allowed: T.Refusals = { edit: null, run: null, answer: null, create_api_keys: null };
 
+/// A policy ceiling where no guardrails apply: every preset may be picked.
+export const noCeiling: T.PolicyCeiling = {
+  applies_as: null,
+  workspace_name: null,
+  max_preset: null,
+  presets: (["read-only", "sandboxed", "trusted", "custom"] as const).map((preset) => ({
+    preset,
+    refusal: null,
+  })),
+  policy_refusal: null,
+  held: null,
+  protected: null,
+};
+
 export const blankSpec: T.DotSpec = T.DotSpec.parse(contract.NewDotSpec);
 
 /// A status with nothing to warn about.
@@ -146,6 +163,11 @@ export function installDefaults(): void {
   backend.on("startup_error", () => null);
   backend.on("status", () => quietStatus);
   backend.on("update_note", () => ({ state: "none" }));
+  // Open Dot's voice: off, nothing downloaded, no devices.
+  backend.on("voice_status", () => sample.voiceOff);
+  backend.on("voice_devices", () => ({ microphones: [], speakers: [] }));
+  // The frame tells Open Dot what is on screen.
+  backend.on("voice_view", () => null);
   backend.on("update_status", () => ({
     version: "0.3.0",
     checks_on: true,
@@ -210,6 +232,12 @@ export function installDefaults(): void {
   backend.on("approval_touches_private", () => false);
   // And what the send-and-delete guard finds in the call; by default nothing.
   backend.on("approval_guard", () => null);
+  // And what the workspace's guardrails find in it; by default nothing.
+  backend.on("approval_guardrail", () => null);
+  // No workspace has guardrails: no policy ceiling (guardrails spec section 7).
+  backend.on("dot_ceiling", () => noCeiling);
+  backend.on("policy_ceiling", () => noCeiling);
+  backend.on("role_matrix", () => []);
   // The policy editor asks which always-allowed rules cover a private folder; by default none.
   backend.on("rules_touch_private", ({ patterns }) => (patterns as string[]).map(() => false));
   // No company Claude Code policy is installed on this PC.

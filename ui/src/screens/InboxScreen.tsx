@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Inbox as InboxIcon, Play } from "lucide-react";
 import { useCallback, useEffect, useRef, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router";
@@ -31,6 +31,7 @@ import { CapActions } from "@/components/SpendCaps";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useRunBlocker } from "@/lib/access";
 import { byRun, type RunApprovals } from "@/lib/approvals";
 import { relativeTime } from "@/lib/format";
 import { triggerLabel } from "@/lib/home-topics";
@@ -237,6 +238,8 @@ function AttentionRow({ item, actions }: { item: NeedsAttention; actions?: React
     onError: notifyError,
     onSettled: reload,
   });
+  // Off, with the core's reason, while the dot may not run or its runs are held.
+  const runBlocker = useRunBlocker(item.dot_id);
   const dismiss = useMutation({
     mutationFn: () => commands.dismissScheduleAttention(item.dot_id),
     onError: notifyError,
@@ -262,7 +265,8 @@ function AttentionRow({ item, actions }: { item: NeedsAttention; actions?: React
       <Button
         size="sm"
         variant="outline"
-        disabled={runNow.isPending}
+        disabled={runNow.isPending || runBlocker !== undefined}
+        title={runBlocker}
         onClick={onSingleClick(() => runNow.mutate())}
       >
         <Play aria-hidden /> Run now
@@ -334,6 +338,16 @@ function RunBatch({ group }: { group: RunApprovals }) {
   });
   // One answer per set: after a success the buttons stay off until the Inbox has reloaded.
   const decided = decideAll.isPending || decideAll.isSuccess;
+  // A call the guardrails keep for an Admin can't be approved from this PC, so neither can the
+  // set (the core refuses it too); Deny all stays. Each card says which call it is.
+  const guardrails = useQueries({
+    queries: group.approvals.map((approval) => ({
+      queryKey: keys.approvalGuardrail(approval.id),
+      queryFn: () => commands.approvalGuardrail(approval.id),
+      retry: false,
+    })),
+  });
+  const needsAdmin = guardrails.find((q) => q.data?.needs_admin)?.data?.text;
   const count = group.approvals.length;
   const calls = group.approvals.map((approval) => (
     <span key={approval.id} className="block font-mono text-xs">
@@ -351,11 +365,13 @@ function RunBatch({ group }: { group: RunApprovals }) {
           </>
         }
         confirmLabel="Approve all"
-        disabled={decided}
+        disabled={decided || needsAdmin !== undefined}
+        reason={needsAdmin}
         onConfirm={() => decideAll.mutate(true)}
       >
         Approve all ({count})
       </ConfirmButton>
+      {needsAdmin && <Badge variant="outline">Needs an Admin</Badge>}
       <ConfirmButton
         title={`Deny all ${count} calls?`}
         description={

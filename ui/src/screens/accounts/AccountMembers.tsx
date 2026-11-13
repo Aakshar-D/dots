@@ -44,6 +44,7 @@ import { onSingleClick } from "@/lib/single-click";
 
 import { ApproveDialog } from "./ApproveDialog";
 import { INVITE_ROLES, InviteDialog } from "./InviteDialog";
+import { RoleMatrix } from "./RoleMatrix";
 
 /// The core's refusal for an edit that touches an Owner (`accounts::edit::OWNER_LOCKED`).
 export const OWNER_TEXT =
@@ -238,6 +239,8 @@ export function AccountMembers({ org }: { org: OrgSummary }) {
           </ul>
         </div>
       )}
+
+      <RoleMatrix />
 
       {dialog === "invite" && (
         <InviteDialog orgId={org.id} account={org.name} onClose={() => setDialog(undefined)} />

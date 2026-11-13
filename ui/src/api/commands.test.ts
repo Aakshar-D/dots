@@ -500,6 +500,91 @@ describe("commands", () => {
     ]);
   });
 
+  it("sends the voice commands as the core names them, a click as an index", async () => {
+    reply = async () => fixture.VoiceStatus[1];
+    expect((await commands.voiceStatus()).state).toBe("listening");
+    await commands.voiceEnable(true);
+    await commands.voiceRemove();
+    reply = async () => null;
+    await commands.voiceDownloadCancel();
+    await commands.voiceOpen();
+    await commands.voiceClose();
+    await commands.voiceStop();
+    await commands.voicePick(1, 7);
+    const view = T.View.parse(fixture.View[1]);
+    await commands.voiceView(view);
+    await commands.voicePreview(3, 1.2);
+    reply = async () => fixture.VoiceDevices[1];
+    expect((await commands.voiceDevices()).microphones[0].default).toBe(true);
+    expect(calls).toEqual([
+      ["voice_status", undefined],
+      ["voice_enable", { on: true }],
+      ["voice_remove", undefined],
+      ["voice_download_cancel", undefined],
+      ["voice_open", undefined],
+      ["voice_close", undefined],
+      ["voice_stop", undefined],
+      ["voice_pick", { index: 1, seq: 7 }],
+      ["voice_view", { view }],
+      ["voice_preview", { voice: 3, speed: 1.2 }],
+      ["voice_devices", undefined],
+    ]);
+    // A cancelled download comes back as its kind, with the sentence.
+    reply = async () => {
+      throw { kind: "cancelled", message: "The download was cancelled." };
+    };
+    expect(await failure(commands.voiceEnable(true))).toEqual({
+      kind: "cancelled",
+      message: "The download was cancelled.",
+    });
+  });
+
+  it("sends the guardrails commands as the core names them", async () => {
+    const [view] = fixture.GuardrailsView;
+    const defaults = T.Guardrails.parse(view.defaults);
+    const policy = T.Policy.parse(fixture.DotSpec.policy);
+    reply = async () => view;
+    expect(await commands.workspaceGuardrails("acme-eng", "platform")).toEqual(view);
+    reply = async () => fixture.EditOutcome[0];
+    await commands.workspaceGuardrailsSet("acme-eng", 7, "platform", defaults);
+    await commands.workspaceGuardrailsSet("acme-eng", 8, "platform", null);
+    reply = async () => fixture.RoleRow;
+    expect(await commands.roleMatrix()).toEqual(fixture.RoleRow);
+    reply = async () => fixture.PolicyCeiling[0];
+    expect((await commands.dotCeiling("d1")).max_preset).toBe("sandboxed");
+    await commands.policyCeiling("acme-eng", "platform");
+    await commands.policyCeiling(null, "default", policy);
+    reply = async () => fixture.ApprovalGuardrail[0];
+    expect((await commands.approvalGuardrail("a1"))?.needs_admin).toBe(true);
+    reply = async () => null;
+    expect(await commands.approvalGuardrail("a2")).toBeNull();
+    expect(calls).toEqual([
+      ["workspace_guardrails", { orgId: "acme-eng", workspaceId: "platform" }],
+      [
+        "workspace_guardrails_set",
+        { orgId: "acme-eng", baseSeq: 7, workspaceId: "platform", guardrails: defaults },
+      ],
+      [
+        "workspace_guardrails_set",
+        { orgId: "acme-eng", baseSeq: 8, workspaceId: "platform", guardrails: null },
+      ],
+      ["role_matrix", undefined],
+      ["dot_ceiling", { dotId: "d1" }],
+      ["policy_ceiling", { orgId: "acme-eng", workspaceId: "platform", policy: null }],
+      ["policy_ceiling", { orgId: null, workspaceId: "default", policy }],
+      ["approval_guardrail", { id: "a1" }],
+      ["approval_guardrail", { id: "a2" }],
+    ]);
+  });
+
+  it("refuses guardrails in a shape it does not know", async () => {
+    const [view] = fixture.GuardrailsView;
+    reply = async () => ({ ...view, guardrails: { ...view.guardrails, extra: 1 } });
+    expect((await failure(commands.workspaceGuardrails("acme-eng", "platform"))).kind).toBe(
+      "internal",
+    );
+  });
+
   it("invokes exactly the commands the app registers", async () => {
     // A wrapper calls `invoke` before it first waits, so calling each one without arguments
     // lists the names with no backend. Their answers, mostly rejections here, do not matter.

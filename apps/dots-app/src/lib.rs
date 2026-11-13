@@ -1,3 +1,7 @@
+// Open Dot's turns (`voice::service::RuntimeMind`) await the runtime's dot actions, whose
+// futures nest deeper than the default limit lets the compiler lay out.
+#![recursion_limit = "256"]
+
 pub mod app_frame;
 pub mod autostart;
 pub mod commands;
@@ -15,6 +19,12 @@ pub mod update;
 pub mod update_record;
 pub mod update_service;
 pub mod viewing;
+mod voice;
+
+/// For the end-to-end test of Open Dot only (`tests/open_dot_e2e.rs`): the real voice service
+/// over a runtime, with a microphone and a speaker the test supplies.
+#[doc(hidden)]
+pub use voice::testing;
 
 use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
@@ -90,6 +100,8 @@ command_list![
     setup_apply,
     dot_move,
     dot_access,
+    dot_ceiling,
+    policy_ceiling,
     workspace_list,
     personal_workspace_add,
     personal_workspace_rename,
@@ -152,6 +164,7 @@ command_list![
     approval_rule_candidates,
     approval_touches_private,
     approval_guard,
+    approval_guardrail,
     decide_run_approvals,
     inbox,
     inbox_count,
@@ -216,6 +229,9 @@ command_list![
     invite_revoke,
     request_inspect,
     member_edit,
+    workspace_guardrails,
+    workspace_guardrails_set,
+    role_matrix,
     roster_draft_retry,
     roster_draft_discard,
     org_request_access,
@@ -321,6 +337,17 @@ command_list![
     graph_rebuild,
     graph_export,
     graph_reveal,
+    voice_status,
+    voice_enable,
+    voice_download_cancel,
+    voice_remove,
+    voice_open,
+    voice_close,
+    voice_stop,
+    voice_pick,
+    voice_view,
+    voice_preview,
+    voice_devices,
 ];
 
 /// Keeps the log writer flushing until the app exits.
@@ -439,6 +466,13 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
     app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
     app.manage(publishing::Publisher::default());
     phone::manage(app, runtime.as_ref().ok().map(|(rt, _)| rt.clone()));
+    // Open Dot's voice, and the listener for its spoken notices (it subscribes to the runtime
+    // here, after the tray): with voice off nothing is built and nothing is said.
+    voice::manage(
+        app,
+        runtime.as_ref().ok().map(|(rt, _)| rt.clone()),
+        data_dir.as_ref().ok().cloned(),
+    );
     app.manage(AppState::new(runtime.map(|(rt, _)| rt), log_dir).with_data_dir(data_dir.ok()));
     // A failed start always shows its error page, even when launched hidden; so does a start
     // that "Restart Dots" asked for.
@@ -481,6 +515,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
+        // Open Dot's hotkey: registered from Rust by the voice service, only while voice is on.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // The pages of the apps' screens (app library spec section 5).
         .register_asynchronous_uri_scheme_protocol(app_frame::SCHEME, |ctx, request, responder| {
             let app = ctx.app_handle().clone();
@@ -521,6 +557,10 @@ pub fn run() {
         .expect("failed to build the Dots app");
     app.run(|app, event| {
         if let RunEvent::Exit = event {
+            // The microphone and speaker are let go before the process ends.
+            if let Some(voice) = app.try_state::<voice::VoiceHandle>() {
+                voice.shutdown();
+            }
             if let Some(rt) = state::runtime_of(app.try_state::<AppState>().as_deref()) {
                 rt.shutdown();
             }

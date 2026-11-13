@@ -69,6 +69,9 @@ use crate::state::{AppState, StartupError};
 use crate::tray::Tray;
 use crate::update::{Next, UpdateNote};
 use crate::update_service;
+use crate::voice::events::{VoiceDevices, VoiceStatus};
+use crate::voice::VoiceHandle;
+use dots_core::open_dot::picture::View;
 
 type Res<T> = Result<T, CmdError>;
 
@@ -203,11 +206,14 @@ pub async fn update_settings(
     app: AppHandle,
     state: State<'_, AppState>,
     phone: State<'_, PhoneHandle>,
+    voice: State<'_, VoiceHandle>,
     settings: Settings,
 ) -> Res<SettingsSaved> {
     let rt = state.rt()?;
     // Pointing Dots at another program needs the user's own yes, in a dialog the webview
-    // cannot answer.
+    // cannot answer. Only the Voice switch (`voice_enable`) turns voice on or off: the save
+    // keeps the stored `voice_enabled`, read as it stores, so a draft (or a dialog left open)
+    // cannot undo a turn-on still downloading or a failed download's turn-off.
     let saved = confirm::save_settings_confirmed(&rt, settings, |title, message| {
         confirm::ask(&app, title, message)
     })
@@ -222,6 +228,10 @@ pub async fn update_settings(
     }
     // "Answer from my phone" applies at once: on starts the listener, off closes it.
     phone.get()?.apply(&saved.settings).await;
+    // So does voice: a new voice or hotkey at once; a new device rebuilds the session in the
+    // background (its outcome comes as `Status` events), so the save does not wait for it.
+    // A missing voice service never holds the save back.
+    voice.apply_saved(&saved.settings);
     Ok(saved)
 }
 
@@ -243,7 +253,9 @@ pub async fn set_schedules_paused(
 /// start at login included, so a mark in the data folder tells the new process to show its
 /// window: the person who clicked is waiting for it.
 #[tauri::command]
-pub fn restart_app(app: AppHandle, state: State<'_, AppState>) {
+pub fn restart_app(app: AppHandle, state: State<'_, AppState>, voice: State<'_, VoiceHandle>) {
+    // The microphone and speaker are let go before the new process wants them.
+    voice.shutdown();
     if let Ok(rt) = state.rt() {
         rt.shutdown();
     }
@@ -608,6 +620,31 @@ pub async fn dot_move(
 #[tauri::command]
 pub async fn dot_access(state: State<'_, AppState>, dot_id: String) -> Res<DotAccess> {
     Ok(state.rt()?.dot_access(&dot_id).await?)
+}
+
+/// The policy ceiling of the dot: the highest preset this PC's dots may use in its workspace,
+/// why each preset or its own policy may not be used, and the text its runs are held with.
+#[tauri::command]
+pub async fn dot_ceiling(
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<dots_core::accounts::PolicyCeiling> {
+    Ok(state.rt()?.dot_ceiling(&dot_id).await?)
+}
+
+/// The policy ceiling of a workspace (`orgId` null: Personal) for a dot not yet made, with
+/// `policy` judged when given.
+#[tauri::command]
+pub async fn policy_ceiling(
+    state: State<'_, AppState>,
+    org_id: Option<String>,
+    workspace_id: String,
+    policy: Option<dots_core::policy::Policy>,
+) -> Res<dots_core::accounts::PolicyCeiling> {
+    Ok(state
+        .rt()?
+        .policy_ceiling(org_id.as_deref(), &workspace_id, policy.as_ref())
+        .await?)
 }
 
 /// The workspaces of `scope` (`personal`, or an org's id) this PC may see.
@@ -1219,6 +1256,16 @@ pub async fn approval_guard(
     Ok(state.rt()?.approval_guard(&id).await?)
 }
 
+/// What the guardrails of the dot's workspace find in the call of this approval: what it hits,
+/// and whether this PC needs an Admin to approve it. Null when it hits none.
+#[tauri::command]
+pub async fn approval_guardrail(
+    state: State<'_, AppState>,
+    id: String,
+) -> Res<Option<dots_core::accounts::ApprovalGuardrail>> {
+    Ok(state.rt()?.approval_guardrail(&id).await?)
+}
+
 #[tauri::command]
 pub async fn decide_run_approvals(
     state: State<'_, AppState>,
@@ -1819,6 +1866,42 @@ pub async fn member_edit(
     edit: RosterEdit,
 ) -> Res<EditOutcome> {
     Ok(state.rt()?.member_edit(&org_id, base_seq, edit).await?)
+}
+
+/// The guardrails of a workspace of the org for the Guardrails tab, with what this PC may do
+/// to them (guardrails spec §7).
+#[tauri::command]
+pub async fn workspace_guardrails(
+    state: State<'_, AppState>,
+    org_id: String,
+    workspace_id: String,
+) -> Res<dots_core::vault::org::GuardrailsView> {
+    Ok(state
+        .rt()?
+        .workspace_guardrails(&org_id, &workspace_id)
+        .await?)
+}
+
+/// Sets a workspace's guardrails, or removes them with `null`: signed and published like any
+/// member-list edit, or kept as a draft.
+#[tauri::command]
+pub async fn workspace_guardrails_set(
+    state: State<'_, AppState>,
+    org_id: String,
+    base_seq: u64,
+    workspace_id: String,
+    guardrails: Option<dots_core::accounts::Guardrails>,
+) -> Res<EditOutcome> {
+    Ok(state
+        .rt()?
+        .workspace_guardrails_set(&org_id, base_seq, &workspace_id, guardrails)
+        .await?)
+}
+
+/// What each role can do: the permission table as the core checks it.
+#[tauri::command]
+pub async fn role_matrix() -> Res<Vec<dots_core::accounts::RoleRow>> {
+    Ok(dots_core::accounts::role_matrix())
 }
 
 /// Publishes the org's waiting signed member list again.
@@ -2767,4 +2850,85 @@ pub async fn graph_reveal(
     app.opener()
         .reveal_item_in_dir(&path)
         .map_err(|e| CmdError::internal(format!("could not show {}: {e}", path.display())))
+}
+
+// ---- Open Dot's voice (Open Dot design spec, step 3) ----------------------------------------
+
+/// Where voice stands: on, the speech files, the download, the session's state.
+#[tauri::command]
+pub async fn voice_status(voice: State<'_, VoiceHandle>) -> Res<VoiceStatus> {
+    Ok(voice.get()?.status().await)
+}
+
+/// Turns voice on (downloading the speech files first when they are missing, then building
+/// the session) or off (the microphone is let go). Stored in the settings.
+#[tauri::command]
+pub async fn voice_enable(voice: State<'_, VoiceHandle>, on: bool) -> Res<VoiceStatus> {
+    voice.get()?.enable(on).await
+}
+
+/// Stops the speech files' download; what came so far is kept for the next try.
+#[tauri::command]
+pub fn voice_download_cancel(voice: State<'_, VoiceHandle>) -> Res<()> {
+    voice.get()?.download_cancel();
+    Ok(())
+}
+
+/// Turns voice off and deletes the speech files.
+#[tauri::command]
+pub async fn voice_remove(voice: State<'_, VoiceHandle>) -> Res<VoiceStatus> {
+    voice.get()?.remove().await
+}
+
+/// Listen (the rail, the tray). Not ready: a `voice` trouble event says why.
+#[tauri::command]
+pub fn voice_open(voice: State<'_, VoiceHandle>) -> Res<()> {
+    voice.get()?.open();
+    Ok(())
+}
+
+/// Esc: stop everything and forget the conversation.
+#[tauri::command]
+pub fn voice_close(voice: State<'_, VoiceHandle>) -> Res<()> {
+    voice.get()?.close();
+    Ok(())
+}
+
+/// Stop speaking and listen.
+#[tauri::command]
+pub fn voice_stop(voice: State<'_, VoiceHandle>) -> Res<()> {
+    voice.get()?.stop();
+    Ok(())
+}
+
+/// A click on an option (0-based) of question `seq` (the `seq` of the `ask` event the
+/// options came from): it reaches the mind as a pick, never as words, and only while that
+/// question is the one showing.
+#[tauri::command]
+pub fn voice_pick(voice: State<'_, VoiceHandle>, index: u32, seq: u64) -> Res<()> {
+    voice.get()?.pick(index as usize, seq);
+    Ok(())
+}
+
+/// The account, workspace, screen and conversation the person is looking at. Cheap, also
+/// with voice off (it is only kept); a field over 256 bytes is refused.
+#[tauri::command]
+pub fn voice_view(voice: State<'_, VoiceHandle>, view: View) -> Res<()> {
+    voice.get()?.set_view(view)
+}
+
+/// Says "Hi, I'm Dot." in `voice` (0 to 9) at `speed` (0.8 to 1.4), then goes back to the
+/// saved voice.
+#[tauri::command]
+pub async fn voice_preview(handle: State<'_, VoiceHandle>, voice: u8, speed: f32) -> Res<()> {
+    handle.get()?.preview(voice, speed).await
+}
+
+/// The microphones and speakers to choose from.
+#[tauri::command]
+pub async fn voice_devices(voice: State<'_, VoiceHandle>) -> Res<VoiceDevices> {
+    let service = voice.get()?;
+    tauri::async_runtime::spawn_blocking(move || service.devices())
+        .await
+        .map_err(|_| CmdError::internal("the devices could not be listed"))
 }

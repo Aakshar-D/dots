@@ -3,6 +3,7 @@
 
 pub mod api_keys;
 pub mod edit;
+pub mod guardrails;
 mod identity;
 mod membership;
 mod permissions;
@@ -11,6 +12,10 @@ pub mod roster;
 mod scope;
 mod workspaces;
 
+pub use guardrails::{
+    dot_rails, enforced_rails, rails_in, rails_state, unknown_rails, ApprovalGuardrail, DotRails,
+    GitAction, GuardRole, Guardrails, PolicyCeiling, PresetCeiling, RailsState,
+};
 pub use identity::{
     ensure_identity, identity, set_profile, sign_with_identity, Identity, IDENTITY_SECRET,
     MAX_EMAIL, MAX_PROFILE_NAME,
@@ -18,7 +23,7 @@ pub use identity::{
 pub use membership::{Membership, NotMember};
 pub use permissions::{
     access, access_dot, access_in, account_label, can, require, require_dot, require_in,
-    require_team, workspace_name, Access, Permission,
+    require_team, role_matrix, workspace_name, Access, Permission, RoleRow,
 };
 pub use request::{make_request, parse_request, AccessRequest, RequestError, REQUEST_PREFIX};
 pub use roster::{

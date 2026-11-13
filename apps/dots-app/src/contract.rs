@@ -40,7 +40,7 @@ use dots_core::scheduler::MAX_ATTEMPTS;
 use dots_core::settings::{Settings, MAX_CONCURRENT_RUNS, MAX_GLOBAL_INSTRUCTIONS};
 use dots_core::setup::{SetupAnswer, SetupApplied, SetupProposal, SetupRequest, SetupRound};
 use dots_core::skill_creator::{DraftRequest, DraftSummary};
-use dots_core::store::{HistoryRow, HistoryState, PhoneAction, PhoneDevice};
+use dots_core::store::{HistoryRow, HistoryState, OpenDotUsage, PhoneAction, PhoneDevice};
 use dots_core::usage_counts::{Report, UsageCountsState};
 use dots_core::vault::audit::{AuditView, Event as AuditEvent, SendState};
 use dots_core::vault::org::{
@@ -846,7 +846,7 @@ fn claude_usage() -> Vec<ClaudeUsage> {
     ]
 }
 
-/// The Usage page's week: a Claude dot and a local one.
+/// The Usage page's week: a Claude dot and a local one, and Open Dot's requests.
 fn usage_summary() -> UsageSummary {
     UsageSummary {
         period: UsagePeriod::Week,
@@ -891,6 +891,12 @@ fn usage_summary() -> UsageSummary {
                 }],
             },
         ],
+        open_dot: Some(OpenDotUsage {
+            requests: 38,
+            tokens_in: 152_000,
+            tokens_out: 4_100,
+            cost_usd: Some(0.21),
+        }),
     }
 }
 
@@ -2046,6 +2052,7 @@ pub fn samples() -> Value {
             skip: true,
         },
     ]);
+    let voice_proposal = proposal.clone();
     samples["SetupAnswer"] = to([
         SetupAnswer::Questions {
             questions: vec!["Which folder?".into(), "How often?".into()],
@@ -2404,6 +2411,14 @@ pub fn samples() -> Value {
             member_id: "01J0MEM".into(),
             workspaces: BTreeMap::from([("platform".to_string(), WorkspaceRole::Admin)]),
         },
+        RosterEdit::SetGuardrails {
+            workspace_id: "platform".into(),
+            guardrails: Some(dots_core::accounts::Guardrails::defaults()),
+        },
+        RosterEdit::SetGuardrails {
+            workspace_id: "platform".into(),
+            guardrails: None,
+        },
     ]);
     inbox_marks_samples(&mut samples);
     send_later_samples(&mut samples);
@@ -2413,7 +2428,295 @@ pub fn samples() -> Value {
     context_rules_samples(&mut samples);
     samples["ResultCheck"] = result_checks();
     graph_samples(&mut samples);
+    guardrails_samples(&mut samples);
+    voice_samples(&mut samples, voice_proposal);
     samples
+}
+
+/// Open Dot's voice (Open Dot design spec, step 3): every `voice` event kind, each card and
+/// deed and place to open, the status off and ready, the devices and the view.
+fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
+    use crate::voice::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceStatus};
+    use dots_core::open_dot::act::{Deed, OpenTarget};
+    use dots_core::open_dot::picture::View;
+    use dots_core::open_dot::Card;
+    use dots_voice::State;
+
+    let off = VoiceStatus {
+        enabled: false,
+        installed: false,
+        downloading: false,
+        ready: false,
+        state: State::Off,
+        mic_open: false,
+        download_bytes: dots_voice::Manifest::pinned().total_bytes(),
+        hotkey_error: None,
+        trouble: None,
+    };
+    let ready = VoiceStatus {
+        enabled: true,
+        installed: true,
+        ready: true,
+        state: State::Listening,
+        mic_open: true,
+        hotkey_error: Some("Another app uses Ctrl+Shift+Space.".into()),
+        trouble: Some("The speaker could not be opened. Check your sound settings.".into()),
+        ..off.clone()
+    };
+    let deeds = [
+        Deed::Approve {
+            approval_id: "ap_1".into(),
+            dot_name: "Research".into(),
+            tool: "Bash".into(),
+            target: "ls -la".into(),
+        },
+        Deed::Deny {
+            approval_id: "ap_1".into(),
+            dot_name: "Research".into(),
+            tool: "Bash".into(),
+            target: "ls -la".into(),
+        },
+        Deed::Run {
+            dot_id: "dot_1".into(),
+            dot_name: "Deploy watcher".into(),
+        },
+        Deed::Answer {
+            message_id: "msg_1".into(),
+            dot_name: "Release helper".into(),
+            text: "main".into(),
+        },
+        Deed::Send {
+            dot_id: "dot_1".into(),
+            dot_name: "Research".into(),
+            text: "look at the build".into(),
+            topic_root: Some("msg_2".into()),
+        },
+        Deed::Send {
+            dot_id: "dot_1".into(),
+            dot_name: "Research".into(),
+            text: "and the tests".into(),
+            topic_root: None,
+        },
+    ];
+    let targets = [
+        OpenTarget::Dot {
+            dot_id: "dot_1".into(),
+        },
+        OpenTarget::Approval {
+            approval_id: "ap_1".into(),
+        },
+        OpenTarget::Inbox,
+        OpenTarget::Settings,
+        OpenTarget::Usage,
+        OpenTarget::Home,
+    ];
+    let mut events = vec![
+        VoiceEvent::State {
+            state: State::Idle,
+            mic_open: false,
+        },
+        VoiceEvent::Level {
+            mic: 0.5,
+            voice: 0.0,
+        },
+        VoiceEvent::Hearing {
+            text: "what needs".into(),
+        },
+        VoiceEvent::Heard {
+            text: "what needs me".into(),
+        },
+        VoiceEvent::Saying {
+            text: "One question.".into(),
+        },
+        VoiceEvent::Ask {
+            question: "Approve it?".into(),
+            options: vec!["Yes".into(), "No".into()],
+            seq: 1,
+        },
+        VoiceEvent::Ask {
+            question: "What should it be called?".into(),
+            options: vec![],
+            seq: 2,
+        },
+        VoiceEvent::Card {
+            card: Card::Proposal { proposal },
+        },
+        VoiceEvent::Card {
+            card: Card::List {
+                title: "What needs you".into(),
+                lines: vec!["Research asks: which branch?".into()],
+            },
+        },
+        VoiceEvent::Cleared,
+        VoiceEvent::Woke,
+        VoiceEvent::Trouble {
+            message: "Open Dot is off. Turn it on in Settings, under Voice.".into(),
+        },
+        VoiceEvent::Download {
+            done_bytes: 1_000_000,
+            total_bytes: 258_311_120,
+        },
+        VoiceEvent::Status {
+            status: off.clone(),
+        },
+    ];
+    for state in [
+        State::Off,
+        State::Listening,
+        State::Thinking,
+        State::Speaking,
+        State::Asking,
+    ] {
+        events.push(VoiceEvent::State {
+            state,
+            mic_open: true,
+        });
+    }
+    events.extend(deeds.map(|deed| VoiceEvent::Card {
+        card: Card::Confirm { deed },
+    }));
+    events.extend(targets.map(|target| VoiceEvent::Open { target }));
+    samples["VoiceEvent"] = to(events);
+    samples["VoiceStatus"] = to([off, ready]);
+    samples["VoiceDevices"] = to([
+        VoiceDevices::default(),
+        VoiceDevices {
+            microphones: vec![VoiceDevice {
+                id: "{0.0.1.00000000}.{mic}".into(),
+                name: "Desk microphone".into(),
+                default: true,
+            }],
+            speakers: vec![VoiceDevice {
+                id: "{0.0.0.00000000}.{out}".into(),
+                name: "Speakers".into(),
+                default: false,
+            }],
+        },
+    ]);
+    samples["View"] = to([
+        View::default(),
+        View {
+            account: "personal".into(),
+            workspace: "default".into(),
+            screen: "dot".into(),
+            dot_id: Some("dot_1".into()),
+            topic_root: Some("msg_2".into()),
+        },
+    ]);
+}
+
+/// Workspace guardrails (guardrails spec §7): the Guardrails tab of an Admin who may sign and of
+/// a Member, what each role can do, the ceiling of a Member's Trusted dot and of a workspace
+/// with none, and the approval cards of a protected call.
+fn guardrails_samples(samples: &mut Value) {
+    use dots_core::accounts::guardrails::{preset_label, COMPAT_NOTE};
+    use dots_core::accounts::{
+        role_matrix, ApprovalGuardrail, GitAction, GuardRole, Guardrails, Permission,
+        PolicyCeiling, PresetCeiling,
+    };
+    use dots_core::vault::org::{GitActionView, GuardrailsView};
+    let git_actions: Vec<GitActionView> = GitAction::ALL
+        .iter()
+        .map(|a| GitActionView {
+            action: *a,
+            label: a.label().to_string(),
+        })
+        .collect();
+    let member_refusal =
+        "Acme Engineering: a Member can't change guardrails. Ask an Admin or Owner.";
+    samples["GuardrailsView"] = to([
+        GuardrailsView {
+            org_id: "acme-eng".into(),
+            workspace_id: "platform".into(),
+            workspace_name: "Platform".into(),
+            seq: 7,
+            guardrails: Some(Guardrails::defaults()),
+            defaults: Guardrails::defaults(),
+            git_actions: git_actions.clone(),
+            edit_refusal: None,
+            sign_blocker: None,
+            applies_as: Some(GuardRole::Admin),
+            compat_note: COMPAT_NOTE.into(),
+        },
+        GuardrailsView {
+            org_id: "acme-eng".into(),
+            workspace_id: "default".into(),
+            workspace_name: "Default".into(),
+            seq: 7,
+            guardrails: None,
+            defaults: Guardrails::defaults(),
+            git_actions,
+            edit_refusal: Some(member_refusal.into()),
+            sign_blocker: Some(member_refusal.into()),
+            applies_as: None,
+            compat_note: COMPAT_NOTE.into(),
+        },
+    ]);
+    samples["Guardrails"] = to(Guardrails {
+        protected_paths: vec!["db/**".into()],
+        protected_git: vec![GitAction::ForcePush],
+        protected_commands: vec!["make deploy".into()],
+        member_max_preset: Preset::ReadOnly,
+    });
+    samples["RoleRow"] = to(role_matrix());
+    let too_high = format!(
+        "Acme Engineering: a Member's dot in the Platform workspace may use up to {}, and this policy is Trusted. Ask an Admin or Owner.",
+        preset_label(Preset::Sandboxed)
+    );
+    let preset = |p: Preset, refusal: Option<&str>| PresetCeiling {
+        preset: p,
+        refusal: refusal.map(str::to_string),
+    };
+    samples["PolicyCeiling"] = to([
+        PolicyCeiling {
+            applies_as: Some(GuardRole::Member),
+            workspace_name: Some("Platform".into()),
+            max_preset: Some(Preset::Sandboxed),
+            presets: vec![
+                preset(Preset::ReadOnly, None),
+                preset(Preset::Sandboxed, None),
+                preset(Preset::Trusted, Some(&too_high)),
+                preset(Preset::Custom, None),
+            ],
+            policy_refusal: Some(too_high.clone()),
+            held: Some(
+                "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin."
+                    .into(),
+            ),
+            protected: Some(Guardrails::defaults()),
+        },
+        PolicyCeiling {
+            applies_as: None,
+            workspace_name: None,
+            max_preset: None,
+            presets: [Preset::ReadOnly, Preset::Sandboxed, Preset::Trusted, Preset::Custom]
+                .into_iter()
+                .map(|p| preset(p, None))
+                .collect(),
+            policy_refusal: None,
+            held: None,
+            protected: None,
+        },
+    ]);
+    samples["ApprovalGuardrail"] = to([
+        ApprovalGuardrail {
+            what: "pushing to main or master".into(),
+            workspace_name: "Platform".into(),
+            needs_admin: true,
+            text: "This needs an Admin: pushing to main or master is protected in the Platform workspace."
+                .into(),
+        },
+        ApprovalGuardrail {
+            what: "the file migrations/0001.sql".into(),
+            workspace_name: "Platform".into(),
+            needs_admin: false,
+            text: "The file migrations/0001.sql is protected in the Platform workspace, so it always asks."
+                .into(),
+        },
+    ]);
+    samples["Enums"]["GitAction"] = to(GitAction::ALL);
+    samples["Enums"]["GuardRole"] = to([GuardRole::Member, GuardRole::Admin]);
+    samples["Enums"]["RolePermission"] = to(Permission::ALL);
 }
 
 /// Attachments in chat (attachments spec section 5): a staged file, a chat run with a file,
