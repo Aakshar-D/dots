@@ -63,7 +63,7 @@ jobs:
         shell: bash
         run: |
           ls -l target/release/bundle/nsis/
-          test -n "$(find target/release/bundle/nsis -name 'Dots_*_x64-setup.exe' -size +1M)"
+          test -n "$(find target/release/bundle/nsis -name 'Sage_*_x64-setup.exe' -size +1M)"
 
   macos:
     runs-on: macos-latest
@@ -97,7 +97,7 @@ jobs:
       - name: Check the app
         shell: bash
         run: |
-          app="target/universal-apple-darwin/release/bundle/macos/Dots.app"
+          app="target/universal-apple-darwin/release/bundle/macos/Sage.app"
           ls -l target/universal-apple-darwin/release/bundle/dmg/
           test -n "$(find target/universal-apple-darwin/release/bundle/dmg -name '*.dmg' -size +1M)"
           program="$(find "$app/Contents/MacOS" -type f -perm +111 | head -n 1)"

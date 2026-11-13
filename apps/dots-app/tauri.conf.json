@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Dots",
+  "productName": "Sage",
   "version": "0.4.0",
   "identifier": "dev.dots.app",
   "build": {
@@ -28,6 +28,7 @@
   },
   "bundle": {
     "active": true,
+    "publisher": "Sage",
     "targets": ["nsis"],
     "icon": [
       "icons/32x32.png",
@@ -37,7 +38,7 @@
     ],
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
-      "nsis": { "installMode": "currentUser" }
+      "nsis": { "installMode": "currentUser", "installerHooks": "windows/upgrade-from-dots.nsh" }
     },
     "macOS": {
       "infoPlist": "Info.plist",

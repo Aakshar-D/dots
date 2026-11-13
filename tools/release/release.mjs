@@ -8,7 +8,7 @@
 //   node tools/release/release.mjs manifest <tag> <installer> <out> [notes-file] [mac-archive]
 //       Writes the updater manifest (latest.json) for the NSIS installer <installer>, whose
 //       signature is <installer>.sig, to <out>. With <mac-archive>, the universal macOS app's
-//       updater archive (Dots.app.tar.gz, signature <mac-archive>.sig), the manifest offers it
+//       updater archive (Sage.app.tar.gz, signature <mac-archive>.sig), the manifest offers it
 //       to Apple silicon and Intel Macs too.
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
