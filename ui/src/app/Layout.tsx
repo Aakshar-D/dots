@@ -85,7 +85,7 @@ export function Layout() {
     (inbox?.app_reviews.length ?? 0) > 0 ||
     shownMessages(inbox, messages ?? []).some(isOpenQuestion);
   return (
-    <div className="flex h-screen bg-background text-sm text-foreground">
+    <div className="app-backdrop flex h-screen text-sm text-foreground">
       <nav
         aria-label="Main"
         className="flex w-[46px] shrink-0 flex-col items-center gap-1 border-r bg-sidebar py-2 text-sidebar-foreground"

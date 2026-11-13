@@ -1,9 +1,10 @@
 import type { VoiceState } from "@/api/types";
 
-/// The numbers behind The Breath: where the three dots of the Dots mark are, how big and how
-/// bright, frame by frame. Ported from the accepted prototype (the-breath.html): the logo
-/// arrangement, each state's targets, the level smoothing and the easing. The model never reads
-/// a clock: `step` is given the time, so the same inputs always give the same frames.
+/// The numbers behind The Breath: where the three bars of the Sage mark are, how wide, how tall
+/// and how bright, frame by frame. The mark is three stacked pill bars that step like an S; each
+/// state gives every bar a target made of slow sines and the smoothed sound level, and the bars
+/// ease toward it. The model never reads a clock: `step` is given the time, so the same inputs
+/// always give the same frames.
 
 export type BreathState =
   | "resting"
@@ -13,14 +14,14 @@ export type BreathState =
   | "asking"
   | "done"
   | "trouble";
-/// One body, in a 200 × 200 box.
-export type Dot = { x: number; y: number; r: number; opacity: number };
-/// `lobes`: the extra body shown while asking with four or more options, empty otherwise.
+/// One pill bar, in a 200 × 200 box. `x`, `y` are its centre.
+export type Bar = { x: number; y: number; w: number; h: number; opacity: number };
+/// `extra`: the fourth bar shown while asking with four options, empty otherwise.
 /// `mic`, `voice`: the smoothed levels, exactly 0 once too small to see. `settled`: every value
 /// is at its target, so with the same input the next frame is this one.
 export type Frame = {
-  dots: [Dot, Dot, Dot];
-  lobes: Dot[];
+  bars: [Bar, Bar, Bar];
+  extra: Bar[];
   glow: number;
   mic: number;
   voice: number;
@@ -40,55 +41,57 @@ export const MORPH_MS = 320;
 /// How long `done` shows after a reply ends, before the mark rests.
 export const DONE_MS = 600;
 
-/// The prototype drew in a 400 × 280 box around its middle; its widest shape (four lobes) spans
-/// 274 units, so 0.7 fits every shape into the 200 box with room to spare.
-const SCALE = 0.7;
 const MIDDLE = 100;
+/// Every bar is this tall at rest, and a pill: its ends are half circles.
+const THICK = 25;
+/// How far apart the bars' centres are, top to bottom.
+const PITCH = 35;
 
-/// The logo arrangement in the prototype's units: one large dot left, two smaller right. The
-/// fourth body is the extra lobe, seen only when asking with four options.
-const HOME = [
-  { x: -50, y: 0, r: 35 },
-  { x: 50, y: -50, r: 25 },
-  { x: 50, y: 50, r: 25 },
-  { x: -50, y: 0, r: 0 },
-] as const;
+type Body = { x: number; y: number; w: number; h: number };
 
-const toBox = (h: { x: number; y: number; r: number }) => ({
-  x: MIDDLE + h.x * SCALE,
-  y: MIDDLE + h.y * SCALE,
-  r: h.r * SCALE,
-});
-
-/// The logo arrangement in the 200 box, at full brightness.
-export const LOGO: readonly [Dot, Dot, Dot] = [
-  { ...toBox(HOME[0]), opacity: 1 },
-  { ...toBox(HOME[1]), opacity: 1 },
-  { ...toBox(HOME[2]), opacity: 1 },
+/// The logo arrangement: the top bar sits right of the middle one and the bottom bar left, so
+/// the three step like an S. The fourth body is the extra bar, which has no width until asking
+/// with four options; it waits where it will appear, below the others.
+const HOME: readonly Body[] = [
+  { x: MIDDLE + 10, y: MIDDLE - PITCH, w: 80, h: THICK },
+  { x: MIDDLE, y: MIDDLE, w: 100, h: THICK },
+  { x: MIDDLE - 10, y: MIDDLE + PITCH, w: 80, h: THICK },
+  { x: MIDDLE, y: MIDDLE + 1.5 * PITCH, w: 0, h: THICK },
 ];
 
-/// Easing rate per second: 1 - e^(-3) = 95% of the way after MORPH_MS. The prototype used 9.
+/// The logo arrangement at full brightness.
+export const LOGO: readonly [Bar, Bar, Bar] = [
+  { ...HOME[0]!, opacity: 1 },
+  { ...HOME[1]!, opacity: 1 },
+  { ...HOME[2]!, opacity: 1 },
+];
+
+/// Easing rate per second: 1 - e^(-3) = 95% of the way after MORPH_MS.
 const MORPH_RATE = 3000 / MORPH_MS;
-/// Brightness eases a little slower (prototype `dim`).
+/// Brightness eases a little slower.
 const FADE_RATE = 6;
-/// The level rises fast (prototype: 14) and falls back more slowly, so syllables read as a
-/// swell rather than a flicker.
+/// The level rises fast and falls back more slowly, so syllables read as a swell rather than a
+/// flicker.
 const ATTACK_RATE = 14;
 const RELEASE_RATE = 7;
-/// The longest step one frame may take, in seconds (prototype: 0.05). A frame after the tab was
-/// hidden eases like a slow frame instead of cutting to the target.
+/// The longest step one frame may take, in seconds. A frame after the tab was hidden eases like
+/// a slow frame instead of cutting to the target.
 const MAX_DT = 0.05;
 /// Below this a value is at its target.
 const SNAP = 1e-3;
 /// Below this a smoothed level is silence, so a mark at rest can tell nothing moves.
 const LEVEL_SNAP = 1e-4;
-/// The glow behind the dots (prototype halo opacity).
+/// Below this width the extra bar is not there.
+const SEEN = 0.05;
+/// The glow behind the middle bar, and how much more of it the sound adds.
 const GLOW = 0.28;
-/// How dim the dots are when something is wrong (prototype).
+const GLOW_GAIN = 0.32;
+/// How dim the bars are when something is wrong.
 const TROUBLE_DIM = 0.32;
 /// With reduced motion brightness carries the sound: from this, up to full with the level.
 const STILL_BASE = 0.85;
-const STILL_GLOW_GAIN = 0.32;
+
+const TURN = 2 * Math.PI;
 
 /// A level as given by the voice, read as 0 to 1 whatever it is.
 function unit(v: number): number {
@@ -101,58 +104,61 @@ function optionCount(n: number): number {
   return Math.min(4, Math.max(1, Math.round(n)));
 }
 
-type Body = { x: number; y: number; r: number };
-
-/// Where each body wants to be at time `t` (seconds), in the prototype's units
-/// (the-breath.html `targets(t)`).
+/// Where each bar wants to be at time `t` (seconds). A width of 0 means the bar is not part of
+/// this shape; `step` lets it shrink where it stands.
 function targets(state: BreathState, t: number, level: number, n: number): Body[] {
-  const breath = (i: number, depth: number, period: number) =>
-    1 + depth * Math.sin((t / period) * 2 * Math.PI + i * 1.3);
-  return HOME.map((h, i) => {
+  /// A sine between -1 and 1 that takes `period` seconds, `lag` of a cycle behind.
+  const wave = (period: number, lag = 0) => Math.sin((t / period - lag) * TURN);
+  return HOME.map((home, i): Body => {
+    if (i === 3 && !(state === "asking" && n === 4)) return { ...home, w: 0 };
+    const middle = i === 1;
     switch (state) {
-      case "resting":
-        // A slow swell and settle every 4.5 s, each dot a little out of step.
-        return { x: h.x, y: h.y, r: h.r * breath(i, 0.07, 4.5) };
+      case "resting": {
+        // The outer bars drift out along the S and back every 4.5 s, and the middle bar
+        // breathes in width, each a little after the one above.
+        const out = 1.5 * (1 + wave(4.5, 0.25 + i * 0.06));
+        if (middle) return { ...home, w: home.w * (1 + 0.04 * wave(4.5, 0.06)) };
+        return { ...home, x: home.x + (i === 0 ? out : -out) };
+      }
       case "done":
       case "trouble":
-        return { x: h.x, y: h.y, r: h.r };
+        return { ...home };
       case "listening":
-        // Leaning apart; each swells with the mic, the yellow one most.
+        // A level meter: centred, each bar as wide as the mic is loud, the middle one most. A
+        // slow sine of its own keeps each bar alive in silence and no two alike.
         return {
-          x: h.x * 1.28,
-          y: h.y * 1.28,
-          r: i === 3 ? 0 : h.r * breath(i, 0.03, 3) + level * (i === 0 ? 24 : 12 + i * 2),
+          x: MIDDLE,
+          y: home.y,
+          w: middle
+            ? 63 + 84 * level + 3 * wave(3, 0)
+            : 53 + 54 * level + 3 * wave(i === 0 ? 3.7 : 4.3, i * 0.2),
+          h: THICK,
         };
-      case "thinking": {
-        // Circling one another, drifting in and out so they touch and part.
-        const a = (i * 2 * Math.PI) / 3 + t * 1.1;
-        const d = 36 + 14 * Math.sin(t * 1.9 + i * 2.1);
-        return {
-          x: Math.cos(a) * d,
-          y: Math.sin(a) * d * 0.8,
-          r: i === 3 ? 0 : 24 + 5 * Math.sin(t * 2.3 + i),
-        };
-      }
+      case "thinking":
+        // Pistons: each bar slides from side to side, a third of a cycle after the one above.
+        return { x: MIDDLE + 22 * wave(1.6, i / 3), y: home.y, w: 80, h: THICK };
       case "speaking": {
-        // Melted into one shape, turning slowly, pulsing with Dot's voice. Far enough apart and
-        // close enough in size that each colour keeps part of the outline.
-        const a = (i * 2 * Math.PI) / 3 + t * 0.7;
-        const d = 18 + level * 9;
+        // The logo, pulsing with Sage's voice: every bar widens, the middle one most, and it
+        // swells in height while the outer bars move away to keep their distance from it.
+        const away = 6 * level * (i === 0 ? -1 : i === 2 ? 1 : 0);
         return {
-          x: Math.cos(a) * d,
-          y: Math.sin(a) * d,
-          r: i === 3 ? 0 : h.r * (i === 0 ? 1 : 1.2) + level * 20 + 2 * Math.sin(t * 3 + i),
+          x: home.x,
+          y: home.y + away,
+          w: home.w + (middle ? 40 : 20) * level + 2 * wave(2.6, i * 0.3),
+          h: middle ? THICK * (1 + 0.45 * level) : THICK,
         };
       }
       case "asking": {
-        // One lobe per option, side by side on a gentle arc, bobbing a little.
-        const span = 74;
-        const slot = n === 1 ? 0 : n === 2 ? [0, 1, 1, 0][i]! : n === 3 ? [0, 1, 2, 0][i]! : i;
-        const from = slot - (n - 1) / 2;
+        // One bar per option, alike and evenly spaced from the top down. Each nudges sideways a
+        // quarter of a cycle after the one above, so the eye runs down the choices.
+        // A single option is the middle bar, the one in colour; otherwise from the top.
+        const row = n === 1 ? (middle ? 0 : -1) : i < n ? i : -1;
+        if (row < 0) return { ...home, w: 0 };
         return {
-          x: from * span,
-          y: -8 * Math.cos((from / n) * Math.PI) + 4 * Math.sin(t * 1.4 + slot),
-          r: i === 3 && n < 4 ? 0 : 26,
+          x: MIDDLE + 4 * wave(2.4, row * 0.25),
+          y: MIDDLE + (row - (n - 1) / 2) * PITCH,
+          w: 90,
+          h: THICK,
         };
       }
     }
@@ -166,7 +172,7 @@ function ease(value: number, target: number, k: number): number {
 
 /// One Breath's smoothed values. `step` is called once per animation frame with the time.
 export function createBreath(): { step(input: BreathInput, nowMs: number): Frame } {
-  const bodies: Body[] = HOME.map(toBox);
+  const bodies: Body[] = HOME.map((h) => ({ ...h }));
   let last: number | null = null;
   let t = 0;
   let mic = 0;
@@ -196,22 +202,19 @@ export function createBreath(): { step(input: BreathInput, nowMs: number): Frame
       let settled = true;
       if (input.still) {
         // Reduced motion: the logo, always; only brightness moves.
-        HOME.forEach((h, i) => Object.assign(bodies[i]!, toBox(h)));
+        HOME.forEach((h, i) => Object.assign(bodies[i]!, h));
       } else {
         const k = 1 - Math.exp(-dt * MORPH_RATE);
         targets(state, t, level, optionCount(input.options)).forEach((goal, i) => {
           const b = bodies[i]!;
-          const g = toBox(goal);
-          // The extra lobe shrinks where it stands instead of flying across the others as it
-          // goes (the prototype sent it back under the yellow dot).
-          if (i === 3 && g.r <= 0) {
-            g.x = b.x;
-            g.y = b.y;
-          }
+          // A bar that is leaving shrinks where it stands instead of sliding across the others
+          // as it goes.
+          const g = goal.w <= 0 ? { ...b, w: 0 } : goal;
           b.x = ease(b.x, g.x, k);
           b.y = ease(b.y, g.y, k);
-          b.r = ease(b.r, Math.max(0, g.r), k);
-          if (b.x !== g.x || b.y !== g.y || b.r !== Math.max(0, g.r)) settled = false;
+          b.w = ease(b.w, g.w, k);
+          b.h = ease(b.h, g.h, k);
+          if (b.x !== g.x || b.y !== g.y || b.w !== g.w || b.h !== g.h) settled = false;
         });
       }
 
@@ -219,13 +222,13 @@ export function createBreath(): { step(input: BreathInput, nowMs: number): Frame
       dim = ease(dim, wantDim, 1 - Math.exp(-dt * FADE_RATE));
       if (dim !== wantDim || mic !== 0 || voice !== 0) settled = false;
       const opacity = input.still ? dim * (STILL_BASE + (1 - STILL_BASE) * level) : dim;
-      const glow = input.still ? dim * (GLOW + STILL_GLOW_GAIN * level) : dim * GLOW;
+      const glow = dim * (GLOW + GLOW_GAIN * level);
 
-      const dot = (b: Body): Dot => ({ x: b.x, y: b.y, r: b.r, opacity });
-      const lobe = bodies[3]!;
+      const bar = (b: Body): Bar => ({ x: b.x, y: b.y, w: b.w, h: b.h, opacity });
+      const fourth = bodies[3]!;
       return {
-        dots: [dot(bodies[0]!), dot(bodies[1]!), dot(bodies[2]!)],
-        lobes: lobe.r > 0.05 ? [dot(lobe)] : [],
+        bars: [bar(bodies[0]!), bar(bodies[1]!), bar(bodies[2]!)],
+        extra: fourth.w > SEEN ? [bar(fourth)] : [],
         glow,
         mic,
         voice,

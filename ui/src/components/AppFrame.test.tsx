@@ -34,7 +34,7 @@ describe("an app's screen in its frame", () => {
     const { got } = load(frame);
     await waitFor(() => expect(got).toHaveLength(1));
     expect(got[0]).toMatchObject({ type: "theme", mode: "light" });
-    expect((got[0] as { tokens: Record<string, string> }).tokens.primary).toBe("#0c7765");
+    expect((got[0] as { tokens: Record<string, string> }).tokens.primary).toBe("#0a6f4d");
   });
 
   it("calls a listed tool as the page asks and refuses one it does not list", async () => {
