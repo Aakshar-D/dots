@@ -708,6 +708,7 @@ impl Makers {
             by_name: maker.spec.name.clone(),
             run_id: run_id.to_string(),
             purpose: purpose.to_string(),
+            spend_parent_dot_id: Some(maker.id.clone()),
         };
         let created = p
             .dot_admin

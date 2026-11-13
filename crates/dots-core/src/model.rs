@@ -215,6 +215,12 @@ pub struct Made {
     pub run_id: String,
     /// One line on what the dot is for, written by the maker.
     pub purpose: String,
+    /// The dot whose caps this dot's spend counts toward next (design section 6, Spend;
+    /// migration 0057): the maker, or, once a dot between them is deleted, the maker above it.
+    /// `None` when there is none. Set by the store, never shown; what a dot is given here when
+    /// it is made is not read.
+    #[serde(skip)]
+    pub spend_parent_dot_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

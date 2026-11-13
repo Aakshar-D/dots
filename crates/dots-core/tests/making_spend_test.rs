@@ -61,6 +61,7 @@ fn made_by(maker: &Dot) -> Made {
         by_name: maker.spec.name.clone(),
         run_id: "run".into(),
         purpose: "Reads the feeds".into(),
+        spend_parent_dot_id: Some(maker.id.clone()),
     }
 }
 
@@ -427,26 +428,82 @@ async fn deleting_the_middle_of_a_chain_keeps_what_it_and_its_deleted_dot_spent(
 }
 
 #[tokio::test]
-async fn deleting_a_maker_keeps_what_the_dots_below_it_spent_so_far() {
+async fn deleting_a_maker_keeps_what_the_dots_below_it_spend_under_the_cap_above() {
     let (_d, store) = temp_store().await;
     let a = dot(&store, "A", usd_cap(3.0)).await;
     let b = made(&store, &a, "B", DotCaps::default()).await;
     let c = made(&store, &b, "C", DotCaps::default()).await;
+    let d = made(&store, &c, "D", DotCaps::default()).await;
     let now = Utc::now();
     run_at(&store, &c, now, 1.0, 100).await;
     run_at(&store, &b, now, 0.5, 10).await;
     assert_eq!(shared(&store, &a, now).await, spent(1.5, 110));
 
-    // B goes while C lives: A cannot shed what C spent by deleting the dot between them.
+    // B goes while C lives: A cannot shed what C spent by deleting the dot between them, and
+    // what C spent is counted once, not kept and still read from its runs.
     store.delete_dot_if_idle(&b.id).await.unwrap();
     assert_eq!(shared(&store, &a, now).await, spent(1.5, 110));
-    // C has no maker now: what it spends from here on is its own alone.
+    // Who made C stays as it was: B, now gone. C is not A's to change or delete.
     let c_now = store.get_dot(&c.id).await.unwrap();
-    assert_eq!(c_now.made.unwrap().by_dot_id, None);
-    run_at(&store, &c, now, 4.0, 400).await;
-    assert_eq!(shared(&store, &a, now).await, spent(1.5, 110));
-    assert_eq!(shared(&store, &c, now).await, spent(5.0, 500));
+    let by = c_now.made.unwrap();
+    assert_eq!((by.by_dot_id, by.by_name.as_str()), (None, "B"));
+    assert!(store.list_made_dots(&a.id).await.unwrap().is_empty());
+    assert_eq!(store.count_made_dots(&a.id).await.unwrap(), 0);
+    // Its spend counts toward A's cap from here on, as D's does through C.
+    let names = |dots: Vec<Dot>| dots.into_iter().map(|d| d.spec.name).collect::<Vec<_>>();
+    assert_eq!(names(store.makers_of(&c.id).await.unwrap()), ["A"]);
+    assert_eq!(names(store.makers_of(&d.id).await.unwrap()), ["C", "A"]);
+    run_at(&store, &c, now, 1.0, 100).await;
+    assert_eq!(shared(&store, &a, now).await, spent(2.5, 210));
     assert_eq!(hit(&store, &c, now).await, None);
+    run_at(&store, &d, now, 0.5, 50).await;
+    assert_eq!(shared(&store, &a, now).await, spent(3.0, 260));
+    assert_eq!(shared(&store, &c, now).await, spent(2.5, 250));
+    let of_a = "A reached its $3.00 daily cap, shared with the dots it made";
+    assert_eq!(hit(&store, &c, now).await.as_deref(), Some(of_a));
+    assert_eq!(hit(&store, &d, now).await.as_deref(), Some(of_a));
+
+    // C goes too: what it spent is kept for A, and D's spend still counts toward A's cap.
+    store.delete_dot_if_idle(&c.id).await.unwrap();
+    assert_eq!(shared(&store, &a, now).await, spent(3.0, 260));
+    assert_eq!(names(store.makers_of(&d.id).await.unwrap()), ["A"]);
+    assert_eq!(hit(&store, &d, now).await.as_deref(), Some(of_a));
+    assert_eq!(hit(&store, &d, next_day(now)).await, None);
+
+    // The person deletes A, which has no maker: D's spend is its own alone from then on.
+    store.delete_dot_if_idle(&a.id).await.unwrap();
+    let d_now = store.get_dot(&d.id).await.unwrap();
+    assert_eq!(d_now.made.unwrap().spend_parent_dot_id, None);
+    assert!(store.makers_of(&d.id).await.unwrap().is_empty());
+    assert_eq!(shared(&store, &d, now).await, spent(0.5, 50));
+}
+
+#[tokio::test]
+async fn a_ledger_reads_a_dots_makers_once_and_none_for_a_dot_without_one() {
+    let (_d, store) = temp_store().await;
+    let a = dot(&store, "A", usd_cap(3.0)).await;
+    let b = made(&store, &a, "B", DotCaps::default()).await;
+    let top = dot(&store, "Top", DotCaps::default()).await;
+    let alone = made(&store, &top, "Alone", DotCaps::default()).await;
+    store.delete_dot_if_idle(&top.id).await.unwrap();
+    let alone = store.get_dot(&alone.id).await.unwrap();
+    let now = Utc::now();
+    run_at(&store, &b, now, 1.0, 100).await;
+    let settings = Settings::default();
+    let mut ledger = Ledger::new(&settings, now);
+    assert_eq!(ledger.hit(&store, &b).await.unwrap(), None);
+
+    // With the store closed, nothing more can be read: B's makers and A's spend were read
+    // once, and a made dot with no maker above it needs no read at all.
+    store.close().await;
+    assert_eq!(ledger.hit(&store, &b).await.unwrap(), None);
+    assert_eq!(
+        Ledger::new(&settings, now)
+            .hit(&store, &alone)
+            .await
+            .unwrap(),
+        None
+    );
 }
 
 #[tokio::test]

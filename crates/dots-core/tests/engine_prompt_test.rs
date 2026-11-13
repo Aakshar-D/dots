@@ -929,6 +929,7 @@ fn made_by(maker: &dots_core::model::Dot, name: &str, purpose: &str) -> dots_cor
         by_name: maker.spec.name.clone(),
         run_id: "RUN0".into(),
         purpose: purpose.to_string(),
+        spend_parent_dot_id: Some(maker.id.clone()),
     });
     dot
 }

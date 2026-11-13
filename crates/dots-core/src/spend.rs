@@ -250,6 +250,8 @@ pub struct Ledger {
     all_today: Option<Spend>,
     all_month: Option<Spend>,
     dots: HashMap<String, Spend>,
+    /// The makers above each dot whose run was looked at (`Store::makers_of`), read once.
+    makers: HashMap<String, Vec<Dot>>,
 }
 
 impl Ledger {
@@ -262,6 +264,7 @@ impl Ledger {
             all_today: None,
             all_month: None,
             dots: HashMap::new(),
+            makers: HashMap::new(),
         }
     }
 
@@ -288,7 +291,8 @@ impl Ledger {
     /// each maker above it, nearest first, then the caps for every dot together. A maker's cap
     /// is shared by the maker and every dot below it (dots-make-dots design section 6, Spend),
     /// and its words on another dot's run say so (`SHARED_WITH_MADE`). Nothing is read for a
-    /// cap not set, and no maker is looked for above a dot that has none.
+    /// cap not set, no maker is looked for above a dot whose spend counts toward none
+    /// (`Made::spend_parent_dot_id`), and a dot's makers are read once per ledger.
     pub async fn hit(&mut self, store: &Store, dot: &Dot) -> Result<Option<CapHit>> {
         let caps = dot.spec.spend_cap;
         if !caps.is_empty() {
@@ -297,8 +301,20 @@ impl Ledger {
                 return Ok(Some(hit));
             }
         }
-        if dot.made.as_ref().is_some_and(|m| m.by_dot_id.is_some()) {
-            for maker in store.makers_of(&dot.id).await? {
+        if dot
+            .made
+            .as_ref()
+            .is_some_and(|m| m.spend_parent_dot_id.is_some())
+        {
+            let makers = match self.makers.get(&dot.id) {
+                Some(makers) => makers.clone(),
+                None => {
+                    let makers = store.makers_of(&dot.id).await?;
+                    self.makers.insert(dot.id.clone(), makers.clone());
+                    makers
+                }
+            };
+            for maker in makers {
                 let caps = maker.spec.spend_cap;
                 if caps.is_empty() {
                     continue;
@@ -393,11 +409,11 @@ pub async fn today(store: &Store, now: DateTime<Utc>) -> Result<SpendToday> {
         .into_iter()
         .collect();
     let all = store.list_dots().await?;
-    // The dots that share their caps today: those with a made dot, and those something was
-    // kept for (dots-make-dots design section 6, Spend).
+    // The dots that share their caps today: those a dot's spend counts toward, and those
+    // something was kept for (dots-make-dots design section 6, Spend).
     let mut sharing: HashSet<String> = all
         .iter()
-        .filter_map(|d| d.made.as_ref()?.by_dot_id.clone())
+        .filter_map(|d| d.made.as_ref()?.spend_parent_dot_id.clone())
         .collect();
     sharing.extend(store.makers_with_kept_spend(&day_start, &day_end).await?);
     let mut dots = Vec::new();

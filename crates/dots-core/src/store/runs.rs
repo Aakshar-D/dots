@@ -1000,8 +1000,10 @@ impl Store {
 
     /// What counts toward the caps of `dot_id` for `[start, end)` (dots-make-dots design
     /// section 6, Spend): the runs of the dot, of the dots it made and of those below them that
-    /// started then, and what was kept for it of deleted ones (`kept_spend_between`). For a dot
-    /// that made nothing it is `spend_between` of the dot.
+    /// started then, and what was kept for it of deleted ones (`kept_spend_between`). The dots
+    /// below are those whose spend chain leads to it (`spend_parent_dot_id`, migration 0057),
+    /// which a delete in the middle does not break. For a dot that made nothing it is
+    /// `spend_between` of the dot.
     pub async fn shared_spend_between(
         &self,
         dot_id: &str,
@@ -1012,7 +1014,8 @@ impl Store {
             "WITH RECURSIVE tree(dot, depth) AS ( \
              SELECT ?1, 0 \
              UNION ALL \
-             SELECT d.id, tree.depth + 1 FROM dots d JOIN tree ON d.made_by_dot_id = tree.dot \
+             SELECT d.id, tree.depth + 1 FROM dots d \
+             JOIN tree ON d.spend_parent_dot_id = tree.dot \
              WHERE tree.depth < ?4) \
              SELECT COALESCE(SUM(cost), 0.0) AS cost, COALESCE(SUM(tokens), 0) AS tokens FROM ( \
              SELECT cost_usd AS cost, tokens_in + tokens_out AS tokens FROM runs \

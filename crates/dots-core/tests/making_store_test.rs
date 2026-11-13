@@ -31,6 +31,7 @@ fn made_by(maker: &Dot) -> Made {
         by_name: maker.spec.name.clone(),
         run_id: "run-1".into(),
         purpose: "Watches three blogs each Monday.".into(),
+        spend_parent_dot_id: Some(maker.id.clone()),
     }
 }
 
@@ -345,6 +346,7 @@ async fn deleting_the_maker_keeps_its_made_dots() {
             by_name: "Scout".into(),
             run_id: "run-1".into(),
             purpose: "Watches three blogs each Monday.".into(),
+            spend_parent_dot_id: None,
         })
     );
     assert_eq!(kept.spec, dot.spec);

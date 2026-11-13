@@ -89,6 +89,7 @@ fn made_by(maker: &Dot) -> Made {
         by_name: maker.spec.name.clone(),
         run_id: "run-1".into(),
         purpose: "Reads the feeds".into(),
+        spend_parent_dot_id: Some(maker.id.clone()),
     }
 }
 

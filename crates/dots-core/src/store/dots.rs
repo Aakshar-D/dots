@@ -18,7 +18,7 @@ pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, end
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id, \
     workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules, \
     use_graph, making_on, making_per_run, making_total, made_by_dot_id, made_by_name, \
-    made_in_run, made_purpose";
+    made_in_run, made_purpose, spend_parent_dot_id";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
     // A dot is a made dot when it has the run that made it (migration 0046).
@@ -32,6 +32,7 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
             purpose: row
                 .try_get::<Option<String>, _>("made_purpose")?
                 .unwrap_or_default(),
+            spend_parent_dot_id: row.try_get("spend_parent_dot_id")?,
         }),
         None => None,
     };
@@ -149,12 +150,14 @@ async fn clashes_in_case(tx: &mut sqlx::SqliteConnection, name: &str, id: &str) 
 
 /// Keeps what the dot `id`, about to be deleted, spent in the runs started this local month, so
 /// it still counts toward its makers' caps (dots-make-dots design section 6, Spend survives a
-/// delete; migration 0053): one row per run that spent anything for each maker up the chain as
-/// it is now, and one that counts toward the caps for every dot together, since the runs go
-/// with the dot. The runs of the living dots below it are kept for the makers above it too:
-/// those dots have no maker once it is gone, so without this a maker could shed their spend by
-/// deleting the dot between them. A dot with no maker keeps nothing. Rows older than the month
-/// count toward no cap and are removed here.
+/// delete; migration 0053): one row per run that spent anything for each maker up its spend
+/// chain as it is now (`spend_parent_dot_id`, migration 0057), and one that counts toward the
+/// caps for every dot together, since the runs go with the dot. Then the dots whose spend went
+/// to it go to its own spend parent (NULL if it has none): so a maker cannot free the dots below
+/// from its cap by deleting the dot between them, and their runs, which stay, are not kept as
+/// well, so nothing counts twice. Who made them (`made_by_dot_id`) does not move. A dot with no
+/// spend parent keeps nothing. Rows older than the month count toward no cap and are removed
+/// here. Run in the delete's transaction, before the dot is deleted.
 async fn keep_spend(tx: &mut sqlx::SqliteConnection, id: &str) -> Result<()> {
     let (month_start, _) = crate::spend::month_bounds_in(Utc::now(), &Local);
     sqlx::query("DELETE FROM made_spend_kept WHERE started_at < ?")
@@ -163,27 +166,31 @@ async fn keep_spend(tx: &mut sqlx::SqliteConnection, id: &str) -> Result<()> {
         .await?;
     sqlx::query(
         "WITH RECURSIVE up(maker, depth) AS ( \
-         SELECT made_by_dot_id, 1 FROM dots WHERE id = ?1 AND made_by_dot_id IS NOT NULL \
+         SELECT spend_parent_dot_id, 1 FROM dots \
+         WHERE id = ?1 AND spend_parent_dot_id IS NOT NULL \
          UNION ALL \
-         SELECT d.made_by_dot_id, up.depth + 1 FROM dots d JOIN up ON d.id = up.maker \
-         WHERE d.made_by_dot_id IS NOT NULL AND up.depth < ?3), \
-         tree(dot, depth) AS ( \
-         SELECT ?1, 0 \
-         UNION ALL \
-         SELECT d.id, tree.depth + 1 FROM dots d JOIN tree ON d.made_by_dot_id = tree.dot \
-         WHERE tree.depth < ?3), \
+         SELECT d.spend_parent_dot_id, up.depth + 1 FROM dots d JOIN up ON d.id = up.maker \
+         WHERE d.spend_parent_dot_id IS NOT NULL AND up.depth < ?3), \
          holders(maker) AS ( \
          SELECT maker FROM up UNION ALL SELECT NULL WHERE EXISTS (SELECT 1 FROM up)) \
          INSERT INTO made_spend_kept (dot_id, started_at, cost_usd, tokens) \
          SELECT holders.maker, r.started_at, COALESCE(r.cost_usd, 0.0), \
          r.tokens_in + r.tokens_out \
-         FROM holders JOIN runs r ON (holders.maker IS NOT NULL OR r.dot_id = ?1) \
-         WHERE r.dot_id IN (SELECT dot FROM tree) AND r.started_at >= ?2 \
+         FROM holders JOIN runs r ON r.dot_id = ?1 \
+         WHERE r.started_at >= ?2 \
          AND (COALESCE(r.cost_usd, 0.0) > 0 OR r.tokens_in + r.tokens_out > 0)",
     )
     .bind(id)
     .bind(&month_start)
     .bind(crate::spend::MAKER_DEPTH)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE dots SET spend_parent_dot_id = \
+         (SELECT spend_parent_dot_id FROM dots WHERE id = ?1) \
+         WHERE spend_parent_dot_id = ?1",
+    )
+    .bind(id)
     .execute(&mut *tx)
     .await?;
     Ok(())
@@ -274,9 +281,9 @@ impl Store {
              timeout_secs, approval_wait_secs, enabled, created_at, updated_at, org_id, \
              workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules, \
              use_graph, making_on, making_per_run, making_total, made_by_dot_id, made_by_name, \
-             made_in_run, made_purpose) \
+             made_in_run, made_purpose, spend_parent_dot_id) \
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
-             ?, ?, ?, ?, ?, ?, ?)",
+             ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -316,6 +323,8 @@ impl Store {
         .bind(made.map(|m| m.by_name.as_str()))
         .bind(made.map(|m| m.run_id.as_str()))
         .bind(made.map(|m| m.purpose.as_str()))
+        // A made dot's spend counts toward its maker's caps first (migration 0057).
+        .bind(made.and_then(|m| m.by_dot_id.as_deref()))
         .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
@@ -335,17 +344,19 @@ impl Store {
         rows.iter().map(dot_from_row).collect()
     }
 
-    /// The makers above `dot_id` that exist now, nearest first: the dot that made it, the dot
-    /// that made that one, and so on (dots-make-dots design section 6, Spend). The chain ends at
-    /// a dot a person made or one whose maker is deleted; no chain is followed further than
-    /// `spend::MAKER_DEPTH`.
+    /// The makers above `dot_id` whose caps its spend counts toward, nearest first: the dot that
+    /// made it, the dot that made that one, and so on (dots-make-dots design section 6, Spend),
+    /// along `spend_parent_dot_id`, so a maker deleted between them is passed over to the one
+    /// above it (migration 0057). The chain ends at a dot a person made; no chain is followed
+    /// further than `spend::MAKER_DEPTH`.
     pub async fn makers_of(&self, dot_id: &str) -> Result<Vec<Dot>> {
         let rows = sqlx::query(&format!(
             "WITH RECURSIVE up(maker, depth) AS ( \
-             SELECT made_by_dot_id, 1 FROM dots WHERE id = ? AND made_by_dot_id IS NOT NULL \
+             SELECT spend_parent_dot_id, 1 FROM dots \
+             WHERE id = ? AND spend_parent_dot_id IS NOT NULL \
              UNION ALL \
-             SELECT d.made_by_dot_id, up.depth + 1 FROM dots d JOIN up ON d.id = up.maker \
-             WHERE d.made_by_dot_id IS NOT NULL AND up.depth < ?) \
+             SELECT d.spend_parent_dot_id, up.depth + 1 FROM dots d JOIN up ON d.id = up.maker \
+             WHERE d.spend_parent_dot_id IS NOT NULL AND up.depth < ?) \
              SELECT {DOT_COLUMNS} FROM dots JOIN up ON dots.id = up.maker ORDER BY up.depth"
         ))
         .bind(dot_id)
