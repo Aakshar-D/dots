@@ -462,10 +462,11 @@ describe("The Breath's model", () => {
   });
 
   it("state_changes_are_continuous", () => {
-    // No value moves more than this per 60th of a second on the way from one state to another.
-    // A cut would move a width by up to 150 at once; the ease starts at its fastest, with the
-    // widest bar of a loud listening shrinking away (150 to 0, about 22 in the first frame).
-    const BOUND = 24;
+    // No value moves more than this per 60th of a second on the way from one state to another:
+    // about what the level meter moves within a state. A cut would move a width by up to 110
+    // at once. The fastest is an outer bar of a loud listening shrinking away (110 to 0), a
+    // little way into the change.
+    const BOUND = 8;
     const input = { mic: 1, voice: 1, options: 4 };
     for (const fps of [30, 60, 144]) {
       const frameMs = 1000 / fps;
@@ -531,9 +532,13 @@ describe("The Breath's model", () => {
       const is = pick(frames[n]!);
       is.forEach((v, i) => {
         const side = Math.sign(from[i]! - goal[i]!);
-        // Still on the side it started from, and no farther away than a frame ago.
+        // Still on the side it started from. It may carry on the way it was going for a moment,
+        // by less than a unit; once it has turned toward its place it does not turn back.
         expect((v - goal[i]!) * side).toBeGreaterThanOrEqual(0);
-        expect(Math.abs(v - goal[i]!)).toBeLessThanOrEqual(Math.abs(was[i]! - goal[i]!));
+        expect(Math.abs(v - goal[i]!)).toBeLessThanOrEqual(Math.abs(from[i]! - goal[i]!) + 1);
+        if (n > 6) {
+          expect(Math.abs(v - goal[i]!)).toBeLessThanOrEqual(Math.abs(was[i]! - goal[i]!));
+        }
       });
     }
     expect(pick(frames.at(-1)!)).toEqual(goal);
@@ -553,7 +558,8 @@ describe("The Breath's model", () => {
   });
 
   it("morphs_over_about_morph_ms", () => {
-    expect(MORPH_MS).toBe(320);
+    expect(MORPH_MS).toBeGreaterThanOrEqual(320);
+    expect(MORPH_MS).toBeLessThanOrEqual(420);
     const d = driver();
     const start = d.run({ state: "done" }, 1000).at(-1)!;
     const frames = d.run({ state: "asking", options: 2 }, 2000);
@@ -562,9 +568,25 @@ describe("The Breath's model", () => {
     // The top bar's row does not sway while asking, so it measures the morph alone.
     const left = (f: Frame) =>
       Math.abs(goal.bars[0].y - f.bars[0].y) / Math.abs(goal.bars[0].y - start.bars[0].y);
-    // Most of the way after MORPH_MS, and not before a quarter of it.
-    expect(left(at(MORPH_MS))).toBeLessThan(0.1);
+    // Within 5% after MORPH_MS, and not before a quarter of it.
+    expect(left(at(MORPH_MS))).toBeLessThan(0.06);
     expect(left(at(MORPH_MS / 4))).toBeGreaterThan(0.3);
+  });
+
+  it("a_change_of_state_starts_gently", () => {
+    // No kick: a bar sets off slowly, is fastest part of the way there, and slows to a stop.
+    // Its speed never changes by much from one frame to the next.
+    const d = driver();
+    const start = d.run({ state: "done" }, 1000).at(-1)!;
+    const frames = [start, ...d.run({ state: "asking", options: 1 }, 2000)];
+    const steps = frames.slice(1).map((f, i) => frames[i]!.bars[0].w - f.bars[0].w);
+    const fastest = Math.max(...steps);
+    expect(steps[0]!).toBeLessThan(fastest / 4);
+    expect(steps.indexOf(fastest)).toBeGreaterThan(2);
+    for (let i = 1; i < steps.length; i++) {
+      expect(Math.abs(steps[i]! - steps[i - 1]!)).toBeLessThan(fastest / 2);
+    }
+    expect(frames.at(-1)!.bars[0].w).toBe(0);
   });
 
   it("reduced_motion_only_changes_brightness", () => {

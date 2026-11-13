@@ -36,8 +36,9 @@ export type BreathInput = {
 };
 
 /// How long a change of state takes: the values ease from wherever they are toward the new
-/// targets, and are within 5% of them after this long.
-export const MORPH_MS = 320;
+/// targets, and are within 5% of them after this long. Long enough that the fastest moment of
+/// the widest change (a bar 110 wide shrinking away) stays under 8 units a frame.
+export const MORPH_MS = 420;
 /// How long `done` shows after a reply ends, before the mark rests.
 export const DONE_MS = 600;
 
@@ -47,12 +48,15 @@ const THICK = 25;
 /// How far apart the bars' centres are, top to bottom.
 const PITCH = 35;
 
-type Body = { x: number; y: number; w: number; h: number };
+type Shape = { x: number; y: number; w: number; h: number };
+const SHAPE_KEYS = ["x", "y", "w", "h"] as const;
+/// A bar in motion: where it is, and how fast each of its values is changing, per second.
+type Body = Shape & { speed: Shape };
 
 /// The logo arrangement: the top bar sits right of the middle one and the bottom bar left, so
 /// the three step like an S. The fourth body is the extra bar, which has no width until asking
 /// with four options; it waits where it will appear, below the others.
-const HOME: readonly Body[] = [
+const HOME: readonly Shape[] = [
   { x: MIDDLE + 10, y: MIDDLE - PITCH, w: 80, h: THICK },
   { x: MIDDLE, y: MIDDLE, w: 100, h: THICK },
   { x: MIDDLE - 10, y: MIDDLE + PITCH, w: 80, h: THICK },
@@ -66,8 +70,9 @@ export const LOGO: readonly [Bar, Bar, Bar] = [
   { ...HOME[2]!, opacity: 1 },
 ];
 
-/// Easing rate per second: 1 - e^(-3) = 95% of the way after MORPH_MS.
-const MORPH_RATE = 3000 / MORPH_MS;
+/// The stiffness of the ease, per second. A value starting at rest has (1 + rt) e^(-rt) of its
+/// way left after t seconds, which is 5% at rt = 4.744: so 95% of the way after MORPH_MS.
+const MORPH_RATE = 4744 / MORPH_MS;
 /// Brightness eases a little slower.
 const FADE_RATE = 6;
 /// The level rises fast and falls back more slowly, so syllables read as a swell rather than a
@@ -77,8 +82,9 @@ const RELEASE_RATE = 7;
 /// The longest step one frame may take, in seconds. A frame after the tab was hidden eases like
 /// a slow frame instead of cutting to the target.
 const MAX_DT = 0.05;
-/// Below this a value is at its target.
+/// Below this a value is at its target, if it is also slower than `REST` (units per second).
 const SNAP = 1e-3;
+const REST = 0.05;
 /// Below this a smoothed level is silence, so a mark at rest can tell nothing moves.
 const LEVEL_SNAP = 1e-4;
 /// Below this width the extra bar is not there.
@@ -106,10 +112,10 @@ function optionCount(n: number): number {
 
 /// Where each bar wants to be at time `t` (seconds). A width of 0 means the bar is not part of
 /// this shape; `step` lets it shrink where it stands.
-function targets(state: BreathState, t: number, level: number, n: number): Body[] {
+function targets(state: BreathState, t: number, level: number, n: number): Shape[] {
   /// A sine between -1 and 1 that takes `period` seconds, `lag` of a cycle behind.
   const wave = (period: number, lag = 0) => Math.sin((t / period - lag) * TURN);
-  return HOME.map((home, i): Body => {
+  return HOME.map((home, i): Shape => {
     if (i === 3 && !(state === "asking" && n === 4)) return { ...home, w: 0 };
     const middle = i === 1;
     switch (state) {
@@ -136,7 +142,9 @@ function targets(state: BreathState, t: number, level: number, n: number): Body[
         };
       case "thinking":
         // Pistons: each bar slides from side to side, a third of a cycle after the one above.
-        return { x: MIDDLE + 22 * wave(1.6, i / 3), y: home.y, w: 80, h: THICK };
+        // The ease follows a swing this quick at about nine tenths of its size, so the target
+        // swings a little wider than the 22 the bar is to travel.
+        return { x: MIDDLE + 24.5 * wave(1.6, i / 3), y: home.y, w: 80, h: THICK };
       case "speaking": {
         // The logo, pulsing with Sage's voice: every bar widens, the middle one most, and it
         // swells in height while the outer bars move away to keep their distance from it.
@@ -165,14 +173,30 @@ function targets(state: BreathState, t: number, level: number, n: number): Body[
   });
 }
 
+/// Brightness and other values with no weight: straight toward the target, slowing as it nears.
 function ease(value: number, target: number, k: number): number {
   const next = value + (target - value) * k;
   return Math.abs(target - next) < SNAP ? target : next;
 }
 
+/// One value of a bar, eased like a critically damped spring: it keeps its speed, so a new
+/// target bends its path instead of kicking it, and it arrives without going past. This is the
+/// exact motion over `dt` seconds toward a target that holds still for that long, so the
+/// result does not depend on the frame rate.
+function glide(body: Body, key: (typeof SHAPE_KEYS)[number], target: number, dt: number): void {
+  const away = body[key] - target;
+  const pull = body.speed[key] + MORPH_RATE * away;
+  const fade = Math.exp(-MORPH_RATE * dt);
+  const next = (away + pull * dt) * fade;
+  const speed = (body.speed[key] - pull * MORPH_RATE * dt) * fade;
+  const there = Math.abs(next) < SNAP && Math.abs(speed) < REST;
+  body[key] = there ? target : target + next;
+  body.speed[key] = there ? 0 : speed;
+}
+
 /// One Breath's smoothed values. `step` is called once per animation frame with the time.
 export function createBreath(): { step(input: BreathInput, nowMs: number): Frame } {
-  const bodies: Body[] = HOME.map((h) => ({ ...h }));
+  const bodies: Body[] = HOME.map((h) => ({ ...h, speed: { x: 0, y: 0, w: 0, h: 0 } }));
   let last: number | null = null;
   let t = 0;
   let mic = 0;
@@ -202,19 +226,23 @@ export function createBreath(): { step(input: BreathInput, nowMs: number): Frame
       let settled = true;
       if (input.still) {
         // Reduced motion: the logo, always; only brightness moves.
-        HOME.forEach((h, i) => Object.assign(bodies[i]!, h));
+        HOME.forEach((h, i) => Object.assign(bodies[i]!, h, { speed: { x: 0, y: 0, w: 0, h: 0 } }));
       } else {
-        const k = 1 - Math.exp(-dt * MORPH_RATE);
         targets(state, t, level, optionCount(input.options)).forEach((goal, i) => {
           const b = bodies[i]!;
           // A bar that is leaving shrinks where it stands instead of sliding across the others
           // as it goes.
-          const g = goal.w <= 0 ? { ...b, w: 0 } : goal;
-          b.x = ease(b.x, g.x, k);
-          b.y = ease(b.y, g.y, k);
-          b.w = ease(b.w, g.w, k);
-          b.h = ease(b.h, g.h, k);
-          if (b.x !== g.x || b.y !== g.y || b.w !== g.w || b.h !== g.h) settled = false;
+          const g: Shape = goal.w <= 0 ? { x: b.x, y: b.y, w: 0, h: b.h } : goal;
+          for (const key of SHAPE_KEYS) {
+            glide(b, key, g[key], dt);
+            // A width can not go below nothing, whatever speed the bar was shrinking at.
+            if (key === "w" && b.w < 0) {
+              b.w = 0;
+              b.speed.w = 0;
+            }
+            // At rest only when it is there and no longer moving.
+            if (b[key] !== g[key] || b.speed[key] !== 0) settled = false;
+          }
         });
       }
 
@@ -224,7 +252,7 @@ export function createBreath(): { step(input: BreathInput, nowMs: number): Frame
       const opacity = input.still ? dim * (STILL_BASE + (1 - STILL_BASE) * level) : dim;
       const glow = dim * (GLOW + GLOW_GAIN * level);
 
-      const bar = (b: Body): Bar => ({ x: b.x, y: b.y, w: b.w, h: b.h, opacity });
+      const bar = (b: Shape): Bar => ({ x: b.x, y: b.y, w: b.w, h: b.h, opacity });
       const fourth = bodies[3]!;
       return {
         bars: [bar(bodies[0]!), bar(bodies[1]!), bar(bodies[2]!)],
