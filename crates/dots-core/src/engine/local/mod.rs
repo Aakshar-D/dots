@@ -21,6 +21,7 @@ use self::tools::{PathFilter, PreparedCall, ToolOutput};
 mod app_tools;
 pub mod client;
 pub mod history;
+mod making_tools;
 pub mod mcp_tools;
 pub mod tools;
 
@@ -382,6 +383,8 @@ impl Session {
             }
             let output = if approval.tool == crate::apps::APP_POLICY {
                 self.perform_app(&approval.input).await
+            } else if approval.tool == crate::making::tools::POLICY_NAME {
+                self.perform_making(&approval.input).await
             } else if approval.tool.starts_with("mcp__") {
                 self.perform_mcp(&approval.tool, &approval.input).await
             } else {
@@ -549,6 +552,8 @@ impl Session {
         }
         let output = if self.app_tool(&call.name) {
             self.app_output(call).await
+        } else if let Some(tool) = self.making_tool(&call.name) {
+            self.making_output(call, tool).await
         } else {
             match self.mcp_tool(&call.name) {
                 Some(qualified) => self.mcp_output(call, &qualified).await,

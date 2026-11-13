@@ -14,7 +14,8 @@
 //! whose URL reads a variable reaches now. 0016 (app library spec section 6): `finish_0016` does
 //! what `finish_0012` does for `App` and `ProposeApp` with `upgrade_0016`, Custom policies too,
 //! and 0018 (conversational chat spec section 4) `finish_0018` for `Instructions` with
-//! `upgrade_0018`.
+//! `upgrade_0018`, and 0048 (dots-make-dots design section 5) `finish_0048` for `MakeDots` with
+//! `upgrade_0048`.
 
 use std::collections::BTreeMap;
 
@@ -412,6 +413,13 @@ pub(super) async fn finish_0016(pool: &SqlitePool) -> Result<()> {
 /// and drops the list.
 pub(super) async fn finish_0018(pool: &SqlitePool) -> Result<()> {
     give_preset_rules(pool, "0018", &[crate::policy::INSTRUCTIONS_TOOL], true).await
+}
+
+/// Gives the policy of each dot that migration 0048 listed the `MakeDots` allow rule, a Custom
+/// policy included, as 0018 did for `Instructions` (dots-make-dots design sections 5 and 12),
+/// and drops the list. A rule that names `MakeDots` already is the person's and stays.
+pub(super) async fn finish_0048(pool: &SqlitePool) -> Result<()> {
+    give_preset_rules(pool, "0048", &[crate::policy::MAKE_DOTS_TOOL], true).await
 }
 
 /// Gives the policy of each dot listed in `upgrade_<migration>` the rule its preset has for each

@@ -6,7 +6,7 @@ use super::library::check_uses;
 use super::Store;
 use crate::inbox::{hidden_sql, InboxKind};
 use crate::library::{LibraryConfig, Uses};
-use crate::model::{Dot, DotSpec, EngineKind, WorkspaceMode};
+use crate::model::{Dot, DotSpec, EngineKind, Made, Making, WorkspaceMode};
 use crate::schedule::Schedule;
 use crate::util::{ct_eq, new_id, new_token, now, token_hash};
 use crate::vault::Grants;
@@ -17,10 +17,27 @@ pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, end
     quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
     timeout_secs, approval_wait_secs, enabled, created_at, updated_at, seen_at, org_id, \
     workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules, \
-    use_graph";
+    use_graph, making_on, making_per_run, making_total, made_by_dot_id, made_by_name, \
+    made_in_run, made_purpose, spend_parent_dot_id";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
+    // A dot is a made dot when it has the run that made it (migration 0047).
+    let made = match row.try_get::<Option<String>, _>("made_in_run")? {
+        Some(run_id) => Some(Made {
+            by_dot_id: row.try_get("made_by_dot_id")?,
+            by_name: row
+                .try_get::<Option<String>, _>("made_by_name")?
+                .unwrap_or_default(),
+            run_id,
+            purpose: row
+                .try_get::<Option<String>, _>("made_purpose")?
+                .unwrap_or_default(),
+            spend_parent_dot_id: row.try_get("spend_parent_dot_id")?,
+        }),
+        None => None,
+    };
     Ok(Dot {
+        made,
         id: row.try_get("id")?,
         has_webhook_token: !row.try_get::<String, _>("webhook_token")?.is_empty(),
         created_at: row.try_get("created_at")?,
@@ -60,6 +77,11 @@ pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
                 .map(|s| serde_json::from_str(&s))
                 .transpose()?,
             use_graph: row.try_get::<i64, _>("use_graph")? != 0,
+            making: Making {
+                on: row.try_get::<i64, _>("making_on")? != 0,
+                per_run: row.try_get::<i64, _>("making_per_run")? as u32,
+                total: row.try_get::<i64, _>("making_total")? as u32,
+            },
             use_user_settings: row.try_get::<i64, _>("use_user_settings")? != 0,
             max_turns: row.try_get::<i64, _>("max_turns")? as u32,
             timeout_secs: row.try_get::<i64, _>("timeout_secs")? as u64,
@@ -126,6 +148,54 @@ async fn clashes_in_case(tx: &mut sqlx::SqliteConnection, name: &str, id: &str) 
     )
 }
 
+/// Keeps what the dot `id`, about to be deleted, spent in the runs started this local month, so
+/// it still counts toward its makers' caps (dots-make-dots design section 6, Spend survives a
+/// delete; migration 0054): one row per run that spent anything for each maker up its spend
+/// chain as it is now (`spend_parent_dot_id`, migration 0057), and one that counts toward the
+/// caps for every dot together, since the runs go with the dot. Then the dots whose spend went
+/// to it go to its own spend parent (NULL if it has none): so a maker cannot free the dots below
+/// from its cap by deleting the dot between them, and their runs, which stay, are not kept as
+/// well, so nothing counts twice. Who made them (`made_by_dot_id`) does not move. A dot with no
+/// spend parent keeps nothing. Rows older than the month count toward no cap and are removed
+/// here. Run in the delete's transaction, before the dot is deleted.
+async fn keep_spend(tx: &mut sqlx::SqliteConnection, id: &str) -> Result<()> {
+    let (month_start, _) = crate::spend::month_bounds_in(Utc::now(), &Local);
+    sqlx::query("DELETE FROM made_spend_kept WHERE started_at < ?")
+        .bind(&month_start)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "WITH RECURSIVE up(maker, depth) AS ( \
+         SELECT spend_parent_dot_id, 1 FROM dots \
+         WHERE id = ?1 AND spend_parent_dot_id IS NOT NULL \
+         UNION ALL \
+         SELECT d.spend_parent_dot_id, up.depth + 1 FROM dots d JOIN up ON d.id = up.maker \
+         WHERE d.spend_parent_dot_id IS NOT NULL AND up.depth < ?3), \
+         holders(maker) AS ( \
+         SELECT maker FROM up UNION ALL SELECT NULL WHERE EXISTS (SELECT 1 FROM up)) \
+         INSERT INTO made_spend_kept (dot_id, started_at, cost_usd, tokens) \
+         SELECT holders.maker, r.started_at, COALESCE(r.cost_usd, 0.0), \
+         r.tokens_in + r.tokens_out \
+         FROM holders JOIN runs r ON r.dot_id = ?1 \
+         WHERE r.started_at >= ?2 \
+         AND (COALESCE(r.cost_usd, 0.0) > 0 OR r.tokens_in + r.tokens_out > 0)",
+    )
+    .bind(id)
+    .bind(&month_start)
+    .bind(crate::spend::MAKER_DEPTH)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "UPDATE dots SET spend_parent_dot_id = \
+         (SELECT spend_parent_dot_id FROM dots WHERE id = ?1) \
+         WHERE spend_parent_dot_id = ?1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
 impl Store {
     /// `spec`'s grants as a save stores them (`Grants::synced`): a server newly used, alone or
     /// with its plugin, is granted the variables of its config; `before` is what the dot used.
@@ -168,7 +238,33 @@ impl Store {
     ) -> Result<Dot> {
         let mut spec = prepared(spec, None)?;
         spec.variables = self.synced_grants(None, &spec).await?;
-        let spec = &spec;
+        self.insert_dot(&spec, org_id, workspace_id, None).await
+    }
+
+    /// Creates a dot a maker made, as `create_dot` does, and records `made` (dots-make-dots
+    /// design sections 3 and 7.1). Its grants are stored exactly as `spec` gives them: a server
+    /// it uses is not granted the variables of its config, since that could give the dot a name
+    /// its maker lacks (section 6, Variables). What it may hold is the caller's check.
+    pub async fn create_made_dot(
+        &self,
+        spec: &DotSpec,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        made: &Made,
+    ) -> Result<Dot> {
+        let spec = prepared(spec, None)?;
+        self.insert_dot(&spec, org_id, workspace_id, Some(made))
+            .await
+    }
+
+    /// Stores a new dot from `spec`, which is prepared and holds its grants as they are stored.
+    async fn insert_dot(
+        &self,
+        spec: &DotSpec,
+        org_id: Option<&str>,
+        workspace_id: &str,
+        made: Option<&Made>,
+    ) -> Result<Dot> {
         let id = new_id();
         let ts = now();
         // The write lock up front: the clash check reads before the insert, and a deferred
@@ -184,8 +280,10 @@ impl Store {
              quiet_limit_secs, use_global_instructions, use_user_settings, max_turns, \
              timeout_secs, approval_wait_secs, enabled, created_at, updated_at, org_id, \
              workspace_id, spend_daily_usd, spend_daily_tokens, check_results, context_rules, \
-             use_graph) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             use_graph, making_on, making_per_run, making_total, made_by_dot_id, made_by_name, \
+             made_in_run, made_purpose, spend_parent_dot_id) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+             ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&spec.name)
@@ -218,12 +316,64 @@ impl Store {
         .bind(spec.check_results as i64)
         .bind(rules_json(spec)?)
         .bind(spec.use_graph as i64)
+        .bind(spec.making.on as i64)
+        .bind(spec.making.per_run as i64)
+        .bind(spec.making.total as i64)
+        .bind(made.and_then(|m| m.by_dot_id.as_deref()))
+        .bind(made.map(|m| m.by_name.as_str()))
+        .bind(made.map(|m| m.run_id.as_str()))
+        .bind(made.map(|m| m.purpose.as_str()))
+        // A made dot's spend counts toward its maker's caps first (migration 0057).
+        .bind(made.and_then(|m| m.by_dot_id.as_deref()))
         .execute(&mut *tx)
         .await
         .map_err(|e| map_unique(e, &spec.name))?;
         check_uses(&mut tx, &spec.uses).await?;
         tx.commit().await?;
         self.get_dot(&id).await
+    }
+
+    /// The dots `maker_id` made that exist now, by name (dots-make-dots design section 9).
+    pub async fn list_made_dots(&self, maker_id: &str) -> Result<Vec<Dot>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {DOT_COLUMNS} FROM dots WHERE made_by_dot_id = ? ORDER BY name"
+        ))
+        .bind(maker_id)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(dot_from_row).collect()
+    }
+
+    /// The makers above `dot_id` whose caps its spend counts toward, nearest first: the dot that
+    /// made it, the dot that made that one, and so on (dots-make-dots design section 6, Spend),
+    /// along `spend_parent_dot_id`, so a maker deleted between them is passed over to the one
+    /// above it (migration 0057). The chain ends at a dot a person made; no chain is followed
+    /// further than `spend::MAKER_DEPTH`.
+    pub async fn makers_of(&self, dot_id: &str) -> Result<Vec<Dot>> {
+        let rows = sqlx::query(&format!(
+            "WITH RECURSIVE up(maker, depth) AS ( \
+             SELECT spend_parent_dot_id, 1 FROM dots \
+             WHERE id = ? AND spend_parent_dot_id IS NOT NULL \
+             UNION ALL \
+             SELECT d.spend_parent_dot_id, up.depth + 1 FROM dots d JOIN up ON d.id = up.maker \
+             WHERE d.spend_parent_dot_id IS NOT NULL AND up.depth < ?) \
+             SELECT {DOT_COLUMNS} FROM dots JOIN up ON dots.id = up.maker ORDER BY up.depth"
+        ))
+        .bind(dot_id)
+        .bind(crate::spend::MAKER_DEPTH)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(dot_from_row).collect()
+    }
+
+    /// How many dots `maker_id` made that exist now: what its total limit counts (dots-make-dots
+    /// design section 10).
+    pub async fn count_made_dots(&self, maker_id: &str) -> Result<u32> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM dots WHERE made_by_dot_id = ?")
+            .bind(maker_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n as u32)
     }
 
     /// Moves a dot to another workspace of its account. Whether the workspace exists is the
@@ -261,11 +411,27 @@ impl Store {
     /// otherwise nothing changes and `Error::Conflict` is returned. The check is atomic. The
     /// schedule is prepared against the stored one (`prepared`). Every item its `uses` names
     /// must be in the Library (`Invalid`). A server it uses now and did not before is granted
-    /// its variables; one it no longer uses loses its grants.
+    /// its variables; one it no longer uses loses its grants. Who made the dot stays as it is,
+    /// and a new name is written to the dots it made (dots-make-dots design section 9).
     pub async fn update_dot(&self, id: &str, spec: &DotSpec) -> Result<Dot> {
+        self.save_dot(id, spec, true).await
+    }
+
+    /// Updates a dot as `update_dot` does, but stores its grants exactly as `spec` gives them:
+    /// for a change a maker makes to a dot it made, where the grant of a newly used server's
+    /// variables could give the dot a name its maker lacks (dots-make-dots design section 6,
+    /// Variables). What the dot may hold is the caller's check.
+    pub async fn update_dot_exact(&self, id: &str, spec: &DotSpec) -> Result<Dot> {
+        self.save_dot(id, spec, false).await
+    }
+
+    /// `update_dot` with `sync_grants`, `update_dot_exact` without.
+    async fn save_dot(&self, id: &str, spec: &DotSpec, sync_grants: bool) -> Result<Dot> {
         let stored = self.get_dot(id).await?.spec;
         let mut spec = prepared(spec, stored.schedule.as_ref())?;
-        spec.variables = self.synced_grants(Some(&stored.uses), &spec).await?;
+        if sync_grants {
+            spec.variables = self.synced_grants(Some(&stored.uses), &spec).await?;
+        }
         let spec = &spec;
         // The write lock up front, as in `create_dot`: the clash check reads before the update.
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -277,7 +443,8 @@ impl Store {
              workdir = ?, workspace_mode = ?, schedule = ?, policy = ?, uses = ?, variables = ?, \
              browser = ?, quiet_limit_secs = ?, spend_daily_usd = ?, spend_daily_tokens = ?, \
              use_global_instructions = ?, use_user_settings = ?, max_turns = ?, timeout_secs = ?, approval_wait_secs = ?, \
-             enabled = ?, check_results = ?, context_rules = ?, use_graph = ?, updated_at = ? \
+             enabled = ?, check_results = ?, context_rules = ?, use_graph = ?, making_on = ?, \
+             making_per_run = ?, making_total = ?, updated_at = ? \
              WHERE id = ? \
              AND ((workdir = ? AND workspace_mode = ?) OR NOT EXISTS (SELECT 1 FROM runs \
              WHERE dot_id = ? AND status IN ('queued','running','awaiting_approval')))",
@@ -306,6 +473,9 @@ impl Store {
         .bind(spec.check_results as i64)
         .bind(rules_json(spec)?)
         .bind(spec.use_graph as i64)
+        .bind(spec.making.on as i64)
+        .bind(spec.making.per_run as i64)
+        .bind(spec.making.total as i64)
         .bind(now())
         .bind(id)
         .bind(&spec.workdir)
@@ -324,36 +494,79 @@ impl Store {
             ));
         }
         check_uses(&mut tx, &spec.uses).await?;
+        if spec.name != stored.name {
+            // The dots it made show its name (dots-make-dots design section 9).
+            sqlx::query("UPDATE dots SET made_by_name = ? WHERE made_by_dot_id = ?")
+                .bind(&spec.name)
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
         tx.commit().await?;
         self.get_dot(id).await
     }
 
+    /// Deletes the dot. What a dot with a maker spent this month is kept first, in the same
+    /// transaction (`keep_spend`).
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        keep_spend(&mut tx, id).await?;
         let res = sqlx::query("DELETE FROM dots WHERE id = ?")
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         if res.rows_affected() == 0 {
             return Err(Error::NotFound(format!("dot {id}")));
         }
+        tx.commit().await?;
         Ok(())
     }
 
-    /// Deletes the dot only if it has no queued/running/awaiting runs, atomically.
+    /// Deletes the dot only if it has no queued/running/awaiting runs, atomically. What a dot
+    /// with a maker spent this month is kept first, in the same transaction (`keep_spend`).
     pub async fn delete_dot_if_idle(&self, id: &str) -> Result<()> {
+        self.delete_dot_if_idle_and_wake(id, &[]).await
+    }
+
+    /// `delete_dot_if_idle`, storing in the same transaction `wakes`, each a maker, its chat
+    /// topic and the message it is woken with (dots-make-dots design sections 8 and 9): the
+    /// makers a delete tells are told if and only if the dot is gone.
+    pub async fn delete_dot_if_idle_and_wake(
+        &self,
+        id: &str,
+        wakes: &[(String, String, String)],
+    ) -> Result<()> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        keep_spend(&mut tx, id).await?;
         let res = sqlx::query(
             "DELETE FROM dots WHERE id = ? AND NOT EXISTS (SELECT 1 FROM runs WHERE dot_id = ?              AND status IN ('queued','running','awaiting_approval'))",
         )
         .bind(id)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
         if res.rows_affected() == 0 {
+            // Nothing was deleted, so nothing is kept.
+            tx.rollback().await?;
             self.get_dot(id).await?;
             return Err(Error::Conflict(
                 "dot has queued, running or awaiting runs; cancel them first".into(),
             ));
         }
+        for (maker, topic, message) in wakes {
+            sqlx::query(
+                "INSERT INTO making_wakes (id, maker_dot_id, root_run_id, message, created_at) \
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(new_id())
+            .bind(maker)
+            .bind(topic)
+            .bind(message)
+            .bind(now())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -395,9 +608,10 @@ impl Store {
     }
 
     /// What the dot has for the person (needs-you spec section 2), as `(needs_you, unread)`:
-    /// its open questions, pending approvals, paused watchers, app proposals waiting for review
-    /// and the workflow runs its chats started that wait for the person (teams spec section
-    /// 10); and those plus its runs that ended and its notes posted after its `seen_at` (none
+    /// its open questions, pending approvals, paused watchers, app proposals waiting for review,
+    /// the workflow runs its chats started that wait for the person (teams spec section 10)
+    /// and, for a maker, its make requests the person has not answered (dots-make-dots design
+    /// section 11); and those plus its runs that ended and its notes posted after its `seen_at` (none
     /// without one). Items the person snoozed or marked done are left out.
     /// `NotFound` for an unknown dot.
     pub async fn dot_counts(&self, id: &str) -> Result<(u32, u32)> {
@@ -421,6 +635,8 @@ impl Store {
               AND {not_delivered}) \
              + (SELECT COUNT(*) FROM workflow_runs w JOIN runs o ON o.id = w.origin_run_id \
               WHERE o.dot_id = d.id AND w.status = 'waiting' AND w.waiting_on IS NOT NULL) \
+             + (SELECT COUNT(*) FROM make_requests mr WHERE mr.maker_dot_id = d.id \
+              AND mr.status IN ('waiting', 'gone') AND {make_request}) \
              AS needs_you, \
              CASE WHEN d.seen_at IS NULL THEN 0 ELSE \
              (SELECT COUNT(*) FROM runs r WHERE r.dot_id = d.id \
@@ -437,6 +653,7 @@ impl Store {
             review = hidden_sql(InboxKind::Review, "r.id"),
             ended_not_delivered = hidden_sql(InboxKind::NotDelivered, "r.id"),
             note = hidden_sql(InboxKind::Message, "m.id"),
+            make_request = hidden_sql(InboxKind::MakeRequest, "mr.id"),
         );
         let row = sqlx::query(&sql)
             .bind(id)

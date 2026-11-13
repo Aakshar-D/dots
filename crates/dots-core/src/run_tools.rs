@@ -192,6 +192,9 @@ pub struct RunTools {
     instructions: bool,
     /// The code graph of the dot's project (project graph spec section 8), when the dot uses it.
     graph: Option<RunGraph>,
+    /// The maker's limits, for a run that has the tools for making dots (dots-make-dots design
+    /// section 5).
+    making: Option<crate::model::Making>,
 }
 
 /// The project graph a run asks with the `graph` tool.
@@ -298,6 +301,19 @@ impl RunTools {
     /// The project graph the run's `graph` tool asks, for a dot that uses it.
     pub fn graph(&self) -> Option<&RunGraph> {
         self.graph.as_ref()
+    }
+
+    /// The run has the tools for making dots (`making::tools::Tool`): its dot's limits as
+    /// they were when the run started, which `make_dot` names to the model. `None` for a run
+    /// that is not offered them.
+    pub fn making(&self) -> Option<&crate::model::Making> {
+        self.making.as_ref()
+    }
+
+    /// The run's tools, with the tools for making dots when `making` is the maker's limits.
+    pub fn with_making(mut self, making: Option<crate::model::Making>) -> RunTools {
+        self.making = making;
+        self
     }
 
     /// The run's tools with the project graph.

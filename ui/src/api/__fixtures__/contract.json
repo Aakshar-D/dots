@@ -17,6 +17,12 @@
         "has_webhook_token": true,
         "id": "01J0DOT",
         "instructions": "Run the tests and summarize failures.",
+        "made": null,
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
         "max_turns": 40,
         "model": "sonnet",
         "name": "nightly-tests",
@@ -134,6 +140,10 @@
             {
               "action": "allow",
               "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
             }
           ]
         },
@@ -2115,6 +2125,12 @@
     "has_webhook_token": true,
     "id": "01J0DOT",
     "instructions": "Run the tests and summarize failures.",
+    "made": null,
+    "making": {
+      "on": false,
+      "per_run": 3,
+      "total": 10
+    },
     "max_turns": 40,
     "model": "sonnet",
     "name": "nightly-tests",
@@ -2232,6 +2248,10 @@
         {
           "action": "allow",
           "tool": "Instructions"
+        },
+        {
+          "action": "allow",
+          "tool": "MakeDots"
         }
       ]
     },
@@ -2308,6 +2328,12 @@
       "has_webhook_token": true,
       "id": "01J0DOT",
       "instructions": "Run the tests and summarize failures.",
+      "made": null,
+      "making": {
+        "on": false,
+        "per_run": 3,
+        "total": 10
+      },
       "max_turns": 40,
       "model": "sonnet",
       "name": "nightly-tests",
@@ -2425,6 +2451,10 @@
           {
             "action": "allow",
             "tool": "Instructions"
+          },
+          {
+            "action": "allow",
+            "tool": "MakeDots"
           }
         ]
       },
@@ -2523,6 +2553,7 @@
       "workflow_step_run_id": null,
       "workspace_path": "C:/Users/u/AppData/Local/dots/worktrees/01J0RUN"
     },
+    "made_dots": 2,
     "needs_you": 0,
     "schedule_state": {
       "attention": {
@@ -2548,6 +2579,11 @@
     "endpoint_url": "http://127.0.0.1:1234",
     "engine": "local",
     "instructions": "Tidy the notes folder.",
+    "making": {
+      "on": false,
+      "per_run": 3,
+      "total": 10
+    },
     "max_turns": 40,
     "model": "google/gemma-4-12b-qat",
     "name": "notes",
@@ -2632,6 +2668,10 @@
         {
           "action": "allow",
           "tool": "Instructions"
+        },
+        {
+          "action": "allow",
+          "tool": "MakeDots"
         }
       ]
     },
@@ -2874,7 +2914,8 @@
       "tools",
       "instructions",
       "app_review",
-      "team_scope"
+      "team_scope",
+      "make_request"
     ],
     "InstructionStatus": [
       "pending",
@@ -3740,6 +3781,25 @@
         }
       }
     ],
+    "make_requests": [
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "01J0DOT",
+        "dot_name": "Researcher",
+        "id": "01J0MRQ",
+        "kind": "make",
+        "lines": [
+          "The browser",
+          "4th dot in this run; the limit is 3"
+        ],
+        "name": "Blog Watcher",
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+        "status": "waiting",
+        "title": "Researcher wants to make a dot with more than it has"
+      }
+    ],
     "not_delivered": [
       {
         "base_commit": "0123abcd",
@@ -3980,6 +4040,10 @@
     {
       "id": "01J0TEAM/01J0DOT",
       "kind": "team_scope"
+    },
+    {
+      "id": "01J0MRQ",
+      "kind": "make_request"
     }
   ],
   "InboxMark": [
@@ -5214,6 +5278,11 @@
     "endpoint_url": null,
     "engine": "claude",
     "instructions": "",
+    "making": {
+      "on": false,
+      "per_run": 3,
+      "total": 10
+    },
     "max_turns": 40,
     "model": "sonnet",
     "name": "",
@@ -5330,6 +5399,10 @@
         {
           "action": "allow",
           "tool": "Instructions"
+        },
+        {
+          "action": "allow",
+          "tool": "MakeDots"
         }
       ]
     },
@@ -7080,6 +7153,30 @@
     },
     {
       "dot_id": "01J0DOT",
+      "root_run_id": "01J0RUN",
+      "type": "making_updated"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "purpose": "Reads the feeds",
+      "request_id": "01J0MAKEREQ",
+      "root_run_id": "01J0RUN",
+      "title": "Researcher wants to make a dot with more than it has",
+      "type": "make_requested"
+    },
+    {
+      "dot_id": "01J0DOT",
+      "made_dot_id": "01J0MADE",
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "type": "dot_made",
+      "typed": false
+    },
+    {
+      "dot_id": "01J0DOT",
       "type": "watcher_updated",
       "watcher_id": "01J0WAT1"
     },
@@ -8097,6 +8194,12 @@
         "has_webhook_token": true,
         "id": "01J0DOT",
         "instructions": "Run the tests and summarize failures.",
+        "made": null,
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
         "max_turns": 40,
         "model": "sonnet",
         "name": "nightly-tests",
@@ -8214,6 +8317,10 @@
             {
               "action": "allow",
               "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
             }
           ]
         },
@@ -8279,6 +8386,12 @@
         "has_webhook_token": true,
         "id": "01J0DOT",
         "instructions": "Run the tests and summarize failures.",
+        "made": null,
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
         "max_turns": 40,
         "model": "sonnet",
         "name": "nightly-tests",
@@ -8396,6 +8509,10 @@
             {
               "action": "allow",
               "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
             }
           ]
         },
@@ -8534,6 +8651,7 @@
         },
         "dot_id": "01J0DOT",
         "dot_name": "nightly-tests",
+        "shared_today": null,
         "today": {
           "cost_usd": 2.0,
           "tokens": 400000
@@ -8546,6 +8664,7 @@
         },
         "dot_id": "01J0DOT2",
         "dot_name": "local-summarizer",
+        "shared_today": null,
         "today": {
           "cost_usd": 0.0,
           "tokens": 850000

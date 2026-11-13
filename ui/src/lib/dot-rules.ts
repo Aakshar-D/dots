@@ -254,6 +254,7 @@ export function specOf(dot: DotSpec): DotSpec {
     spend_cap: dot.spend_cap,
     enabled: dot.enabled,
     context_rules: dot.context_rules,
+    making: dot.making,
   };
 }
 

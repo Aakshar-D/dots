@@ -9,10 +9,11 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::accounts::edit::RosterEdit;
-use crate::accounts::{Access, Permission, Role};
+use crate::accounts::{Permission, Role};
 use crate::approvals::{ApprovalHub, DecideEffect};
 use crate::checkins::CheckIns;
 use crate::checkpoint::{ChangesPreview, Checkpoints, RunChanges, UndoOutcome};
+use crate::dot_admin::{DotAdmin, DotAdminParts};
 use crate::engine::claude::args::resolve_claude;
 use crate::engine::claude::{cli_version, ClaudeEngine};
 use crate::engine::local::client::DEFAULT_RETRY_DELAYS;
@@ -23,6 +24,9 @@ use crate::followups::FollowUps;
 use crate::inbox::{self, InboxEntry, InboxKey, InboxKind, InboxMark, MarkState};
 use crate::library::LibraryKind;
 use crate::library_service::LibraryService;
+use crate::making::cards::MakingCard;
+use crate::making::requests::{MakeDecision, MakeRequest, MakeRequestCard, PendingMakeRequest};
+use crate::making::service::Makers;
 use crate::model::{
     Approval, AttentionRun, ClaudeStatus, ConversationFile, DeliveryCounts, Dot, DotOverview,
     DotSpec, EngineKind, FileSource, Inbox, MessageKind, NewRun, PendingApproval, ReviewRun, Run,
@@ -311,6 +315,11 @@ pub struct Runtime {
     usage_counts: Arc<crate::usage_counts::UsageCounts>,
     /// Sends each account's audit records (env vault spec §10).
     audit_sender: Arc<crate::vault::audit::AuditSender>,
+    /// Creates, changes and deletes dots, for the person and for a run's tools alike
+    /// (dots-make-dots design section 12).
+    dot_admin: DotAdmin,
+    /// What a maker's run does (dots-make-dots design sections 7 to 10).
+    makers: Makers,
     shutdown: CancellationToken,
 }
 
@@ -687,7 +696,46 @@ impl Runtime {
             viewing.clone(),
             shutdown.clone(),
         );
+        // A dot is created, changed and deleted through one path, the person's and a maker's
+        // alike. The tools for making dots reach it through the check-ins, on both engines
+        // (dots-make-dots design section 12).
+        let dot_admin = DotAdmin::new(DotAdminParts {
+            store: store.clone(),
+            bus: bus.clone(),
+            clock: cfg.clock.clone(),
+            new_dot_root: cfg.new_dot_root.clone(),
+            orgs: orgs.clone(),
+            vault: vault.clone(),
+            scheduler: scheduler.clone(),
+            watchers: watchers.clone(),
+            follow_ups: follow_ups.clone(),
+            runner: runner.clone(),
+            teams: teams.clone(),
+            apps: apps.clone(),
+            chat_files: chat_files.clone(),
+            browsers: browsers.clone(),
+            viewing: viewing.clone(),
+        });
+        checkins.set_dot_admin(&dot_admin);
+        // What a maker's run does. The check-ins hold it weakly, as they hold the dot admin:
+        // the runtime keeps it alive (dots-make-dots design section 12).
+        let makers = Makers::new(
+            store.clone(),
+            bus.clone(),
+            dot_admin.clone(),
+            vault.clone(),
+            cfg.data_dir.join("worktrees"),
+            follow_ups.clone(),
+            runner.clone(),
+        );
+        checkins.set_makers(&makers);
+        // Started after interrupted runs were failed, so its first pass sees each topic as it
+        // is and delivers the wakes that waited across the restart (dots-make-dots design
+        // section 8).
+        makers.spawn_wakes(shutdown.clone());
         Ok(Runtime {
+            dot_admin,
+            makers,
             library: LibraryService::new(store.clone(), bus.clone())
                 .with_skills_dir(cfg.data_dir.join(SKILLS_DIR))
                 .with_vault(vault.clone()),
@@ -878,11 +926,21 @@ impl Runtime {
     }
 
     /// Every dot with its active and last run, where its schedule stands, and what it has for
-    /// the person (needs-you spec section 3). A dot deleted meanwhile is left out.
+    /// the person (needs-you spec section 3), and how many dots it made that exist (dots-make-dots
+    /// design section 11). A dot deleted meanwhile is left out.
     pub async fn dot_overview(&self) -> Result<Vec<DotOverview>> {
         let now = self.clock.now();
         let mut rows = Vec::new();
-        for dot in self.store.list_dots().await? {
+        let dots = self.store.list_dots().await?;
+        // Counted from the list itself: no further read for each dot.
+        let mut made_by: HashMap<String, u32> = HashMap::new();
+        for maker in dots
+            .iter()
+            .filter_map(|dot| dot.made.as_ref()?.by_dot_id.as_ref())
+        {
+            *made_by.entry(maker.clone()).or_default() += 1;
+        }
+        for dot in dots {
             let (needs_you, unread) = match self.store.dot_counts(&dot.id).await {
                 Ok(counts) => counts,
                 Err(Error::NotFound(_)) => continue,
@@ -894,6 +952,7 @@ impl Runtime {
                 schedule_state: self.schedule_view(&dot, now).await?,
                 needs_you,
                 unread,
+                made_dots: made_by.get(&dot.id).copied().unwrap_or(0),
                 dot,
             });
         }
@@ -1096,6 +1155,27 @@ impl Runtime {
                 proposal,
             })
             .collect();
+        // Oldest first in the store; the Inbox lists the newest first. Each item is built from
+        // the request's ask card, so the two say the same (dots-make-dots design section 11).
+        let mut make_requests = Vec::new();
+        for request in self
+            .store
+            .list_make_requests(None, true)
+            .await?
+            .iter()
+            .rev()
+        {
+            match self.makers.request_card(&request.id).await {
+                Ok(card) => make_requests.push(PendingMakeRequest::of(&card)),
+                // Answered, or gone with its maker, since the list was read.
+                Err(Error::NotFound(_)) => {}
+                Err(e) => {
+                    tracing::warn!(request = %request.id, "the ask card could not be read for the Inbox: {e}");
+                    let maker = name(&request.maker_dot_id);
+                    make_requests.push(PendingMakeRequest::stored(request, &maker));
+                }
+            }
+        }
         let inbox = Inbox {
             approvals,
             review_runs,
@@ -1108,6 +1188,7 @@ impl Runtime {
             team_scope: self.store.team_scope_issues().await?,
             not_delivered,
             workflows: self.store.waiting_workflow_runs().await?,
+            make_requests,
             back: Vec::new(),
             snoozed: Vec::new(),
             done: Vec::new(),
@@ -1183,6 +1264,9 @@ impl Runtime {
         inbox
             .team_scope
             .retain(|t| shown(InboxKind::TeamScope, &format!("{}/{}", t.team_id, t.dot_id)));
+        inbox
+            .make_requests
+            .retain(|r| shown(InboxKind::MakeRequest, &r.id));
         inbox.hidden_messages = messages
             .iter()
             .filter(|m| !shown(InboxKind::Message, &m.id))
@@ -1210,6 +1294,9 @@ impl Runtime {
             + inbox.workflows.len()
             // A chat message that did not reach its dot (snooze and done spec section 3.9.7).
             + inbox.not_delivered.len()
+            // A make request's waiting card counts like an approval (dots-make-dots design
+            // section 11).
+            + inbox.make_requests.len()
             + self.store.count_waiting_messages().await?)
     }
 
@@ -1975,6 +2062,19 @@ impl Runtime {
         &self.workflows
     }
 
+    /// What creates, changes and deletes dots: `create_dot`, `update_dot` and `delete_dot` go
+    /// through it, and so do the tools a maker's run has (dots-make-dots design section 12).
+    pub fn dot_admin(&self) -> &DotAdmin {
+        &self.dot_admin
+    }
+
+    /// What a maker's run does: making a dot within its reach and its limits (dots-make-dots
+    /// design section 7.1). The tools of both engines reach the same service through the
+    /// check-ins.
+    pub fn makers(&self) -> &Makers {
+        &self.makers
+    }
+
     /// The follow-ups dots scheduled: what the `follow_up*` commands call.
     pub fn follow_ups(&self) -> &Arc<FollowUps> {
         &self.follow_ups
@@ -2045,21 +2145,11 @@ impl Runtime {
     /// dot was disabled and is enabled now), deleted without a schedule. A change of the row
     /// is published as `ScheduleUpdated`.
     async fn sync_schedule(&self, dot: &Dot, enabled_now: bool) -> Result<()> {
-        let schedule = dot.spec.schedule.as_ref();
-        if self
-            .store
-            .sync_schedule_state(&dot.id, schedule, enabled_now, self.clock.now())
-            .await?
-        {
-            self.schedule_updated(&dot.id);
-        }
-        Ok(())
+        self.dot_admin.sync_schedule(dot, enabled_now).await
     }
 
     fn schedule_updated(&self, dot_id: &str) {
-        let _ = self.bus.send(RuntimeEvent::ScheduleUpdated {
-            dot_id: dot_id.to_string(),
-        });
+        self.dot_admin.schedule_updated(dot_id);
     }
 
     /// Creates a dot, in the org `org_id` or, with `None`, in Personal, and in its workspace
@@ -2068,78 +2158,13 @@ impl Runtime {
     /// changing dots, and giving it secrets when it is granted any (members spec §6.3).
     pub async fn create_dot(
         &self,
-        mut spec: DotSpec,
+        spec: DotSpec,
         org_id: Option<String>,
         workspace_id: Option<String>,
     ) -> Result<Dot> {
-        if let Some(org) = &org_id {
-            if self.store.get_org(org).await?.is_none() {
-                return Err(Error::Invalid(format!(
-                    "no org '{org}' is joined on this PC"
-                )));
-            }
-        }
-        let workspace_id =
-            workspace_id.unwrap_or_else(|| crate::accounts::DEFAULT_WORKSPACE.into());
-        self.check_workspace(org_id.as_deref(), &workspace_id)
-            .await?;
-        let workspace_id = workspace_id.as_str();
-        self.require_in(org_id.as_deref(), workspace_id, Permission::EditDots)
-            .await?;
-        self.require_ceiling(
-            org_id.as_deref(),
-            workspace_id,
-            &spec.policy,
-            spec.use_user_settings,
-        )
-        .await?;
-        if !spec.variables.0.is_empty() {
-            self.require_in(org_id.as_deref(), workspace_id, Permission::GrantEntries)
-                .await?;
-        }
-        // A blank folder gets a new one of its own; remembered so a failed create removes it.
-        let mut made: Option<PathBuf> = None;
-        if spec.workdir.trim().is_empty() {
-            let used: Vec<PathBuf> = self
-                .store
-                .list_dots()
-                .await?
-                .into_iter()
-                .map(|d| PathBuf::from(d.spec.workdir.trim()))
-                .collect();
-            let (dir, created) = default_folder(&self.new_dot_root, &spec.name, &used).await?;
-            spec.workdir = dir.to_string_lossy().into_owned();
-            // A folder that was there already, empty, may be another dot's: it stays.
-            made = created.then_some(dir);
-            // A folder Dots made is never a repository's top level: a worktree would check out
-            // whatever repository it happens to sit in.
-            spec.workspace_mode = WorkspaceMode::Folder;
-        }
-        // Worktree mode needs the top level of a repository with a commit; elsewhere the dot
-        // runs in the folder itself.
-        if spec.workspace_mode == WorkspaceMode::Worktree
-            && !worktree_ready(Path::new(spec.workdir.trim())).await
-        {
-            spec.workspace_mode = WorkspaceMode::Folder;
-        }
-        let created = self
-            .store
-            .create_dot(&spec, org_id.as_deref(), workspace_id)
-            .await;
-        let dot = match created {
-            Ok(dot) => dot,
-            Err(e) => {
-                if let Some(dir) = made {
-                    // Only removes an empty folder.
-                    let _ = tokio::fs::remove_dir(dir).await;
-                }
-                return Err(e);
-            }
-        };
-        self.sync_schedule(&dot, false).await?;
-        self.scheduler.reload();
-        self.watchers.reload();
-        Ok(dot)
+        self.dot_admin
+            .create(spec, org_id, workspace_id, None)
+            .await
     }
 
     /// The folders an agent scan reads: the home folder's agents, the workdir of each dot in the
@@ -2286,18 +2311,11 @@ impl Runtime {
 
     /// Refuses a workspace the account (`None` is Personal) doesn't have.
     async fn check_workspace(&self, org_id: Option<&str>, workspace_id: &str) -> Result<()> {
-        let scope = org_id.unwrap_or(crate::accounts::PERSONAL);
-        if self.store.workspace(scope, workspace_id).await?.is_some() {
-            return Ok(());
-        }
-        Err(self.no_workspace(org_id, workspace_id).await)
+        self.dot_admin.check_workspace(org_id, workspace_id).await
     }
 
     async fn no_workspace(&self, org_id: Option<&str>, workspace_id: &str) -> Error {
-        Error::NotFound(format!(
-            "No workspace '{workspace_id}' in {}.",
-            crate::accounts::account_label(Some(&self.orgs), org_id).await
-        ))
+        self.dot_admin.no_workspace(org_id, workspace_id).await
     }
 
     /// Moves a dot to another workspace of its account. The role must allow changing dots in
@@ -2479,106 +2497,18 @@ impl Runtime {
     /// account, the role must allow changing dots, and giving secrets to them when the grants
     /// change (members spec §6.3).
     pub async fn update_dot(&self, id: &str, spec: DotSpec) -> Result<Dot> {
-        let old = self.store.get_dot(id).await?;
-        if let Some(text) = self.vault.org_removed(&old) {
-            return Err(Error::Conflict(text));
-        }
-        self.require_dot(&old, Permission::EditDots).await?;
-        if spec.variables != old.spec.variables {
-            self.require_dot(&old, Permission::GrantEntries).await?;
-        }
-        // Only a new policy (or settings choice) past the ceiling is refused: a dot held for
-        // one can still be renamed or switched off (guardrails spec §4.3).
-        if spec.policy != old.spec.policy || spec.use_user_settings != old.spec.use_user_settings {
-            self.require_ceiling(
-                old.org_id.as_deref(),
-                &old.workspace_id,
-                &spec.policy,
-                spec.use_user_settings,
-            )
-            .await?;
-        }
-        // Only a change to the mode or the folder is refused: a stored dot whose repository
-        // has gone can still have its other fields edited.
-        if spec.workspace_mode == WorkspaceMode::Worktree
-            && (spec.workspace_mode != old.spec.workspace_mode || spec.workdir != old.spec.workdir)
-            && !spec.workdir.trim().is_empty()
-            && !worktree_ready(Path::new(spec.workdir.trim())).await
-        {
-            return Err(Error::Invalid(NOT_A_REPO.into()));
-        }
-        let was_enabled = old.spec.enabled;
-        let dot = self.store.update_dot(id, &spec).await?;
-        // A run held past the policy ceiling may start now (guardrails spec §4.3).
-        self.runner.nudge();
-        if dot.spec.name != old.spec.name {
-            self.teams.dot_renamed(id).await;
-        }
-        self.sync_schedule(&dot, dot.spec.enabled && !was_enabled)
-            .await?;
-        self.scheduler.reload();
-        self.watchers.reload();
-        self.follow_ups.wake();
-        // A cap raised or cleared lets its waiting runs start now.
-        self.runner.nudge();
-        Ok(dot)
+        self.dot_admin.update(id, spec, None).await
     }
 
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`). In an account, the
     /// role must allow changing dots (members spec §6.3), or this PC is waiting for or removed
     /// from the member list, and only cleaning up (`require_cleanup`).
+    ///
+    /// It goes through the makers (`Makers::person_deletes`), so what they show of the dot is
+    /// told (dots-make-dots design section 11): a made dot's waiting job ends and its maker is
+    /// woken, a change request for it goes, and the topics' cards and the Inbox read again.
     pub async fn delete_dot(&self, id: &str) -> Result<()> {
-        let dot = self.store.get_dot(id).await?;
-        self.require_cleanup(&dot).await?;
-        let had_row = self.store.get_schedule_state(id).await?.is_some();
-        let proposals = self.store.list_app_proposals(Some(id)).await?;
-        let watchers: Vec<String> = self
-            .store
-            .list_watchers(id)
-            .await?
-            .into_iter()
-            .map(|w| w.id)
-            .collect();
-        let teams = self.store.teams_of_dot(id).await?;
-        let attachments = self.store.attachment_ids_of_dot(id).await?;
-        let had_goals = self.store.count_intents_of_dot(id).await? > 0;
-        self.store.delete_dot_if_idle(id).await?;
-        // It left its teams (`ON DELETE CASCADE`), and their workflows may now have a problem.
-        self.teams.dot_deleted(&teams).await;
-        // Its goals stay, unlinked (`ON DELETE SET NULL`).
-        if had_goals {
-            let _ = self.bus.send(RuntimeEvent::IntentsUpdated {
-                org_id: dot.org_id.clone(),
-                workspace_id: dot.workspace_id.clone(),
-            });
-        }
-        // Its attached files' rows went with it; their stored copies go too (attachments spec
-        // section 4.7).
-        for a in &attachments {
-            self.chat_files.remove(a);
-        }
-        // Its proposals' rows went with it; their files go too (app library spec section 6.2).
-        for p in &proposals {
-            self.apps.drop_proposed(&p.id).await;
-        }
-        // Its watchers went with it; what they staged and kept goes too.
-        self.watchers.forget(&watchers);
-        // It can no longer be viewed (needs-you spec section 7).
-        {
-            let mut viewing = lock(&self.viewing);
-            if viewing.as_deref() == Some(id) {
-                *viewing = None;
-            }
-        }
-        // Its Edge closes and its profile goes with it (browser spec section 6).
-        self.browsers.forget(id).await;
-        if had_row {
-            self.schedule_updated(id);
-        }
-        self.scheduler.reload();
-        self.watchers.reload();
-        self.follow_ups.wake();
-        Ok(())
+        self.makers.person_deletes(id).await
     }
 
     /// Switches the dot on or off. In an account, the role must allow changing dots (members
@@ -2826,8 +2756,16 @@ impl Runtime {
         self.refuse_at_the_limit(&dot)?;
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
         new.id = Some(crate::util::new_id());
-        // The person typed it (conversational chat spec section 3).
-        let mut payload = json!({ "message": message, crate::prompt::TYPED: true });
+        // The person typed it (conversational chat spec section 3); a job's text that Retry
+        // sends again is still its maker's words, and a wake's is still Dots' report
+        // (dots-make-dots design section 8).
+        let mut payload = match (&extra.from_maker, &extra.wake_id) {
+            (Some(maker), _) => json!({ "message": message, crate::prompt::FROM_MAKER: maker }),
+            (None, Some(wake)) => {
+                json!({ "message": message, crate::making::wake::WAKE_ID: wake })
+            }
+            (None, None) => json!({ "message": message, crate::prompt::TYPED: true }),
+        };
         if let Some(note) = &extra.send_later {
             payload["send_later"] = serde_json::to_value(note)?;
         }
@@ -2980,14 +2918,39 @@ impl Runtime {
         };
         let mut new = NewRun::resend_of(&run, parent.as_ref());
         // Sent by the person: no note that Dots resent it.
+        let mut job = None;
         if let Some(serde_json::Value::Object(payload)) = &mut new.payload {
             payload.remove(crate::model::RESENT);
+            job = payload
+                .get(crate::making::jobs::JOB_ID)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned);
         }
         // Its files go with it, as a Retry's do (attachments spec section 4.3).
-        let run = self
-            .store
-            .create_chat_run(&new, &[], None, Some(run_id))
-            .await?;
+        let run = match job {
+            // A maker's job goes on in it while the job is open. One that has ended since is
+            // no job any more (dots-make-dots design section 8): nobody is woken with its
+            // result, so it does not say so, and its text stays the maker's words. Which one
+            // is read in the transaction that stores the run.
+            Some(job) => {
+                let mut ended = new.clone();
+                if let Some(serde_json::Value::Object(payload)) = &mut ended.payload {
+                    payload.remove(crate::making::jobs::JOB_ID);
+                    payload.remove(crate::limits::BACKGROUND);
+                    if let Some(maker) = payload.remove(crate::prompt::JOB_FROM) {
+                        payload.insert(crate::prompt::FROM_MAKER.into(), maker);
+                    }
+                }
+                self.store
+                    .create_resent_job_run(&new, &ended, &job, run_id)
+                    .await?
+            }
+            None => {
+                self.store
+                    .create_chat_run(&new, &[], None, Some(run_id))
+                    .await?
+            }
+        };
         self.runner.enqueued(&run);
         Ok(run)
     }
@@ -3092,9 +3055,22 @@ impl Runtime {
                 "this message has no text to send again".into(),
             ));
         };
-        // Its files move to the new message (attachments spec section 4.3).
+        // Its files move to the new message (attachments spec section 4.3). A job's run is
+        // sent as its maker's words, not the person's, and as no job: Retry does not carry the
+        // job on, so the job ends with the run that did not get there (dots-make-dots design
+        // section 8). A wake's run is sent again as Dots' report, with its wake's id: never as a
+        // message the person typed, so its run starts no workflows and the loop guard counts on.
+        let wake_id = run
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(crate::making::wake::WAKE_ID))
+            .and_then(|v| v.as_str())
+            .filter(|_| crate::prompt::is_wake(&run))
+            .map(str::to_owned);
         let extra = ChatExtra {
             carry_from: Some(run.id.clone()),
+            from_maker: crate::prompt::makers_words(&run).map(str::to_owned),
+            wake_id,
             ..ChatExtra::default()
         };
         match self
@@ -3273,14 +3249,9 @@ impl Runtime {
         policy: &crate::policy::Policy,
         own_settings: bool,
     ) -> Result<()> {
-        let Some(rails) = crate::accounts::rails_in(Some(&self.orgs), org_id, workspace_id) else {
-            return Ok(());
-        };
-        let account = crate::accounts::account_label(Some(&self.orgs), org_id).await;
-        match rails.ceiling_refusal(&account, policy, own_settings) {
-            Some(text) => Err(Error::NotAllowed(text)),
-            None => Ok(()),
-        }
+        self.dot_admin
+            .require_ceiling(org_id, workspace_id, policy, own_settings)
+            .await
     }
 
     /// What the send-and-delete guard finds in the call of this approval (it sends or deletes,
@@ -3473,6 +3444,49 @@ impl Runtime {
             .instructions()
             .changed(&decided.id, &decided.dot_id);
         Ok((decided, run))
+    }
+
+    /// The ask card of the make request `id`, waiting or answered (dots-make-dots design
+    /// section 7.2), as `Makers::request_card` builds it: it says whether this PC's role may
+    /// allow the request, and why not. Anyone may read it. `NotFound` once the request is
+    /// gone with its maker, or with the made dot a change was asked for.
+    pub async fn make_request_card(&self, id: &str) -> Result<MakeRequestCard> {
+        self.makers.request_card(id).await
+    }
+
+    /// The ask cards of every request that waits for the person, of every maker, newest first:
+    /// the Inbox's section (dots-make-dots design section 11). `Inbox::make_requests` lists
+    /// the same requests, without the ones the person snoozed or marked done.
+    pub async fn waiting_make_requests(&self) -> Result<Vec<MakeRequestCard>> {
+        self.makers.waiting_cards().await
+    }
+
+    /// The person's answer on the ask card of the make request `id`: allow it, make or change
+    /// the dot without what is beyond the maker's reach, or refuse it (dots-make-dots design
+    /// sections 7.2 and 9). Returns the request as it is after; the maker is woken with the
+    /// answer. The checks are `Makers::decide_request`'s: an answer that makes or changes a
+    /// dot needs this PC's right to change dots in the maker's account and workspace, and to
+    /// give secrets when variables are given (`NotAllowed`, and the request still waits).
+    /// `limit` is the limit line of the card the person answered (`MakeRequestCard::limit`):
+    /// an answer that makes a dot past another limit is refused (`Conflict`). `shown` is what
+    /// that card showed beyond the maker's reach (`MakeRequestCard::shown`): Allow and an
+    /// answer without the extras are refused (`Conflict`) when the request would now give
+    /// something else.
+    pub async fn decide_make_request(
+        &self,
+        id: &str,
+        decision: MakeDecision,
+        limit: Option<&str>,
+        shown: Option<&str>,
+    ) -> Result<MakeRequest> {
+        self.makers.decide_request(id, decision, limit, shown).await
+    }
+
+    /// The making cards of the chat topic `root_run_id`, oldest first (dots-make-dots design
+    /// section 11): made, working and finished, the ask, changed and deleted, each with what
+    /// it shows (`Makers::cards`). Empty for a topic of a dot that makes none.
+    pub async fn making_cards(&self, root_run_id: &str) -> Result<Vec<MakingCard>> {
+        self.makers.cards(root_run_id).await
     }
 
     /// Decides an approval. With `allow_rule`, an approval also saves that allow rule to the
@@ -3712,13 +3726,7 @@ impl Runtime {
     /// can't run, and Leave removes the account. So may a member outside the dot's workspace
     /// (members spec §6.3). Enabling, editing and watcher changes stay refused for them.
     async fn require_cleanup(&self, dot: &Dot) -> Result<()> {
-        if matches!(
-            crate::accounts::access_dot(Some(&self.orgs), dot),
-            Access::Waiting | Access::Removed | Access::OutsideWorkspace { .. }
-        ) {
-            return Ok(());
-        }
-        self.require_dot(dot, Permission::EditDots).await
+        self.dot_admin.require_cleanup(dot).await
     }
 
     /// `require_dot` on the dot `dot_id`.
@@ -3974,9 +3982,9 @@ impl Runtime {
 }
 
 /// The dot being viewed (`Runtime::set_viewing`), shared with `watch_viewing`.
-type Viewing = Arc<std::sync::Mutex<Option<String>>>;
+pub(crate) type Viewing = Arc<std::sync::Mutex<Option<String>>>;
 
-fn lock(viewing: &Viewing) -> std::sync::MutexGuard<'_, Option<String>> {
+pub(crate) fn lock(viewing: &Viewing) -> std::sync::MutexGuard<'_, Option<String>> {
     viewing
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -4325,7 +4333,7 @@ impl Runtime {
         if run.status != RunStatus::Queued
             || run.hold_released
             || dot.spec.engine != crate::model::EngineKind::Claude
-            || !crate::limits::is_background(run.trigger)
+            || !crate::limits::run_is_background(&run)
         {
             return Err(Error::Invalid(crate::limits::NOT_HELD.into()));
         }
@@ -4342,7 +4350,7 @@ impl Runtime {
         let run = self.store.get_run(run_id).await?;
         let dot = self.store.get_dot(&run.dot_id).await?;
         self.require_dot(&dot, Permission::RunDots).await?;
-        if crate::limits::is_background(run.trigger) {
+        if crate::limits::run_is_background(&run) {
             return Err(Error::Invalid(crate::spend::BACKGROUND_WAITS.into()));
         }
         let Some(hit) = self.runner.cap_hold(&run).await? else {
@@ -4894,6 +4902,8 @@ impl Runtime {
             attachment_ids,
             scheduled_id: Some(message.id.clone()),
             carry_from: None,
+            from_maker: None,
+            wake_id: None,
         })
     }
 

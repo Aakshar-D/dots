@@ -118,6 +118,13 @@ pub fn build_args(ctx: &RunContext, mcp_config_path: &Path) -> Vec<String> {
     if ctx.tools.instructions() {
         allow.push(crate::instructions::model_name(EngineKind::Claude).to_string());
     }
+    // And of the tools for making dots, for a run of a dot that may make dots (dots-make-dots
+    // design section 5).
+    if ctx.tools.making().is_some() {
+        allow.extend(
+            crate::making::tools::Tool::ALL.map(|t| t.model_name(EngineKind::Claude).to_string()),
+        );
+    }
     // The model's plumbing tools never ask (approval guards spec section 5), unless a deny or
     // an ask rule matches one, as `Policy::resolve_in` reads it: that one is left to the
     // other lists and to the `approve` tool.

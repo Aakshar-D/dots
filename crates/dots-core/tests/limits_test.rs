@@ -51,6 +51,7 @@ fn q(id: &str, trigger: TriggerKind) -> QueuedRun {
     QueuedRun {
         id: id.into(),
         trigger,
+        background: dots_core::limits::is_background(trigger),
         engine: EngineKind::Claude,
         hold_released: false,
         queued_at: timestamp(t0()),

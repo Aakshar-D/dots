@@ -137,6 +137,27 @@ export const ContextRules = z.strictObject({
 });
 export type ContextRules = z.infer<typeof ContextRules>;
 
+/// Whether a dot may make dots, and how many (dots-make-dots design section 5): `per_run` is
+/// how many one run of it may make (1 to 10) and `total` how many made dots it may keep (1 to
+/// 50) before Dots asks the person.
+export const Making = z.strictObject({
+  on: z.boolean(),
+  per_run: z.number().int(),
+  total: z.number().int(),
+});
+export type Making = z.infer<typeof Making>;
+
+/// Who made a dot (dots-make-dots design sections 3 and 9): the maker (null once it is
+/// deleted), the maker's name as it is now or last was, the maker's run that made the dot, and
+/// the maker's one line on what the dot is for.
+export const Made = z.strictObject({
+  by_dot_id: nullable(z.string()),
+  by_name: z.string(),
+  run_id: z.string(),
+  purpose: z.string(),
+});
+export type Made = z.infer<typeof Made>;
+
 const dotSpecShape = {
   name: z.string(),
   instructions: z.string(),
@@ -167,6 +188,8 @@ const dotSpecShape = {
   enabled: z.boolean(),
   // The dot's own context rules; null follows Settings.
   context_rules: nullable(ContextRules),
+  // "Can make dots" and its two limits; off until the person turns it on.
+  making: Making,
 };
 export const DotSpec = z.strictObject(dotSpecShape);
 export const Dot = z.strictObject({
@@ -182,6 +205,8 @@ export const Dot = z.strictObject({
   org_id: nullable(z.string()),
   // The workspace of its account the dot is in; "default" until it is moved.
   workspace_id: z.string(),
+  // Who made the dot; null for a dot a person made.
+  made: nullable(Made),
   ...dotSpecShape,
 });
 
@@ -444,6 +469,10 @@ export const DotSpend = z.strictObject({
   dot_name: z.string(),
   today: Spend,
   caps: DotCaps,
+  // What counts toward this dot's caps today when that is more than its own runs: with the
+  // dots it made and those below them, deleted ones included (dots-make-dots design section
+  // 6); null for a dot that shares nothing.
+  shared_today: nullable(Spend),
 });
 // Today's spend (local midnight to local midnight) and this month's, against the caps.
 export const SpendToday = z.strictObject({
@@ -845,6 +874,7 @@ export const InboxKind = z.enum([
   "instructions",
   "app_review",
   "team_scope",
+  "make_request",
 ]);
 export const InboxKey = z.strictObject({ kind: InboxKind, id: z.string() });
 // A mark on an Inbox item, in exactly one state (RFC 3339 UTC times). `dot_id` is null for
@@ -980,6 +1010,35 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
     type: z.literal("instruction_proposal_changed"),
     id: z.string(),
     dot_id: z.string(),
+  }),
+  // The log of what the maker `dot_id` did in one chat topic changed: it made a dot.
+  z.strictObject({
+    type: z.literal("making_updated"),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+  }),
+  // The maker `dot_id` asked for a dot, or a change to one it made, that needs the person's
+  // answer: a request waits. The app notifies, as for an approval.
+  z.strictObject({
+    type: z.literal("make_requested"),
+    request_id: z.string(),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+    title: z.string(),
+    name: z.string(),
+    purpose: z.string(),
+  }),
+  // A run of the maker `dot_id` made a dot. `typed`: the person typed the message that
+  // started the run, so nothing notifies.
+  z.strictObject({
+    type: z.literal("dot_made"),
+    dot_id: z.string(),
+    root_run_id: z.string(),
+    maker_name: z.string(),
+    made_dot_id: z.string(),
+    name: z.string(),
+    purpose: z.string(),
+    typed: z.boolean(),
   }),
   // A watcher of the dot was added, changed, paused, resumed, deleted or had an event.
   z.strictObject({
@@ -1181,6 +1240,9 @@ export const DotOverview = z.strictObject({
   needs_you: z.number().int(),
   // `needs_you`, plus its runs that ended and its notes posted since it was last seen.
   unread: z.number().int(),
+  // How many dots it made that exist now: the "2" of "can make dots · 2 of 10". Optional until
+  // the dots list shows it: the core always sends the count.
+  made_dots: z.number().int().optional(),
 });
 
 export const PendingApproval = z.strictObject({
@@ -1270,7 +1332,30 @@ export const Inbox = z.strictObject({
   // Workflow runs that wait for the person (a check, the budget, the send-back cap or a failed
   // step), newest first.
   workflows: z.array(z.lazy(() => WaitingWorkflowRun)),
+  // Requests of makers that wait for the person, newest first. Optional until the Inbox lists
+  // them: the core always sends the list.
+  make_requests: z.array(z.lazy(() => PendingMakeRequest)).optional(),
 });
+// A make request, a request to change a made dot, or a job for a made dot that holds more than
+// its maker, that waits for the person, as the Inbox lists it. `dot_id` and `dot_name` are the
+// maker's; `name` is the dot's as it is called now; `status` is "waiting" or "gone".
+export const PendingMakeRequest = z.strictObject({
+  id: z.string(),
+  dot_id: z.string(),
+  dot_name: z.string(),
+  root_run_id: z.string(),
+  kind: z.enum(["make", "change", "job"]),
+  name: z.string(),
+  purpose: z.string(),
+  title: z.string(),
+  lines: z.array(z.string()),
+  // What the card shows beyond the maker's reach, as a digest: an answer sends it back, as it
+  // sends the card's limit line, and is refused when the request would now give something else.
+  shown: nullable(z.string()),
+  status: z.enum(["waiting", "allowed", "made_without", "refused", "gone", "discarded"]),
+  created_at: z.string(),
+});
+export type PendingMakeRequest = z.infer<typeof PendingMakeRequest>;
 // A member dot that is not in its team's account or workspace, as the Inbox lists it.
 export const TeamScopeIssue = z.strictObject({
   team_id: z.string(),

@@ -41,8 +41,8 @@ describe("the app frame", () => {
     // One pending approval, one run to review, one schedule that needs attention, one MCP
     // server whose tools changed, one paused watcher, the runs held for Claude usage, one
     // proposed instruction, one app sent for review, one team scope problem, one message that
-    // did not reach its dot and one waiting workflow run.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
+    // did not reach its dot, one waiting workflow run and one make request.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 12 waiting" })).toBeVisible();
   });
 
   it("has a Usage link that opens the Usage page from the keyboard", async () => {
@@ -69,7 +69,7 @@ describe("the app frame", () => {
     backend.on("dot_overview", () => [{ ...idle, dot: { ...sample.dot, org_id: null } }]);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 12 waiting" })).toBeVisible();
   });
 
   // The rail's count is the tray's (core `inbox_count`): every list of the Inbox, the held runs
@@ -89,6 +89,26 @@ describe("the app frame", () => {
       team_scope: copies(box.team_scope, 9),
       workflows: copies(box.workflows, 10),
       not_delivered: copies(box.not_delivered, 11),
+      // Its own, so its count can differ from the other kinds.
+      make_requests: copies(
+        [
+          {
+            id: "req-1",
+            dot_id: "dot-maker",
+            dot_name: "Maker",
+            root_run_id: "run-1",
+            kind: "make" as const,
+            name: "Feeds",
+            purpose: "Reads the feeds every morning",
+            title: "Maker asks to make Feeds",
+            lines: ["The browser"],
+            shown: "shown-1",
+            status: "waiting" as const,
+            created_at: "2026-11-12T09:00:00.000Z",
+          },
+        ],
+        12,
+      ),
       // Marks, not items: the items stay in (or leave) their sections.
       back: [],
       snoozed: [],
@@ -107,8 +127,8 @@ describe("the app frame", () => {
     ]);
     renderApp("/dots");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    // 1 + 2 + 3 + 4 + 5 + 1 (held) + 7 + 8 + 9 + 10 + 11, and 2 messages.
-    expect(await within(nav).findByRole("link", { name: "Inbox, 63 waiting" })).toBeVisible();
+    // 1 + 2 + 3 + 4 + 5 + 1 (held) + 7 + 8 + 9 + 10 + 11 + 12, and 2 messages.
+    expect(await within(nav).findByRole("link", { name: "Inbox, 75 waiting" })).toBeVisible();
   });
 
   it("shows why Dots could not start instead of the app", async () => {
@@ -513,7 +533,7 @@ describe("the app frame", () => {
     await listening();
     backend.on("inbox", () => sample.inbox);
     act(() => backend.emit("runtime", { type: "approval_requested", approval: sample.approval }));
-    expect(await within(nav).findByRole("link", { name: "Inbox, 11 waiting" })).toBeVisible();
+    expect(await within(nav).findByRole("link", { name: "Inbox, 12 waiting" })).toBeVisible();
   });
 });
 

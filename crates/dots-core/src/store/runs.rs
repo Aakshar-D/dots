@@ -199,7 +199,7 @@ pub(super) async fn insert_run(conn: &mut SqliteConnection, new: &NewRun) -> Res
 }
 
 /// The run `id` read in `conn`.
-async fn run_in(conn: &mut SqliteConnection, id: &str) -> Result<Run> {
+pub(super) async fn run_in(conn: &mut SqliteConnection, id: &str) -> Result<Run> {
     let row = sqlx::query(&format!("SELECT {RUN_COLUMNS} FROM runs WHERE id = ?"))
         .bind(id)
         .fetch_optional(conn)
@@ -1004,6 +1004,80 @@ impl Store {
                 ))
             })
             .collect()
+    }
+
+    /// What counts toward the caps of `dot_id` for `[start, end)` (dots-make-dots design
+    /// section 6, Spend): the runs of the dot, of the dots it made and of those below them that
+    /// started then, and what was kept for it of deleted ones (`kept_spend_between`). The dots
+    /// below are those whose spend chain leads to it (`spend_parent_dot_id`, migration 0057),
+    /// which a delete in the middle does not break. For a dot that made nothing it is
+    /// `spend_between` of the dot.
+    pub async fn shared_spend_between(
+        &self,
+        dot_id: &str,
+        start: &str,
+        end: &str,
+    ) -> Result<crate::spend::Spend> {
+        let row = sqlx::query(
+            "WITH RECURSIVE tree(dot, depth) AS ( \
+             SELECT ?1, 0 \
+             UNION ALL \
+             SELECT d.id, tree.depth + 1 FROM dots d \
+             JOIN tree ON d.spend_parent_dot_id = tree.dot \
+             WHERE tree.depth < ?4) \
+             SELECT COALESCE(SUM(cost), 0.0) AS cost, COALESCE(SUM(tokens), 0) AS tokens FROM ( \
+             SELECT cost_usd AS cost, tokens_in + tokens_out AS tokens FROM runs \
+             WHERE dot_id IN (SELECT dot FROM tree) AND started_at >= ?2 AND started_at < ?3 \
+             UNION ALL \
+             SELECT cost_usd, tokens FROM made_spend_kept \
+             WHERE dot_id = ?1 AND started_at >= ?2 AND started_at < ?3)",
+        )
+        .bind(dot_id)
+        .bind(start)
+        .bind(end)
+        .bind(crate::spend::MAKER_DEPTH)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(crate::spend::Spend {
+            cost_usd: row.try_get("cost")?,
+            tokens: row.try_get("tokens")?,
+        })
+    }
+
+    /// What deleted dots spent in runs started in `[start, end)` that still counts
+    /// (dots-make-dots design section 6, Spend survives a delete): toward the caps of the maker
+    /// `dot_id` or, with `None`, toward the caps for every dot together.
+    pub async fn kept_spend_between(
+        &self,
+        dot_id: Option<&str>,
+        start: &str,
+        end: &str,
+    ) -> Result<crate::spend::Spend> {
+        let row = sqlx::query(
+            "SELECT COALESCE(SUM(cost_usd), 0.0) AS cost, COALESCE(SUM(tokens), 0) AS tokens \
+             FROM made_spend_kept WHERE started_at >= ? AND started_at < ? AND dot_id IS ?",
+        )
+        .bind(start)
+        .bind(end)
+        .bind(dot_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(crate::spend::Spend {
+            cost_usd: row.try_get("cost")?,
+            tokens: row.try_get("tokens")?,
+        })
+    }
+
+    /// The makers that hold spend kept of deleted dots for runs started in `[start, end)`.
+    pub async fn makers_with_kept_spend(&self, start: &str, end: &str) -> Result<Vec<String>> {
+        Ok(sqlx::query_scalar(
+            "SELECT DISTINCT dot_id FROM made_spend_kept \
+             WHERE dot_id IS NOT NULL AND started_at >= ? AND started_at < ?",
+        )
+        .bind(start)
+        .bind(end)
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     /// Marks a queued run let past a reached spending cap by **Run once anyway** (spend caps

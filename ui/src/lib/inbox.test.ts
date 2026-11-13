@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import contract from "@/api/__fixtures__/contract.json";
 import * as T from "@/api/types";
-import { hiddenKeys, inboxKeys, inboxWaiting, keyString, messageKey } from "@/lib/inbox";
+import { hiddenKeys, inboxKeys, inboxWaiting, keyString, makeRequestKey, messageKey } from "@/lib/inbox";
 
 const inbox = T.Inbox.parse(contract.Inbox);
 const messages = T.Message.array().parse(contract.Message);
@@ -11,6 +11,14 @@ describe("Inbox item keys", () => {
   it("inboxKeys_match_the_core", () => {
     // The core's keys for the same Inbox and messages (`inbox::entries`), in the same order.
     expect(inboxKeys(inbox, messages)).toEqual(T.InboxKey.array().parse(contract.InboxKeys));
+  });
+
+  it("reads a job request as a make request, keyed by its id", () => {
+    // A job for a made dot that holds more than its maker waits for the person as its own kind.
+    const [made] = inbox.make_requests ?? [];
+    const job = T.PendingMakeRequest.parse({ ...made, id: "01J0MRJ", kind: "job" });
+    expect(job.kind).toBe("job");
+    expect(makeRequestKey(job)).toEqual({ kind: "make_request", id: "01J0MRJ" });
   });
 
   it("puts snoozed, done and hidden messages in the hidden keys", () => {
@@ -40,8 +48,10 @@ describe("inboxWaiting", () => {
       shown.instructions.length +
       shown.app_reviews.length +
       shown.team_scope.length +
-      shown.workflows.length;
+      shown.workflows.length +
+      (shown.make_requests?.length ?? 0);
     expect(shown.held.length).toBeGreaterThan(1);
+    expect(shown.make_requests?.length).toBe(1);
     expect(shown.not_delivered.length).toBe(1);
     expect(shown.team_scope.length).toBe(1);
     expect(shown.workflows.length).toBe(1);

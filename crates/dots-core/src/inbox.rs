@@ -28,6 +28,7 @@ str_enum!(InboxKind {
     Instructions => "instructions",
     AppReview => "app_review",
     TeamScope => "team_scope",
+    MakeRequest => "make_request",
 });
 
 /// One Inbox item: its kind and an id that names the item as it is now (spec section 4.1), so
@@ -106,7 +107,8 @@ pub fn title_cut(text: &str) -> String {
 /// Every item of `inbox` and the waiting ones of `messages`, with their keys and titles (spec
 /// section 4.1), in the order of the sections: messages, approvals, not delivered, runs to
 /// review, schedules that need attention, tools changed, paused watchers, held runs,
-/// instructions, apps to review, team scope problems. The UI's `inboxKeys` gives the same.
+/// instructions, apps to review, team scope problems, make requests. The UI's `inboxKeys` gives
+/// the same.
 pub fn entries(inbox: &Inbox, messages: &[Message]) -> Vec<InboxEntry> {
     let mut out = Vec::new();
     let mut add = |kind: InboxKind, id: String, dot_id: Option<&str>, title: String| {
@@ -203,6 +205,15 @@ pub fn entries(inbox: &Inbox, messages: &[Message]) -> Vec<InboxEntry> {
         let title = format!("{} in team {} needs attention", t.dot_name, t.team_name);
         let id = format!("{}/{}", t.team_id, t.dot_id);
         add(InboxKind::TeamScope, id, Some(&t.dot_id), title);
+    }
+    // The ask card's own title (dots-make-dots design section 7.2).
+    for r in &inbox.make_requests {
+        add(
+            InboxKind::MakeRequest,
+            r.id.clone(),
+            Some(&r.dot_id),
+            r.title.clone(),
+        );
     }
     out
 }

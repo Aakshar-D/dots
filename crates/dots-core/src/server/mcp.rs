@@ -13,6 +13,7 @@ use crate::checkins::Tool;
 use crate::context;
 use crate::engine::local::tools::cap_head;
 use crate::engine::{PermissionGate, PermissionOutcome};
+use crate::making::tools::Tool as MakingTool;
 use crate::memory::{self, Tool as MemoryTool};
 use crate::team_tools::{self, Tool as TeamTool};
 
@@ -153,6 +154,10 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
             if has_instructions(&s, &run_id) {
                 tools.push(crate::instructions::mcp_schema());
             }
+            // A run of a dot that may make dots (dots-make-dots design section 5).
+            if let Some(limits) = making(&s, &run_id) {
+                tools.extend(MakingTool::ALL.map(|tool| tool.mcp_schema(&limits)));
+            }
             json!({ "tools": tools })
         }
         "tools/call" => {
@@ -176,6 +181,10 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
                     if run_apps(&s, &run_id).is_some_and(|a| a.resolve(n).is_some()) =>
                 {
                     call_app(&s, &run_id, &req, n).await
+                }
+                (Some(n), None) if MakingTool::from_name(n).is_some() => {
+                    let tool = MakingTool::from_name(n).expect("a tool for making dots");
+                    call_making(&s, &run_id, &req, tool).await
                 }
                 _ => call_approve(&s, &run_id, &req).await,
             };
@@ -235,6 +244,69 @@ async fn call_instructions(
             .propose(run_id, arg("instructions"), arg("reason"))
             .await
         {
+            Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
+            Err(text) => not_performed(&text),
+        },
+    )
+}
+
+/// The maker's limits, when the run has the tools for making dots (`RunTools::making`).
+fn making(s: &ServerState, run_id: &str) -> Option<crate::model::Making> {
+    s.runner
+        .run_tools(run_id)
+        .and_then(|tools| tools.making().copied())
+}
+
+/// Checks a call of the tool for making dots `tool` against the dot's policy under `MakeDots`,
+/// waiting for an approval when a rule asks, and has the makers' service perform it
+/// (dots-make-dots design sections 5 and 7 to 9). The policy is asked about the tool by name
+/// with its arguments, and the made dot a call names (`making::tools::checked_input`).
+/// Arguments the tool cannot read, and a name that finds no dot the maker made, are refused
+/// before the policy is asked, in a sentence for the model. A call that is not
+/// performed, or that the service refuses, is a tool result with `isError`, as for the
+/// check-in tools; a tool the run was not offered is unknown.
+async fn call_making(
+    s: &ServerState,
+    run_id: &str,
+    req: &Value,
+    tool: MakingTool,
+) -> Result<Value, (i64, String)> {
+    let makers = s
+        .runner
+        .checkins()
+        .filter(|_| making(s, run_id).is_some())
+        .and_then(|checkins| checkins.makers());
+    let Some(makers) = makers else {
+        return Err((-32602, "unknown tool".to_string()));
+    };
+    let params = req
+        .get("params")
+        .ok_or((-32602, "missing params".to_string()))?;
+    let arguments = match params.get("arguments") {
+        None | Some(Value::Null) => json!({}),
+        Some(args @ Value::Object(_)) => args.clone(),
+        Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
+    };
+    // A call that names a made dot is checked, and approved, for that dot alone.
+    let input = match crate::making::tools::checked_input(&makers, run_id, tool, &arguments).await {
+        Ok(input) => input,
+        Err(text) => return Ok(not_performed(&text)),
+    };
+    let checked = match s
+        .hub
+        .check(run_id, crate::making::tools::POLICY_NAME, input)
+        .await
+    {
+        Ok(PermissionOutcome::Allow { input }) => input,
+        Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
+        // The store's own words are for the log, not the model.
+        Err(e) => {
+            tracing::warn!(run = %run_id, "a making call's permission check failed: {e}");
+            return Ok(not_performed(crate::making::tools::COULD_NOT));
+        }
+    };
+    Ok(
+        match crate::making::tools::call(&makers, run_id, &checked).await {
             Ok(text) => json!({ "content": [{ "type": "text", "text": text }] }),
             Err(text) => not_performed(&text),
         },

@@ -36,6 +36,13 @@ pub struct ChatExtra {
     pub scheduled_id: Option<String>,
     /// Retry: the message whose files move to the new one, keeping their names.
     pub carry_from: Option<String>,
+    /// Retry of a job's run: the maker whose words the text is (dots-make-dots design section
+    /// 8). The run is then not typed by the person, and says whose words it carries
+    /// (`prompt::FROM_MAKER`).
+    pub from_maker: Option<String>,
+    /// Retry of a wake's run: the wake it delivered (dots-make-dots design section 8). The run
+    /// is then Dots' report to a maker, not typed by the person (`making::wake::WAKE_ID`).
+    pub wake_id: Option<String>,
 }
 
 /// Where a due message goes, decided at send time.

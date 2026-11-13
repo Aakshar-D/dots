@@ -183,6 +183,11 @@ impl Session {
         if self.ctx.tools.instructions() && self.checkins.is_some() {
             out.push(tools::instructions::schema());
         }
+        // The tools for making dots (dots-make-dots design section 5), for a run of a dot that
+        // may make dots.
+        if let Some(limits) = self.making_limits() {
+            out.extend(super::making_tools::schemas(limits));
+        }
         // The built-in browser's tools (browser spec section 2.2); their names fit as they are,
         // so `ToolNames` finds them by their `mcp__` name.
         if self.ctx.tools.browser().is_some() {

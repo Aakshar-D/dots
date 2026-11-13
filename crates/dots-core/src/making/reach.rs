@@ -1,0 +1,1281 @@
+//! The reach check (dots-make-dots design section 6): given a maker as it is now and what it
+//! asks for a new dot, or as a change to a dot it made, the whole dot asked for, the parts of
+//! it beyond the maker's reach (the extras), and the same dot without them.
+//!
+//! It compares with the maker's own settings only, and writes nothing: no store, no folder. It
+//! reads the file system to resolve real paths. Whether the Library has an item and the vault
+//! a variable, the limits (section 10), and that the maker made the dot it changes are the
+//! caller's checks.
+
+use std::path::{Component, Path, PathBuf, Prefix};
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use crate::library::{LibraryKind, Uses};
+use crate::model::{Dot, DotSpec, Making, WorkspaceMode};
+use crate::policy::{Action, Policy, Preset};
+use crate::schedule::Schedule;
+use crate::vault::{Consumer, Grants};
+use crate::{Error, Result};
+
+/// What `permissions` says for an exact copy of the maker's whole policy.
+pub const MAKERS_PERMISSIONS: &str = "maker";
+/// What `schedule` says for a dot without a schedule.
+pub const NO_SCHEDULE: &str = "none";
+
+/// What a maker asks for (design sections 7.1 and 9). Every field is optional: a new dot needs
+/// `name` and `instructions`, and a change changes only the fields it names. In JSON a field
+/// that is missing or `null` is not named, and a field this struct does not have is refused.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Wanted {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
+    /// A model of the maker's engine; the maker's when a new dot names none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The folder the dot works in: absolute, or relative to the maker's folder. Blank is as
+    /// not named: a new dot gets a new folder of its own, a changed dot keeps its folder.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<WantedPermissions>,
+    /// The whole set of Library items the dot is to use; none when a new dot names none. A
+    /// group `Uses` does not have is refused, not dropped.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "known_uses"
+    )]
+    pub uses: Option<Uses>,
+    /// The whole set of variables the dot is to be granted, by consumer (`shell` or
+    /// `mcp:<server>`); none when a new dot names none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variables: Option<Grants>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_user_settings: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    /// `Some(None)` is no schedule: it clears the schedule of a changed dot. In JSON a
+    /// schedule is its object and no schedule is the word `"none"`; `null` is not named, since
+    /// a model writes `null` for a field it leaves out.
+    #[serde(skip_serializing_if = "Option::is_none", with = "schedule_or_none")]
+    pub schedule: Option<Option<Schedule>>,
+}
+
+/// The groups of `uses`, as `Uses` reads them.
+const USES_GROUPS: [&str; 5] = ["mcp_servers", "skills", "plugins", "context", "apps"];
+
+/// `uses` as `Uses` reads it, but a group it does not have (`"skill"`) is refused by name, so
+/// the maker learns that nothing of it was asked. `Uses` itself stays lenient: stored dots and
+/// the other callers read it.
+fn known_uses<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<Uses>, D::Error> {
+    use serde::de::Error as _;
+    let value = serde_json::Value::deserialize(d)?;
+    if let Some(groups) = value.as_object() {
+        if let Some(unknown) = groups
+            .keys()
+            .find(|key| !USES_GROUPS.contains(&key.as_str()))
+        {
+            return Err(D::Error::custom(format!(
+                "uses has no group {unknown:?}; its groups are {}",
+                USES_GROUPS.join(", ")
+            )));
+        }
+    }
+    Option::<Uses>::deserialize(value).map_err(D::Error::custom)
+}
+
+mod schedule_or_none {
+    use super::*;
+
+    pub fn serialize<S: Serializer>(
+        value: &Option<Option<Schedule>>,
+        s: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        match value {
+            None => s.serialize_none(),
+            Some(None) => s.serialize_str(NO_SCHEDULE),
+            Some(Some(schedule)) => schedule.serialize(s),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> std::result::Result<Option<Option<Schedule>>, D::Error> {
+        use serde::de::Error as _;
+        match serde_json::Value::deserialize(d)? {
+            serde_json::Value::Null => Ok(None),
+            serde_json::Value::String(word) if word == NO_SCHEDULE => Ok(Some(None)),
+            serde_json::Value::String(word) => Err(D::Error::custom(format!(
+                "schedule is a schedule or \"{NO_SCHEDULE}\", not {word:?}"
+            ))),
+            value => serde_json::from_value(value)
+                .map(|schedule| Some(Some(schedule)))
+                .map_err(D::Error::custom),
+        }
+    }
+}
+
+/// The permissions a maker asks for (design section 6, Permissions). In JSON, `"maker"` or
+/// the preset's name: `"read-only"`, `"sandboxed"` or `"trusted"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WantedPermissions {
+    /// An exact copy of the maker's whole policy, as it is at that moment.
+    Maker,
+    /// A plain preset with no added rules. `Preset::Custom` is no plain preset and is refused.
+    Preset(Preset),
+}
+
+/// What is said of a `permissions` that is neither the maker's nor a plain preset.
+const PERMISSIONS_RULE: &str =
+    "permissions is \"maker\", \"read-only\", \"sandboxed\" or \"trusted\"";
+
+impl Serialize for WantedPermissions {
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_str(match self {
+            Self::Maker => MAKERS_PERMISSIONS,
+            Self::Preset(preset) => preset.as_str(),
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for WantedPermissions {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let word = String::deserialize(d)?;
+        if word == MAKERS_PERMISSIONS {
+            return Ok(Self::Maker);
+        }
+        match Preset::parse(&word) {
+            Ok(preset) if preset != Preset::Custom => Ok(Self::Preset(preset)),
+            _ => Err(D::Error::custom(format!(
+                "{PERMISSIONS_RULE}, not {word:?}"
+            ))),
+        }
+    }
+}
+
+/// One thing beyond the maker's reach (design section 6). It is stored as JSON with a make
+/// request, and says itself in plain words on the ask card (section 7.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Extra {
+    /// A Library item the maker does not use.
+    Item {
+        item_kind: LibraryKind,
+        name: String,
+    },
+    /// A variable the maker is not granted for that consumer (`shell` or `mcp:<server>`).
+    Variable { consumer: String, name: String },
+    /// A plain preset stronger than the maker's (`makers`); when the maker's is custom, one
+    /// whose allows its rules do not all allow, or whose default is wider (`covers`).
+    Preset { preset: Preset, makers: Preset },
+    /// A folder outside the maker's folder, or, with `below_maker`, a folder below the folder
+    /// of a maker that works in worktree copies. `path` is the real path.
+    Folder {
+        path: String,
+        #[serde(default)]
+        below_maker: bool,
+    },
+    /// The maker's own folder, for a dot that works in it directly while the maker works only
+    /// in worktree copies of it: the dot would write the checkout the maker never writes.
+    /// `path` is the real path.
+    MakersFolder { path: String },
+    /// A folder below the maker's that is, or is inside, git's or Claude's own folder (`.git`,
+    /// `.claude`), whose settings and hooks run code. `path` is the real path.
+    SettingsFolder { path: String },
+    /// The browser, which the maker does not have.
+    Browser,
+    /// The person's own Claude settings, which the maker does not use.
+    UserSettings,
+    /// A turn limit above the maker's.
+    MaxTurns { wanted: u32, makers: u32 },
+    /// A time limit above the maker's.
+    Timeout { wanted_secs: u64, makers_secs: u64 },
+    /// "Can make dots" switched on, with the dot's own limits: a made dot the person let make
+    /// dots, which its maker could use to make dots past its own limits (design section 9).
+    Making { per_run: u32, total: u32 },
+    /// A setting the person narrowed on the made dot since its maker last set it, which the
+    /// change gives back (`Narrowed`, design section 9). `what` is the setting as the change
+    /// would leave it, in plain words.
+    Undoes { what: String },
+}
+
+/// A preset as the person reads it.
+pub(super) fn preset_label(preset: Preset) -> &'static str {
+    match preset {
+        Preset::ReadOnly => "Read-only",
+        Preset::Sandboxed => "Sandboxed",
+        Preset::Trusted => "Trusted",
+        Preset::Custom => "Custom",
+    }
+}
+
+/// A time limit as the person reads it: "30 min", "2 h", "1 h 30 min", "45 s".
+pub(super) fn time_label(secs: u64) -> String {
+    let (hours, minutes, seconds) = (secs / 3600, secs % 3600 / 60, secs % 60);
+    let mut parts = Vec::new();
+    if hours > 0 {
+        parts.push(format!("{hours} h"));
+    }
+    if minutes > 0 {
+        parts.push(format!("{minutes} min"));
+    }
+    if seconds > 0 || parts.is_empty() {
+        parts.push(format!("{seconds} s"));
+    }
+    parts.join(" ")
+}
+
+impl Extra {
+    /// The extra as one line of the ask card (design section 7.2). `maker` is the maker's name.
+    pub fn line(&self, maker: &str) -> String {
+        match self {
+            Self::Item { item_kind, name } => format!("The {} '{name}'", item_kind.label()),
+            Self::Variable { consumer, name } => match Consumer::parse(consumer) {
+                Ok(Consumer::Mcp(server)) => {
+                    format!("The variable {name} for the server '{server}'")
+                }
+                Ok(Consumer::Shell) => format!("The variable {name} for the shell"),
+                Err(_) => format!("The variable {name} for {consumer}"),
+            },
+            Self::Preset { preset, makers } => match makers {
+                Preset::Custom => format!(
+                    "The preset {} ({maker} has its own rules)",
+                    preset_label(*preset)
+                ),
+                makers => format!(
+                    "The preset {} ({maker} has {})",
+                    preset_label(*preset),
+                    preset_label(*makers)
+                ),
+            },
+            Self::Folder {
+                path,
+                below_maker: false,
+            } => format!("The folder {path}, outside {maker}'s folder"),
+            Self::Folder {
+                path,
+                below_maker: true,
+            } => format!(
+                "The folder {path}, inside {maker}'s folder ({maker} itself works in copies of it)"
+            ),
+            Self::MakersFolder { path } => format!(
+                "The folder {path}, {maker}'s own folder ({maker} itself works only in copies of \
+                 it)"
+            ),
+            Self::SettingsFolder { path } => format!(
+                "The folder {path}, inside {maker}'s folder, where git or Claude keep their own \
+                 settings"
+            ),
+            Self::Browser => "The browser".to_string(),
+            Self::UserSettings => "Your Claude settings".to_string(),
+            Self::MaxTurns { wanted, makers } => {
+                format!("A turn limit of {wanted} ({maker} has {makers})")
+            }
+            Self::Timeout {
+                wanted_secs,
+                makers_secs,
+            } => format!(
+                "A time limit of {} ({maker} has {})",
+                time_label(*wanted_secs),
+                time_label(*makers_secs)
+            ),
+            Self::Making { per_run, total } => {
+                format!("Can make dots itself ({per_run} in one run, {total} kept)")
+            }
+            Self::Undoes { what } => format!("{what}, which undoes your change to this dot"),
+        }
+    }
+}
+
+/// A setting the person narrowed on a made dot since its maker last set it (design section 9):
+/// their own edit took it away or lowered it. A maker's change that gives it back would undo
+/// their edit, so it asks the person (`Extra::Undoes`). It is kept until the dot has it again,
+/// by the person's own edit or with their say-so. Stored with the dot (migration 0058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "setting", rename_all = "snake_case")]
+pub enum Narrowed {
+    /// The browser turned off.
+    Browser,
+    /// The person's own Claude settings turned off.
+    UserSettings,
+    /// A Library item removed.
+    Item {
+        item_kind: LibraryKind,
+        name: String,
+    },
+    /// A variable removed from a consumer (`shell` or `mcp:<server>`).
+    Variable { consumer: String, name: String },
+    /// The schedule cleared.
+    Schedule,
+    /// The turn limit lowered to `limit`.
+    MaxTurns { limit: u32 },
+    /// The time limit lowered to `limit_secs`.
+    Timeout { limit_secs: u64 },
+    /// The permissions set to a narrower plain preset.
+    Preset { preset: Preset },
+    /// The permissions narrowed in another way, to `policy`: a rule of the person's own, or
+    /// Custom permissions that allow less than before.
+    Policy { policy: Policy },
+}
+
+impl Narrowed {
+    /// Whether `spec` gives the dot back what the person took.
+    fn given_back(&self, spec: &DotSpec) -> bool {
+        match self {
+            Self::Browser => spec.browser,
+            Self::UserSettings => spec.use_user_settings,
+            Self::Item { item_kind, name } => spec.uses.names(*item_kind).contains(name),
+            Self::Variable { consumer, name } => grants(&spec.variables, consumer, name),
+            Self::Schedule => spec.schedule.is_some(),
+            Self::MaxTurns { limit } => spec.max_turns > *limit,
+            Self::Timeout { limit_secs } => spec.timeout_secs > *limit_secs,
+            Self::Preset { preset } if plain_preset(&spec.policy) => {
+                rank(spec.policy.preset) > rank(*preset)
+            }
+            // Custom permissions give it back only when they allow more than the preset.
+            Self::Preset { preset } => !covers(&Policy::preset(*preset), &spec.policy),
+            Self::Policy { policy } => !covers(policy, &spec.policy),
+        }
+    }
+
+    /// The setting as `spec` gives it back, in plain words, for the card's line.
+    fn words(&self, spec: &DotSpec) -> String {
+        match self {
+            Self::Browser => Extra::Browser.line(""),
+            Self::UserSettings => Extra::UserSettings.line(""),
+            Self::Item { item_kind, name } => format!("The {} '{name}'", item_kind.label()),
+            Self::Variable { consumer, name } => Extra::Variable {
+                consumer: consumer.clone(),
+                name: name.clone(),
+            }
+            .line(""),
+            Self::Schedule => "A schedule".to_string(),
+            Self::MaxTurns { limit } => {
+                format!("A turn limit of {} (you set {limit})", spec.max_turns)
+            }
+            Self::Timeout { limit_secs } => format!(
+                "A time limit of {} (you set {})",
+                time_label(spec.timeout_secs),
+                time_label(*limit_secs)
+            ),
+            Self::Preset { preset } if plain_preset(&spec.policy) => format!(
+                "The preset {} (you set {})",
+                preset_label(spec.policy.preset),
+                preset_label(*preset)
+            ),
+            Self::Preset { preset } => format!(
+                "Permissions with rules of their own (you set {})",
+                preset_label(*preset)
+            ),
+            Self::Policy { .. } if plain_preset(&spec.policy) => format!(
+                "The preset {} (you set narrower permissions)",
+                preset_label(spec.policy.preset)
+            ),
+            Self::Policy { .. } => {
+                "Permissions with rules of their own (you set narrower ones)".to_string()
+            }
+        }
+    }
+
+    /// Puts the setting on `without` back as the person left it on `made`.
+    fn keep(&self, made: &DotSpec, without: &mut DotSpec) {
+        match self {
+            Self::Browser => without.browser = made.browser,
+            Self::UserSettings => without.use_user_settings = made.use_user_settings,
+            Self::Item { item_kind, name } => {
+                names_mut(&mut without.uses, *item_kind).retain(|n| n != name)
+            }
+            Self::Variable { consumer, name } => {
+                if let Some(names) = without.variables.0.get_mut(consumer) {
+                    names.retain(|n| !n.eq_ignore_ascii_case(name));
+                    if names.is_empty() {
+                        without.variables.0.remove(consumer);
+                    }
+                }
+            }
+            Self::Schedule => without.schedule = made.schedule.clone(),
+            Self::MaxTurns { limit } => without.max_turns = without.max_turns.min(*limit),
+            Self::Timeout { limit_secs } => {
+                without.timeout_secs = without.timeout_secs.min(*limit_secs)
+            }
+            Self::Preset { .. } | Self::Policy { .. } => without.policy = made.policy.clone(),
+        }
+    }
+}
+
+/// What the person has narrowed on a made dot after their own edit from `before` to `after`
+/// (design section 9): of `kept`, what they narrowed before, what `after` does not give back,
+/// and what this edit takes away or lowers. A lowered limit, or narrower permissions, replace
+/// the ones kept.
+pub fn narrowed_by_person(kept: &[Narrowed], before: &DotSpec, after: &DotSpec) -> Vec<Narrowed> {
+    let mut list: Vec<Narrowed> = kept
+        .iter()
+        .filter(|n| !n.given_back(after))
+        .cloned()
+        .collect();
+    let permissions = |n: &Narrowed| matches!(n, Narrowed::Preset { .. } | Narrowed::Policy { .. });
+    let mut add = |n: Narrowed| {
+        list.retain(|old| {
+            !(permissions(old) && permissions(&n))
+                && (std::mem::discriminant(old) != std::mem::discriminant(&n) || {
+                    matches!(n, Narrowed::Item { .. } | Narrowed::Variable { .. }) && *old != n
+                })
+        });
+        list.push(n);
+    };
+    if before.browser && !after.browser {
+        add(Narrowed::Browser);
+    }
+    if before.use_user_settings && !after.use_user_settings {
+        add(Narrowed::UserSettings);
+    }
+    for kind in LibraryKind::ALL {
+        for name in before.uses.names(*kind) {
+            if !after.uses.names(*kind).contains(name) {
+                add(Narrowed::Item {
+                    item_kind: *kind,
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    for (consumer, names) in &before.variables.0 {
+        for name in names {
+            if !grants(&after.variables, consumer, name) {
+                add(Narrowed::Variable {
+                    consumer: consumer.clone(),
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    if before.schedule.is_some() && after.schedule.is_none() {
+        add(Narrowed::Schedule);
+    }
+    if after.max_turns < before.max_turns {
+        add(Narrowed::MaxTurns {
+            limit: after.max_turns,
+        });
+    }
+    if after.timeout_secs < before.timeout_secs {
+        add(Narrowed::Timeout {
+            limit_secs: after.timeout_secs,
+        });
+    }
+    let lower = rank(after.policy.preset) < rank(before.policy.preset)
+        && rank(after.policy.preset).is_some();
+    if after.policy != before.policy {
+        if plain_preset(&after.policy) && (lower || covers(&before.policy, &after.policy)) {
+            add(Narrowed::Preset {
+                preset: after.policy.preset,
+            });
+        } else if !plain_preset(&after.policy) && !covers(&after.policy, &before.policy) {
+            // A rule of the person's own, or Custom permissions that allow less than before.
+            // Kept whole: a maker's change asks when it allows anything these do not.
+            add(Narrowed::Policy {
+                policy: after.policy.clone(),
+            });
+        }
+    }
+    list
+}
+
+/// What the person narrowed on a made dot whose stored record `text` cannot be read (design
+/// section 9): each entry of it that can still be read and, so that the person is still asked,
+/// everything else the record can name, as `spec`, the dot as it is, has it: the browser and
+/// the person's Claude settings when off, no schedule, the limits and the permissions. A
+/// Library item or variable named only in the part that cannot be read is not known.
+pub fn narrowed_unread(text: &str, spec: &DotSpec) -> Vec<Narrowed> {
+    let mut list: Vec<Narrowed> = serde_json::from_str::<Vec<serde_json::Value>>(text)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect();
+    let mut all = vec![
+        Narrowed::MaxTurns {
+            limit: spec.max_turns,
+        },
+        Narrowed::Timeout {
+            limit_secs: spec.timeout_secs,
+        },
+        Narrowed::Policy {
+            policy: spec.policy.clone(),
+        },
+    ];
+    if !spec.browser {
+        all.push(Narrowed::Browser);
+    }
+    if !spec.use_user_settings {
+        all.push(Narrowed::UserSettings);
+    }
+    if spec.schedule.is_none() {
+        all.push(Narrowed::Schedule);
+    }
+    for n in all {
+        if !list.contains(&n) {
+            list.push(n);
+        }
+    }
+    list
+}
+
+/// Of `kept`, what the person narrowed on a made dot, what is still narrowed once its maker's
+/// change saved `after`: a change that gave a setting back was one the person allowed.
+pub fn narrowed_after_maker(kept: &[Narrowed], after: &DotSpec) -> Vec<Narrowed> {
+    kept.iter()
+        .filter(|n| !n.given_back(after))
+        .cloned()
+        .collect()
+}
+
+/// Adds to `reach`, a maker's change to the made dot `made`, what of it gives back a setting
+/// the person narrowed (`narrowed`) as an extra (`Extra::Undoes`), and keeps that setting as
+/// the person left it in what "without" saves (design section 9).
+pub fn undo_extras(narrowed: &[Narrowed], made: &DotSpec, reach: &mut Reach) {
+    for n in narrowed {
+        if n.given_back(&reach.spec) {
+            reach.extras.push(Extra::Undoes {
+                what: n.words(&reach.spec),
+            });
+            n.keep(made, &mut reach.without);
+        }
+    }
+}
+
+/// What the reach check found.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Reach {
+    /// The dot as asked, ready to save if the person allows the extras. A blank `workdir` is a
+    /// new dot that gets a new folder of its own when it is created (`DotAdmin::create`).
+    pub spec: DotSpec,
+    /// The same with the extras removed (design section 7.2, "Make it without these"): the
+    /// items and variables dropped, the browser and the user settings off, the permissions
+    /// and the limits the maker's, the folder a new one of its own. For a change, a part that
+    /// is an extra stays as the dot has it, except that a limit or a plain preset below the
+    /// maker's is raised to the maker's.
+    pub without: DotSpec,
+    /// Empty when everything is within reach; then `spec == without`.
+    pub extras: Vec<Extra>,
+    /// The folder of `spec` when it lies below the maker's folder and does not exist yet: the
+    /// caller creates it before saving `spec` (design section 6, folder rules). `without` needs
+    /// it only when the folder is no extra.
+    pub create_folder: Option<PathBuf>,
+}
+
+/// `path` without Windows' `\\?\` prefix, which `std::fs::canonicalize` adds and which git and
+/// the `claude` CLI do not take. A UNC path keeps it.
+fn plain(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC") => PathBuf::from(rest),
+        _ => path,
+    }
+}
+
+/// The real path of the absolute `path` (design section 6: case, `..`, links and junctions):
+/// each part that exists is resolved as the file system has it, and the parts after the last
+/// one that exists are kept as given, so a folder that is still to be made has a real path
+/// too. A `..` leaves the real folder it follows.
+pub fn real_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(_) => {
+                out.push(part);
+                if let Ok(real) = std::fs::canonicalize(&out) {
+                    out = real;
+                }
+            }
+            // A drive alone would resolve to the current folder on it.
+            Component::Prefix(_) | Component::RootDir => out.push(part),
+        }
+    }
+    plain(out)
+}
+
+/// A real path as it is compared: Windows paths ignore case, and a part that does not exist
+/// yet keeps the case it was given in.
+pub(super) fn folded(path: &Path) -> PathBuf {
+    if cfg!(windows) {
+        PathBuf::from(path.to_string_lossy().to_lowercase())
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Where a named folder puts the dot (design section 6, folder rules).
+struct Placed {
+    /// Its real path.
+    real: PathBuf,
+    /// The dot's `workdir`: the maker's own as the maker has it, else the real path.
+    workdir: String,
+    mode: WorkspaceMode,
+    /// Set when the folder is beyond the maker's reach.
+    extra: Option<Extra>,
+    /// Set when it lies below the maker's folder and does not exist yet.
+    create: Option<PathBuf>,
+}
+
+/// What is said of a folder on another computer or a device.
+const ELSEWHERE: &str = "That folder is on another computer or a device. Name a folder on this PC.";
+
+/// Refuses, before anything reads the disk, a folder on another computer or a device (a
+/// `\\server\share` path, `\\?\UNC\…`, `\\.\…`), whose mere lookup would connect to it, and a
+/// drive without its root (`C:notes`), which means a different folder at each moment.
+fn refuse_unplain(given: &str, maker: &str) -> Result<()> {
+    let mut parts = Path::new(given).components();
+    let Some(Component::Prefix(prefix)) = parts.next() else {
+        return Ok(());
+    };
+    if !matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_)) {
+        return Err(Error::Invalid(ELSEWHERE.into()));
+    }
+    if !matches!(parts.next(), Some(Component::RootDir)) {
+        return Err(Error::Invalid(format!(
+            "Name the folder by its full path, such as {}\\notes, or by its path from \
+             {maker}'s folder.",
+            prefix.as_os_str().to_string_lossy()
+        )));
+    }
+    Ok(())
+}
+
+/// Whether a part of `path` is a link or junction whose target cannot be found: the folder it
+/// names would follow the link once a target appears, wherever that is.
+fn dangling_link(path: &Path) -> bool {
+    path.ancestors().any(|part| {
+        std::fs::symlink_metadata(part).is_ok_and(|meta| meta.file_type().is_symlink())
+            && std::fs::canonicalize(part).is_err()
+    })
+}
+
+/// Whether `part` of a path names git's or Claude's own folder, `.git` or `.claude`, in any
+/// case. Windows drops trailing dots and spaces, and reads `name::$INDEX_ALLOCATION` as the
+/// folder `name`.
+fn settings_part(part: &std::ffi::OsStr) -> bool {
+    let text = part.to_string_lossy();
+    let name = text
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(['.', ' ']);
+    name.eq_ignore_ascii_case(".git") || name.eq_ignore_ascii_case(".claude")
+}
+
+/// Applies the folder rules to `given`, a folder that is not blank: absolute, or relative to
+/// the maker's folder.
+fn place(maker: &Dot, given: &str, worktrees_root: &Path) -> Result<Placed> {
+    refuse_unplain(given, &maker.spec.name)?;
+    let own = maker.spec.workdir.trim();
+    // A maker whose folder is not a full path (".", "C:") has no folder a path can be inside:
+    // every folder is beyond its reach, and one relative to it cannot be found.
+    let anchored = Path::new(own).is_absolute();
+    if !anchored && !Path::new(given).is_absolute() {
+        return Err(Error::Invalid(format!(
+            "Name the folder by its full path: {}'s own folder is not one.",
+            maker.spec.name
+        )));
+    }
+    let makers = real_path(Path::new(own));
+    // The path as Windows reads it where the dot uses it (`GetFullPathNameW`, which reads no
+    // disk): `.. ` is `..` and a trailing dot goes, which `real_path`'s long form keeps.
+    let joined = std::path::absolute(makers.join(given))
+        .map_err(|_| Error::Invalid(format!("{given} is not a folder path.")))?;
+    if let Some(Component::Prefix(prefix)) = joined.components().next() {
+        // A device name (`nul`, `com1`) is a device, not a folder.
+        if matches!(prefix.kind(), Prefix::DeviceNS(_)) {
+            return Err(Error::Invalid(ELSEWHERE.into()));
+        }
+    }
+    let real = real_path(&joined);
+    let (key, makers_key) = (folded(&real), folded(&makers));
+    // A worktree copy goes when its run is discarded or merged, so no card can allow it.
+    if !worktrees_root.as_os_str().is_empty() && key.starts_with(folded(&real_path(worktrees_root)))
+    {
+        return Err(Error::Invalid(format!(
+            "That folder is a run's working copy, which does not last. Leave the folder blank \
+             for a new one, or use {}'s own folder.",
+            maker.spec.name
+        )));
+    }
+    if anchored && key == makers_key {
+        // The maker's mode too, so a made dot of a worktree maker works in worktree copies.
+        return Ok(Placed {
+            real,
+            workdir: maker.spec.workdir.clone(),
+            mode: maker.spec.workspace_mode,
+            extra: None,
+            create: None,
+        });
+    }
+    // The nearest part of it that exists must be a folder.
+    let mut nearest = real.as_path();
+    while !nearest.exists() {
+        match nearest.parent() {
+            Some(parent) => nearest = parent,
+            None => break,
+        }
+    }
+    if nearest.is_file() {
+        return Err(Error::Invalid(format!(
+            "{} is a file, not a folder.",
+            nearest.display()
+        )));
+    }
+    let missing = !real.is_dir();
+    let workdir = real.to_string_lossy().into_owned();
+    // Inside by its path; a dangling link in it may lead anywhere, so it is not inside.
+    let below = anchored && key.starts_with(&makers_key) && !dangling_link(&real);
+    if below {
+        // Git's and Claude's own folders hold settings and hooks that run code, which no
+        // preset but Trusted lets a dot write: one that works there writes them by a relative
+        // path, which the deny rules of `.git` and `.claude` do not see.
+        let settings = key.strip_prefix(&makers_key).is_ok_and(|tail| {
+            tail.components()
+                .any(|part| settings_part(part.as_os_str()))
+        });
+        // A worktree maker only ever writes in worktree copies; a dot in a subfolder would
+        // write straight into the person's checkout, which is more than the maker can do.
+        let extra = if settings {
+            Some(Extra::SettingsFolder {
+                path: workdir.clone(),
+            })
+        } else {
+            (maker.spec.workspace_mode == WorkspaceMode::Worktree).then(|| Extra::Folder {
+                path: workdir.clone(),
+                below_maker: true,
+            })
+        };
+        return Ok(Placed {
+            create: missing.then(|| real.clone()),
+            real,
+            workdir,
+            mode: WorkspaceMode::Folder,
+            extra,
+        });
+    }
+    if missing {
+        return Err(Error::Invalid(format!(
+            "The folder {workdir} does not exist. Leave the folder blank for a new one, or name \
+             one that exists."
+        )));
+    }
+    Ok(Placed {
+        real,
+        extra: Some(Extra::Folder {
+            path: workdir.clone(),
+            below_maker: false,
+        }),
+        workdir,
+        mode: WorkspaceMode::Folder,
+        create: None,
+    })
+}
+
+/// A plain preset's place in the order read-only, sandboxed, trusted (design section 6).
+/// `None` for custom, which has no place in it.
+pub(super) fn rank(preset: Preset) -> Option<u8> {
+    match preset {
+        Preset::ReadOnly => Some(0),
+        Preset::Sandboxed => Some(1),
+        Preset::Trusted => Some(2),
+        Preset::Custom => None,
+    }
+}
+
+/// An action's place from the narrowest: deny, ask, allow.
+fn breadth(action: Action) -> u8 {
+    match action {
+        Action::Deny => 0,
+        Action::Ask => 1,
+        Action::Allow => 2,
+    }
+}
+
+/// The tool a rule names, without its argument: `Bash` of `Bash(git status:*)`.
+fn rule_tool(rule: &str) -> &str {
+    rule.split('(').next().unwrap_or(rule).trim()
+}
+
+/// Whether `policy` is a plain preset with no added rules, as a made dot asks for one.
+fn plain_preset(policy: &Policy) -> bool {
+    rank(policy.preset).is_some() && *policy == Policy::preset(policy.preset)
+}
+
+/// Whether `has` allows everything `wanted` allows (design section 6): its defaults are no
+/// narrower, it allows each tool an allow rule of `wanted` names (for any input, or by the same
+/// rule), and each of its own deny and ask rules is one `wanted` has too, as narrow or
+/// narrower, or `wanted` denies that tool outright. An input of nothing matches no allow rule
+/// with an argument and every deny or ask rule with one, so `Allow` for it means allowed
+/// everywhere. It answers no where it cannot tell, and a card then asks the person.
+fn covers(has: &Policy, wanted: &Policy) -> bool {
+    if breadth(wanted.default) > breadth(has.default)
+        || breadth(wanted.mcp_default) > breadth(has.mcp_default)
+        || (has.ask_send_delete && !wanted.ask_send_delete)
+    {
+        return false;
+    }
+    let allowed = wanted
+        .rules
+        .iter()
+        .filter(|rule| rule.action == Action::Allow)
+        .all(|rule| {
+            has.rules.contains(rule)
+                || has.resolve(rule_tool(&rule.tool), &serde_json::Value::Null) == Action::Allow
+        });
+    let no_narrower = has
+        .rules
+        .iter()
+        .filter(|rule| rule.action != Action::Allow)
+        .all(|rule| {
+            wanted.rules.iter().any(|w| {
+                (w.tool == rule.tool && breadth(w.action) <= breadth(rule.action))
+                    || (w.tool.trim() == rule_tool(&rule.tool) && w.action == Action::Deny)
+            })
+        });
+    allowed && no_narrower
+}
+
+/// The list of `uses` that names items of `kind`.
+fn names_mut(uses: &mut Uses, kind: LibraryKind) -> &mut Vec<String> {
+    match kind {
+        LibraryKind::McpServer => &mut uses.mcp_servers,
+        LibraryKind::Skill => &mut uses.skills,
+        LibraryKind::Plugin => &mut uses.plugins,
+        LibraryKind::Context => &mut uses.context,
+        LibraryKind::App => &mut uses.apps,
+    }
+}
+
+/// Whether `grants` gives `consumer` (a key of `Grants`) the variable `name`, in any case.
+pub(super) fn grants(grants: &Grants, consumer: &str, name: &str) -> bool {
+    grants
+        .0
+        .get(consumer)
+        .is_some_and(|names| names.iter().any(|n| n.eq_ignore_ascii_case(name)))
+}
+
+/// `DotSpec::validate`, for a dot whose blank folder is filled when it is created.
+fn validate(spec: &DotSpec) -> Result<()> {
+    if !spec.workdir.trim().is_empty() {
+        return spec.validate();
+    }
+    let mut filled = spec.clone();
+    filled.workdir = ".".to_string();
+    filled.validate()
+}
+
+/// Puts what `wanted` names on `base`, the dot before it: a new dot with nothing asked, or the
+/// made dot as it is. A named part is within reach when the maker has it, or `base` has it
+/// already.
+fn check(maker: &Dot, base: &DotSpec, wanted: &Wanted, worktrees_root: &Path) -> Result<Reach> {
+    let m = &maker.spec;
+    let mut spec = base.clone();
+    let mut without = base.clone();
+    let mut extras = Vec::new();
+    let mut create_folder = None;
+
+    // The maker's to write, or not part of reach.
+    // Kept without the spaces around it, as the name is checked.
+    if let Some(name) = &wanted.name {
+        spec.name = name.trim().to_string();
+        without.name = spec.name.clone();
+    }
+    if let Some(instructions) = &wanted.instructions {
+        spec.instructions = instructions.clone();
+        without.instructions = instructions.clone();
+    }
+    if let Some(model) = &wanted.model {
+        spec.model = model.clone();
+        without.model = model.clone();
+    }
+    if let Some(schedule) = &wanted.schedule {
+        spec.schedule = schedule.clone();
+        without.schedule = schedule.clone();
+    }
+
+    if let Some(uses) = &wanted.uses {
+        let mut within = Uses::default();
+        for kind in LibraryKind::ALL {
+            for name in uses.names(*kind) {
+                if m.uses.names(*kind).contains(name) || base.uses.names(*kind).contains(name) {
+                    names_mut(&mut within, *kind).push(name.clone());
+                } else {
+                    extras.push(Extra::Item {
+                        item_kind: *kind,
+                        name: name.clone(),
+                    });
+                }
+            }
+        }
+        spec.uses = uses.clone();
+        without.uses = within;
+    }
+
+    if let Some(variables) = &wanted.variables {
+        let (mut asked, mut within) = (Grants::default(), Grants::default());
+        for (consumer, names) in &variables.0 {
+            // A consumer with no name is granted nothing.
+            if names.is_empty() {
+                continue;
+            }
+            asked.0.insert(consumer.clone(), names.clone());
+            let mut kept = Vec::new();
+            for name in names {
+                if grants(&m.variables, consumer, name) || grants(&base.variables, consumer, name) {
+                    kept.push(name.clone());
+                } else {
+                    extras.push(Extra::Variable {
+                        consumer: consumer.clone(),
+                        name: name.clone(),
+                    });
+                }
+            }
+            if !kept.is_empty() {
+                within.0.insert(consumer.clone(), kept);
+            }
+        }
+        spec.variables = asked;
+        without.variables = within;
+    }
+
+    match wanted.permissions {
+        None => {}
+        Some(WantedPermissions::Maker) => {
+            spec.policy = m.policy.clone();
+            without.policy = m.policy.clone();
+        }
+        Some(WantedPermissions::Preset(preset)) => {
+            let Some(asked) = rank(preset) else {
+                return Err(Error::Invalid(format!("{PERMISSIONS_RULE}.")));
+            };
+            let no_stronger_than = |has: Preset| rank(has).is_some_and(|has| asked <= has);
+            // `Policy::preset` carries the allow rules of Dots' own tools.
+            spec.policy = Policy::preset(preset);
+            // Custom rules can be narrower than a preset, so a custom policy gives a preset only
+            // when it allows all that the preset allows, with a default no narrower.
+            let custom_gives =
+                |has: &Policy| has.preset == Preset::Custom && covers(has, &spec.policy);
+            if no_stronger_than(m.policy.preset)
+                || no_stronger_than(base.policy.preset)
+                || custom_gives(&m.policy)
+                || custom_gives(&base.policy)
+            {
+                without.policy = spec.policy.clone();
+            } else {
+                extras.push(Extra::Preset {
+                    preset,
+                    makers: m.policy.preset,
+                });
+                // Lowered to the maker's own policy, unless that would take from a dot that
+                // has more already, or the two cannot be ordered.
+                if let (Some(makers), Some(has)) = (rank(m.policy.preset), rank(base.policy.preset))
+                {
+                    if makers > has {
+                        without.policy = m.policy.clone();
+                    }
+                }
+            }
+        }
+    }
+
+    let folder = wanted.folder.as_deref().map(str::trim).unwrap_or_default();
+    if !folder.is_empty() {
+        let placed = place(maker, folder, worktrees_root)?;
+        let has = base.workdir.trim();
+        let same = !has.is_empty() && folded(&real_path(Path::new(has))) == folded(&placed.real);
+        // The folder the dot has already stays as it is, mode included.
+        if !same {
+            spec.workdir = placed.workdir;
+            spec.workspace_mode = placed.mode;
+            create_folder = placed.create;
+            match placed.extra {
+                Some(extra) => extras.push(extra),
+                None => {
+                    without.workdir = spec.workdir.clone();
+                    without.workspace_mode = spec.workspace_mode;
+                }
+            }
+        }
+    }
+
+    if let Some(on) = wanted.browser {
+        spec.browser = on;
+        if on && !m.browser && !base.browser {
+            extras.push(Extra::Browser);
+        } else {
+            without.browser = on;
+        }
+    }
+    if let Some(on) = wanted.use_user_settings {
+        spec.use_user_settings = on;
+        if on && !m.use_user_settings && !base.use_user_settings {
+            extras.push(Extra::UserSettings);
+        } else {
+            without.use_user_settings = on;
+        }
+    }
+
+    if let Some(turns) = wanted.max_turns {
+        let reach = m.max_turns.max(base.max_turns);
+        spec.max_turns = turns;
+        without.max_turns = turns.min(reach);
+        if turns > reach {
+            extras.push(Extra::MaxTurns {
+                wanted: turns,
+                makers: m.max_turns,
+            });
+        }
+    }
+    if let Some(secs) = wanted.timeout_secs {
+        let reach = m.timeout_secs.max(base.timeout_secs);
+        spec.timeout_secs = secs;
+        without.timeout_secs = secs.min(reach);
+        if secs > reach {
+            extras.push(Extra::Timeout {
+                wanted_secs: secs,
+                makers_secs: m.timeout_secs,
+            });
+        }
+    }
+
+    validate(&spec)?;
+    validate(&without)?;
+    Ok(Reach {
+        spec,
+        without,
+        extras,
+        create_folder,
+    })
+}
+
+/// For a new dot (design sections 6 and 7.1). `worktrees_root` is where runs' worktree copies
+/// are made (`RunnerConfig::worktrees_dir`): the maker's settings do not say.
+///
+/// Asked nothing but a name and instructions, the dot has the maker's engine, endpoint, model,
+/// policy and limits and the settings the table says are copied; a new folder of its own; no
+/// Library item, no variable, no browser, no user settings and no schedule; "Can make dots"
+/// off and no spending cap of its own; and it is enabled. Its account and workspace are the
+/// maker's, which the caller passes on.
+///
+/// `Error::Invalid` with a plain sentence, for what no card can allow: no name or no
+/// instructions, a folder inside a run's worktree copy, a folder outside the maker's that does
+/// not exist, and a dot that is not valid (`DotSpec::validate`).
+pub fn reach_new(maker: &Dot, wanted: &Wanted, worktrees_root: &Path) -> Result<Reach> {
+    let named = |text: &Option<String>| text.as_deref().is_some_and(|t| !t.trim().is_empty());
+    if !named(&wanted.name) {
+        return Err(Error::Invalid("A new dot needs a name.".into()));
+    }
+    if !named(&wanted.instructions) {
+        return Err(Error::Invalid("A new dot needs instructions.".into()));
+    }
+    let m = &maker.spec;
+    let base = DotSpec {
+        name: String::new(),
+        instructions: String::new(),
+        engine: m.engine,
+        model: m.model.clone(),
+        endpoint_url: m.endpoint_url.clone(),
+        // Blank: `DotAdmin::create` makes a new folder, in folder mode.
+        workdir: String::new(),
+        workspace_mode: WorkspaceMode::Folder,
+        schedule: None,
+        policy: m.policy.clone(),
+        uses: Uses::default(),
+        variables: Grants::default(),
+        browser: false,
+        quiet_limit_secs: m.quiet_limit_secs,
+        spend_cap: crate::spend::DotCaps::default(),
+        use_global_instructions: m.use_global_instructions,
+        check_results: m.check_results,
+        use_graph: m.use_graph,
+        context_rules: m.context_rules,
+        making: Making::default(),
+        use_user_settings: false,
+        max_turns: m.max_turns,
+        timeout_secs: m.timeout_secs,
+        approval_wait_secs: m.approval_wait_secs,
+        enabled: true,
+    };
+    check(maker, &base, wanted, worktrees_root)
+}
+
+/// For a change to `made`, a dot the maker made (design section 9). Only the fields `wanted`
+/// names change; the rest stays, including what the person edited and the extras they allowed.
+/// Only the named fields are checked, against the maker's reach now, and nothing the dot holds
+/// already is an extra again: an item or a variable it has, its folder, the browser, a limit no
+/// higher and a plain preset no stronger than its own. So removing and lowering never ask.
+///
+/// That the maker made `made` is the caller's check. Errors as `reach_new`, without the need
+/// for a name and instructions.
+pub fn reach_change(
+    maker: &Dot,
+    made: &Dot,
+    wanted: &Wanted,
+    worktrees_root: &Path,
+) -> Result<Reach> {
+    check(maker, &made.spec, wanted, worktrees_root)
+}
+
+/// Whether `folder`, a folder just made for a dot, is still by its real path the folder that
+/// was judged (design section 6, folder rules): within the maker's reach, or shown on the card
+/// the person allowed. `folder` is that folder as judged, a real path (`Reach::create_folder`).
+/// A link or junction planted in its path between the check and the making leads it
+/// elsewhere, and a dangling link may lead anywhere.
+pub fn still_as_judged(folder: &Path) -> bool {
+    let real = real_path(folder);
+    folded(&real) == folded(folder) && !dangling_link(&real)
+}
+
+/// Whether `spec` gives the dot the thing `extra` names, as `held_extras` finds it: so an
+/// extra a card did not show can be told apart as one the dot was given since, or one its
+/// maker no longer has.
+pub(super) fn spec_holds(spec: &DotSpec, extra: &Extra) -> bool {
+    let same_folder = |path: &str| {
+        let workdir = spec.workdir.trim();
+        !workdir.is_empty() && folded(&real_path(Path::new(workdir))) == folded(Path::new(path))
+    };
+    match extra {
+        Extra::Item { item_kind, name } => spec.uses.names(*item_kind).contains(name),
+        Extra::Variable { consumer, name } => grants(&spec.variables, consumer, name),
+        Extra::Preset { preset, .. } => spec.policy.preset == *preset,
+        Extra::Folder { path, .. }
+        | Extra::MakersFolder { path }
+        | Extra::SettingsFolder { path } => same_folder(path),
+        Extra::Browser => spec.browser,
+        Extra::UserSettings => spec.use_user_settings,
+        Extra::MaxTurns { wanted, .. } => spec.max_turns >= *wanted,
+        Extra::Timeout { wanted_secs, .. } => spec.timeout_secs >= *wanted_secs,
+        Extra::Making { per_run, total } => {
+            spec.making.on && spec.making.per_run >= *per_run && spec.making.total >= *total
+        }
+        // The person's own narrowing, not something the dot was given.
+        Extra::Undoes { .. } => true,
+    }
+}
+
+/// What `made`, a dot the maker made, holds that is beyond the maker's reach as the maker is
+/// now (design section 9): what the person allowed it, or gave it since, or what the maker
+/// itself no longer has. `own_folder` is whether the dot's folder is the new folder of its own
+/// it was made with, which is within reach.
+pub fn held_extras(maker: &Dot, made: &DotSpec, own_folder: bool) -> Vec<Extra> {
+    let m = &maker.spec;
+    let mut extras = Vec::new();
+    for kind in LibraryKind::ALL {
+        for name in made.uses.names(*kind) {
+            if !m.uses.names(*kind).contains(name) {
+                extras.push(Extra::Item {
+                    item_kind: *kind,
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    for (consumer, names) in &made.variables.0 {
+        for name in names {
+            if !grants(&m.variables, consumer, name) {
+                extras.push(Extra::Variable {
+                    consumer: consumer.clone(),
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    if made.policy != m.policy {
+        let preset = made.policy.preset;
+        // A plain preset, as a made dot asks for one, no stronger than the maker's; or, for a
+        // custom maker, one its rules allow all of (`covers`), so one "Always allow" on the
+        // maker does not put every dot it made beyond its reach.
+        let within = plain_preset(&made.policy)
+            && (rank(m.policy.preset).is_some_and(|has| rank(preset) <= Some(has))
+                || (m.policy.preset == Preset::Custom && covers(&m.policy, &made.policy)));
+        if !within {
+            extras.push(Extra::Preset {
+                preset,
+                makers: m.policy.preset,
+            });
+        }
+    }
+    if !own_folder {
+        extras.extend(held_folder(maker, made));
+    }
+    if made.browser && !m.browser {
+        extras.push(Extra::Browser);
+    }
+    if made.use_user_settings && !m.use_user_settings {
+        extras.push(Extra::UserSettings);
+    }
+    if made.max_turns > m.max_turns {
+        extras.push(Extra::MaxTurns {
+            wanted: made.max_turns,
+            makers: m.max_turns,
+        });
+    }
+    if made.timeout_secs > m.timeout_secs {
+        extras.push(Extra::Timeout {
+            wanted_secs: made.timeout_secs,
+            makers_secs: m.timeout_secs,
+        });
+    }
+    // A made dot is made with the switch off. Its limits do nothing while it is off; once the
+    // person turns it on, the dot could make dots for its maker past the maker's own limits.
+    if made.making.on {
+        extras.push(Extra::Making {
+            per_run: made.making.per_run,
+            total: made.making.total,
+        });
+    }
+    extras
+}
+
+/// The folder of `made` as an extra, when it is beyond the maker's reach now: outside the
+/// maker's folder, in git's or Claude's own folder, or below the folder of a maker that works
+/// in worktree copies. The maker's own folder is within reach in the maker's own mode: a dot
+/// that works in it directly, while the maker works in worktree copies of it, writes the
+/// person's checkout, which the maker never does.
+fn held_folder(maker: &Dot, made: &DotSpec) -> Option<Extra> {
+    let workdir = made.workdir.trim();
+    if workdir.is_empty() {
+        return None;
+    }
+    let own = maker.spec.workdir.trim();
+    let anchored = Path::new(own).is_absolute();
+    let real = real_path(Path::new(workdir));
+    let path = real.to_string_lossy().into_owned();
+    let (key, makers_key) = (folded(&real), folded(&real_path(Path::new(own))));
+    if anchored && key == makers_key {
+        let copies = maker.spec.workspace_mode == WorkspaceMode::Worktree
+            && made.workspace_mode != WorkspaceMode::Worktree;
+        return copies.then_some(Extra::MakersFolder { path });
+    }
+    if anchored && key.starts_with(&makers_key) && !dangling_link(&real) {
+        let settings = key.strip_prefix(&makers_key).is_ok_and(|tail| {
+            tail.components()
+                .any(|part| settings_part(part.as_os_str()))
+        });
+        return if settings {
+            Some(Extra::SettingsFolder { path })
+        } else {
+            (maker.spec.workspace_mode == WorkspaceMode::Worktree).then_some(Extra::Folder {
+                path,
+                below_maker: true,
+            })
+        };
+    }
+    Some(Extra::Folder {
+        path,
+        below_maker: false,
+    })
+}
