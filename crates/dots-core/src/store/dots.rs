@@ -21,7 +21,7 @@ pub(super) const DOT_COLUMNS: &str = "id, name, instructions, engine, model, end
     made_in_run, made_purpose, spend_parent_dot_id";
 
 pub(super) fn dot_from_row(row: &SqliteRow) -> Result<Dot> {
-    // A dot is a made dot when it has the run that made it (migration 0046).
+    // A dot is a made dot when it has the run that made it (migration 0047).
     let made = match row.try_get::<Option<String>, _>("made_in_run")? {
         Some(run_id) => Some(Made {
             by_dot_id: row.try_get("made_by_dot_id")?,
@@ -150,7 +150,7 @@ async fn clashes_in_case(tx: &mut sqlx::SqliteConnection, name: &str, id: &str) 
 
 /// Keeps what the dot `id`, about to be deleted, spent in the runs started this local month, so
 /// it still counts toward its makers' caps (dots-make-dots design section 6, Spend survives a
-/// delete; migration 0053): one row per run that spent anything for each maker up its spend
+/// delete; migration 0054): one row per run that spent anything for each maker up its spend
 /// chain as it is now (`spend_parent_dot_id`, migration 0057), and one that counts toward the
 /// caps for every dot together, since the runs go with the dot. Then the dots whose spend went
 /// to it go to its own spend parent (NULL if it has none): so a maker cannot free the dots below

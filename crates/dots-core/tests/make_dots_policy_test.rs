@@ -1,6 +1,6 @@
 //! The policy name `MakeDots` (dots-make-dots design section 5): every preset allows it last, an
 //! ask or deny rule the person adds wins over that allow, a rule names it alone, the CLI never
-//! sees its rules, and migration 0047 gives it to stored policies, Custom too.
+//! sees its rules, and migration 0048 gives it to stored policies, Custom too.
 
 use dots_core::policy::{Action, Policy, Preset, Rule, MAKE_DOTS_RULE, MAKE_DOTS_TOOL};
 use dots_core::store::Store;
@@ -75,10 +75,10 @@ fn the_cli_never_sees_the_make_dots_rule() {
     assert!(p.cli_lists().1.contains(&"MakeDotsLater".to_string()));
 }
 
-/// Migration 0047 on a database Dots left at 0046: every stored policy, a Custom one too, gets
+/// Migration 0048 on a database Dots left at 0047: every stored policy, a Custom one too, gets
 /// a `MakeDots` allow rule at the end unless a rule names it; opening again adds nothing.
 #[tokio::test]
-async fn migration_0047_gives_every_stored_policy_the_make_dots_rule_once() {
+async fn migration_0048_gives_every_stored_policy_the_make_dots_rule_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dots.db");
     let opts = SqliteConnectOptions::new()
@@ -89,12 +89,12 @@ async fn migration_0047_gives_every_stored_policy_the_make_dots_rule_once() {
     before.migrations = before
         .migrations
         .iter()
-        .filter(|m| m.version < 47)
+        .filter(|m| m.version < 48)
         .cloned()
         .collect::<Vec<_>>()
         .into();
     before.run(&pool).await.unwrap();
-    // A policy as 0046 left it: the preset's rules without `MakeDots`.
+    // A policy as 0047 left it: the preset's rules without `MakeDots`.
     let old = |preset: Preset| {
         let mut p = Policy::preset(preset);
         p.rules.retain(|r| r.tool != "MakeDots");
@@ -162,7 +162,7 @@ async fn migration_0047_gives_every_stored_policy_the_make_dots_rule_once() {
         .unwrap();
     let waiting = |pool: SqlitePool| async move {
         sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0047'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0048'",
         )
         .fetch_one(&pool)
         .await
@@ -198,7 +198,7 @@ async fn a_new_database_has_nothing_waiting_and_new_dots_allow_making() {
             .await
             .unwrap();
         let n = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0047'",
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'upgrade_0048'",
         )
         .fetch_one(&pool)
         .await
