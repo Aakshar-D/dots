@@ -1,0 +1,107 @@
+# Builds the Windows installer and the macOS app the way a release does, without a tag,
+# without signing and without publishing anything. It answers "would the next release
+# build?" before a tag is pushed: the release workflow is the only other place the static C
+# runtime, the x64 sherpa-onnx library, and the universal macOS build are put together.
+# Run it by hand from the Actions tab, or let a pull request that changes what a release
+# build depends on run it.
+name: Release build check
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release-check.yml"
+      - ".github/workflows/release.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "apps/dots-app/Cargo.toml"
+      - "apps/dots-app/build.rs"
+      - "apps/dots-app/tauri.conf.json"
+      - "apps/dots-app/capabilities/**"
+      - "apps/dots-app/Entitlements.plist"
+      - "apps/dots-app/Info.plist"
+      - "crates/dots-voice/Cargo.toml"
+      - "crates/dots-voice/build.rs"
+      - "tools/voice/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    # The static C runtime, as in the release workflow.
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install the UI's packages
+        run: bun install --frozen-lockfile
+
+      - name: Fetch and unpack the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs unpack --target x86_64-pc-windows-msvc --out "$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
+
+      - name: Build the installer
+        shell: bash
+        run: bun run tauri build -- --locked
+
+      - name: Check that the installer was made
+        shell: bash
+        run: |
+          ls -l target/release/bundle/nsis/
+          test -n "$(find target/release/bundle/nsis -name 'Dots_*_x64-setup.exe' -size +1M)"
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install the UI's packages
+        run: bun install --frozen-lockfile
+
+      - name: Fetch and unpack the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs unpack --target aarch64-apple-darwin --target x86_64-apple-darwin --out "$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
+
+      # Not code-signed and not notarized: no secret is given to this workflow.
+      - name: Build the app
+        shell: bash
+        run: bun run tauri build --target universal-apple-darwin --bundles app,dmg -- --locked
+
+      # Both halves are in the one program, and the microphone's reason is in the app: without
+      # it macOS closes the app the first time Open Dot listens.
+      - name: Check the app
+        shell: bash
+        run: |
+          app="target/universal-apple-darwin/release/bundle/macos/Dots.app"
+          ls -l target/universal-apple-darwin/release/bundle/dmg/
+          test -n "$(find target/universal-apple-darwin/release/bundle/dmg -name '*.dmg' -size +1M)"
+          program="$(find "$app/Contents/MacOS" -type f -perm +111 | head -n 1)"
+          lipo -archs "$program"
+          lipo -archs "$program" | grep -q arm64
+          lipo -archs "$program" | grep -q x86_64
+          /usr/libexec/PlistBuddy -c "Print :NSMicrophoneUsageDescription" "$app/Contents/Info.plist"
