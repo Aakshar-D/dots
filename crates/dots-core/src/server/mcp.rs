@@ -260,8 +260,9 @@ fn making(s: &ServerState, run_id: &str) -> Option<crate::model::Making> {
 /// Checks a call of the tool for making dots `tool` against the dot's policy under `MakeDots`,
 /// waiting for an approval when a rule asks, and has the makers' service perform it
 /// (dots-make-dots design sections 5 and 7 to 9). The policy is asked about the tool by name
-/// with its arguments (`making::tools::policy_input`). Arguments the tool cannot read are
-/// refused before the policy is asked, in a sentence for the model. A call that is not
+/// with its arguments, and the made dot a call names (`making::tools::checked_input`).
+/// Arguments the tool cannot read, and a name that finds no dot the maker made, are refused
+/// before the policy is asked, in a sentence for the model. A call that is not
 /// performed, or that the service refuses, is a tool result with `isError`, as for the
 /// check-in tools; a tool the run was not offered is unknown.
 async fn call_making(
@@ -286,10 +287,11 @@ async fn call_making(
         Some(args @ Value::Object(_)) => args.clone(),
         Some(_) => return Err((-32602, "params.arguments must be an object".to_string())),
     };
-    if let Err(text) = crate::making::tools::check_arguments(tool, &arguments) {
-        return Ok(not_performed(&text));
-    }
-    let input = crate::making::tools::policy_input(tool, &arguments);
+    // A call that names a made dot is checked, and approved, for that dot alone.
+    let input = match crate::making::tools::checked_input(&makers, run_id, tool, &arguments).await {
+        Ok(input) => input,
+        Err(text) => return Ok(not_performed(&text)),
+    };
     let checked = match s
         .hub
         .check(run_id, crate::making::tools::POLICY_NAME, input)

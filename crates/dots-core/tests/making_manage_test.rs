@@ -13,7 +13,7 @@ use dots_core::events::RuntimeEvent;
 use dots_core::library::{LibraryConfig, McpServerConfig, Uses};
 use dots_core::making::log::{MakingEvent, MakingEventKind};
 use dots_core::making::manage::{
-    change_went_message, made_dots_text, ChangeDot, ChangeOutcome, MadeDotLine,
+    change_went_message, made_dots_text, not_the_same_dot, ChangeDot, ChangeOutcome, MadeDotLine,
 };
 use dots_core::making::reach::{Extra, Wanted};
 use dots_core::making::requests::{MakeDecision, MakeRequest, RequestKind, RequestStatus};
@@ -1883,4 +1883,101 @@ async fn without_tells_the_maker_what_was_left_out_of_the_change_as_it_stood_the
              The browser."
         ]
     );
+}
+
+#[tokio::test]
+async fn an_error_of_the_database_reaches_the_model_as_a_plain_sentence() {
+    use dots_core::making::tools::{call, checked_input, policy_input, Tool, COULD_NOT};
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    // Nothing can be read once the store is closed.
+    t.rt.store().close().await;
+    let checked = policy_input(Tool::ListMadeDots, &json!({}));
+    let told = call(t.rt.makers(), &run.id, &checked).await;
+    assert_eq!(told, Err(COULD_NOT.to_string()));
+    // The same before the policy is asked about a call that names a dot.
+    let told = checked_input(
+        t.rt.makers(),
+        &run.id,
+        Tool::DeleteDot,
+        &json!({"dot": "One"}),
+    )
+    .await;
+    assert_eq!(told, Err(COULD_NOT.to_string()));
+}
+
+#[tokio::test]
+async fn a_call_checked_for_one_made_dot_is_never_performed_on_another() {
+    use dots_core::making::tools::{call, checked_input, policy_input, Tool, NOT_CHECKED};
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let archive = make(&t, &run, "Archive").await;
+    let precious = make(&t, &run, "Precious").await;
+    // Each call that names a made dot is checked for the dot its name finds now.
+    let mut checked = Vec::new();
+    for (tool, arguments) in [
+        (Tool::ChangeDot, json!({"dot": "archive", "max_turns": 7})),
+        (
+            Tool::GiveJob,
+            json!({"dot": "Archive", "message": "Clear it out."}),
+        ),
+        (Tool::DeleteDot, json!({"dot": "Archive"})),
+    ] {
+        let input = checked_input(t.rt.makers(), &run.id, tool, &arguments)
+            .await
+            .unwrap();
+        assert_eq!(input["dot"], json!({"id": archive.id, "name": "Archive"}));
+        assert_eq!(input["input"], arguments);
+        checked.push(input);
+    }
+    // A name that finds no dot the maker made is refused before the person is asked.
+    let told = checked_input(
+        t.rt.makers(),
+        &run.id,
+        Tool::DeleteDot,
+        &json!({"dot": "Nobody"}),
+    )
+    .await;
+    assert_eq!(told, Err(not_made("Nobody")));
+    // Nothing to check for a new dot or the list.
+    let list = checked_input(t.rt.makers(), &run.id, Tool::ListMadeDots, &json!({})).await;
+    assert_eq!(list, Ok(policy_input(Tool::ListMadeDots, &json!({}))));
+
+    // "Archive" comes to name the other dot: no call checked for the first is performed.
+    person_edits(&t, &archive, |s| s.name = "Old".into()).await;
+    person_edits(&t, &precious, |s| s.name = "Archive".into()).await;
+    for input in &checked {
+        let told = call(t.rt.makers(), &run.id, input).await;
+        // In the words the model called it by.
+        let named = input["input"]["dot"].as_str().unwrap();
+        assert_eq!(told, Err(not_the_same_dot(named)), "{input}");
+    }
+    let now = stored(&t, &precious).await;
+    assert_eq!(now.spec.max_turns, precious.spec.max_turns);
+    assert!(t
+        .rt
+        .store()
+        .list_runs(Some(&precious.id), 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert!(t
+        .rt
+        .store()
+        .list_runs(Some(&archive.id), 10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(dot_names(&t).await, ["Archive", "Old", "Researcher"]);
+    // Nor one for a dot that is gone.
+    t.rt.delete_dot(&archive.id).await.unwrap();
+    let told = call(t.rt.makers(), &run.id, &checked[2]).await;
+    assert_eq!(told, Err(not_the_same_dot("Archive")));
+    // A call that names a dot but was checked without one is not performed either.
+    let unchecked = policy_input(Tool::DeleteDot, &json!({"dot": "Archive"}));
+    let told = call(t.rt.makers(), &run.id, &unchecked).await;
+    assert_eq!(told, Err(NOT_CHECKED.to_string()));
+    assert_eq!(dot_names(&t).await, ["Archive", "Researcher"]);
 }

@@ -18,6 +18,10 @@ use crate::{Error, Result};
 /// The policy name of every tool for making dots.
 pub const POLICY_NAME: &str = crate::policy::MAKE_DOTS_TOOL;
 
+/// What the model is told when a call failed for a reason it cannot act on, such as the
+/// database or the disk; the detail goes to the log.
+pub const COULD_NOT: &str = "Dots could not do that just now.";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
     MakeDot,
@@ -91,7 +95,7 @@ impl Tool {
             Tool::ChangeDot => "Change a dot you made. Only the settings you name change; the \
                  rest stay as they are. What you name is checked against what you have now: \
                  giving the dot more than you have waits for the person, as with make_dot, and \
-                 taking something away never asks."
+                 taking something away never needs the person's say-so for reach."
                 .to_string(),
             Tool::DeleteDot => "Delete a dot you made, with its whole history. It cannot be \
                  undone. Refused while the dot has a run going or queued."
@@ -182,20 +186,54 @@ pub fn offered(dot: &Dot, run: &Run) -> bool {
 
 /// What the policy checks of a call of `tool` with `arguments`, under `MakeDots`: the tool by
 /// name and its arguments, as an `App` call names its app and tool. An approval then shows
-/// which of the five tools waits, and a grant for one of them is not a grant for another.
+/// which of the five tools waits, and a grant for one of them is not a grant for another. A
+/// call that names a made dot is checked with that dot too (`checked_input`).
 pub fn policy_input(tool: Tool, arguments: &Value) -> Value {
     json!({ "tool": tool.name(), "input": arguments })
 }
 
-/// The made dot a `MakeDots` call would delete, when what the policy checked is a
-/// `delete_dot`: the send-and-delete guard asks before it (`policy::guard::classify`).
+/// What the policy is asked about a call of `tool` with `arguments` by the run `run_id`
+/// (design sections 9 and 12): `policy_input`, and for a call that names a made dot
+/// (`change_dot`, `delete_dot`, `give_job`), that dot as its name finds it now, `"dot": {"id",
+/// "name"}`, with its name as it is stored. An approval, and the grant it gives, is then for
+/// that one dot, its card names it, and the call is performed on it alone (`call`). `Err` is
+/// the sentence the model gets before the person is asked anything: arguments the tool cannot
+/// read (`check_arguments`), a name that finds no dot the maker made, and what `make_dot`
+/// refuses a run for.
+pub async fn checked_input(
+    makers: &Makers,
+    run_id: &str,
+    tool: Tool,
+    arguments: &Value,
+) -> std::result::Result<Value, String> {
+    let named = match read(tool, arguments)? {
+        Call::Change(ask) => Some(ask.dot),
+        Call::Delete(named) => Some(named.dot),
+        Call::Job(job) => Some(job.dot),
+        Call::Make(_) | Call::List => None,
+    };
+    let mut input = policy_input(tool, arguments);
+    if let Some(name) = named {
+        let dot = makers
+            .named_made_dot(run_id, &name)
+            .await
+            .map_err(|e| sentence(tool, e))?;
+        input["dot"] = json!({ "id": dot.id, "name": dot.spec.name });
+    }
+    Ok(input)
+}
+
+/// The made dot a `MakeDots` call would delete, by its name as stored, when what the policy
+/// checked is a `delete_dot`: the send-and-delete guard asks before it
+/// (`policy::guard::classify`).
 pub fn deletes(checked: &Value) -> Option<&str> {
     if Tool::for_input(checked) != Some(Tool::DeleteDot) {
         return None;
     }
     Some(
         checked
-            .pointer("/input/dot")
+            .pointer("/dot/name")
+            .or_else(|| checked.pointer("/input/dot"))
             .and_then(Value::as_str)
             .unwrap_or_default(),
     )
@@ -256,18 +294,29 @@ pub fn check_arguments(tool: Tool, arguments: &Value) -> std::result::Result<(),
     read(tool, arguments).map(|_| ())
 }
 
-/// A service error as the sentence the model gets.
+/// What the model is told of a call that names a made dot but was not checked with one
+/// (`checked_input`): nothing is done.
+pub const NOT_CHECKED: &str =
+    "Dots did not check which dot this call is for, so nothing was done. Call the tool again.";
+
+/// A service error as the sentence the model gets. An error it cannot act on, of the database
+/// or the disk, is `COULD_NOT`, and its detail goes to the log.
 fn sentence(tool: Tool, e: Error) -> String {
     match e {
         Error::Invalid(m) | Error::Conflict(m) | Error::NotFound(m) | Error::NotAllowed(m) => m,
-        other => format!("{} failed: {other}", tool.name()),
+        other => {
+            tracing::warn!(tool = tool.name(), "a tool for making dots failed: {other}");
+            COULD_NOT.to_string()
+        }
     }
 }
 
 /// Performs the call the policy let through, for the run `run_id`: `checked` is what
-/// `policy_input` made, as the policy or the person's approval returned it. `Ok` is the
-/// service's text for the model; `Err` the sentence of what it refused, for a tool result that
-/// is an error. The same on both engines.
+/// `checked_input` made, as the policy or the person's approval returned it. A call that names
+/// a made dot is performed on the dot it was checked for, and refused when its name finds
+/// another dot or none now (`manage::not_the_same_dot`). `Ok` is the service's text for the
+/// model; `Err` the sentence of what it refused, for a tool result that is an error. The same
+/// on both engines.
 pub async fn call(
     makers: &Makers,
     run_id: &str,
@@ -277,17 +326,31 @@ pub async fn call(
         return Err("this is not a tool for making dots".to_string());
     };
     let arguments = checked.get("input").cloned().unwrap_or_else(|| json!({}));
+    let bound = || {
+        checked
+            .pointer("/dot/id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| NOT_CHECKED.to_string())
+    };
     let done = match read(tool, &arguments)? {
         Call::Make(ask) => makers
             .make_dot(run_id, ask)
             .await
             .map(|outcome| outcome.tool_text()),
         Call::Change(ask) => makers
-            .change_dot(run_id, ask)
+            .change_dot_as(run_id, ask, Some(bound()?))
             .await
             .map(|outcome| outcome.tool_text()),
-        Call::Delete(named) => makers.delete_dot(run_id, &named.dot).await,
-        Call::Job(job) => makers.give_job(run_id, &job.dot, &job.message).await,
+        Call::Delete(named) => {
+            makers
+                .delete_dot_as(run_id, &named.dot, Some(bound()?))
+                .await
+        }
+        Call::Job(job) => {
+            makers
+                .give_job_as(run_id, &job.dot, &job.message, Some(bound()?))
+                .await
+        }
         Call::List => makers.made_dots_tool_text(run_id).await,
     };
     done.map_err(|e| sentence(tool, e))

@@ -564,6 +564,17 @@ fn not_made(maker: &Dot, name: &str) -> Error {
     ))
 }
 
+/// What a call for the made dot named `name` is refused with when, as it is performed, the name
+/// no longer finds the dot the call was checked for, and approved for if it asked (design
+/// sections 9 and 12): a dot was renamed or deleted in between, so the name may find another.
+pub fn not_the_same_dot(name: &str) -> String {
+    format!(
+        "\"{}\" is no longer the dot this call was for: a dot was renamed or deleted since. \
+         Nothing was done.",
+        name.trim()
+    )
+}
+
 /// What a maker is woken with when the made dot named `name`, for which a change it asked waits
 /// for the person, is deleted (design section 9): the request went with the dot.
 pub fn change_went_message(name: &str) -> String {
@@ -620,6 +631,37 @@ impl Makers {
             .made_dot_named(&maker.id, name.trim())
             .await?
             .ok_or_else(|| not_made(maker, name))
+    }
+
+    /// `made_dot` for a call checked for the made dot `bound` (`tools::checked_input`): the
+    /// name must still find that dot, so a call checked, or approved, for one dot is never
+    /// performed on another. Refused (`Conflict`, `not_the_same_dot`) when it finds another dot
+    /// or none. With no `bound`, `made_dot`.
+    pub(super) async fn made_dot_as(
+        &self,
+        maker: &Dot,
+        name: &str,
+        bound: Option<&str>,
+    ) -> Result<Dot> {
+        let Some(id) = bound else {
+            return self.made_dot(maker, name).await;
+        };
+        match self
+            .parts
+            .store
+            .made_dot_named(&maker.id, name.trim())
+            .await?
+        {
+            Some(dot) if dot.id == id => Ok(dot),
+            _ => Err(Error::Conflict(not_the_same_dot(name))),
+        }
+    }
+
+    /// The made dot named `name` of the maker of the run `run_id`, which may use the tools for
+    /// making dots (`caller`): what a call that names it is checked for.
+    pub(crate) async fn named_made_dot(&self, run_id: &str, name: &str) -> Result<Dot> {
+        let (_, maker) = self.caller(run_id).await?;
+        self.made_dot(&maker, name).await
     }
 
     /// The dots the maker of the run `run_id` made that exist now, by name, each with its
@@ -685,12 +727,23 @@ impl Makers {
     /// (`check_exists`), a new name another dot has (`Conflict`), a change of the folder
     /// while the dot has a run going (`Conflict`, the store's own sentence), and a refusal of
     /// this PC's role (`NotAllowed`).
-    pub async fn change_dot(&self, run_id: &str, mut ask: ChangeDot) -> Result<ChangeOutcome> {
+    pub async fn change_dot(&self, run_id: &str, ask: ChangeDot) -> Result<ChangeOutcome> {
+        self.change_dot_as(run_id, ask, None).await
+    }
+
+    /// `change_dot` for a call checked for the made dot `bound` (`tools::checked_input`):
+    /// refused with `not_the_same_dot`, and nothing changed, when the name no longer finds it.
+    pub(crate) async fn change_dot_as(
+        &self,
+        run_id: &str,
+        mut ask: ChangeDot,
+        bound: Option<&str>,
+    ) -> Result<ChangeOutcome> {
         let p = &self.parts;
         let (_, maker) = self.caller(run_id).await?;
         ask.purpose = ask.purpose.as_deref().map(checked_purpose).transpose()?;
         check_shown_text(&ask.wanted)?;
-        let made = self.made_dot(&maker, &ask.dot).await?;
+        let made = self.made_dot_as(&maker, &ask.dot, bound).await?;
         if ask.purpose.is_none() && names_nothing(&ask.wanted) {
             return Err(Error::Invalid(NOTHING_TO_CHANGE.into()));
         }
@@ -711,6 +764,10 @@ impl Makers {
         let makers = made_now.made.as_ref().and_then(|m| m.by_dot_id.as_deref());
         if makers != Some(maker_now.id.as_str()) {
             return Err(not_made(&maker_now, &ask.dot));
+        }
+        // A rename while this call waited for the lock.
+        if bound.is_some() {
+            self.made_dot_as(&maker_now, &ask.dot, bound).await?;
         }
         if maker_now.spec != maker.spec || made_now.spec != made.spec || made_now.made != made.made
         {
@@ -1053,6 +1110,18 @@ impl Makers {
     /// words for the model: the store's own sentence says to cancel the runs, which a maker
     /// cannot do). Refused as `make_dot` is for the run, and for a dot the maker did not make.
     pub async fn delete_dot(&self, run_id: &str, dot_name: &str) -> Result<String> {
+        self.delete_dot_as(run_id, dot_name, None).await
+    }
+
+    /// `delete_dot` for a call checked, and approved if it asked, for the made dot `bound`
+    /// (`tools::checked_input`; design sections 9 and 12): refused with `not_the_same_dot`,
+    /// and nothing deleted, when the name no longer finds that dot.
+    pub(crate) async fn delete_dot_as(
+        &self,
+        run_id: &str,
+        dot_name: &str,
+        bound: Option<&str>,
+    ) -> Result<String> {
         let p = &self.parts;
         let (run, _) = self.caller(run_id).await?;
         // With the answers: no answer to a change request for the dot is carried out while
@@ -1060,7 +1129,7 @@ impl Makers {
         let one_at_a_time = p.one_at_a_time.lock().await;
         // As they are once the lock is held: the run may have ended, or the switch turned off.
         let (run, maker) = self.caller(&run.id).await?;
-        let made = self.made_dot(&maker, dot_name).await?;
+        let made = self.made_dot_as(&maker, dot_name, bound).await?;
         let name = made.spec.name.as_str();
         let busy = || {
             Error::Conflict(format!(

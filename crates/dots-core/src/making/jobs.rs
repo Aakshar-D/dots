@@ -299,6 +299,19 @@ impl Makers {
     /// conversation to the dot has not ended (before any request is stored), and what
     /// `start_job` refuses. The maker is judged as it is once the service's lock is held.
     pub async fn give_job(&self, run_id: &str, dot_name: &str, message: &str) -> Result<String> {
+        self.give_job_as(run_id, dot_name, message, None).await
+    }
+
+    /// `give_job` for a call checked for the made dot `bound` (`tools::checked_input`):
+    /// refused with `manage::not_the_same_dot`, and no job given or asked for, when the name
+    /// no longer finds that dot. A request it stores is for that dot, by its id.
+    pub(crate) async fn give_job_as(
+        &self,
+        run_id: &str,
+        dot_name: &str,
+        message: &str,
+        bound: Option<&str>,
+    ) -> Result<String> {
         let p = &self.parts;
         self.caller(run_id).await?;
         // With the makes: two jobs of one run cannot both take the last place of the guard.
@@ -306,7 +319,7 @@ impl Makers {
         // As they are once the lock is held: the run may have ended, the switch turned off, or
         // the person narrowed the maker while this call waited, as for `change_dot`.
         let (run, maker) = self.caller(run_id).await?;
-        let made = self.made_dot(&maker, dot_name).await?;
+        let made = self.made_dot_as(&maker, dot_name, bound).await?;
         let message = message.trim();
         if message.is_empty() || message.chars().count() > MAX_JOB {
             return Err(Error::Invalid(JOB_RULE.into()));

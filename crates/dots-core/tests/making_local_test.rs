@@ -15,15 +15,15 @@ use std::time::{Duration, Instant};
 use common::{init_repo, spec, wait_status};
 use dots_core::approvals::grant_key;
 use dots_core::making::jobs::{gave_text, job_waits_text, JobStatus};
-use dots_core::making::manage::{ChangeDot, ChangeOutcome};
+use dots_core::making::manage::{not_the_same_dot, ChangeDot, ChangeOutcome};
 use dots_core::making::reach::Extra;
 use dots_core::making::requests::RequestKind;
 use dots_core::making::service::{MakeDot, MakeOutcome};
 use dots_core::making::tools::Tool;
 use dots_core::model::{
-    ApplyState, Approval, Dot, DotSpec, EngineKind, MemberSpec, NewRun, ProjectSpec, Run,
-    RunStatus, TeamSpec, TriggerKind, WorkflowRun, WorkflowRunStatus, WorkflowSpec,
-    WorkflowTrigger, WorkspaceMode,
+    ApplyState, Approval, ApprovalStatus, Dot, DotSpec, EngineKind, Made, MemberSpec, NewRun,
+    ProjectSpec, Run, RunStatus, TeamSpec, TriggerKind, WorkflowRun, WorkflowRunStatus,
+    WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::policy::{Action, GuardKind, Rule};
 use dots_core::prompt::{making_section, MakerPart, WAKE_NOTE};
@@ -649,9 +649,11 @@ async fn deleting_a_made_dot_asks_first_and_dots_deletes_it_once_approved() {
         .await
         .contains("Queued for human approval"));
     assert_eq!(approval.tool, "MakeDots");
+    let dot = made_dot(&t, &maker, "Blog Watcher").await.unwrap();
     assert_eq!(
         approval.input,
-        json!({"tool": "delete_dot", "input": {"dot": "Blog Watcher"}})
+        json!({"tool": "delete_dot", "input": {"dot": "Blog Watcher"},
+               "dot": {"id": dot.id, "name": "Blog Watcher"}})
     );
     // Dots performs it, not the model.
     assert!(approval.self_apply);
@@ -754,7 +756,11 @@ async fn a_rule_that_asks_parks_each_call_and_an_approval_is_for_that_call_alone
         .await
         .unwrap());
     let second = parked(&t, &child).await;
-    assert_eq!(second.input, json!({"tool": "change_dot", "input": change}));
+    let bound = json!({"id": dot.id, "name": "Blog Watcher"});
+    assert_eq!(
+        second.input,
+        json!({"tool": "change_dot", "input": change, "dot": bound})
+    );
     assert_ne!(dot.spec.max_turns, 10);
 
     // The approved `change_dot` changes the dot, and does not let `delete_dot` through.
@@ -764,7 +770,7 @@ async fn a_rule_that_asks_parks_each_call_and_an_approval_is_for_that_call_alone
     let third = parked(&t, &grandchild).await;
     assert_eq!(
         third.input,
-        json!({"tool": "delete_dot", "input": {"dot": "Blog Watcher"}})
+        json!({"tool": "delete_dot", "input": {"dot": "Blog Watcher"}, "dot": bound})
     );
     assert!(refused(&t, &grandchild, "c3")
         .await
@@ -772,6 +778,202 @@ async fn a_rule_that_asks_parks_each_call_and_an_approval_is_for_that_call_alone
     assert!(made_dot(&t, &maker, "Blog Watcher").await.is_some());
     assert_eq!(llm.requests().len(), 6);
     assert_eq!(dot_names(&t).await, ["Blog Watcher", "Researcher"]);
+    t.rt.shutdown();
+}
+
+/// A dot `maker` made, named `name`, stored as the makers' service stores one within the
+/// maker's reach: the maker's settings, in a folder below the maker's.
+async fn put_made(t: &T, maker: &Dot, name: &str) -> Dot {
+    let mut s = maker.spec.clone();
+    s.name = name.to_string();
+    s.making.on = false;
+    let folder = PathBuf::from(&maker.spec.workdir).join(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    s.workdir = folder.to_string_lossy().to_string();
+    let made = Made {
+        by_dot_id: Some(maker.id.clone()),
+        by_name: maker.spec.name.clone(),
+        run_id: "run-0".into(),
+        purpose: "Keeps things".into(),
+        spend_parent_dot_id: None,
+    };
+    t.rt.store()
+        .create_made_dot(&s, maker.org_id.as_deref(), &maker.workspace_id, &made)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_approved_delete_is_performed_only_on_the_dot_the_person_approved() {
+    let t = start().await;
+    let llm = Llm::start(vec![
+        call("c1", "delete_dot", json!({"dot": "Archive"})),
+        text("Queued."),
+        text("Nothing was deleted."),
+    ])
+    .await;
+    let maker = create(&t, &llm, "Researcher", |_| {}).await;
+    let archive = put_made(&t, &maker, "Archive").await;
+    let precious = put_made(&t, &maker, "Precious").await;
+    let chat = t.rt.chat(&maker.id, "clean up", None).await.unwrap();
+    let approval = parked(&t, &chat).await;
+    assert_eq!(
+        approval.input,
+        json!({"tool": "delete_dot", "input": {"dot": "Archive"},
+               "dot": {"id": archive.id, "name": "Archive"}})
+    );
+
+    // Before the person says yes, "Archive" comes to name the other dot.
+    for (dot, name) in [(&archive, "Old"), (&precious, "Archive")] {
+        let mut s = t.rt.store().get_dot(&dot.id).await.unwrap().spec;
+        s.name = name.into();
+        t.rt.update_dot(&dot.id, s).await.unwrap();
+    }
+    // Dots performs the approved call for the dot approved, which "Archive" no longer names:
+    // it is refused, and neither dot is deleted.
+    let child = approve(&t, &approval, &chat, RunStatus::Succeeded).await;
+    let (output, is_error) = result(&t, &child, &format!("approval:{}", approval.id)).await;
+    assert!(is_error, "{output}");
+    assert_eq!(output, not_the_same_dot("Archive"));
+    let applied = t.rt.store().get_approval(&approval.id).await.unwrap();
+    assert_eq!(applied.apply_state, Some(ApplyState::Failed));
+    assert_eq!(dot_names(&t).await, ["Archive", "Old", "Researcher"]);
+    let precious = t.rt.store().get_dot(&precious.id).await.unwrap();
+    assert_eq!(precious.spec.name, "Archive");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn the_person_says_no_to_a_make_dots_call_and_nothing_is_made() {
+    let t = start().await;
+    let llm = Llm::start(vec![
+        call("c1", "make_dot", asks("Blog Watcher")),
+        text("Queued."),
+        text("I will not make it."),
+    ])
+    .await;
+    let maker = create(&t, &llm, "Researcher", |s| {
+        s.policy.rules.push(Rule::new("MakeDots", Action::Ask));
+    })
+    .await;
+    let chat =
+        t.rt.chat(&maker.id, "watch three blogs", None)
+            .await
+            .unwrap();
+    let approval = parked(&t, &chat).await;
+    t.rt.decide_approval(&approval.id, false, Some("Not this one".into()), None)
+        .await
+        .unwrap();
+    let child = resume_child(&t, &chat).await;
+    wait_status(t.rt.store(), &child.id, RunStatus::Succeeded, 30).await;
+
+    // The model is told no, with the person's words, and nothing was made or asked for.
+    let told = report(&llm.requests()[2]);
+    assert!(
+        told.contains(&format!(
+            "Approval #{} for make_dot was denied. Reviewer note: Not this one",
+            approval.id
+        )),
+        "{told}"
+    );
+    let denied = t.rt.store().get_approval(&approval.id).await.unwrap();
+    assert_eq!(denied.status, ApprovalStatus::Denied);
+    assert_eq!(denied.apply_state, None);
+    assert!(made_dot(&t, &maker, "Blog Watcher").await.is_none());
+    assert!(t
+        .rt
+        .store()
+        .list_make_requests(Some(&maker.id), true)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(dot_names(&t).await, ["Researcher"]);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_run_whose_engine_has_no_makers_service_is_not_given_the_tools() {
+    use dots_core::approvals::ApprovalHub;
+    use dots_core::checkins::CheckIns;
+    use dots_core::engine::local::LocalEngine;
+    use dots_core::engine::Engine;
+    use dots_core::events::new_bus;
+    use dots_core::followups::FollowUps;
+    use dots_core::runner::{Runner, RunnerConfig};
+    use dots_core::scheduler::SystemClock;
+    use std::collections::HashMap;
+    use tokio_util::sync::CancellationToken;
+
+    // A makers' service, which the runner is given and the engine is not.
+    let t = start().await;
+    let llm = Llm::start(vec![
+        call("c1", "make_dot", asks("Blog Watcher")),
+        text("Done."),
+    ])
+    .await;
+    let (dir, store) = common::temp_store().await;
+    let bus = new_bus();
+    let hub = Arc::new(ApprovalHub::new(store.clone(), bus.clone()));
+    let follow_ups = FollowUps::new(store.clone(), bus.clone(), Arc::new(SystemClock));
+    let engine =
+        LocalEngine::with_retry_delays(store.clone(), hub, vec![Duration::ZERO; 2]).with_checkins(
+            CheckIns::new(store.clone(), bus.clone(), follow_ups.clone()),
+        );
+    let mut engines: HashMap<EngineKind, Arc<dyn Engine>> = HashMap::new();
+    engines.insert(EngineKind::Local, Arc::new(engine));
+    let runner = Runner::new(
+        store.clone(),
+        bus.clone(),
+        engines,
+        RunnerConfig {
+            max_concurrent: 1,
+            mcp_url: "http://127.0.0.1:1/mcp".into(),
+            worktrees_dir: dir.path().join("wt"),
+            cancel_grace: Duration::from_millis(500),
+            plugins_dir: dir.path().join("plugins"),
+            quiet_unit: Duration::from_secs(1),
+        },
+    );
+    let wired = CheckIns::new(store.clone(), bus, follow_ups);
+    wired.set_makers(t.rt.makers());
+    runner.set_checkins(wired);
+    runner.spawn_dispatcher(CancellationToken::new());
+
+    // Every call the policy is asked about would wait for the person.
+    let folder = dir.path().join("ws");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut s = spec("Researcher");
+    s.workdir = folder.to_string_lossy().to_string();
+    s.workspace_mode = WorkspaceMode::Folder;
+    s.engine = EngineKind::Local;
+    s.endpoint_url = Some(format!("{}/v1", llm.endpoint()));
+    s.model = "test-model".into();
+    s.making.on = true;
+    s.approval_wait_secs = 0;
+    s.policy.rules.push(Rule::new("MakeDots", Action::Ask));
+    let maker = store.create_dot(&s, None, "default").await.unwrap();
+    let run = runner
+        .enqueue(NewRun::new(&maker.id, TriggerKind::Manual))
+        .await
+        .unwrap();
+    wait_status(&store, &run.id, RunStatus::Succeeded, 30).await;
+
+    // The engine cannot perform them, so it neither offers them nor asks the person about one.
+    let reqs = llm.requests();
+    assert!(!names(&offered(&reqs[0])).contains(&"make_dot"));
+    let events = store.list_events(&run.id, 0).await.unwrap();
+    let answered = events
+        .iter()
+        .find(|e| e.kind == "tool_result" && e.data["id"] == "c1")
+        .expect("an answer");
+    assert_eq!(answered.data["is_error"], true);
+    let output = answered.data["output"].as_str().unwrap();
+    assert!(output.starts_with(UNKNOWN), "{output}");
+    assert!(!events
+        .iter()
+        .any(|e| e.kind == "tool_call" && e.data["tool"] == "MakeDots"));
+    assert!(store.approvals_for_run(&run.id).await.unwrap().is_empty());
+    assert_eq!(store.list_dots().await.unwrap().len(), 1);
     t.rt.shutdown();
 }
 

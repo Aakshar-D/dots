@@ -12,14 +12,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use common::{init_repo, spec, wait_status};
+use dots_core::approvals::grant_key;
 use dots_core::library::Uses;
 use dots_core::making::jobs::gave_text;
-use dots_core::making::manage::{made_dots_text, ChangeDot};
+use dots_core::making::manage::{made_dots_text, not_the_same_dot, ChangeDot};
 use dots_core::making::reach::{Wanted, WantedPermissions};
 use dots_core::making::service::MakeDot;
 use dots_core::making::tools::{offered, Tool};
 use dots_core::model::{
-    Dot, DotSpec, EngineKind, Making, MemberSpec, ProjectSpec, Run, RunStatus, TeamSpec,
+    Dot, DotSpec, EngineKind, Made, Making, MemberSpec, ProjectSpec, Run, RunStatus, TeamSpec,
     WorkflowRun, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::policy::{Action, GuardKind, Preset, Rule};
@@ -897,9 +898,11 @@ async fn deleting_a_made_dot_asks_first_while_the_maker_always_asks_before_delet
     let approvals = t.rt.store().approvals_for_run(&chat.id).await.unwrap();
     assert_eq!(approvals.len(), 1);
     assert_eq!(approvals[0].tool, "MakeDots");
+    let dot = made_dot(&t, &maker, "Blog Watcher").await.unwrap();
     assert_eq!(
         approvals[0].input,
-        json!({"tool": "delete_dot", "input": {"dot": "Blog Watcher"}})
+        json!({"tool": "delete_dot", "input": {"dot": "Blog Watcher"},
+               "dot": {"id": dot.id, "name": "Blog Watcher"}})
     );
     let guard =
         t.rt.approval_guard(&approvals[0].id)
@@ -913,6 +916,207 @@ async fn deleting_a_made_dot_asks_first_while_the_maker_always_asks_before_delet
     );
     assert!(guard.always_asks);
     assert!(made_dot(&t, &maker, "Blog Watcher").await.is_some());
+    finish(&t, &[&chat]).await;
+}
+
+#[test]
+fn the_change_dot_words_promise_only_that_taking_away_needs_no_say_so_for_reach() {
+    let words = Tool::ChangeDot.description(&Making::default());
+    // A rule of the maker's permissions may still ask about any call.
+    assert!(!words.contains("never asks"), "{words}");
+    assert!(
+        words.contains("taking something away never needs the person's say-so for reach"),
+        "{words}"
+    );
+}
+
+/// A dot `maker` made, named `name`, stored as the makers' service stores one within the
+/// maker's reach: the maker's settings, in a folder below the maker's.
+async fn put_made(t: &T, maker: &Dot, name: &str) -> Dot {
+    let mut s = maker.spec.clone();
+    s.name = name.to_string();
+    s.making.on = false;
+    let folder = PathBuf::from(&maker.spec.workdir).join(name);
+    std::fs::create_dir_all(&folder).unwrap();
+    s.workdir = folder.to_string_lossy().to_string();
+    let made = Made {
+        by_dot_id: Some(maker.id.clone()),
+        by_name: maker.spec.name.clone(),
+        run_id: "run-0".into(),
+        purpose: "Keeps things".into(),
+        spend_parent_dot_id: None,
+    };
+    t.rt.store()
+        .create_made_dot(&s, maker.org_id.as_deref(), &maker.workspace_id, &made)
+        .await
+        .unwrap()
+}
+
+/// The person renames "Archive" to "Old" and "Precious" to "Archive": the name "Archive" then
+/// finds the other dot.
+async fn swap_names(t: &T, archive: &Dot, precious: &Dot) {
+    for (dot, name) in [(archive, "Old"), (precious, "Archive")] {
+        let mut s = t.rt.store().get_dot(&dot.id).await.unwrap().spec;
+        s.name = name.into();
+        t.rt.update_dot(&dot.id, s).await.unwrap();
+    }
+}
+
+/// The approvals of the run `run_id`, once there are `n`.
+async fn approvals(t: &T, run_id: &str, n: usize) -> Vec<dots_core::model::Approval> {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let found = t.rt.store().approvals_for_run(run_id).await.unwrap();
+        if found.len() >= n {
+            return found;
+        }
+        assert!(Instant::now() < deadline, "no approval for {run_id}");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+#[tokio::test]
+async fn an_approved_delete_called_again_after_a_rename_deletes_no_other_dot() {
+    let t = start(json!([
+        init(),
+        mcp_call("delete_dot", json!({"dot": "Archive"})),
+        success()
+    ]))
+    .await;
+    let maker = create(&t, "Researcher", |_| {}).await;
+    let archive = put_made(&t, &maker, "Archive").await;
+    let precious = put_made(&t, &maker, "Precious").await;
+    let chat = t.rt.chat(&maker.id, "clean up", None).await.unwrap();
+    wait_status(t.rt.store(), &chat.id, RunStatus::AwaitingApproval, 30).await;
+    let approval = approvals(&t, &chat.id, 1).await.remove(0);
+    // The approval is for the dot the name found when the call was made: its id, and its name
+    // as it is stored, which the card shows.
+    assert_eq!(
+        approval.input,
+        json!({"tool": "delete_dot", "input": {"dot": "Archive"},
+               "dot": {"id": archive.id, "name": "Archive"}})
+    );
+    let guard =
+        t.rt.approval_guard(&approval.id)
+            .await
+            .unwrap()
+            .expect("a guarded call");
+    assert_eq!(guard.summary, "delete the dot \"Archive\" and its history");
+
+    // Before the person says yes, "Archive" comes to name the other dot.
+    swap_names(&t, &archive, &precious).await;
+    t.rt.decide_approval(&approval.id, true, None, None)
+        .await
+        .unwrap();
+    // The resumed run calls `delete_dot` for "Archive" again. The grant is for the dot the
+    // person approved, so this call asks again, and nothing is deleted.
+    let child = resume_child(&t, &chat).await;
+    wait_status(t.rt.store(), &child.id, RunStatus::AwaitingApproval, 30).await;
+    let again = approvals(&t, &child.id, 1).await;
+    assert_eq!(again.len(), 1);
+    assert_eq!(
+        again[0].input["dot"],
+        json!({"id": precious.id, "name": "Archive"})
+    );
+    assert_eq!(dot_names(&t).await, ["Archive", "Old", "Researcher"]);
+    let precious = t.rt.store().get_dot(&precious.id).await.unwrap();
+    assert_eq!(precious.spec.name, "Archive");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_delete_approved_while_it_waits_is_refused_once_its_name_finds_another_dot() {
+    let t = start(held()).await;
+    // The call waits for the person's answer, as it does while the person looks at the card.
+    let maker = create(&t, "Researcher", |s| s.approval_wait_secs = 60).await;
+    put_made(&t, &maker, "Archive").await;
+    put_made(&t, &maker, "Precious").await;
+    let chat = t.rt.chat(&maker.id, "clean up", None).await.unwrap();
+    let cli = Arc::new(connect(&t, "clean up").await);
+    let waiting = {
+        let cli = cli.clone();
+        tokio::spawn(async move { call(&cli, "delete_dot", json!({"dot": "Archive"})).await })
+    };
+    let approval = approvals(&t, &chat.id, 1).await.remove(0);
+    // Meanwhile the maker's run renames both: a rename never asks.
+    let renamed = call(&cli, "change_dot", json!({"dot": "Archive", "name": "Old"})).await;
+    done(&renamed);
+    let renamed = call(
+        &cli,
+        "change_dot",
+        json!({"dot": "Precious", "name": "Archive"}),
+    )
+    .await;
+    done(&renamed);
+
+    t.rt.decide_approval(&approval.id, true, None, None)
+        .await
+        .unwrap();
+    let answer = waiting.await.unwrap();
+    assert_eq!(refused(&answer), not_the_same_dot("Archive"));
+    assert_eq!(dot_names(&t).await, ["Archive", "Old", "Researcher"]);
+    finish(&t, &[&chat]).await;
+}
+
+#[tokio::test]
+async fn an_approval_for_one_call_lets_no_other_tool_or_arguments_through() {
+    let t = start(held()).await;
+    // Every call asks; without "Always ask before sending or deleting", only the rule does.
+    let maker = create(&t, "Researcher", |s| {
+        s.policy.ask_send_delete = false;
+        s.policy.rules.push(Rule::new("MakeDots", Action::Ask));
+    })
+    .await;
+    put_made(&t, &maker, "Blog Watcher").await;
+    put_made(&t, &maker, "Other").await;
+    let chat = t.rt.chat(&maker.id, "clean up", None).await.unwrap();
+    let cli = connect(&t, "clean up").await;
+    let parked = call(&cli, "delete_dot", json!({"dot": "Blog Watcher"})).await;
+    assert!(
+        refused(&parked).contains("Queued for human approval"),
+        "{parked}"
+    );
+    let first = approvals(&t, &chat.id, 1).await.remove(0);
+    // The one-shot grant the person's yes gives the run that goes on (`Runner::maybe_resume`).
+    t.rt.store()
+        .create_grant(
+            &chat.root_run_id,
+            "MakeDots",
+            &grant_key("MakeDots", &first.input),
+        )
+        .await
+        .unwrap();
+
+    // The same arguments for another tool, and the same tool for another dot or with other
+    // arguments, each ask again; nothing is performed.
+    for (tool, arguments) in [
+        ("change_dot", json!({"dot": "Blog Watcher"})),
+        ("delete_dot", json!({"dot": "Other"})),
+        ("make_dot", asks("Blog Watcher 2")),
+    ] {
+        let asked = call(&cli, tool, arguments).await;
+        assert!(
+            refused(&asked).contains("Queued for human approval"),
+            "{tool}: {asked}"
+        );
+    }
+    assert_eq!(approvals(&t, &chat.id, 4).await.len(), 4);
+    assert_eq!(dot_names(&t).await, ["Blog Watcher", "Other", "Researcher"]);
+
+    // The call approved goes through, once.
+    let deleted = call(&cli, "delete_dot", json!({"dot": "Blog Watcher"})).await;
+    assert!(done(&deleted).contains("Blog Watcher"), "{deleted}");
+    assert_eq!(dot_names(&t).await, ["Other", "Researcher"]);
+    assert!(!t
+        .rt
+        .store()
+        .take_grant(
+            &chat.root_run_id,
+            "MakeDots",
+            &grant_key("MakeDots", &first.input)
+        )
+        .await
+        .unwrap());
     finish(&t, &[&chat]).await;
 }
 
