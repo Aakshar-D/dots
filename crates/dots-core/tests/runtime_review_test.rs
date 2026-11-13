@@ -160,7 +160,12 @@ fn preview_schedule_lists_the_next_fire_times() {
     let anchored = json!({"rule": {"kind": "every", "minutes": 60,
         "anchor": "2020-01-01T00:20:00Z"}});
     let times = preview(anchored, 2).unwrap();
-    assert!(times.iter().all(|t| t.contains(":20:00")), "{times:?}");
+    // Read in UTC, as the anchor is given: local time is not a whole hour off it everywhere.
+    let in_utc = |t: &String| {
+        let at = chrono::DateTime::parse_from_rfc3339(t).unwrap();
+        at.with_timezone(&chrono::Utc).format("%M:%S").to_string()
+    };
+    assert!(times.iter().all(|t| in_utc(t) == "20:00"), "{times:?}");
     // Refused like `DotSpec::validate`, and like a create or a change of the schedule when no
     // slot is left, so the editor can say why before a save.
     let no_day = json!({"rule": {"kind": "weekly", "days": [], "time": "09:00"}});
