@@ -52,6 +52,28 @@ pub const NOTHING_WITHOUT_JOB: &str =
 /// What follows the reason when a job request that names something that has gone is allowed.
 pub const ONLY_REFUSE_JOB_LEFT: &str = "Only \"Don't give it\" is left.";
 
+/// What Allow and the answers that make or change a dot without the extras are told when what
+/// the request would give beyond the maker's reach is not what the card the person answered
+/// showed (`MakeRequestCard::shown`): the card read again shows it.
+pub const CARD_CHANGED: &str = "What this request would give changed since the card was shown. \
+    Look at the card again, and answer again.";
+
+/// The line a job's card ends with (design section 8): where the made dot's answer goes.
+/// `maker` is the maker's name.
+pub fn job_result_line(maker: &str) -> String {
+    format!("Its final message goes back to {maker}.")
+}
+
+/// What a card shows beyond the maker's reach, as the answer to it sends it back
+/// (`MakeRequestCard::shown`): a digest of the lines of `extras`; `None` when there are none.
+fn shown_of(maker: &str, extras: &[Extra]) -> Option<String> {
+    if extras.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = extras.iter().map(|e| e.line(maker)).collect();
+    Some(crate::util::json_hash(&json!(lines)))
+}
+
 /// What changing a dot without the extras is told when the dot itself holds more than its maker
 /// has: the change would steer that, so no part of it is saved alone.
 pub const NOTHING_WITHOUT_HELD: &str =
@@ -309,7 +331,11 @@ impl MakeRequest {
     /// plain words, then the limit when one is passed. The card's own lines are of things as
     /// they are when it is read (`MakeRequestCard::lines`).
     pub fn lines(&self, maker: &str) -> Vec<String> {
-        card_lines(maker, &self.extras, self.over.as_ref())
+        let mut lines = card_lines(maker, &self.extras, self.over.as_ref());
+        if self.kind == RequestKind::Job {
+            lines.push(job_result_line(maker));
+        }
+        lines
     }
 
     /// The request as it was stored, as the reach check gives it.
@@ -471,6 +497,12 @@ pub struct MakeRequestCard {
     /// a limit was reached since the card was read (`Makers::decide_request`).
     #[serde(default)]
     pub limit: Option<String>,
+    /// A digest of the lines of what is beyond the maker's reach as the card shows it, `None`
+    /// when it shows nothing beyond reach: the answer to this card sends it back, as it sends
+    /// `limit`, so Allow and Make it without these are refused when the request would now
+    /// give something else (`CARD_CHANGED`; design section 7.2).
+    #[serde(default)]
+    pub shown: Option<String>,
     /// Whether Allow for this dot is on.
     pub can_allow: bool,
     /// Whether Make it without these is on. Off when the only problem is a limit.
@@ -502,6 +534,9 @@ pub struct PendingMakeRequest {
     pub title: String,
     /// The ask card's lines (`MakeRequest::lines`).
     pub lines: Vec<String>,
+    /// What the card shows beyond the maker's reach, for the answer to send back
+    /// (`MakeRequestCard::shown`).
+    pub shown: Option<String>,
     /// `waiting`, or `gone` for one that only "Don't make it" can still answer.
     pub status: RequestStatus,
     pub created_at: String,
@@ -522,6 +557,7 @@ impl PendingMakeRequest {
             purpose: request.purpose.clone(),
             title: card.title.clone(),
             lines: card.lines.clone(),
+            shown: card.shown.clone(),
             status: request.status,
             created_at: request.created_at.clone(),
         }
@@ -540,6 +576,7 @@ impl PendingMakeRequest {
             purpose: request.purpose.clone(),
             title: request.title(maker),
             lines: request.lines(maker),
+            shown: shown_of(maker, &request.extras),
             status: request.status,
             created_at: request.created_at.clone(),
         }
@@ -632,6 +669,7 @@ impl Makers {
             title: make_title(&maker_name, &asked.extras),
             lines: card_lines(&maker_name, &asked.extras, over.as_ref()),
             limit: over.as_ref().map(OverLimit::line),
+            shown: shown_of(&maker_name, &asked.extras),
             asked: Vec::new(),
             instructions: Some(asked.spec.instructions.clone()),
             schedule: asked.spec.schedule.as_ref().map(schedule_words),
@@ -689,6 +727,7 @@ impl Makers {
         let maker_name = maker.spec.name.clone();
         let mut title = request.title(&maker_name);
         let mut lines = request.lines(&maker_name);
+        let mut shown = shown_of(&maker_name, &request.extras);
         // What the ask names, on the dot as it was asked; on the dot as it is now while the
         // request waits.
         let named = |ask: Option<&ChangeDot>, before: &DotSpec, after: &DotSpec| match ask {
@@ -725,6 +764,7 @@ impl Makers {
                         change_title(&maker_name, name)
                     };
                     lines = card_lines(&maker_name, &standing.extras, None);
+                    shown = shown_of(&maker_name, &standing.extras);
                     asked = named(
                         request.ask.as_ref(),
                         &standing.dot.spec,
@@ -782,6 +822,7 @@ impl Makers {
             title,
             lines,
             limit: None,
+            shown,
             asked,
             instructions,
             schedule,
@@ -830,7 +871,8 @@ impl Makers {
 
     /// The ask card of a job request (design section 8), under the service's lock. Its title
     /// names the made dot as it is called now, its lines are what the dot holds beyond the
-    /// maker's reach, and the job itself is `request.first_job`, in full. There is no
+    /// maker's reach, then that its final message goes back to the maker (`job_result_line`),
+    /// and the job itself is `request.first_job`, in full. There is no
     /// "without": Allow starts the job as asked, Don't give it wakes the maker. Allow is on
     /// when the dot holds nothing the card did not show, is switched on, and this PC may run
     /// it.
@@ -847,6 +889,7 @@ impl Makers {
             }
         }
         let mut lines = request.lines(&maker_name);
+        let mut shown = shown_of(&maker_name, &request.extras);
         let (mut can_allow, mut blocked) = (false, None);
         match request.status {
             RequestStatus::Waiting => match self.job_stands(&maker, &request).await? {
@@ -860,6 +903,8 @@ impl Makers {
                     beyond_what_was_seen,
                 } => {
                     lines = card_lines(&maker_name, &held, None);
+                    lines.push(job_result_line(&maker_name));
+                    shown = shown_of(&maker_name, &held);
                     if beyond_what_was_seen {
                         let gained = gained_since(&request, &held, &name);
                         blocked = Some(reach_shrank(
@@ -892,6 +937,7 @@ impl Makers {
             title: job_title(&maker_name, &name),
             lines,
             limit: None,
+            shown,
             asked: Vec::new(),
             instructions: None,
             schedule: None,
@@ -917,6 +963,7 @@ impl Makers {
         &self,
         request: MakeRequest,
         decision: MakeDecision,
+        shown: Option<&str>,
     ) -> Result<(MakeRequest, String, String)> {
         let p = &self.parts;
         let maker = p.store.get_dot(&request.maker_dot_id).await?;
@@ -948,6 +995,7 @@ impl Makers {
                         gained.as_deref(),
                     )));
                 }
+                self.as_shown(&request, shown, &maker.spec.name, &held)?;
                 if !made.spec.enabled {
                     return Err(Error::Conflict(switched_off(name)));
                 }
@@ -981,13 +1029,24 @@ impl Makers {
 
     /// `Ok` when this PC may save `spec` as the made dot `dot` (design sections 5 and 9), as
     /// `DotAdmin::update` checks it: the right to change dots in the dot's account and
-    /// workspace, and to give secrets when its variables change. `NotAllowed` says which is
+    /// workspace, to give secrets when its variables change, and a new policy within the
+    /// workspace's guardrails ceiling (guardrails spec section 4.3). `NotAllowed` says which is
     /// missing.
     async fn may_change(&self, dot: &Dot, spec: &DotSpec) -> Result<()> {
         let admin = &self.parts.dot_admin;
         admin.require_dot(dot, Permission::EditDots).await?;
         if spec.variables != dot.spec.variables {
             admin.require_dot(dot, Permission::GrantEntries).await?;
+        }
+        if spec.policy != dot.spec.policy || spec.use_user_settings != dot.spec.use_user_settings {
+            admin
+                .require_ceiling(
+                    dot.org_id.as_deref(),
+                    &dot.workspace_id,
+                    &spec.policy,
+                    spec.use_user_settings,
+                )
+                .await?;
         }
         Ok(())
     }
@@ -1009,6 +1068,7 @@ impl Makers {
         &self,
         request: MakeRequest,
         decision: MakeDecision,
+        shown: Option<&str>,
     ) -> Result<(MakeRequest, String, Vec<Extra>)> {
         let p = &self.parts;
         let maker = p.store.get_dot(&request.maker_dot_id).await?;
@@ -1040,6 +1100,7 @@ impl Makers {
                 if decision == MakeDecision::Without && !standing.without_changes_something() {
                     return Err(Error::Invalid(NOTHING_WITHIN_REACH.into()));
                 }
+                self.as_shown(&request, shown, &maker.spec.name, &standing.extras)?;
                 let without_folder = standing.without_folder();
                 let Standing {
                     dot,
@@ -1181,7 +1242,10 @@ impl Makers {
     /// the request still waits. `limit` is the limit line of the card the person answered
     /// (`MakeRequestCard::limit`), or `None` when it showed none: an answer that makes the dot
     /// is refused (`Conflict`) when it passes a limit now that is not that line, and the card
-    /// read again shows it. Allow covers this one dot, also past a limit the card showed
+    /// read again shows it. `shown` is what that card showed beyond the maker's reach
+    /// (`MakeRequestCard::shown`): an answer that makes, changes or starts something is
+    /// refused (`Conflict`, `CARD_CHANGED`) when the request would now give something else, and
+    /// the card read again shows it. Allow covers this one dot, also past a limit the card showed
     /// (section 10). When the dot cannot be created the request still waits and the error is
     /// returned. A job request (section 8) is answered by `answer_job`.
     ///
@@ -1193,11 +1257,12 @@ impl Makers {
         request_id: &str,
         decision: MakeDecision,
         limit: Option<&str>,
+        shown: Option<&str>,
     ) -> Result<MakeRequest> {
         let answer = {
             // With `make_dot`: two answers, or an answer and a make, cannot both pass.
             let _one_at_a_time = self.parts.one_at_a_time.lock().await;
-            self.answer(request_id, decision, limit).await?
+            self.answer(request_id, decision, limit, shown).await?
         };
         // After every lock is released: `wake` takes the thread lock itself.
         let message = answer_message(&answer, decision);
@@ -1220,6 +1285,7 @@ impl Makers {
         request_id: &str,
         decision: MakeDecision,
         limit: Option<&str>,
+        shown: Option<&str>,
     ) -> Result<Answer> {
         let p = &self.parts;
         let request = p.store.get_make_request(request_id).await?;
@@ -1234,7 +1300,8 @@ impl Makers {
         }
         match request.kind {
             RequestKind::Change => {
-                let (request, maker_name, left_out) = self.answer_change(request, decision).await?;
+                let (request, maker_name, left_out) =
+                    self.answer_change(request, decision, shown).await?;
                 let dot_name = request.name.clone();
                 return Ok(Answer {
                     request,
@@ -1245,7 +1312,8 @@ impl Makers {
                 });
             }
             RequestKind::Job => {
-                let (request, maker_name, dot_name) = self.answer_job(request, decision).await?;
+                let (request, maker_name, dot_name) =
+                    self.answer_job(request, decision, shown).await?;
                 return Ok(Answer {
                     request,
                     maker_name,
@@ -1279,6 +1347,7 @@ impl Makers {
                         None,
                     )));
                 }
+                self.as_shown(&request, shown, &maker.spec.name, &standing.reach.extras)?;
                 // A limit passed now that the card the person answered did not show: the card
                 // read again shows it, and the person answers again.
                 if let Some(over) = &standing.over {
@@ -1345,13 +1414,17 @@ impl Makers {
     }
 
     /// `Ok` when this PC may create `spec` in the maker's account and workspace (design
-    /// sections 5 and 7.2): the right to change dots, and to give secrets when `spec` gives
-    /// variables. `NotAllowed` says which is missing.
+    /// sections 5 and 7.2), as `DotAdmin::create` checks it: the right to change dots, a
+    /// policy within the workspace's guardrails ceiling (guardrails spec section 4.3), and the
+    /// right to give secrets when `spec` gives variables. `NotAllowed` says which is missing.
     async fn may_answer(&self, maker: &Dot, spec: &DotSpec) -> Result<()> {
         let admin = &self.parts.dot_admin;
         let (org, workspace) = (maker.org_id.as_deref(), maker.workspace_id.as_str());
         admin
             .require_in(org, workspace, Permission::EditDots)
+            .await?;
+        admin
+            .require_ceiling(org, workspace, &spec.policy, spec.use_user_settings)
             .await?;
         if !spec.variables.0.is_empty() {
             admin
@@ -1430,6 +1503,25 @@ impl Makers {
             Err(Error::Invalid(_)) => Ok(Some(SOMETHING_GONE.to_string())),
             Err(e) => Err(e),
         }
+    }
+
+    /// Refuses an answer to `request` that makes, changes or starts something (`Conflict`,
+    /// `CARD_CHANGED`) when `extras`, what it would give beyond the reach of the maker named
+    /// `maker` now, are not what the card the person answered showed (`shown`, design section
+    /// 7.2): the maker's settings moved since that card was read. The topic's cards are told
+    /// to read again.
+    fn as_shown(
+        &self,
+        request: &MakeRequest,
+        shown: Option<&str>,
+        maker: &str,
+        extras: &[Extra],
+    ) -> Result<()> {
+        if shown == shown_of(maker, extras).as_deref() {
+            return Ok(());
+        }
+        self.updated(&request.maker_dot_id, &request.root_run_id);
+        Err(Error::Conflict(CARD_CHANGED.into()))
     }
 
     /// Marks the waiting `request` gone, with `reason`, and says the topic's cards changed.

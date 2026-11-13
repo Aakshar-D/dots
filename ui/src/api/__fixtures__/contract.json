@@ -3795,6 +3795,7 @@
         "name": "Blog Watcher",
         "purpose": "Reads the feeds",
         "root_run_id": "01J0RUN",
+        "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
         "status": "waiting",
         "title": "Researcher wants to make a dot with more than it has"
       }

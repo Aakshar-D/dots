@@ -102,6 +102,7 @@ describe("the app frame", () => {
             purpose: "Reads the feeds every morning",
             title: "Maker asks to make Feeds",
             lines: ["The browser"],
+            shown: "shown-1",
             status: "waiting" as const,
             created_at: "2026-11-12T09:00:00.000Z",
           },

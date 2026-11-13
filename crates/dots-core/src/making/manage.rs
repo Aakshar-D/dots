@@ -13,7 +13,7 @@ use super::jobs::{deleted_message, JobEnd, JobStatus, JOB_WAITING, JOB_WORKING};
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::reach::{
     folded, grants, held_extras, preset_label, rank, reach_change, real_path, still_as_judged,
-    time_label, Extra, Reach, Wanted, WantedPermissions,
+    time_label, undo_extras, Extra, Reach, Wanted, WantedPermissions,
 };
 use super::requests::{MakeRequest, NewMakeRequest, RequestKind, SOMETHING_GONE};
 use super::service::{check_shown_text, checked_purpose, may_make, moved_folder, Makers};
@@ -130,8 +130,14 @@ impl ChangeOutcome {
             } => {
                 let extras: Vec<String> =
                     request.extras.iter().map(|e| e.line(maker_name)).collect();
+                let undoes = |e: &Extra| matches!(e, Extra::Undoes { .. });
                 let why = if *held {
                     "it has, or the change gives it, more than you have"
+                } else if request.extras.iter().all(undoes) {
+                    "the change undoes a change the person made to it"
+                } else if request.extras.iter().any(undoes) {
+                    "the change gives it more than you have and undoes a change the person made \
+                     to it"
                 } else {
                     "the change gives it more than you have"
                 };
@@ -911,7 +917,8 @@ impl Makers {
     /// a server no longer used is dropped here. From the dot as asked, when the change names
     /// `uses` and not `variables`; naming both, the maker says the grants itself. From the dot
     /// without the extras, whenever the change names `uses`: an item that is an extra is not
-    /// among its `uses`.
+    /// among its `uses`. A setting the person narrowed on the dot since the maker last set it
+    /// that the change gives back is an extra too (`undo_extras`, design section 9).
     async fn reach_of_change(&self, maker: &Dot, made: &Dot, wanted: &Wanted) -> Result<Reach> {
         let mut reach = reach_change(maker, made, wanted, &self.parts.worktrees_root)?;
         if wanted.uses.is_some() {
@@ -920,6 +927,8 @@ impl Makers {
             }
             self.prune_grants(&mut reach.without).await?;
         }
+        let narrowed = self.parts.store.made_narrowed(&made.id).await?;
+        undo_extras(&narrowed, &made.spec, &mut reach);
         Ok(reach)
     }
 

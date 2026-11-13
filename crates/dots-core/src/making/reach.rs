@@ -173,9 +173,8 @@ pub enum Extra {
     },
     /// A variable the maker is not granted for that consumer (`shell` or `mcp:<server>`).
     Variable { consumer: String, name: String },
-    /// A plain preset stronger than the maker's (`makers`); when the maker's is custom, any
-    /// but read-only, and read-only too unless the maker's rules allow all that read-only
-    /// allows.
+    /// A plain preset stronger than the maker's (`makers`); when the maker's is custom, one
+    /// whose allows its rules do not all allow, or whose default is wider (`covers`).
     Preset { preset: Preset, makers: Preset },
     /// A folder outside the maker's folder, or, with `below_maker`, a folder below the folder
     /// of a maker that works in worktree copies. `path` is the real path.
@@ -202,6 +201,10 @@ pub enum Extra {
     /// "Can make dots" switched on, with the dot's own limits: a made dot the person let make
     /// dots, which its maker could use to make dots past its own limits (design section 9).
     Making { per_run: u32, total: u32 },
+    /// A setting the person narrowed on the made dot since its maker last set it, which the
+    /// change gives back (`Narrowed`, design section 9). `what` is the setting as the change
+    /// would leave it, in plain words.
+    Undoes { what: String },
 }
 
 /// A preset as the person reads it.
@@ -287,6 +290,202 @@ impl Extra {
             Self::Making { per_run, total } => {
                 format!("Can make dots itself ({per_run} in one run, {total} kept)")
             }
+            Self::Undoes { what } => format!("{what}, which undoes your change to this dot"),
+        }
+    }
+}
+
+/// A setting the person narrowed on a made dot since its maker last set it (design section 9):
+/// their own edit took it away or lowered it. A maker's change that gives it back would undo
+/// their edit, so it asks the person (`Extra::Undoes`). It is kept until the dot has it again,
+/// by the person's own edit or with their say-so. Stored with the dot (migration 0058).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "setting", rename_all = "snake_case")]
+pub enum Narrowed {
+    /// The browser turned off.
+    Browser,
+    /// The person's own Claude settings turned off.
+    UserSettings,
+    /// A Library item removed.
+    Item {
+        item_kind: LibraryKind,
+        name: String,
+    },
+    /// A variable removed from a consumer (`shell` or `mcp:<server>`).
+    Variable { consumer: String, name: String },
+    /// The schedule cleared.
+    Schedule,
+    /// The turn limit lowered to `limit`.
+    MaxTurns { limit: u32 },
+    /// The time limit lowered to `limit_secs`.
+    Timeout { limit_secs: u64 },
+    /// The permissions set to a narrower plain preset.
+    Preset { preset: Preset },
+}
+
+impl Narrowed {
+    /// Whether `spec` gives the dot back what the person took.
+    fn given_back(&self, spec: &DotSpec) -> bool {
+        match self {
+            Self::Browser => spec.browser,
+            Self::UserSettings => spec.use_user_settings,
+            Self::Item { item_kind, name } => spec.uses.names(*item_kind).contains(name),
+            Self::Variable { consumer, name } => grants(&spec.variables, consumer, name),
+            Self::Schedule => spec.schedule.is_some(),
+            Self::MaxTurns { limit } => spec.max_turns > *limit,
+            Self::Timeout { limit_secs } => spec.timeout_secs > *limit_secs,
+            Self::Preset { preset } => {
+                !(plain_preset(&spec.policy) && rank(spec.policy.preset) <= rank(*preset))
+            }
+        }
+    }
+
+    /// The setting as `spec` gives it back, in plain words, for the card's line.
+    fn words(&self, spec: &DotSpec) -> String {
+        match self {
+            Self::Browser => Extra::Browser.line(""),
+            Self::UserSettings => Extra::UserSettings.line(""),
+            Self::Item { item_kind, name } => format!("The {} '{name}'", item_kind.label()),
+            Self::Variable { consumer, name } => Extra::Variable {
+                consumer: consumer.clone(),
+                name: name.clone(),
+            }
+            .line(""),
+            Self::Schedule => "A schedule".to_string(),
+            Self::MaxTurns { limit } => {
+                format!("A turn limit of {} (you set {limit})", spec.max_turns)
+            }
+            Self::Timeout { limit_secs } => format!(
+                "A time limit of {} (you set {})",
+                time_label(spec.timeout_secs),
+                time_label(*limit_secs)
+            ),
+            Self::Preset { preset } if plain_preset(&spec.policy) => format!(
+                "The preset {} (you set {})",
+                preset_label(spec.policy.preset),
+                preset_label(*preset)
+            ),
+            Self::Preset { preset } => format!(
+                "Permissions with rules of their own (you set {})",
+                preset_label(*preset)
+            ),
+        }
+    }
+
+    /// Puts the setting on `without` back as the person left it on `made`.
+    fn keep(&self, made: &DotSpec, without: &mut DotSpec) {
+        match self {
+            Self::Browser => without.browser = made.browser,
+            Self::UserSettings => without.use_user_settings = made.use_user_settings,
+            Self::Item { item_kind, name } => {
+                names_mut(&mut without.uses, *item_kind).retain(|n| n != name)
+            }
+            Self::Variable { consumer, name } => {
+                if let Some(names) = without.variables.0.get_mut(consumer) {
+                    names.retain(|n| !n.eq_ignore_ascii_case(name));
+                    if names.is_empty() {
+                        without.variables.0.remove(consumer);
+                    }
+                }
+            }
+            Self::Schedule => without.schedule = made.schedule.clone(),
+            Self::MaxTurns { limit } => without.max_turns = without.max_turns.min(*limit),
+            Self::Timeout { limit_secs } => {
+                without.timeout_secs = without.timeout_secs.min(*limit_secs)
+            }
+            Self::Preset { .. } => without.policy = made.policy.clone(),
+        }
+    }
+}
+
+/// What the person has narrowed on a made dot after their own edit from `before` to `after`
+/// (design section 9): of `kept`, what they narrowed before, what `after` does not give back,
+/// and what this edit takes away or lowers. A lowered limit or preset replaces the one kept.
+pub fn narrowed_by_person(kept: &[Narrowed], before: &DotSpec, after: &DotSpec) -> Vec<Narrowed> {
+    let mut list: Vec<Narrowed> = kept
+        .iter()
+        .filter(|n| !n.given_back(after))
+        .cloned()
+        .collect();
+    let mut add = |n: Narrowed| {
+        list.retain(|old| {
+            std::mem::discriminant(old) != std::mem::discriminant(&n) || {
+                matches!(n, Narrowed::Item { .. } | Narrowed::Variable { .. }) && *old != n
+            }
+        });
+        list.push(n);
+    };
+    if before.browser && !after.browser {
+        add(Narrowed::Browser);
+    }
+    if before.use_user_settings && !after.use_user_settings {
+        add(Narrowed::UserSettings);
+    }
+    for kind in LibraryKind::ALL {
+        for name in before.uses.names(*kind) {
+            if !after.uses.names(*kind).contains(name) {
+                add(Narrowed::Item {
+                    item_kind: *kind,
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    for (consumer, names) in &before.variables.0 {
+        for name in names {
+            if !grants(&after.variables, consumer, name) {
+                add(Narrowed::Variable {
+                    consumer: consumer.clone(),
+                    name: name.clone(),
+                });
+            }
+        }
+    }
+    if before.schedule.is_some() && after.schedule.is_none() {
+        add(Narrowed::Schedule);
+    }
+    if after.max_turns < before.max_turns {
+        add(Narrowed::MaxTurns {
+            limit: after.max_turns,
+        });
+    }
+    if after.timeout_secs < before.timeout_secs {
+        add(Narrowed::Timeout {
+            limit_secs: after.timeout_secs,
+        });
+    }
+    let lower = rank(after.policy.preset) < rank(before.policy.preset)
+        && rank(after.policy.preset).is_some();
+    if after.policy != before.policy
+        && plain_preset(&after.policy)
+        && (lower || covers(&before.policy, &after.policy))
+    {
+        add(Narrowed::Preset {
+            preset: after.policy.preset,
+        });
+    }
+    list
+}
+
+/// Of `kept`, what the person narrowed on a made dot, what is still narrowed once its maker's
+/// change saved `after`: a change that gave a setting back was one the person allowed.
+pub fn narrowed_after_maker(kept: &[Narrowed], after: &DotSpec) -> Vec<Narrowed> {
+    kept.iter()
+        .filter(|n| !n.given_back(after))
+        .cloned()
+        .collect()
+}
+
+/// Adds to `reach`, a maker's change to the made dot `made`, what of it gives back a setting
+/// the person narrowed (`narrowed`) as an extra (`Extra::Undoes`), and keeps that setting as
+/// the person left it in what "without" saves (design section 9).
+pub fn undo_extras(narrowed: &[Narrowed], made: &DotSpec, reach: &mut Reach) {
+    for n in narrowed {
+        if n.given_back(&reach.spec) {
+            reach.extras.push(Extra::Undoes {
+                what: n.words(&reach.spec),
+            });
+            n.keep(made, &mut reach.without);
         }
     }
 }
@@ -536,15 +735,57 @@ pub(super) fn rank(preset: Preset) -> Option<u8> {
     }
 }
 
-/// Whether `has` allows, for any input, each tool an allow rule of `wanted` names. Each of the
-/// read-only preset's allow rules names a tool alone; an input of nothing matches no allow rule
-/// with an argument and every deny or ask rule with one, so `Allow` means allowed everywhere.
-fn allows_all(has: &Policy, wanted: &Policy) -> bool {
-    wanted
+/// An action's place from the narrowest: deny, ask, allow.
+fn breadth(action: Action) -> u8 {
+    match action {
+        Action::Deny => 0,
+        Action::Ask => 1,
+        Action::Allow => 2,
+    }
+}
+
+/// The tool a rule names, without its argument: `Bash` of `Bash(git status:*)`.
+fn rule_tool(rule: &str) -> &str {
+    rule.split('(').next().unwrap_or(rule).trim()
+}
+
+/// Whether `policy` is a plain preset with no added rules, as a made dot asks for one.
+fn plain_preset(policy: &Policy) -> bool {
+    rank(policy.preset).is_some() && *policy == Policy::preset(policy.preset)
+}
+
+/// Whether `has` allows everything `wanted` allows (design section 6): its defaults are no
+/// narrower, it allows each tool an allow rule of `wanted` names (for any input, or by the same
+/// rule), and each of its own deny and ask rules is one `wanted` has too, as narrow or
+/// narrower, or `wanted` denies that tool outright. An input of nothing matches no allow rule
+/// with an argument and every deny or ask rule with one, so `Allow` for it means allowed
+/// everywhere. It answers no where it cannot tell, and a card then asks the person.
+fn covers(has: &Policy, wanted: &Policy) -> bool {
+    if breadth(wanted.default) > breadth(has.default)
+        || breadth(wanted.mcp_default) > breadth(has.mcp_default)
+        || (has.ask_send_delete && !wanted.ask_send_delete)
+    {
+        return false;
+    }
+    let allowed = wanted
         .rules
         .iter()
         .filter(|rule| rule.action == Action::Allow)
-        .all(|rule| has.resolve(&rule.tool, &serde_json::Value::Null) == Action::Allow)
+        .all(|rule| {
+            has.rules.contains(rule)
+                || has.resolve(rule_tool(&rule.tool), &serde_json::Value::Null) == Action::Allow
+        });
+    let no_narrower = has
+        .rules
+        .iter()
+        .filter(|rule| rule.action != Action::Allow)
+        .all(|rule| {
+            wanted.rules.iter().any(|w| {
+                (w.tool == rule.tool && breadth(w.action) <= breadth(rule.action))
+                    || (w.tool.trim() == rule_tool(&rule.tool) && w.action == Action::Deny)
+            })
+        });
+    allowed && no_narrower
 }
 
 /// The list of `uses` that names items of `kind`.
@@ -663,11 +904,10 @@ fn check(maker: &Dot, base: &DotSpec, wanted: &Wanted, worktrees_root: &Path) ->
             let no_stronger_than = |has: Preset| rank(has).is_some_and(|has| asked <= has);
             // `Policy::preset` carries the allow rules of Dots' own tools.
             spec.policy = Policy::preset(preset);
-            // Custom rules can be narrower than read-only, so a custom policy gives read-only
-            // only when it allows all that read-only allows.
-            let custom_gives = |has: &Policy| {
-                has.preset == Preset::Custom && asked == 0 && allows_all(has, &spec.policy)
-            };
+            // Custom rules can be narrower than a preset, so a custom policy gives a preset only
+            // when it allows all that the preset allows, with a default no narrower.
+            let custom_gives =
+                |has: &Policy| has.preset == Preset::Custom && covers(has, &spec.policy);
             if no_stronger_than(m.policy.preset)
                 || no_stronger_than(base.policy.preset)
                 || custom_gives(&m.policy)
@@ -861,6 +1101,8 @@ pub(super) fn spec_holds(spec: &DotSpec, extra: &Extra) -> bool {
         Extra::Making { per_run, total } => {
             spec.making.on && spec.making.per_run >= *per_run && spec.making.total >= *total
         }
+        // The person's own narrowing, not something the dot was given.
+        Extra::Undoes { .. } => true,
     }
 }
 
@@ -893,13 +1135,12 @@ pub fn held_extras(maker: &Dot, made: &DotSpec, own_folder: bool) -> Vec<Extra> 
     }
     if made.policy != m.policy {
         let preset = made.policy.preset;
-        // A plain preset, as a made dot asks for one, no stronger than the maker's.
-        let plain = rank(preset).is_some() && made.policy == Policy::preset(preset);
-        let within = plain
+        // A plain preset, as a made dot asks for one, no stronger than the maker's; or, for a
+        // custom maker, one its rules allow all of (`covers`), so one "Always allow" on the
+        // maker does not put every dot it made beyond its reach.
+        let within = plain_preset(&made.policy)
             && (rank(m.policy.preset).is_some_and(|has| rank(preset) <= Some(has))
-                || (m.policy.preset == Preset::Custom
-                    && preset == Preset::ReadOnly
-                    && allows_all(&m.policy, &made.policy)));
+                || (m.policy.preset == Preset::Custom && covers(&m.policy, &made.policy)));
         if !within {
             extras.push(Extra::Preset {
                 preset,

@@ -1083,6 +1083,12 @@ async fn a_claude_folder_the_person_allowed_is_made_and_stays() {
                 &request.id,
                 dots_core::making::requests::MakeDecision::Allow,
                 None,
+                t.rt.makers()
+                    .request_card(&request.id)
+                    .await
+                    .unwrap()
+                    .shown
+                    .as_deref(),
             )
             .await
             .unwrap();

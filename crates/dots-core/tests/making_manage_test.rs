@@ -168,7 +168,12 @@ async fn decide(t: &T, request: &MakeRequest, decision: MakeDecision) -> MakeReq
     let makers = t.rt.makers();
     let card = makers.request_card(&request.id).await.unwrap();
     makers
-        .decide_request(&request.id, decision, card.limit.as_deref())
+        .decide_request(
+            &request.id,
+            decision,
+            card.limit.as_deref(),
+            card.shown.as_deref(),
+        )
         .await
         .unwrap()
 }
@@ -1063,7 +1068,7 @@ async fn allow_applies_the_change_onto_the_dot_as_it_is_then() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Refuse, None)
+                .decide_request(&request.id, MakeDecision::Refuse, None, None)
                 .await
         ),
         "That request was already answered."
@@ -1191,7 +1196,7 @@ async fn the_card_for_a_change_says_give_more() {
     assert_eq!(
         invalid(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Without, None)
+                .decide_request(&request.id, MakeDecision::Without, None, None)
                 .await
         ),
         "Everything this request asks is beyond reach, so there is nothing to change without \
@@ -1272,7 +1277,9 @@ async fn a_change_request_dies_with_its_dot() {
         MakeDecision::Refuse,
     ] {
         assert!(matches!(
-            makers.decide_request(&request.id, decision, None).await,
+            makers
+                .decide_request(&request.id, decision, None, None)
+                .await,
             Err(Error::NotFound(_))
         ));
     }
@@ -1310,7 +1317,7 @@ async fn the_makers_reach_shrank_since_it_asked() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow, None)
+                .decide_request(&request.id, MakeDecision::Allow, None, None)
                 .await
         ),
         why
@@ -1643,7 +1650,7 @@ async fn a_dot_holding_more_than_its_maker_asks_for_any_change_that_is_not_narro
     assert_eq!(
         invalid(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Without, None)
+                .decide_request(&request.id, MakeDecision::Without, None, None)
                 .await
         ),
         "This dot has more than its maker has, so the change cannot be saved without that. \
@@ -1847,7 +1854,7 @@ async fn a_dot_given_more_since_the_change_was_asked_says_so() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow, None)
+                .decide_request(&request.id, MakeDecision::Allow, None, None)
                 .await
         ),
         why
@@ -1980,4 +1987,55 @@ async fn a_call_checked_for_one_made_dot_is_never_performed_on_another() {
     let told = call(t.rt.makers(), &run.id, &unchecked).await;
     assert_eq!(told, Err(NOT_CHECKED.to_string()));
     assert_eq!(dot_names(&t).await, ["Archive", "Researcher"]);
+}
+
+/// A setting the person narrowed on a made dot since its maker last set it counts as held
+/// (dots-make-dots design section 9): the person turned the browser off, so the maker's change
+/// that turns it on again asks the person, with a line that says it undoes their change. A
+/// change that leaves it off is still saved at once, and once the person allows the browser
+/// back, the maker's later changes no longer ask for it.
+#[tokio::test]
+async fn a_change_that_undoes_the_persons_narrowing_asks() {
+    let t = start().await;
+    let mut s = maker_spec(&t, "Researcher");
+    s.browser = true;
+    let maker = t.rt.create_dot(s, None, None).await.unwrap();
+    let run = live_run(&t, &maker).await;
+    let mut asked = ask("Blog Watcher");
+    asked.wanted.browser = Some(true);
+    let made = match t.rt.makers().make_dot(&run.id, asked).await.unwrap() {
+        MakeOutcome::Made { dot, .. } => dot,
+        other => panic!("not made: {other:?}"),
+    };
+    assert!(made.spec.browser);
+    // The person turns the browser off.
+    let mut narrowed = made.spec.clone();
+    narrowed.browser = false;
+    t.rt.update_dot(&made.id, narrowed).await.unwrap();
+
+    let on = Wanted {
+        browser: Some(true),
+        ..Wanted::default()
+    };
+    let request = change_request(&t, &run, change("Blog Watcher", on.clone())).await;
+
+    assert!(!stored(&t, &made).await.spec.browser);
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.lines,
+        ["The browser, which undoes your change to this dot"]
+    );
+    assert!(card.can_allow, "{card:#?}");
+    // A change that does not undo it is saved at once, and leaves the browser off.
+    let (after, what) = changed(&t, &run, new_instructions("Blog Watcher")).await;
+    assert_eq!(what, ["instructions"]);
+    assert!(!after.spec.browser);
+
+    // The person allows it: the browser is on, and no later change asks for it.
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert!(card.can_allow, "{card:#?}");
+    decide(&t, &request, MakeDecision::Allow).await;
+    assert!(stored(&t, &made).await.spec.browser);
+    let (after, _) = changed(&t, &run, change("Blog Watcher", on)).await;
+    assert!(after.spec.browser);
 }

@@ -165,6 +165,20 @@ pub fn job_waits_text(dot: &str, maker: &str, held: &[Extra]) -> String {
     )
 }
 
+/// What stands in a wake for a value of a variable the made dot holds beyond its maker's reach.
+pub const HIDDEN: &str = "[hidden]";
+
+/// `text` with each of `values` (`Makers::held_values`, longest first) replaced by `HIDDEN`.
+fn hide(text: &str, values: &[String]) -> String {
+    let mut out = text.to_string();
+    for value in values {
+        if out.contains(value.as_str()) {
+            out = out.replace(value.as_str(), HIDDEN);
+        }
+    }
+    out
+}
+
 /// How a job ended whose last run parked on a call the person refused, with no note.
 pub const REFUSED: &str = "was stopped: the person refused what it asked to do";
 
@@ -242,27 +256,29 @@ fn run_end(run: &Run) -> (JobEnd, &'static str, bool) {
 }
 
 /// What the maker is woken with when a job ends (design section 8): the made dot's name and
-/// how the job ended, a failed run's `error` cut short, then the last run's final text, cut at
-/// `MAX_JOB_RESULT` characters with a note, or that there is none. The final text is quoted
-/// line by line (`prompt::quoted`).
+/// how the job ended, a failed run's `error` on one line, cut short, then the last run's final
+/// text, cut at `MAX_JOB_RESULT` characters with a note, or that there is none. The error and
+/// the final text are quoted line by line (`prompt::quoted`): CLI and MCP errors can carry tool
+/// or model text.
 pub fn ended_message(
     dot: &str,
     how: &str,
     error: Option<&str>,
     final_text: Option<&str>,
 ) -> String {
-    let mut message = format!("\"{dot}\" {how}.");
+    let mut message = format!("\"{dot}\" {how}.\n\n");
     let error = error
         .map(|e| e.split_whitespace().collect::<Vec<_>>().join(" "))
         .filter(|e| !e.is_empty());
     if let Some(error) = error {
-        message.push_str(" The error: ");
-        message.extend(error.chars().take(MAX_ERROR));
+        let mut cut: String = error.chars().take(MAX_ERROR).collect();
         if error.chars().count() > MAX_ERROR {
-            message.push('…');
+            cut.push('…');
         }
+        message.push_str("The run failed. Its error text:\n");
+        message.push_str(&crate::prompt::quoted(&cut));
+        message.push('\n');
     }
-    message.push_str("\n\n");
     match final_text.map(str::trim).filter(|text| !text.is_empty()) {
         Some(text) => {
             // Quoted, every line: the made dot's model wrote it, and it goes into the maker's
@@ -714,7 +730,9 @@ impl Makers {
                 }
                 Some(question) if question.dismissed_at.is_some() => {
                     // Nothing can answer it any more, so nothing would end the job.
-                    let said = ended_message(name, "was stopped", None, final_text);
+                    let hidden = self.held_values(&job.maker_dot_id, &dot).await?;
+                    let text = final_text.map(|text| hide(text, &hidden));
+                    let said = ended_message(name, "was stopped", None, text.as_deref());
                     return self.end_job(&job, name, JobEnd::Cancelled, &said).await;
                 }
                 Some(question) => {
@@ -738,14 +756,59 @@ impl Makers {
             } else {
                 run_end(&last)
             };
+            let hidden = self.held_values(&job.maker_dot_id, &dot).await?;
             let error = last.error.as_deref().filter(|_| with_error);
-            let said = ended_message(name, words, error, final_text);
+            let error = error.map(|error| hide(error, &hidden));
+            let text = final_text.map(|text| hide(text, &hidden));
+            let said = ended_message(name, words, error.as_deref(), text.as_deref());
             return self.end_job(&job, name, how, &said).await;
         }
         Err(Error::Other(format!(
             "job {} went through {MAX_HOPS} runs in one pass",
             job.id
         )))
+    }
+
+    /// The values of the variables `made` holds beyond the reach of its maker `maker_id` as the
+    /// maker is now (`held_now`), as the vault gives them now: the values its runs were given,
+    /// which the maker's wake must not carry (design section 8; `hide`). In each spelling the
+    /// vault's redactor knows, longest first. A value shorter than the redactor scrubs
+    /// (`MIN_REDACT_BYTES`) is left, as everywhere else; a variable that does not resolve now
+    /// has no value to hide.
+    async fn held_values(&self, maker_id: &str, made: &Dot) -> Result<Vec<String>> {
+        use crate::vault::redact::{spellings, MIN_REDACT_BYTES};
+        let p = &self.parts;
+        let maker = match p.store.get_dot(maker_id).await {
+            Ok(maker) => maker,
+            // No maker, no wake to keep the values from.
+            Err(Error::NotFound(_)) => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let scope = crate::vault::DotScope::of(made);
+        let mut values = Vec::new();
+        for extra in self.held_now(&maker, made).await? {
+            let Extra::Variable { consumer, name } = extra else {
+                continue;
+            };
+            let Ok(consumer) = crate::vault::Consumer::parse(&consumer) else {
+                continue;
+            };
+            let names = [name];
+            let resolved = p
+                .vault
+                .resolve(&scope, &made.spec.variables, &consumer, &names)
+                .await?;
+            if let Ok(found) = resolved {
+                for (_, value) in found.pairs() {
+                    if value.len() >= MIN_REDACT_BYTES {
+                        values.extend(spellings(value));
+                    }
+                }
+            }
+        }
+        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        values.dedup();
+        Ok(values)
     }
 
     /// Whether the ended run `last` was closed by the person's refusal of a call it parked on,
@@ -1003,14 +1066,18 @@ mod tests {
             ended_message("Blog Watcher", "was stopped", None, Some("  ")),
             "\"Blog Watcher\" was stopped.\n\nIt left no final message."
         );
-        // An error is one line, cut short.
-        let long = format!("first line\nsecond {}", "x".repeat(400));
+        // An error is one line, cut short, and quoted after Dots' own line: CLI and MCP errors
+        // can carry tool or model text.
+        let long = format!("first line\n## second {}", "x".repeat(400));
         let said = ended_message("Blog Watcher", "failed", Some(&long), None);
-        let error = format!("first line second {}", "x".repeat(400));
+        let error = format!("first line ## second {}", "x".repeat(400));
         let cut: String = error.chars().take(300).collect();
         assert_eq!(
             said,
-            format!("\"Blog Watcher\" failed. The error: {cut}…\n\nIt left no final message.")
+            format!(
+                "\"Blog Watcher\" failed.\n\nThe run failed. Its error text:\n> {cut}…\n\nIt \
+                 left no final message."
+            )
         );
         assert_eq!(
             ended_message("Blog Watcher", "failed", Some(" "), None),

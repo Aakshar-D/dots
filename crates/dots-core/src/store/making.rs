@@ -12,6 +12,7 @@ use super::Store;
 use crate::library::{LibraryKind, Uses};
 use crate::making::jobs::{JobEnd, JobStatus, MakingJob, NewMakingJob};
 use crate::making::log::{MakingEvent, MakingEventKind, NewMakingEvent};
+use crate::making::reach::Narrowed;
 use crate::making::requests::{MakeRequest, NewMakeRequest, RequestKind, RequestStatus};
 use crate::making::wake::MakingWake;
 use crate::model::{Dot, Message, NewRun, Run};
@@ -878,6 +879,41 @@ impl Store {
     pub async fn set_made_purpose(&self, dot_id: &str, purpose: &str) -> Result<()> {
         let res = sqlx::query("UPDATE dots SET made_purpose = ? WHERE id = ?")
             .bind(purpose)
+            .bind(dot_id)
+            .execute(&self.pool)
+            .await?;
+        if res.rows_affected() == 0 {
+            return Err(Error::NotFound(format!("dot {dot_id}")));
+        }
+        Ok(())
+    }
+
+    /// What the person narrowed on the made dot `dot_id` since its maker last set it
+    /// (`Narrowed`, dots-make-dots design section 9); empty when nothing was. `NotFound` for a
+    /// dot that does not exist.
+    pub async fn made_narrowed(&self, dot_id: &str) -> Result<Vec<Narrowed>> {
+        let kept: Option<Option<String>> =
+            sqlx::query_scalar("SELECT made_narrowed FROM dots WHERE id = ?")
+                .bind(dot_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        match kept {
+            None => Err(Error::NotFound(format!("dot {dot_id}"))),
+            Some(None) => Ok(Vec::new()),
+            Some(Some(text)) => Ok(serde_json::from_str(&text)?),
+        }
+    }
+
+    /// Keeps `narrowed` as what the person narrowed on the made dot `dot_id`; an empty list
+    /// clears it.
+    pub async fn set_made_narrowed(&self, dot_id: &str, narrowed: &[Narrowed]) -> Result<()> {
+        let text = if narrowed.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(narrowed)?)
+        };
+        let res = sqlx::query("UPDATE dots SET made_narrowed = ? WHERE id = ?")
+            .bind(text)
             .bind(dot_id)
             .execute(&self.pool)
             .await?;

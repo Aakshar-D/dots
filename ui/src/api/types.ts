@@ -1349,6 +1349,9 @@ export const PendingMakeRequest = z.strictObject({
   purpose: z.string(),
   title: z.string(),
   lines: z.array(z.string()),
+  // What the card shows beyond the maker's reach, as a digest: an answer sends it back, as it
+  // sends the card's limit line, and is refused when the request would now give something else.
+  shown: nullable(z.string()),
   status: z.enum(["waiting", "allowed", "made_without", "refused", "gone", "discarded"]),
   created_at: z.string(),
 });

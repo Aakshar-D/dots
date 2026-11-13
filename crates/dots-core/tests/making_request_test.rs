@@ -151,12 +151,17 @@ async fn request(t: &T, run: &Run, ask: MakeDot) -> MakeRequest {
 }
 
 /// The person's answer to the card they see, which must be taken: it sends back the card's
-/// limit line, as the UI does.
+/// limit line and what it showed beyond reach, as the UI does.
 async fn decide(t: &T, request: &MakeRequest, decision: MakeDecision) -> MakeRequest {
     let makers = t.rt.makers();
     let card = makers.request_card(&request.id).await.unwrap();
     makers
-        .decide_request(&request.id, decision, card.limit.as_deref())
+        .decide_request(
+            &request.id,
+            decision,
+            card.limit.as_deref(),
+            card.shown.as_deref(),
+        )
         .await
         .unwrap()
 }
@@ -406,7 +411,7 @@ async fn a_limit_alone_stores_a_request_that_only_allow_or_refuse_can_answer() {
     // There is nothing to make it without.
     let err =
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Without, None)
+            .decide_request(&request.id, MakeDecision::Without, None, None)
             .await
             .unwrap_err();
     match err {
@@ -743,7 +748,7 @@ async fn a_request_cannot_be_answered_twice() {
             assert_eq!(
                 conflict(
                     t.rt.makers()
-                        .decide_request(&request.id, decision, None)
+                        .decide_request(&request.id, decision, None, None)
                         .await
                 ),
                 "That request was already answered."
@@ -763,7 +768,7 @@ async fn a_request_cannot_be_answered_twice() {
     // A request that does not exist.
     let err =
         t.rt.makers()
-            .decide_request("no-such-request", MakeDecision::Allow, None)
+            .decide_request("no-such-request", MakeDecision::Allow, None, None)
             .await
             .unwrap_err();
     assert!(matches!(err, Error::NotFound(_)), "{err:?}");
@@ -776,9 +781,10 @@ async fn two_answers_at_once_make_one_dot() {
     let run = live_run(&t, &maker).await;
     let request = request(&t, &run, ask_browser("Blog Watcher")).await;
     let makers = t.rt.makers();
+    let shown = makers.request_card(&request.id).await.unwrap().shown;
     let (a, b) = tokio::join!(
-        makers.decide_request(&request.id, MakeDecision::Allow, None),
-        makers.decide_request(&request.id, MakeDecision::Allow, None)
+        makers.decide_request(&request.id, MakeDecision::Allow, None, shown.as_deref()),
+        makers.decide_request(&request.id, MakeDecision::Allow, None, shown.as_deref())
     );
     let (taken, late) = match (a, b) {
         (Ok(taken), late @ Err(_)) | (late @ Err(_), Ok(taken)) => (taken, late),
@@ -838,7 +844,7 @@ async fn a_library_item_gone_since_leaves_only_dont_make_it() {
         assert_eq!(
             conflict(
                 t.rt.makers()
-                    .decide_request(&request.id, decision, None)
+                    .decide_request(&request.id, decision, None, None)
                     .await
             ),
             format!("{gone} Only \"Don't make it\" is left.")
@@ -876,7 +882,7 @@ async fn a_variable_gone_since_is_found_when_the_person_answers() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow, None)
+                .decide_request(&request.id, MakeDecision::Allow, None, None)
                 .await
         ),
         format!("{gone} Only \"Don't make it\" is left.")
@@ -910,7 +916,7 @@ async fn a_name_taken_since_leaves_only_dont_make_it() {
         assert_eq!(
             conflict(
                 t.rt.makers()
-                    .decide_request(&request.id, decision, None)
+                    .decide_request(&request.id, decision, None, None)
                     .await
             ),
             format!("{gone} Only \"Don't make it\" is left.")
@@ -1054,7 +1060,7 @@ async fn deleting_the_maker_discards_its_requests() {
     ));
     assert!(matches!(
         makers
-            .decide_request(&request.id, MakeDecision::Allow, None)
+            .decide_request(&request.id, MakeDecision::Allow, None, None)
             .await,
         Err(Error::NotFound(_))
     ));
@@ -1114,6 +1120,16 @@ impl Acme {
 
     /// Serves a member list at `seq` with an owner who is not this PC, and this PC as `role`.
     async fn serve_list(&self, seq: u64, role: &str) {
+        self.serve_list_with(seq, role, None).await;
+    }
+
+    /// `serve_list`, with `guardrails` on the Default workspace (guardrails spec section 3).
+    async fn serve_list_with(
+        &self,
+        seq: u64,
+        role: &str,
+        guardrails: Option<dots_core::accounts::Guardrails>,
+    ) {
         let me = identity(self.t.rt.store()).await.unwrap().public_key;
         let member = |id: &str, email: &str, role: &str, key: &str| {
             json!({
@@ -1129,7 +1145,12 @@ impl Acme {
         let signed = sign(&self.keys, &policy(ACME, ISSUED, extra));
         self.bao.put_env("secret", "dots", json!({}));
         self.bao.put_policy("secret", "dots", &signed);
-        let list = sign_roster(&self.keys, &roster(ACME, seq, members));
+        let mut list: serde_json::Value =
+            serde_json::from_str(&roster(ACME, seq, members)).unwrap();
+        if let Some(g) = guardrails {
+            list["workspaces"][0]["guardrails"] = serde_json::to_value(g).unwrap();
+        }
+        let list = sign_roster(&self.keys, &list.to_string());
         self.bao.put_roster("secret", "dots", &list);
     }
 
@@ -1151,6 +1172,127 @@ impl Acme {
         self.serve_list(seq, role).await;
         self.t.rt.refresh_org(ACME).await.unwrap();
     }
+
+    /// Serves the list again at `seq` with this PC as a Member of the Default workspace, which
+    /// now has the default guardrails (a Member's dot may use up to Sandboxed), and fetches it.
+    async fn guard(&self, seq: u64) {
+        let rails = dots_core::accounts::Guardrails::defaults();
+        self.serve_list_with(seq, "member", Some(rails)).await;
+        self.t.rt.refresh_org(ACME).await.unwrap();
+    }
+}
+
+/// The answer carries what the card showed beyond the maker's reach (`MakeRequestCard::shown`),
+/// as it carries the limit line: when the maker's settings moved twice between the card and the
+/// answer, so that Allow would now give an extra the card the person looked at did not show,
+/// Allow and Make it without these are refused, and the card read again shows it.
+#[tokio::test]
+async fn allow_covers_only_the_extras_the_card_showed() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let mut both = ask_browser("Blog Watcher");
+    both.wanted.use_user_settings = Some(true);
+    let request = request(&t, &run, both).await;
+    assert_eq!(request.extras, [Extra::Browser, Extra::UserSettings]);
+    // The person gives the maker the browser: the card shows only the Claude settings.
+    let mut s = t.rt.store().get_dot(&maker.id).await.unwrap().spec;
+    s.browser = true;
+    t.rt.update_dot(&maker.id, s.clone()).await.unwrap();
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(card.lines, ["Your Claude settings"]);
+    assert!(card.can_allow);
+    // Then takes the browser away again, while that card is still open.
+    s.browser = false;
+    t.rt.update_dot(&maker.id, s).await.unwrap();
+
+    let mut rx = t.rt.subscribe();
+    for decision in [MakeDecision::Allow, MakeDecision::Without] {
+        let answer = t.rt.makers().decide_request(
+            &request.id,
+            decision,
+            card.limit.as_deref(),
+            card.shown.as_deref(),
+        );
+        assert_eq!(
+            conflict(answer.await),
+            dots_core::making::requests::CARD_CHANGED
+        );
+    }
+    assert!(!updated(&mut rx).is_empty());
+    assert_eq!(stored(&t, &request).await.status, RequestStatus::Waiting);
+    assert_eq!(dot_names(&t).await, ["Researcher"]);
+
+    // The card read again shows both, and its Allow gives both.
+    let again = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(again.lines, ["The browser", "Your Claude settings"]);
+    assert_ne!(again.shown, card.shown);
+    let after = decide(&t, &request, MakeDecision::Allow).await;
+    assert_eq!(after.status, RequestStatus::Allowed);
+    let made = t.rt.store().get_dot(after.made_dot_id.as_deref().unwrap());
+    let made = made.await.unwrap();
+    assert!(made.spec.browser && made.spec.use_user_settings);
+}
+
+/// The card of a request whose dot the workspace's guardrails ceiling would refuse shows Allow
+/// off, with the ceiling's own words (dots-make-dots design section 7.2, guardrails spec section
+/// 4.3): pressing it could only fail. Make it without these, which keeps the maker's own
+/// permissions, stays on. The same for a change.
+#[tokio::test]
+async fn the_guardrails_ceiling_turns_allow_off_on_the_card() {
+    let a = Acme::start().await;
+    let t = &a.t;
+    a.join_as("member").await;
+    let maker =
+        t.rt.create_dot(maker_spec(t), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let run = live_run(t, &maker).await;
+    let made = make(t, &run, "Feed Reader").await;
+    let mut trusted = ask_browser("Blog Watcher");
+    trusted.wanted.permissions = Some(WantedPermissions::Preset(Preset::Trusted));
+    let request = request(t, &run, trusted).await;
+    let change = ChangeDot {
+        dot: "Feed Reader".into(),
+        purpose: None,
+        wanted: Wanted {
+            permissions: Some(WantedPermissions::Preset(Preset::Trusted)),
+            ..Wanted::default()
+        },
+    };
+    let change = match t.rt.makers().change_dot(&run.id, change).await.unwrap() {
+        ChangeOutcome::Waiting { request, .. } => request,
+        other => panic!("changed: {other:?}"),
+    };
+    a.guard(2).await;
+
+    let shown = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert!(!shown.can_allow, "{shown:#?}");
+    let why = shown.blocked.clone().unwrap_or_default();
+    assert!(why.contains("may use up to Sandboxed"), "{why}");
+    assert!(shown.can_without, "{shown:#?}");
+    let card = t.rt.makers().request_card(&change.id).await.unwrap();
+    assert!(!card.can_allow, "{card:#?}");
+    let why = card.blocked.clone().unwrap_or_default();
+    assert!(why.contains("may use up to Sandboxed"), "{why}");
+    // Allow is refused as the card says.
+    match t
+        .rt
+        .makers()
+        .decide_request(
+            &request.id,
+            MakeDecision::Allow,
+            None,
+            shown.shown.as_deref(),
+        )
+        .await
+    {
+        Err(Error::NotAllowed(text)) => assert!(text.contains("may use up to Sandboxed")),
+        other => panic!("expected NotAllowed, got {other:?}"),
+    }
+    assert_eq!(dot_names(t).await, ["Feed Reader", "Researcher"]);
+    assert_eq!(made.spec.policy.preset, Preset::Sandboxed);
+    t.rt.shutdown();
 }
 
 #[tokio::test]
@@ -1180,7 +1322,7 @@ async fn a_person_without_the_rights_cannot_allow() {
         match t
             .rt
             .makers()
-            .decide_request(&request.id, decision, None)
+            .decide_request(&request.id, decision, None, card.shown.as_deref())
             .await
         {
             Err(Error::NotAllowed(text)) => assert_eq!(text, why),
@@ -1280,7 +1422,7 @@ async fn the_maker_narrowed_since_the_ask_blocks_allow() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow, None)
+                .decide_request(&request.id, MakeDecision::Allow, None, None)
                 .await
         ),
         SHRANK
@@ -1307,6 +1449,7 @@ async fn a_limit_reached_while_a_request_waits_is_shown_before_allow() {
     let run = live_run(&t, &maker).await;
     let request = request(&t, &run, ask_browser("Blog Watcher")).await;
     assert_eq!(request.over, None);
+    let seen = t.rt.makers().request_card(&request.id).await.unwrap().shown;
     // Another dot takes the last place while the request waits.
     make(&t, &run, "One").await;
     let mut rx = t.rt.subscribe();
@@ -1318,7 +1461,7 @@ async fn a_limit_reached_while_a_request_waits_is_shown_before_allow() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow, None)
+                .decide_request(&request.id, MakeDecision::Allow, None, seen.as_deref())
                 .await
         ),
         reached
@@ -1386,7 +1529,7 @@ async fn an_outside_folder_gone_since_leaves_only_dont_make_it() {
     assert_eq!(
         conflict(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Allow, None)
+                .decide_request(&request.id, MakeDecision::Allow, None, None)
                 .await
         ),
         format!("{gone} Only \"Don't make it\" is left.")
@@ -1491,9 +1634,12 @@ async fn allow_on_an_open_card_after_another_reader_computed_a_new_limit_is_refu
     let reached = "A limit was reached since the card was shown: it would be the 2nd made dot \
                    kept; the limit is 1. Look at the card again, and answer again if you still \
                    want this dot.";
-    let answer =
-        t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Allow, open.limit.as_deref());
+    let answer = t.rt.makers().decide_request(
+        &request.id,
+        MakeDecision::Allow,
+        open.limit.as_deref(),
+        open.shown.as_deref(),
+    );
     assert_eq!(conflict(answer.await), reached);
     assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
     // The card read again shows it, and Allow on that card is taken.
@@ -1504,7 +1650,12 @@ async fn allow_on_an_open_card_after_another_reader_computed_a_new_limit_is_refu
     );
     let after =
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Allow, again.limit.as_deref())
+            .decide_request(
+                &request.id,
+                MakeDecision::Allow,
+                again.limit.as_deref(),
+                again.shown.as_deref(),
+            )
             .await
             .unwrap();
     assert_eq!(after.status, RequestStatus::Allowed);

@@ -482,8 +482,8 @@ async fn a_failed_job_and_a_stopped_job_wake_the_maker_and_say_how() {
     assert_eq!(
         said,
         [
-            "\"Alpha\" failed. The error: engine exited without a result\n\nIts final \
-             message:\n> I read two of three.",
+            "\"Alpha\" failed.\n\nThe run failed. Its error text:\n> engine exited without a \
+             result\n\nIts final message:\n> I read two of three.",
             "\"Beta\" was stopped.\n\nIt left no final message.",
             "\"Gamma\" was stopped by a spend cap.\n\nIt left no final message.",
         ]
@@ -1205,7 +1205,7 @@ async fn an_answer_or_a_wake_does_not_reset_the_count() {
     };
     finish(&t, &answer.id, RunStatus::Succeeded, Some("Asked."), None).await;
     t.rt.makers()
-        .decide_request(&request.id, MakeDecision::Refuse, None)
+        .decide_request(&request.id, MakeDecision::Refuse, None, None)
         .await
         .unwrap();
     let thread = t.rt.store().list_thread(&run.root_run_id).await.unwrap();
@@ -1317,7 +1317,12 @@ async fn a_first_job_starts_when_the_person_allows_the_request() {
 
     let request =
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Allow, None)
+            .decide_request(
+                &request.id,
+                MakeDecision::Allow,
+                None,
+                shown(&t, &request).await.as_deref(),
+            )
             .await
             .unwrap();
 
@@ -1395,7 +1400,12 @@ async fn a_first_job_past_the_guard_leaves_the_dot_made() {
     let before = wakes(&t).await.len();
     let request =
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Allow, None)
+            .decide_request(
+                &request.id,
+                MakeDecision::Allow,
+                None,
+                shown(&t, &request).await.as_deref(),
+            )
             .await
             .unwrap();
     assert!(request.made_dot_id.is_some());
@@ -2272,6 +2282,11 @@ const JOB_WAITS: &str = "Not started yet: the job for \"Blog Watcher\" needs the
                          for it and do not give the job again: carry on with other work or end \
                          your turn, and you will be woken with their answer.";
 
+/// What the card of `request` shows beyond the maker's reach, as an answer to it sends back.
+async fn shown(t: &T, request: &MakeRequest) -> Option<String> {
+    t.rt.makers().request_card(&request.id).await.unwrap().shown
+}
+
 /// The one request of the maker that waits for the person.
 async fn the_waiting_request(t: &T, maker: &Dot) -> MakeRequest {
     let mut waiting =
@@ -2321,7 +2336,13 @@ async fn a_job_for_a_dot_holding_a_secret_waits_for_the_person() {
         card.title,
         "Researcher wants to give a job to Blog Watcher, which has more than Researcher has"
     );
-    assert_eq!(card.lines, ["The variable DEPLOY_KEY for the shell"]);
+    assert_eq!(
+        card.lines,
+        [
+            "The variable DEPLOY_KEY for the shell",
+            "Its final message goes back to Researcher."
+        ]
+    );
     assert_eq!(card.name, "Blog Watcher");
     assert_eq!(
         card.request.first_job.as_deref(),
@@ -2338,7 +2359,7 @@ async fn a_job_for_a_dot_holding_a_secret_waits_for_the_person() {
     assert_eq!(
         invalid(
             t.rt.makers()
-                .decide_request(&request.id, MakeDecision::Without, None)
+                .decide_request(&request.id, MakeDecision::Without, None, None)
                 .await
         ),
         "A job cannot be given without a part of it. Allow it, or don't give it."
@@ -2347,7 +2368,12 @@ async fn a_job_for_a_dot_holding_a_secret_waits_for_the_person() {
     // Allow starts the job as it was given, from the run and topic that gave it.
     let after =
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Allow, None)
+            .decide_request(
+                &request.id,
+                MakeDecision::Allow,
+                None,
+                shown(&t, &request).await.as_deref(),
+            )
             .await
             .unwrap();
     assert_eq!(after.status, RequestStatus::Allowed);
@@ -2401,7 +2427,7 @@ async fn a_refused_job_starts_nothing_and_wakes_the_maker_once() {
     assert_eq!(request.kind, RequestKind::Job);
 
     let after = makers
-        .decide_request(&request.id, MakeDecision::Refuse, None)
+        .decide_request(&request.id, MakeDecision::Refuse, None, None)
         .await
         .unwrap();
 
@@ -2432,7 +2458,12 @@ async fn a_job_the_person_allows_passes_the_loop_guard_and_counts_toward_it() {
 
     // The person allows it past the guard: the person gave it.
     t.rt.makers()
-        .decide_request(&request.id, MakeDecision::Allow, None)
+        .decide_request(
+            &request.id,
+            MakeDecision::Allow,
+            None,
+            shown(&t, &request).await.as_deref(),
+        )
         .await
         .unwrap();
 
@@ -2463,7 +2494,13 @@ async fn a_made_dot_the_person_lets_make_dots_takes_jobs_only_with_their_say_so(
     assert!(text.await.unwrap().starts_with("Not started yet"));
     let request = the_waiting_request(&t, &maker).await;
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
-    assert_eq!(card.lines, ["Can make dots itself (3 in one run, 10 kept)"]);
+    assert_eq!(
+        card.lines,
+        [
+            "Can make dots itself (3 in one run, 10 kept)",
+            "Its final message goes back to Researcher."
+        ]
+    );
     assert!(jobs(&t, &run).await.is_empty());
 }
 
@@ -2658,9 +2695,10 @@ async fn allow_on_a_job_request_checks_the_dot_and_the_job_stays_the_makers_word
         .await
         .unwrap();
     let request = the_waiting_request(&t, &maker).await;
+    let shown = shown(&t, &request).await;
     let allow = || {
         t.rt.makers()
-            .decide_request(&request.id, MakeDecision::Allow, None)
+            .decide_request(&request.id, MakeDecision::Allow, None, shown.as_deref())
     };
 
     // Given more since: the browser too.
@@ -2706,4 +2744,60 @@ async fn allow_on_a_job_request_checks_the_dot_and_the_job_stays_the_makers_word
         "{said}"
     );
     assert!(!said.contains("## Message from the user"), "{said}");
+}
+
+/// The job card says where the made dot's answer goes (dots-make-dots design section 8), and
+/// the values of a variable that dot holds beyond its maker's reach are hidden from the maker's
+/// wake: a dot that echoes its token does not put it in its maker's prompt.
+#[tokio::test]
+async fn a_job_card_says_the_answer_goes_back_and_the_wake_hides_the_dots_own_values() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    t.rt.vault()
+        .add("SITE_TOKEN", EntryKind::Plain, "tok-4f9a2c71e0")
+        .await
+        .unwrap();
+    let mut spec = t.rt.store().get_dot(&made.id).await.unwrap().spec;
+    spec.variables = Grants([("shell".to_string(), vec!["SITE_TOKEN".to_string()])].into());
+    t.rt.update_dot(&made.id, spec).await.unwrap();
+    let text =
+        t.rt.makers()
+            .give_job(&run.id, "Blog Watcher", "Post the list.")
+            .await
+            .unwrap();
+    assert!(text.starts_with("Not started yet"), "{text}");
+    let request = the_waiting_request(&t, &maker).await;
+
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+
+    assert_eq!(
+        card.lines,
+        [
+            "The variable SITE_TOKEN for the shell",
+            "Its final message goes back to Researcher."
+        ]
+    );
+    t.rt.makers()
+        .decide_request(
+            &request.id,
+            MakeDecision::Allow,
+            None,
+            card.shown.as_deref(),
+        )
+        .await
+        .unwrap();
+    let job = jobs(&t, &run).await.pop().expect("the job started");
+    let its = run_of(&t, &job).await;
+    start(&t, &its.id).await;
+    let posted = "Posted with tok-4f9a2c71e0, as asked.";
+    finish(&t, &its.id, RunStatus::Succeeded, Some(posted), None).await;
+    settle(&t).await;
+    let said = wakes(&t).await;
+    assert_eq!(
+        said.last().unwrap(),
+        "\"Blog Watcher\" finished the job.\n\nIts final message:\n> Posted with [hidden], as \
+         asked."
+    );
 }

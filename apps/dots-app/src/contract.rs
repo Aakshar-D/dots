@@ -1561,6 +1561,7 @@ pub fn samples() -> Value {
                     "The browser".into(),
                     "4th dot in this run; the limit is 3".into(),
                 ],
+                shown: Some(dots_core::util::json_hash(&serde_json::json!(["The browser"]))),
                 status: dots_core::making::requests::RequestStatus::Waiting,
                 created_at: TS.into(),
             }],

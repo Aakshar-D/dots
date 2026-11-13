@@ -1835,3 +1835,56 @@ fn a_made_dot_that_may_make_dots_holds_more_than_its_maker() {
         serde_json::json!({"kind": "making", "per_run": 9, "total": 50})
     );
 }
+
+/// A Custom maker has a plain preset within reach when its rules allow everything that preset
+/// allows and its default is no wider (dots-make-dots design section 6): one "Always allow" on
+/// a Sandboxed maker turns its policy Custom, and the dots it made Sandboxed still hold nothing
+/// beyond its reach, so their jobs and changes do not all ask. One whose default is narrower,
+/// or that denies what the preset allows, does not cover it.
+#[test]
+fn a_custom_maker_whose_rules_cover_a_preset_has_that_preset_within_reach() {
+    let place = place();
+    let mut maker = maker(&place, WorkspaceMode::Folder);
+    assert_eq!(maker.spec.policy, Policy::preset(Preset::Sandboxed));
+    let mut made = maker.spec.clone();
+    made.name = "Blog Watcher".into();
+    made.making = Making::default();
+    assert_eq!(held_extras(&maker, &made, true), []);
+    // One "Always allow".
+    maker
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Bash(npm test:*)", Action::Allow));
+    maker.spec.policy.preset = Preset::Custom;
+
+    assert_eq!(held_extras(&maker, &made, true), []);
+    let mut w = wanted();
+    w.permissions = Some(WantedPermissions::Preset(Preset::Sandboxed));
+    assert!(new(&maker, &w, &place).extras.is_empty());
+    // Trusted's default allows what the maker's asks.
+    w.permissions = Some(WantedPermissions::Preset(Preset::Trusted));
+    let trusted = Extra::Preset {
+        preset: Preset::Trusted,
+        makers: Preset::Custom,
+    };
+    assert_eq!(new(&maker, &w, &place).extras, [trusted]);
+
+    let sandboxed = Extra::Preset {
+        preset: Preset::Sandboxed,
+        makers: Preset::Custom,
+    };
+    let mut narrower = maker.clone();
+    narrower.spec.policy.default = Action::Deny;
+    assert_eq!(
+        held_extras(&narrower, &made, true),
+        std::slice::from_ref(&sandboxed)
+    );
+    let mut denies = maker.clone();
+    denies
+        .spec
+        .policy
+        .rules
+        .push(Rule::new("Write(./secret/**)", Action::Deny));
+    assert_eq!(held_extras(&denies, &made, true), [sandboxed]);
+}

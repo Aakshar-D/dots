@@ -214,6 +214,12 @@ async fn wakes(t: &T) -> Vec<String> {
     wakes.into_iter().map(|w| w.message).collect()
 }
 
+/// What the ask card of the request `id` shows beyond the maker's reach, as an answer to it
+/// sends back.
+async fn shown(t: &T, id: &str) -> Option<String> {
+    t.rt.make_request_card(id).await.unwrap().shown
+}
+
 /// The topics named by the `MakingUpdated` events published since the last call.
 fn updated(rx: &mut Receiver<RuntimeEvent>) -> Vec<(String, String)> {
     let mut seen = Vec::new();
@@ -276,6 +282,7 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
 
     // Newest first, each with what the Inbox sorts, links and titles it by.
     let inbox = t.rt.inbox().await.unwrap();
+    let limit = "2nd dot in this run; the limit is 1";
     let item = |request: &MakeRequest, title: &str, lines: &[&str]| PendingMakeRequest {
         id: request.id.clone(),
         dot_id: maker.id.clone(),
@@ -286,10 +293,14 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
         purpose: "Reads the feeds".into(),
         title: title.into(),
         lines: lines.iter().map(|l| l.to_string()).collect(),
+        // What the card shows beyond reach: every line but the limit's.
+        shown: {
+            let extras: Vec<&&str> = lines.iter().filter(|l| **l != limit).collect();
+            (!extras.is_empty()).then(|| dots_core::util::json_hash(&json!(extras)))
+        },
         status: RequestStatus::Waiting,
         created_at: request.created_at.clone(),
     };
-    let limit = "2nd dot in this run; the limit is 1";
     assert_eq!(
         inbox.make_requests,
         [
@@ -319,6 +330,7 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
             "purpose": "Reads the feeds",
             "title": "Researcher wants to make one more dot",
             "lines": [limit],
+            "shown": null,
             "status": "waiting",
             "created_at": two.created_at,
         })
@@ -352,8 +364,13 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
         // As the card shows it: the request for Two is past the run's limit.
         let card = t.rt.make_request_card(&request.id).await.unwrap();
         let after =
-            t.rt.decide_make_request(&request.id, decision, card.limit.as_deref())
-                .await;
+            t.rt.decide_make_request(
+                &request.id,
+                decision,
+                card.limit.as_deref(),
+                card.shown.as_deref(),
+            )
+            .await;
         assert_eq!(after.unwrap().status, status);
         left -= 1;
         let inbox = t.rt.inbox().await.unwrap();
@@ -367,7 +384,7 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
     assert_eq!(row.needs_you, 0);
     // An answer given twice is refused as the makers refuse it.
     assert!(matches!(
-        t.rt.decide_make_request(&two.id, MakeDecision::Refuse, None)
+        t.rt.decide_make_request(&two.id, MakeDecision::Refuse, None, None)
             .await,
         Err(Error::Conflict(_))
     ));
@@ -412,7 +429,7 @@ async fn a_request_is_snoozed_and_marked_done_as_a_proposal_is() {
     assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
 
     // A key of a request that is answered is no longer in the Inbox.
-    t.rt.decide_make_request(&request.id, MakeDecision::Refuse, None)
+    t.rt.decide_make_request(&request.id, MakeDecision::Refuse, None, None)
         .await
         .unwrap();
     assert!(matches!(
@@ -506,9 +523,16 @@ async fn a_viewer_sees_the_card_and_why_it_cannot_allow() {
     let card = t.rt.make_request_card(&request.id).await.unwrap();
     assert!(!card.can_allow && !card.can_without);
     assert_eq!(card.blocked.as_deref(), Some(why));
-    assert_eq!(t.rt.waiting_make_requests().await.unwrap(), [card]);
+    assert_eq!(
+        t.rt.waiting_make_requests().await.unwrap(),
+        std::slice::from_ref(&card)
+    );
     for decision in [MakeDecision::Allow, MakeDecision::Without] {
-        match t.rt.decide_make_request(&request.id, decision, None).await {
+        match t
+            .rt
+            .decide_make_request(&request.id, decision, None, card.shown.as_deref())
+            .await
+        {
             Err(Error::NotAllowed(text)) => assert_eq!(text, why),
             other => panic!("expected NotAllowed, got {other:?}"),
         }
@@ -518,10 +542,117 @@ async fn a_viewer_sees_the_card_and_why_it_cannot_allow() {
     assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
 
     a.become_(3, "member").await;
-    let after =
-        t.rt.decide_make_request(&request.id, MakeDecision::Allow, None);
+    let after = t.rt.decide_make_request(
+        &request.id,
+        MakeDecision::Allow,
+        None,
+        card.shown.as_deref(),
+    );
     assert_eq!(after.await.unwrap().status, RequestStatus::Allowed);
     assert_eq!(t.rt.inbox_count().await.unwrap(), 0);
+    t.rt.shutdown();
+}
+
+/// A wake starts the maker's run only while this PC may run the maker (dots-make-dots design
+/// section 8): the job ends after an Admin made this PC a Viewer in the maker's workspace, in a
+/// topic the person typed in, so the wake would be a run the person did not start. It waits,
+/// is tried again, and is delivered once the role allows running dots again.
+#[tokio::test]
+async fn a_wake_waits_while_this_pc_may_not_run_the_maker() {
+    let a = Acme::start().await;
+    let t = &a.t;
+    t.rt.makers()
+        .set_wake_retry(std::time::Duration::from_millis(100));
+    a.join_as("member").await;
+    let maker =
+        t.rt.create_dot(maker_spec(t), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let run = live_run(t, &maker).await;
+    make(t, &run, "Blog Watcher").await;
+    let (_, its) = working_job(t, &run, "Blog Watcher").await;
+    t.rt.store()
+        .finish_run(&run.id, RunStatus::Succeeded, Some("Gave it."), None)
+        .await
+        .unwrap();
+    a.become_(2, "viewer").await;
+
+    t.rt.store()
+        .finish_run(
+            &its.id,
+            RunStatus::Succeeded,
+            Some("Three new posts."),
+            None,
+        )
+        .await
+        .unwrap();
+    t.rt.makers().settle_jobs().await.unwrap();
+
+    // No run of the maker was made: the wake waits, also after the loop tried it again.
+    let topic = |t: &T| {
+        let store = t.rt.store().clone();
+        let root = run.root_run_id.clone();
+        async move { store.list_thread(&root).await.unwrap() }
+    };
+    assert_eq!(topic(t).await.len(), 1, "{:#?}", topic(t).await);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(topic(t).await.len(), 1);
+    assert_eq!(wakes(t).await.len(), 1);
+
+    // With the role back, it is delivered.
+    a.become_(3, "member").await;
+    t.rt.makers().deliver_wakes().await.unwrap();
+    let runs = topic(t).await;
+    assert_eq!(runs.len(), 2, "{runs:#?}");
+    assert!(dots_core::prompt::is_wake(&runs[1]));
+    assert!(wakes(t).await.is_empty());
+    t.rt.shutdown();
+}
+
+/// A wake in a topic nobody watches (a schedule started it) is a background run, so the role
+/// hold applies to it as to any background run (members spec section 6.3): when this PC may no
+/// longer run the maker, its run is queued, held for the role, and does not start.
+#[tokio::test]
+async fn a_background_wake_of_a_maker_this_pc_may_not_run_is_held_for_the_role() {
+    let a = Acme::start().await;
+    let t = &a.t;
+    a.join_as("member").await;
+    let maker =
+        t.rt.create_dot(maker_spec(t), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let scheduled = live_run_with(t, &maker, TriggerKind::Schedule, json!({})).await;
+    make(t, &scheduled, "Blog Watcher").await;
+    let (_, its) = working_job(t, &scheduled, "Blog Watcher").await;
+    t.rt.store()
+        .finish_run(&scheduled.id, RunStatus::Succeeded, Some("Gave it."), None)
+        .await
+        .unwrap();
+    a.become_(2, "viewer").await;
+
+    t.rt.store()
+        .finish_run(
+            &its.id,
+            RunStatus::Succeeded,
+            Some("Three new posts."),
+            None,
+        )
+        .await
+        .unwrap();
+    t.rt.makers().settle_jobs().await.unwrap();
+
+    let runs = t.rt.store().list_thread(&scheduled.id).await.unwrap();
+    assert_eq!(runs.len(), 2, "{runs:#?}");
+    let woken = &runs[1];
+    assert!(dots_core::prompt::is_wake(woken));
+    assert!(dots_core::limits::run_is_background(woken));
+    assert_eq!(woken.status, RunStatus::Queued);
+    let held = t.rt.inbox().await.unwrap().held;
+    let hold = held.iter().find(|h| h.run_id == woken.id).expect("held");
+    assert!(
+        matches!(hold.reason, dots_core::model::HoldReason::Role { .. }),
+        "{hold:#?}"
+    );
     t.rt.shutdown();
 }
 
@@ -555,9 +686,14 @@ async fn the_topics_cards_tell_a_make_a_job_an_ask_a_change_and_a_delete() {
     let asking = cards(&t, &run).await;
     let waiting_card = t.rt.make_request_card(&change.id).await.unwrap();
     // Allow, then a change within reach.
-    t.rt.decide_make_request(&change.id, MakeDecision::Allow, None)
-        .await
-        .unwrap();
+    t.rt.decide_make_request(
+        &change.id,
+        MakeDecision::Allow,
+        None,
+        waiting_card.shown.as_deref(),
+    )
+    .await
+    .unwrap();
     // The person gives the maker the browser too, so the dot holds nothing beyond its reach
     // and a new purpose is the maker's to give (a dot that holds more asks the person).
     let mut with_browser = t.rt.store().get_dot(&maker.id).await.unwrap().spec;
@@ -1044,7 +1180,7 @@ async fn a_deleted_maker_leaves_nothing_dangling() {
         Err(Error::NotFound(_))
     ));
     assert!(matches!(
-        t.rt.decide_make_request(&request.id, MakeDecision::Allow, None)
+        t.rt.decide_make_request(&request.id, MakeDecision::Allow, None, None)
             .await,
         Err(Error::NotFound(_))
     ));
@@ -1108,9 +1244,14 @@ async fn an_ask_is_always_announced_and_a_made_dot_says_whether_the_person_typed
     );
     assert_eq!(said[0]["name"], "One");
     // The dot the person's own answer makes is not announced: they made it happen.
-    t.rt.decide_make_request(&asked.id, MakeDecision::Allow, None)
-        .await
-        .unwrap();
+    t.rt.decide_make_request(
+        &asked.id,
+        MakeDecision::Allow,
+        None,
+        shown(&t, &asked.id).await.as_deref(),
+    )
+    .await
+    .unwrap();
     assert!(notices(&mut rx).is_empty());
 
     // A run that resumes the typed one after an approval is the same turn.

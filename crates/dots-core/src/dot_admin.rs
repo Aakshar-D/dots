@@ -194,7 +194,8 @@ impl DotAdmin {
     ///
     /// With `exact`, the change is a maker's to a dot it made (dots-make-dots design section
     /// 9): the grants are stored exactly as `spec` gives them, with no grant of a newly used
-    /// server's variables (`Store::update_dot_exact`).
+    /// server's variables (`Store::update_dot_exact`). Without, on a made dot, what the person
+    /// takes away or lowers is kept (`Store::set_made_narrowed`).
     pub async fn update(&self, id: &str, spec: DotSpec, exact: bool) -> Result<Dot> {
         let p = &self.parts;
         let old = p.store.get_dot(id).await?;
@@ -224,6 +225,21 @@ impl DotAdmin {
             && !worktree_ready(Path::new(spec.workdir.trim())).await
         {
             return Err(Error::Invalid(NOT_A_REPO.into()));
+        }
+        // On a made dot, what the person narrows with their own edit is kept, so its maker's
+        // change that gives it back asks them; what the dot has again is no longer kept
+        // (dots-make-dots design section 9). Kept before the dot is saved: a save that fails
+        // after it leaves at most a setting that asks once more than it needs.
+        if old.made.is_some() {
+            let kept = p.store.made_narrowed(id).await?;
+            let now = if exact {
+                crate::making::reach::narrowed_after_maker(&kept, &spec)
+            } else {
+                crate::making::reach::narrowed_by_person(&kept, &old.spec, &spec)
+            };
+            if now != kept {
+                p.store.set_made_narrowed(id, &now).await?;
+            }
         }
         let was_enabled = old.spec.enabled;
         let dot = if exact {

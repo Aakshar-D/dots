@@ -2757,10 +2757,14 @@ impl Runtime {
         let mut new = NewRun::new(dot_id, TriggerKind::Chat);
         new.id = Some(crate::util::new_id());
         // The person typed it (conversational chat spec section 3); a job's text that Retry
-        // sends again is still its maker's words (dots-make-dots design section 8).
-        let mut payload = match &extra.from_maker {
-            Some(maker) => json!({ "message": message, crate::prompt::FROM_MAKER: maker }),
-            None => json!({ "message": message, crate::prompt::TYPED: true }),
+        // sends again is still its maker's words, and a wake's is still Dots' report
+        // (dots-make-dots design section 8).
+        let mut payload = match (&extra.from_maker, &extra.wake_id) {
+            (Some(maker), _) => json!({ "message": message, crate::prompt::FROM_MAKER: maker }),
+            (None, Some(wake)) => {
+                json!({ "message": message, crate::making::wake::WAKE_ID: wake })
+            }
+            (None, None) => json!({ "message": message, crate::prompt::TYPED: true }),
         };
         if let Some(note) = &extra.send_later {
             payload["send_later"] = serde_json::to_value(note)?;
@@ -3054,10 +3058,19 @@ impl Runtime {
         // Its files move to the new message (attachments spec section 4.3). A job's run is
         // sent as its maker's words, not the person's, and as no job: Retry does not carry the
         // job on, so the job ends with the run that did not get there (dots-make-dots design
-        // section 8).
+        // section 8). A wake's run is sent again as Dots' report, with its wake's id: never as a
+        // message the person typed, so its run starts no workflows and the loop guard counts on.
+        let wake_id = run
+            .payload
+            .as_ref()
+            .and_then(|p| p.get(crate::making::wake::WAKE_ID))
+            .and_then(|v| v.as_str())
+            .filter(|_| crate::prompt::is_wake(&run))
+            .map(str::to_owned);
         let extra = ChatExtra {
             carry_from: Some(run.id.clone()),
             from_maker: crate::prompt::makers_words(&run).map(str::to_owned),
+            wake_id,
             ..ChatExtra::default()
         };
         match self
@@ -3455,14 +3468,18 @@ impl Runtime {
     /// dot needs this PC's right to change dots in the maker's account and workspace, and to
     /// give secrets when variables are given (`NotAllowed`, and the request still waits).
     /// `limit` is the limit line of the card the person answered (`MakeRequestCard::limit`):
-    /// an answer that makes a dot past another limit is refused (`Conflict`).
+    /// an answer that makes a dot past another limit is refused (`Conflict`). `shown` is what
+    /// that card showed beyond the maker's reach (`MakeRequestCard::shown`): Allow and an
+    /// answer without the extras are refused (`Conflict`) when the request would now give
+    /// something else.
     pub async fn decide_make_request(
         &self,
         id: &str,
         decision: MakeDecision,
         limit: Option<&str>,
+        shown: Option<&str>,
     ) -> Result<MakeRequest> {
-        self.makers.decide_request(id, decision, limit).await
+        self.makers.decide_request(id, decision, limit, shown).await
     }
 
     /// The making cards of the chat topic `root_run_id`, oldest first (dots-make-dots design
@@ -4886,6 +4903,7 @@ impl Runtime {
             scheduled_id: Some(message.id.clone()),
             carry_from: None,
             from_maker: None,
+            wake_id: None,
         })
     }
 

@@ -82,6 +82,9 @@ enum Tried {
     /// Its topic is adding an app the person accepted, which ends with no run of its own when
     /// the adding fails: it is tried again after a wait.
     Deciding,
+    /// This PC's role may not run the maker now, and its run would be one nobody holds: it is
+    /// tried again after a wait.
+    NotAllowed,
     /// Its topic is gone, or another pass had delivered it since the list was read.
     Done,
     /// An earlier wake of its topic was tried in this pass.
@@ -126,9 +129,9 @@ impl Makers {
         pass.map(|_| ())
     }
 
-    /// One pass. `true` when a wake waits for something whose end no event tells (`Deciding`):
-    /// the loop then tries again after a wait. A wake that fails is logged once, then at most
-    /// hourly while it keeps failing (`LogEvery`).
+    /// One pass. `true` when a wake waits for something whose end no event tells (`Deciding`,
+    /// `NotAllowed`): the loop then tries again after a wait. A wake that fails is logged once,
+    /// then at most hourly while it keeps failing (`LogEvery`).
     async fn wake_pass(&self) -> Result<bool> {
         let mut tried_topics = HashSet::new();
         let mut again = false;
@@ -146,7 +149,7 @@ impl Makers {
         self.parts.logged.forget(WAITING_LIST);
         for wake in waiting {
             match self.deliver_wake(&wake, &mut tried_topics).await {
-                Ok(Tried::Deciding) => again = true,
+                Ok(Tried::Deciding | Tried::NotAllowed) => again = true,
                 Ok(Tried::Delivered | Tried::Done) => self.parts.logged.forget(&wake.id),
                 Ok(_) => {}
                 Err(e) => {
@@ -175,6 +178,13 @@ impl Makers {
     /// in the same topic, so the topic keeps its history and its count of jobs, in the session
     /// of the newest run of the topic that has one, or without one when none has.
     /// It is background in an unattended topic (`jobs::unattended`, design section 8).
+    ///
+    /// A wake's run is one Dots starts by itself, so it meets the check every other new run
+    /// meets (members spec section 6.3): in an unattended topic it is background, and the role
+    /// hold keeps it queued while this PC may not run the maker (`Runner::role_hold`); in a
+    /// topic the person watches, which no hold stops, it is not made while this PC may not run
+    /// the maker (`Runner::require_run`). The wake then waits, and is tried again after the
+    /// loop's wait. The wake that carries the person's answer to a request is one of these.
     async fn deliver_wake(
         &self,
         wake: &MakingWake,
@@ -218,6 +228,17 @@ impl Makers {
             tracing::debug!(wake = %wake.id, "topic busy: the wake waits");
             return Ok(Tried::Busy);
         }
+        let background = super::jobs::unattended(&thread);
+        if !background {
+            match p.runner.require_run(&maker).await {
+                Ok(()) => {}
+                Err(Error::NotAllowed(why)) => {
+                    tracing::debug!(wake = %wake.id, "the wake waits: {why}");
+                    return Ok(Tried::NotAllowed);
+                }
+                Err(e) => return Err(e),
+            }
+        }
         let end = thread.last().unwrap_or(&first);
         let mut new = crate::checkins::continuation(&first, end, wake.message.clone(), None);
         if new.root_run_id.is_none() {
@@ -240,7 +261,7 @@ impl Makers {
         }
         if let Some(payload) = new.payload.as_mut() {
             payload[WAKE_ID] = wake.id.clone().into();
-            if super::jobs::unattended(&thread) {
+            if background {
                 payload[BACKGROUND] = true.into();
             }
         }
