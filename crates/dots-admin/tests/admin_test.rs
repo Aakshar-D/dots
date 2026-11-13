@@ -420,7 +420,7 @@ fn policy_sign_rewrites_only_issued_at() {
     assert_eq!(envelope["policy"], expected);
     assert_eq!(signed.policy.issued_at, "2026-10-23T10:00:00Z");
     let signature = envelope["signature"].as_str().unwrap();
-    assert!(signature.contains("trusted comment: sols policy acme-eng 2026-10-23T10:00:00Z\n"));
+    assert!(signature.contains("trusted comment: dots policy acme-eng 2026-10-23T10:00:00Z\n"));
     verify_policy(&signed.text, &public_key, "acme-eng").unwrap();
 }
 

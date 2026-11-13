@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(files.len(), 1, "{files:?}");
         let name = files[0].file_name().unwrap().to_string_lossy().into_owned();
         assert!(
-            name.starts_with("sols.") && name.ends_with(".log"),
+            name.starts_with("dots.") && name.ends_with(".log"),
             "{name}"
         );
         std::fs::read_to_string(&files[0]).unwrap()

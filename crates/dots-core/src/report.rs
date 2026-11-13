@@ -300,7 +300,7 @@ fn log_files(dir: &Path) -> Vec<PathBuf> {
             p.is_file()
                 && p.file_name()
                     .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.starts_with("sols.") && n.ends_with(".log"))
+                    .is_some_and(|n| n.starts_with("dots.") && n.ends_with(".log"))
         })
         .collect();
     files.sort();
@@ -486,7 +486,7 @@ pub fn render(
          Version: {version}\n\
          System: {os} {arch}\n\
          Engines in use: {engines}\n\
-         Sage: {dots}\n\
+         Sols: {dots}\n\
          Runs in the last 24 hours: {runs} ({failed} failed)\n\
          \n",
         made = made.format("%Y-%m-%d %H:%M (%:z)"),

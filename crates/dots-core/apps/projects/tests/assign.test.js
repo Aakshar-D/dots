@@ -81,7 +81,7 @@ test("a start the rules refuse is written in Activity, and the task waits", () =
   assert.equal(call("get_task", { id: t.id }).status, "to_do");
   const row = rows(t).find((r) => r.kind === "run");
   assert.equal(row.field, "not_started");
-  assert.ok(row.text.includes("as many dots as the hour allows"), row.text);
+  assert.ok(row.text.includes("as many sols as the hour allows"), row.text);
 });
 
 test("a run's end posts its summary and moves the task In review", () => {

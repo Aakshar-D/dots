@@ -1,10 +1,10 @@
-// Dots' client for an app's screen (app library spec section 5). The `dots-app` protocol puts it
-// at the top of the app's index.html. The page talks to Dots only through the MessagePort the
+// Sage's client for an app's screen (app library spec section 5). The `dots-app` protocol puts it
+// at the top of the app's index.html. The page talks to Sage only through the MessagePort the
 // host sends once it has loaded: `dots.call(tool, input)` answers with the tool's result or
 // rejects with its error, `dots.onChange(cb)` hears that the app's data changed, and the
 // theme's colours arrive as CSS variables (`--dots-<token>`) on the root element, with
 // `data-theme` set to "light" or "dark" (`dots.onTheme(cb)` hears a change).
-// `dots.openRun(runId)` opens, in Dots, the conversation of a run the app started; it rejects
+// `dots.openRun(runId)` opens, in Sage, the conversation of a run the app started; it rejects
 // for any other run.
 (() => {
   let port = null;

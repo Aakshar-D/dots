@@ -398,7 +398,7 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
         .add_project(
             &team,
             &ProjectSpec {
-                name: "Dots".into(),
+                name: "Sage".into(),
                 repo_path: repo.to_string_lossy().to_string(),
                 default_branch: None,
                 remote: "origin".into(),
@@ -605,7 +605,7 @@ async fn a_run_goes_through_its_steps_and_waits_for_the_check() {
     let prompt = &w.engine.prompts_of("dev")[0];
     for part in [
         "## Workflow",
-        "You are the dev agent of the team \"Dots management\", doing one step of the workflow \"Fix\".",
+        "You are the dev agent of the team \"Sage management\", doing one step of the workflow \"Fix\".",
         "- Step: Fix it (2 of 3)",
         "### Task\n\nThe tray icon is invisible in dark mode.",
         "### Your job in this step\n\nFix the bug.",
@@ -1833,8 +1833,8 @@ async fn a_branch_on_project_takes_the_matching_path_then_the_step_after_it() {
                     BranchOn::Project,
                     vec![
                         ("Other app", vec![agent("other", "Other", &w.dev, "No.")]),
-                        // The project is "Dots": labels match without case.
-                        ("dots", vec![agent("dots", "Ship Sage", &w.dev, "Ship it.")]),
+                        // The project is "Sage": labels match without case.
+                        ("sage", vec![agent("dots", "Ship Sage", &w.dev, "Ship it.")]),
                     ],
                     vec![agent("else", "Else", &w.dev, "No.")],
                 ),
@@ -1983,7 +1983,7 @@ async fn a_branch_inside_a_path_takes_its_own_path_and_the_run_climbs_out_of_bot
                     "outer",
                     BranchOn::Project,
                     vec![(
-                        "Dots",
+                        "Sage",
                         vec![branch(
                             "inner",
                             BranchOn::Project,
@@ -2002,7 +2002,7 @@ async fn a_branch_inside_a_path_takes_its_own_path_and_the_run_climbs_out_of_bot
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
     assert_eq!(ran(&wr), ["outer", "inner", "deep", "last"]);
-    assert_eq!(chose(&wr, "outer").as_deref(), Some("Dots"));
+    assert_eq!(chose(&wr, "outer").as_deref(), Some("Sage"));
     assert_eq!(chose(&wr, "inner"), None);
     // The tree in run order: outer, inner, other, deep, last.
     let deep = &w.engine.prompts_of("dev")[0];
@@ -2030,7 +2030,7 @@ async fn the_step_after_a_branch_gets_the_hand_offs_of_the_path_taken() {
                     BranchOn::Project,
                     vec![
                         ("Other app", vec![agent("skip", "Skipped", &w.dev, "No.")]),
-                        ("Dots", vec![agent("fix", "Fix Sage", &w.dev, "Fix it.")]),
+                        ("Sage", vec![agent("fix", "Fix Sage", &w.dev, "Fix it.")]),
                     ],
                     vec![],
                 ),
@@ -2078,7 +2078,7 @@ async fn a_pass_finishes_a_branch_cut_off_before_it_chose() {
                 branch(
                     "pick",
                     BranchOn::Project,
-                    vec![("Dots", vec![agent("dots", "Dots", &w.dev, "Work.")])],
+                    vec![("Sage", vec![agent("dots", "Sage", &w.dev, "Work.")])],
                     vec![],
                 ),
             ],
@@ -2119,7 +2119,7 @@ async fn a_pass_finishes_a_branch_cut_off_before_it_chose() {
         .await;
     // The same step run chose: no second attempt.
     assert_eq!(ran(&wr), ["check", "pick", "dots"]);
-    assert_eq!(chose(&wr, "pick").as_deref(), Some("Dots"));
+    assert_eq!(chose(&wr, "pick").as_deref(), Some("Sage"));
 }
 
 impl World {
@@ -2486,7 +2486,7 @@ async fn a_delegate_step_runs_its_members_at_once_and_is_continued_with_their_re
     assert_eq!(w.engine.step_tools_of("dev"), [None, None]);
     for prompt in w.engine.prompts_of("dev") {
         for part in [
-            "## Workflow\n\nYou are the dev agent of the team \"Dots management\". helper started \
+            "## Workflow\n\nYou are the dev agent of the team \"Sage management\". helper started \
              you on part of one step of the workflow \"Fix\".",
             "- Step: Split it (2 of 2)",
             "### Task\n\nThe tray icon is invisible in dark mode.",
@@ -4976,7 +4976,7 @@ async fn a_step_run_cut_off_before_the_workflow_run_moved_to_it_is_used_not_left
                 branch(
                     "pick",
                     BranchOn::Project,
-                    vec![("Dots", vec![agent("dots", "Dots", &w.dev, "Work.")])],
+                    vec![("Sage", vec![agent("dots", "Sage", &w.dev, "Work.")])],
                     vec![],
                 ),
             ],
@@ -4986,7 +4986,7 @@ async fn a_step_run_cut_off_before_the_workflow_run_moved_to_it_is_used_not_left
     let wr = w.until(&id, done).await;
     assert_eq!(ran(&wr), ["check", "pick", "dots"]);
     assert_eq!(newest(&wr, "pick").id, orphan);
-    assert_eq!(chose(&wr, "pick").as_deref(), Some("Dots"));
+    assert_eq!(chose(&wr, "pick").as_deref(), Some("Sage"));
 
     // A deploy.
     let flow = w

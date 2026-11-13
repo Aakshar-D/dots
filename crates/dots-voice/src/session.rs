@@ -2502,7 +2502,7 @@ mod tests {
         let heard = |wake: bool| {
             let mut r = rig(Opts {
                 wake,
-                recognizer: Some(FakeRecognizer::new("Hey dad, what needs me?")),
+                recognizer: Some(FakeRecognizer::new("Hey Saige, what needs me?")),
                 ..Opts::default()
             });
             r.expect_state(State::Idle, wake);
@@ -2529,7 +2529,7 @@ mod tests {
         };
         let said = "what needs me?".to_string();
         assert_eq!(heard(true), (said.clone(), said));
-        let said = "Hey dad, what needs me?".to_string();
+        let said = "Hey Saige, what needs me?".to_string();
         assert_eq!(heard(false), (said.clone(), said));
     }
 

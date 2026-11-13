@@ -990,34 +990,6 @@ mod tests {
             .any(|w| w == "sage")
     }
 
-    /// Whether a line has the word "sage" ("message" only holds it).
-    fn says_sage(line: &str) -> bool {
-        line.to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .any(|w| w == "sage")
-    }
-
-    /// Whether a line has the word "sage" ("message" only holds it).
-    fn says_sage(line: &str) -> bool {
-        line.to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .any(|w| w == "sage")
-    }
-
-    /// Whether a line has the word "sage" ("message" only holds it).
-    fn says_sage(line: &str) -> bool {
-        line.to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .any(|w| w == "sage")
-    }
-
-    /// Whether a line has the word "sage" ("message" only holds it).
-    fn says_sage(line: &str) -> bool {
-        line.to_lowercase()
-            .split(|c: char| !c.is_alphanumeric())
-            .any(|w| w == "sage")
-    }
-
     #[test]
     fn no_fixed_wording_says_dot() {
         for line in [PRIVATE, AN_APPROVAL, A_QUESTION] {

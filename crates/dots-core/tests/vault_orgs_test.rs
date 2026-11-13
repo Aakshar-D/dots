@@ -628,7 +628,7 @@ async fn the_preview_shows_a_new_org_or_what_an_update_changes() {
         preview.changes,
         vec![
             "name changes from Acme Engineering to Acme Eng".to_string(),
-            "path changes from sols to dots2".to_string(),
+            "path changes from dots to dots2".to_string(),
             format!(
                 "the policy key changes from {} to {}: the key that signs the org's policy is \
                  new, so accept this code only if your admin told you the key changed",

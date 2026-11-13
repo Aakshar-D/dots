@@ -251,7 +251,7 @@ The run never ended.
 Version: 0.3.0
 System: windows x86_64
 Engines in use: claude, local
-Sage: 4
+Sols: 4
 Runs in the last 24 hours: 12 (2 failed)
 
 == Recent log lines (2, scrubbed) ==
