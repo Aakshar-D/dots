@@ -9,7 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
 use tokio::task::JoinHandle;
 
-use super::jobs::{deleted_message, JobEnd, JobStatus, JOB_WAITING, JOB_WORKING};
+use super::jobs::{deleted_message, JobEnd, JobStatus, MakingJob, JOB_WAITING, JOB_WORKING};
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::reach::{
     folded, grants, held_extras, preset_label, rank, reach_change, real_path, still_as_judged,
@@ -599,6 +599,13 @@ pub fn job_went_message(name: &str) -> String {
     )
 }
 
+/// The maker's run that deletes a dot it made, for the `deleted` entry of its topic's log.
+struct DeletedBy {
+    maker_dot_id: String,
+    run_id: String,
+    root_run_id: String,
+}
+
 /// Adds `message` to what the topic `topic` of the maker `maker` is woken with, so each topic
 /// is woken once.
 fn push_wake<'a>(
@@ -779,6 +786,10 @@ impl Makers {
         {
             judged = self.judge_change(&maker_now, &made_now, &ask).await?;
         }
+        // The person's own edits do not take the service's lock, so one may land between this
+        // judgement and the save. A narrowing of the maker then is as one just after the save.
+        // An edit of the made dot itself is overwritten by the save, as any two saves of one dot
+        // are, last one wins; the "changed" card says what the maker set.
         let (maker, made) = (maker_now, made_now);
         let Judged {
             reach,
@@ -1148,37 +1159,17 @@ impl Makers {
         if p.store.latest_run(&made.id, true).await?.is_some() {
             return Err(busy());
         }
-        let (topics, finish) = match self.delete_and_tell(&made).await {
-            Ok(gone) => gone,
+        let by = DeletedBy {
+            maker_dot_id: maker.id.clone(),
+            run_id: run.id.clone(),
+            root_run_id: run.root_run_id.clone(),
+        };
+        let finish = match self.delete_and_tell(&made, Some(by)).await {
+            Ok(finish) => finish,
             // A run of it was queued in between (`Store::delete_dot_if_idle`).
             Err(Error::Conflict(_)) => return Err(busy()),
             Err(e) => return Err(e),
         };
-        // The dot is gone whether or not its entry could be written, so a failure here is
-        // logged and the delete still succeeds.
-        let logged = p
-            .store
-            .add_making_event(&NewMakingEvent {
-                maker_dot_id: &maker.id,
-                run_id: &run.id,
-                root_run_id: &run.root_run_id,
-                kind: MakingEventKind::Deleted,
-                dot_id: None,
-                dot_name: name,
-                detail: json!({}),
-            })
-            .await;
-        if let Err(e) = logged {
-            tracing::error!(dot = %made.id, run = %run.id, "the delete was not logged: {e}");
-        }
-        self.updated(&maker.id, &run.root_run_id);
-        // The other topics that show the dot: their cards read again too.
-        for (maker_id, topic) in &topics {
-            if (maker_id.as_str(), topic.as_str()) != (maker.id.as_str(), run.root_run_id.as_str())
-            {
-                self.updated(maker_id, topic);
-            }
-        }
         // After the service's lock is released: closing its Edge and telling its teams can
         // take a while, and delivering the wakes takes the thread lock.
         drop(one_at_a_time);
@@ -1205,10 +1196,7 @@ impl Makers {
         // the dot goes.
         let one_at_a_time = p.one_at_a_time.lock().await;
         let dot = p.store.get_dot(dot_id).await?;
-        let (topics, finish) = self.delete_and_tell(&dot).await?;
-        for (maker_id, topic) in &topics {
-            self.updated(maker_id, topic);
-        }
+        let finish = self.delete_and_tell(&dot, None).await?;
         // After the service's lock is released, as for the maker's delete.
         drop(one_at_a_time);
         finished(finish).await;
@@ -1221,7 +1209,7 @@ impl Makers {
     pub async fn delete_and_tell_alone(&self, dot_id: &str) -> Result<()> {
         let one_at_a_time = self.parts.one_at_a_time.lock().await;
         let dot = self.parts.store.get_dot(dot_id).await?;
-        let (_, finish) = self.delete_and_tell(&dot).await?;
+        let finish = self.delete_and_tell(&dot, None).await?;
         drop(one_at_a_time);
         finished(finish).await;
         Ok(())
@@ -1237,14 +1225,17 @@ impl Makers {
     /// the delete's own transaction: the makers are woken if and only if the dot is gone. A
     /// topic is woken once, with all it is told.
     ///
-    /// Returns the topics that showed the dot and were not told by a job's entry, for the
-    /// caller to tell (`Store::making_topics_of`), and the task that finishes the delete
-    /// (`after_delete`). That task starts as soon as the rows are gone and runs on its own, so
-    /// a caller whose call is dropped (an MCP call whose run was stopped, say) cannot leave the
-    /// dot gone with its teams not told, its Edge open or its wakes waiting; the caller awaits
-    /// it once it released the service's lock. When the delete is refused after a settle here
-    /// ended a job, the wakes' loop is told to deliver that job's wake now.
-    async fn delete_and_tell(&self, dot: &Dot) -> Result<(Vec<(String, String)>, JoinHandle<()>)> {
+    /// Returns the task that finishes the delete: the log's entries and the `MakingUpdated` of
+    /// every topic that showed the dot (`log_delete`), then `after_delete`, in that order, so no
+    /// wake it delivers comes before the entry that explains it. `by` is the maker's run that
+    /// deletes the dot, for its `deleted` entry; `None` for the person's delete. That task
+    /// starts as soon as the rows are gone and runs on its own, so a caller whose call is
+    /// dropped (an MCP call whose run was stopped, say) cannot leave the dot gone with its
+    /// entries not written, its teams not told, its Edge open or its wakes waiting; the caller
+    /// awaits it once it released the service's lock. When the delete is refused, or a read
+    /// before it fails, after a settle here ended a job, the wakes' loop is told to deliver that
+    /// job's wake now.
+    async fn delete_and_tell(&self, dot: &Dot, by: Option<DeletedBy>) -> Result<JoinHandle<()>> {
         let p = &self.parts;
         let settling = p.settling.lock().await;
         let mut settled = false;
@@ -1258,15 +1249,28 @@ impl Makers {
                 }
             }
         }
-        let open_jobs = p.store.open_making_jobs(Some(&dot.id)).await?;
-        let changes: Vec<MakeRequest> = p
-            .store
-            .list_make_requests(None, true)
-            .await?
-            .into_iter()
-            .filter(|r| r.kind != RequestKind::Make && r.dot_id.as_deref() == Some(&dot.id))
-            .collect();
-        let mut topics = p.store.making_topics_of(&dot.id).await?;
+        let read = async {
+            let open_jobs = p.store.open_making_jobs(Some(&dot.id)).await?;
+            let changes: Vec<MakeRequest> = p
+                .store
+                .list_make_requests(None, true)
+                .await?
+                .into_iter()
+                .filter(|r| r.kind != RequestKind::Make && r.dot_id.as_deref() == Some(&dot.id))
+                .collect();
+            let topics = p.store.making_topics_of(&dot.id).await?;
+            Ok::<_, Error>((open_jobs, changes, topics))
+        };
+        let (open_jobs, changes, topics) = match read.await {
+            Ok(read) => read,
+            Err(e) => {
+                // A job's wake may be stored, and no end of a run may come to deliver it.
+                if settled {
+                    p.retry.notify_one();
+                }
+                return Err(e);
+            }
+        };
         let name = dot.spec.name.as_str();
         let mut wakes: Vec<(&str, &str, String)> = Vec::new();
         for job in &open_jobs {
@@ -1305,10 +1309,31 @@ impl Makers {
         };
         let finish = {
             let makers = self.clone();
-            tokio::spawn(async move { makers.after_delete(deleted).await })
+            let name = name.to_string();
+            tokio::spawn(async move {
+                makers
+                    .log_delete(&open_jobs, &name, by.as_ref(), topics)
+                    .await;
+                makers.after_delete(deleted).await;
+            })
         };
         drop(settling);
-        for job in &open_jobs {
+        Ok(finish)
+    }
+
+    /// The log's entries of a delete of the dot named `name` whose rows are gone
+    /// (`delete_and_tell`): each of `open_jobs` ended as `deleted`, and with `by`, the maker's
+    /// `deleted` entry; then the `MakingUpdated` of each of `topics`, the topics that showed
+    /// the dot, that an entry did not tell already. The dot is gone whether or not an entry
+    /// could be written, so a failure is only logged.
+    async fn log_delete(
+        &self,
+        open_jobs: &[MakingJob],
+        name: &str,
+        by: Option<&DeletedBy>,
+        mut topics: Vec<(String, String)>,
+    ) {
+        for job in open_jobs {
             let detail = json!({
                 "job_id": job.id,
                 "run_id": job.last_run_id,
@@ -1320,7 +1345,31 @@ impl Makers {
                 (maker_id, topic) != (&job.maker_dot_id, &job.maker_root_run_id)
             });
         }
-        Ok((topics, finish))
+        if let Some(by) = by {
+            let logged = self
+                .parts
+                .store
+                .add_making_event(&NewMakingEvent {
+                    maker_dot_id: &by.maker_dot_id,
+                    run_id: &by.run_id,
+                    root_run_id: &by.root_run_id,
+                    kind: MakingEventKind::Deleted,
+                    dot_id: None,
+                    dot_name: name,
+                    detail: json!({}),
+                })
+                .await;
+            if let Err(e) = logged {
+                tracing::error!(run = %by.run_id, "the delete was not logged: {e}");
+            }
+            self.updated(&by.maker_dot_id, &by.root_run_id);
+            topics.retain(|(maker_id, topic)| {
+                (maker_id, topic) != (&by.maker_dot_id, &by.root_run_id)
+            });
+        }
+        for (maker_id, topic) in &topics {
+            self.updated(maker_id, topic);
+        }
     }
 
     /// What a delete finishes once its rows are gone (`delete_and_tell`), in a task of its own:

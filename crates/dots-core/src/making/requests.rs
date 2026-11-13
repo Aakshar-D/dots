@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::jobs::FirstJob;
+use super::jobs::{FirstJob, JobStatus, MakingJob};
 use super::log::{MakingEventKind, NewMakingEvent};
 use super::manage::{change_lines, same_thing, schedule_words, ChangeDot, Standing, Stands};
 use super::reach::{reach_new, spec_holds, Extra, Reach};
@@ -116,6 +116,24 @@ fn gained_since(request: &MakeRequest, now: &[Extra], dot: &str) -> Option<Strin
 /// What the person is told of a job request whose made dot named `dot` is switched off.
 fn switched_off(dot: &str) -> String {
     format!("\"{dot}\" is switched off. Turn it on to allow the job.")
+}
+
+/// Why a job request for the made dot named `dot` cannot be allowed now, in words for the
+/// person, while `earlier`, the last job from the same topic of the maker to that dot, has not
+/// ended (design section 8): a topic is one line of runs, so the job cannot be queued behind
+/// it. `None` when there is none or it ended.
+fn open_job_line(dot: &str, earlier: Option<&MakingJob>) -> Option<String> {
+    match earlier.map(|job| job.status) {
+        Some(JobStatus::Working) => Some(format!(
+            "\"{dot}\" is still working on another job from this chat. Allow this one when that \
+             job ends."
+        )),
+        Some(JobStatus::WaitingAnswer) => Some(format!(
+            "\"{dot}\" is waiting for your answer on another job from this chat. Allow this one \
+             when that job ends."
+        )),
+        Some(JobStatus::Ended) | None => None,
+    }
 }
 
 /// What an answer that makes the dot is told of a request that passes a limit now that the
@@ -874,8 +892,8 @@ impl Makers {
     /// maker's reach, then that its final message goes back to the maker (`job_result_line`),
     /// and the job itself is `request.first_job`, in full. There is no
     /// "without": Allow starts the job as asked, Don't give it wakes the maker. Allow is on
-    /// when the dot holds nothing the card did not show, is switched on, and this PC may run
-    /// it.
+    /// when the dot holds nothing the card did not show, is switched on, has no later job from
+    /// the same topic open (`open_job_line`), and this PC may run it.
     async fn job_request_card(
         &self,
         mut request: MakeRequest,
@@ -914,6 +932,8 @@ impl Makers {
                         ));
                     } else if !dot.spec.enabled {
                         blocked = Some(switched_off(&name));
+                    } else if let Some(why) = self.open_job(&request, &dot).await? {
+                        blocked = Some(why);
                     } else {
                         match self.parts.runner.require_run(&dot).await {
                             Ok(()) => can_allow = true,
@@ -956,8 +976,9 @@ impl Makers {
     /// Allow starts the job as the maker gave it, as a job of the run that asked, in that
     /// run's topic (`start_job`), without the loop guard: the person gave it. It is refused
     /// (`Conflict`) when the dot has gone (the request is marked `gone`), holds something the
-    /// card did not show, or is switched off; and as `start_job` refuses, while the last job
-    /// from that topic to the dot has not ended. Then the request still waits. There is
+    /// card did not show, is not what the card showed (`CARD_CHANGED`), or is switched off;
+    /// and, in words for the person (`open_job_line`), while the last job from that topic to
+    /// the dot has not ended. Then the request still waits. There is
     /// nothing to give without (`Invalid`).
     async fn answer_job(
         &self,
@@ -998,6 +1019,9 @@ impl Makers {
                 self.as_shown(&request, shown, &maker.spec.name, &held)?;
                 if !made.spec.enabled {
                     return Err(Error::Conflict(switched_off(name)));
+                }
+                if let Some(why) = self.open_job(&request, &made).await? {
+                    return Err(Error::Conflict(why));
                 }
                 let message = request.first_job.as_deref().unwrap_or_default();
                 self.start_job(
@@ -1503,6 +1527,17 @@ impl Makers {
             Err(Error::Invalid(_)) => Ok(Some(SOMETHING_GONE.to_string())),
             Err(e) => Err(e),
         }
+    }
+
+    /// Why the job request `request` for the made dot `dot` cannot be allowed now, in words for
+    /// the person (`open_job_line`): a later job from the same topic to that dot is open.
+    async fn open_job(&self, request: &MakeRequest, dot: &Dot) -> Result<Option<String>> {
+        let earlier = self
+            .parts
+            .store
+            .latest_making_job(&request.root_run_id, &dot.id)
+            .await?;
+        Ok(open_job_line(&dot.spec.name, earlier.as_ref()))
     }
 
     /// Refuses an answer to `request` that makes, changes or starts something (`Conflict`,

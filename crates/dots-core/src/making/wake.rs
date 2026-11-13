@@ -318,17 +318,10 @@ impl Makers {
                         true
                     }
                 };
+                // A pass that failed logged what failed itself (`wake_pass`).
                 let again = match this.wake_pass().await {
-                    Ok(again) => {
-                        logged.forget(WAKES_LOOP);
-                        again || jobs_failed
-                    }
-                    Err(e) => {
-                        if logged.due(WAKES_LOOP, Instant::now()) {
-                            tracing::error!("wake loop error: {e}");
-                        }
-                        true
-                    }
+                    Ok(again) => again || jobs_failed,
+                    Err(_) => true,
                 };
                 let retry_wait = this
                     .parts
@@ -356,9 +349,8 @@ impl Makers {
     }
 }
 
-/// The keys of the loop's own errors in `LogEvery`.
+/// The key of the loop's own errors in `LogEvery`.
 const JOBS_LOOP: &str = "loop: jobs";
-const WAKES_LOOP: &str = "loop: wakes";
 /// The key in `LogEvery` of reading the waiting wakes.
 const WAITING_LIST: &str = "wakes: waiting list";
 

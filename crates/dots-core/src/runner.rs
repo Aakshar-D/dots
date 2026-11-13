@@ -438,6 +438,23 @@ impl Runner {
             .await
     }
 
+    /// Whether Claude's usage hold would keep a background Claude run queued now, were one
+    /// queued (usage and limits spec section 4): for a run Dots is yet to make.
+    pub(crate) fn usage_holds_background(&self) -> bool {
+        let Some(limits) = self.limits.get() else {
+            return false;
+        };
+        let probe = QueuedRun {
+            id: String::new(),
+            trigger: TriggerKind::Chat,
+            background: true,
+            engine: EngineKind::Claude,
+            hold_released: false,
+            queued_at: crate::util::now(),
+        };
+        limits.admit(&probe, self.running_background_claude()) != Admit::Go
+    }
+
     /// Sets why each waiting run waits (delivery tracking spec section 3): each `queued` run
     /// not yet delivered gets its reason, every other run `None`. The facts are read once.
     /// The slots in use and the busy dots are the runner's own, exactly what `dispatch_once`

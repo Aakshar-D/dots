@@ -299,7 +299,11 @@ async fn call_making(
     {
         Ok(PermissionOutcome::Allow { input }) => input,
         Ok(PermissionOutcome::Deny { message }) => return Ok(not_performed(&message)),
-        Err(e) => return Ok(not_performed(&format!("permission check failed: {e}"))),
+        // The store's own words are for the log, not the model.
+        Err(e) => {
+            tracing::warn!(run = %run_id, "a making call's permission check failed: {e}");
+            return Ok(not_performed(crate::making::tools::COULD_NOT));
+        }
     };
     Ok(
         match crate::making::tools::call(&makers, run_id, &checked).await {

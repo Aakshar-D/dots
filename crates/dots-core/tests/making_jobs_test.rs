@@ -2801,3 +2801,129 @@ async fn a_job_card_says_the_answer_goes_back_and_the_wake_hides_the_dots_own_va
          asked."
     );
 }
+
+/// A job held by its dot's own cap is not told to a maker whose wake would be held itself
+/// (dots-make-dots design section 8): here the maker works in a topic nobody watches, on Claude,
+/// while Claude's usage hold is on, and the made dot runs on the local engine, so its own run
+/// waits for its cap and not for the usage limit. The wake would be background and usage-held,
+/// and would keep the topic busy until the hold ends.
+#[tokio::test]
+async fn a_job_held_by_its_dots_cap_is_not_told_while_the_makers_wake_would_be_held() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let scheduled = live_run_as(&t, &maker, TriggerKind::Schedule).await;
+    let made = make(&t, &scheduled, "Blog Watcher").await;
+    // The person moves the made dot to a local model and gives it a daily cap, which a run of
+    // it spends.
+    let mut s = t.rt.store().get_dot(&made.id).await.unwrap().spec;
+    s.engine = dots_core::model::EngineKind::Local;
+    s.endpoint_url = Some("http://127.0.0.1:9/v1".into());
+    s.model = "test-model".into();
+    s.spend_cap.daily_usd = Some(0.5);
+    t.rt.update_dot(&made.id, s).await.unwrap();
+    let spent =
+        t.rt.store()
+            .create_run(&NewRun::new(&made.id, TriggerKind::Schedule))
+            .await
+            .unwrap();
+    start(&t, &spent.id).await;
+    t.rt.store()
+        .add_usage(&spent.id, 10, 10, 0, Some(0.6))
+        .await
+        .unwrap();
+    finish(&t, &spent.id, RunStatus::Succeeded, Some("Done."), None).await;
+    // Claude's usage hold is on.
+    t.rt.limits().set_shares(HoldShares {
+        enabled: true,
+        five_hour: 60,
+        weekly: 70,
+    });
+    let now = Utc::now();
+    let reading = LimitReading {
+        window: "five_hour".into(),
+        utilization: 0.95,
+        resets_at: timestamp(now + TimeDelta::hours(3)),
+        status: "allowed".into(),
+        read_at: timestamp(now),
+    };
+    t.rt.limits()
+        .record("allowed", vec![reading])
+        .await
+        .unwrap();
+    let job = give(&t, &scheduled, "Blog Watcher", "Read the blogs now.").await;
+
+    settle(&t).await;
+
+    assert!(wakes(&t).await.is_empty());
+    assert!(!t.rt.store().making_job_held_told(&job.id).await.unwrap());
+}
+
+/// A job request whose dot took a later job from the same topic in the meantime cannot be
+/// allowed while that job is open (dots-make-dots design section 8): its card says so in words
+/// for the person, and Allow is refused with the same words.
+#[tokio::test]
+async fn a_job_request_cannot_be_allowed_while_a_later_job_to_its_dot_is_open() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    give_secret(&t, &made).await;
+    let text =
+        t.rt.makers()
+            .give_job(&run.id, "Blog Watcher", "Send the key.");
+    assert_eq!(text.await.unwrap(), JOB_WAITS);
+    let request = the_waiting_request(&t, &maker).await;
+    // The person gives the maker the variable, and the maker gives the dot another job.
+    let mut s = t.rt.store().get_dot(&maker.id).await.unwrap().spec;
+    s.variables = Grants([("shell".to_string(), vec!["DEPLOY_KEY".to_string()])].into());
+    t.rt.update_dot(&maker.id, s).await.unwrap();
+    give(&t, &run, "Blog Watcher", "Rotate it.").await;
+
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+
+    let why = "\"Blog Watcher\" is still working on another job from this chat. Allow this one \
+               when that job ends.";
+    assert!(!card.can_allow, "{card:#?}");
+    assert_eq!(card.blocked.as_deref(), Some(why));
+    let allow = t.rt.makers().decide_request(
+        &request.id,
+        MakeDecision::Allow,
+        None,
+        card.shown.as_deref(),
+    );
+    match allow.await {
+        Err(Error::Conflict(text)) => assert_eq!(text, why),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    assert_eq!(jobs(&t, &run).await.len(), 1);
+}
+
+/// A first job that could not be stored tells the model a plain sentence, not the store's
+/// error (dots-make-dots design section 12): the detail goes to the log.
+#[tokio::test]
+async fn a_first_job_the_store_could_not_start_tells_the_model_a_plain_sentence() {
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let mut conn = SqliteConnectOptions::new()
+        .filename(t.dir.path().join("data").join("dots.db"))
+        .foreign_keys(false)
+        .connect()
+        .await
+        .unwrap();
+    sqlx::query("ALTER TABLE making_jobs RENAME TO making_jobs_away")
+        .execute(&mut conn)
+        .await
+        .unwrap();
+    let mut asked = ask("Blog Watcher");
+    asked.first_job = Some("Read them now.".into());
+
+    let outcome = t.rt.makers().make_dot(&run.id, asked).await.unwrap();
+
+    assert_eq!(
+        outcome.tool_text(),
+        "Made the dot \"Blog Watcher\". It is on and ready; give it a job with give_job. Its \
+         first job was not started: Dots could not do that just now. Give it the job with \
+         give_job."
+    );
+}

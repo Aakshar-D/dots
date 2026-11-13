@@ -64,6 +64,10 @@ impl Session {
         call: &ToolCallRequest,
         tool: Tool,
     ) -> Option<ToolOutput> {
+        // Before the call is shown: a run whose engine cannot perform it shows no step for it.
+        let Some(makers) = self.checkins.as_ref().and_then(CheckIns::makers) else {
+            return Some(ToolOutput::err(NOT_AVAILABLE));
+        };
         let parsed = arguments(&call.arguments);
         let shown = parsed.clone().unwrap_or_else(|_| call.arguments.clone());
         let event = EngineEvent::ToolCall {
@@ -75,9 +79,6 @@ impl Session {
         if !self.emit(event).await {
             return None;
         }
-        let Some(makers) = self.checkins.as_ref().and_then(CheckIns::makers) else {
-            return Some(ToolOutput::err(NOT_AVAILABLE));
-        };
         let arguments = match parsed {
             Ok(arguments) => arguments,
             Err(e) => return Some(ToolOutput::err(format!("{}: {e}", call.name))),
@@ -93,7 +94,11 @@ impl Session {
         Some(match decided {
             Ok(PermissionOutcome::Allow { input }) => self.perform_making(&input).await,
             Ok(PermissionOutcome::Deny { message }) => ToolOutput::err(message),
-            Err(e) => ToolOutput::err(format!("permission check failed: {e}")),
+            // The store's own words are for the log, not the model.
+            Err(e) => {
+                tracing::warn!(run = %self.ctx.run_id, "a making call's permission check failed: {e}");
+                ToolOutput::err(crate::making::tools::COULD_NOT)
+            }
         })
     }
 

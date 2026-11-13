@@ -399,6 +399,10 @@ impl Makers {
         if maker_now.spec != maker.spec {
             reach = reach_new(&maker_now, &ask.wanted, &p.worktrees_root)?;
         }
+        // The person's own edits do not take this lock, so a narrowing of the maker may land
+        // between this judgement and the dot's insert. The dot then stands as one made just
+        // before the edit, which section 6 leaves as it is (narrowing a maker leaves its made
+        // dots), and every later make and change is judged on the edit.
         let maker = maker_now;
         self.check_name_free(&reach.spec.name).await?;
         let over = self.over_limit(&maker, &run.id).await?;

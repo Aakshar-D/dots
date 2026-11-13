@@ -357,6 +357,10 @@ impl Makers {
         if let Some(refusal) = still_open(&made.spec.name, earlier.as_ref()) {
             return Err(refusal);
         }
+        // The person's own edits do not take the service's lock, so one may land between this
+        // check and the job's insert in `start_job`. That is no hole: the job then stands as one
+        // given just before the edit, which the edit would not have stopped either, and every
+        // later job is judged on the edit. Making every edit wait for the makes is not worth it.
         let held = self.held_now(&maker, &made).await?;
         if !held.is_empty() {
             self.store_job_request(&maker, &run, &made, message, &held)
@@ -520,9 +524,13 @@ impl Makers {
             Err(Error::Invalid(why) | Error::Conflict(why) | Error::NotAllowed(why)) => {
                 FirstJob::NotStarted(why)
             }
+            // The store's or the disk's own words are for the log, not the model.
             Err(e) => {
                 tracing::warn!(dot = %made.id, run = %maker_run_id, "the first job was not started: {e}");
-                FirstJob::NotStarted(format!("{e}. Give it the job with give_job."))
+                FirstJob::NotStarted(format!(
+                    "{} Give it the job with give_job.",
+                    super::tools::COULD_NOT
+                ))
             }
         })
     }
@@ -629,7 +637,11 @@ impl Makers {
                 }
             }
             match self.tell_held(held).await {
-                Ok(told) => ended |= told,
+                Ok(told) => {
+                    // A new failure is logged at once.
+                    p.logged.forget(HELD_CHECK);
+                    ended |= told;
+                }
                 Err(e) => {
                     if p.logged.due(HELD_CHECK, std::time::Instant::now()) {
                         tracing::warn!("the held jobs could not be checked: {e}");
@@ -829,10 +841,11 @@ impl Makers {
     /// for all of them. `true` when a wake was stored here.
     ///
     /// The maker is told only when that wake could start: not while a cap holds the maker too,
-    /// as the cap it shares with the dots it made does, and not for Claude's usage limit when
-    /// the wake would be background (`unattended`). Such a wake would wait as long as the job,
-    /// keep the maker's topic busy meanwhile, and arrive when it is no longer true. The job is
-    /// then left untold, and may be told on a later pass.
+    /// as the cap it shares with the dots it made does, and, when the wake would be background
+    /// (`unattended`), not while Claude's usage hold or the role hold would hold it
+    /// (`background_wake_held`). Such a wake would wait as long as the job, keep the maker's
+    /// topic busy meanwhile, and arrive when it is no longer true. The job is then left
+    /// untold, and may be told on a later pass.
     async fn tell_held(&self, held: Vec<MaybeHeld>) -> Result<bool> {
         let p = &self.parts;
         let mut untold = Vec::with_capacity(held.len());
@@ -865,6 +878,11 @@ impl Makers {
             if ledger.hit_for(&p.store, &job.maker_dot_id).await?.is_some() {
                 continue;
             }
+            if self.topic_unattended(&job.maker_root_run_id).await?
+                && self.background_wake_held(&job.maker_dot_id).await?
+            {
+                continue;
+            }
             let said = held_message(dot_name, &why);
             if p.store.tell_making_job_held(&job.id, &said).await? {
                 tracing::info!(job = %job.id, run = %run.id, "a job's maker was told its run waits");
@@ -872,6 +890,30 @@ impl Makers {
             }
         }
         Ok(told)
+    }
+
+    /// Whether a background wake of the maker `maker_id` would be held now: by Claude's usage
+    /// hold for a Claude maker, or by the role hold (this PC may not run the maker, or its
+    /// policy is past the workspace's guardrails ceiling; members spec section 6.3). A maker
+    /// that is gone holds nothing.
+    async fn background_wake_held(&self, maker_id: &str) -> Result<bool> {
+        let p = &self.parts;
+        let maker = match p.store.get_dot(maker_id).await {
+            Ok(maker) => maker,
+            Err(Error::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        if maker.spec.engine == crate::model::EngineKind::Claude
+            && p.runner.usage_holds_background()
+        {
+            return Ok(true);
+        }
+        match p.runner.require_run(&maker).await {
+            Ok(()) => {}
+            Err(Error::NotAllowed(_)) => return Ok(true),
+            Err(e) => return Err(e),
+        }
+        Ok(p.runner.ceiling_hold(&maker).await.is_some())
     }
 
     /// Whether the job that is at the run `last` has been at the run `run_id`: `last` itself,
