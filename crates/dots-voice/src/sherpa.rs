@@ -343,11 +343,11 @@ mod tests {
 
     #[test]
     fn the_samples_after_a_spotted_word_are_counted_from_its_last_token() {
-        // 1.6 s fed, the last token timed at 1.2 s: what follows is taken from 0.95 s.
+        // 1.6 s fed, the last token timed at 1.2 s: what follows is taken from 1.15 s.
         let after = samples_after(25_600, Some(1.2));
-        assert!((10_399..=10_401).contains(&after), "{after}");
-        // A token timed near the start takes everything fed.
-        assert_eq!(samples_after(3_200, Some(0.1)), 3_200);
+        assert!((7_199..=7_201).contains(&after), "{after}");
+        // A token timed at the very start takes everything fed.
+        assert_eq!(samples_after(3_200, Some(0.04)), 3_200);
         // A time past the last sample fed, or no time at all: none.
         assert_eq!(samples_after(16_000, Some(1.5)), 0);
         assert_eq!(samples_after(16_000, None), 0);
