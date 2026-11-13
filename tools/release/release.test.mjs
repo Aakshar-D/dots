@@ -132,8 +132,8 @@ test("the manifest carries the notes file when one is given", () => {
     date: new Date("2026-10-27T09:00:00Z"),
   };
   assert.equal(manifest({ ...base, notes: "- New things\n" }).notes, "- New things");
-  assert.equal(manifest(base).notes, "Dots 0.3.0");
-  assert.equal(manifest({ ...base, notes: "  \n" }).notes, "Dots 0.3.0");
+  assert.equal(manifest(base).notes, "Sage 0.3.0");
+  assert.equal(manifest({ ...base, notes: "  \n" }).notes, "Sage 0.3.0");
 });
 
 // Final review I6: the notes a promote left on master never describe a later version.
