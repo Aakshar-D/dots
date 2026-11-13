@@ -79,6 +79,43 @@ const DIDNT_CATCH: &str = "Sorry, I didn't catch that.";
 const QUESTION_CUT: &str = "The question could not be said in full, so nothing was done.";
 
 /// How many times in a row a word, or a group of two or three, must come for `babble`.
+/// `text` without "Hey Dot" at its start, as the recogniser writes the phrase or the end of
+/// it: "Hey Dot,", "Hey dad,", "Hey, doc," and "Hey dots" were all seen for it, and a lone "Dot." when the
+/// clip began in the middle of the phrase. The words after the wake phrase are cut from the
+/// microphone's sound by the time the spotter gives for the phrase's end, which is not exact,
+/// so the phrase can still be in the clip. Only a short word starting with "d" after "hey"
+/// is taken for "Dot": "Hey, do that again" stays whole.
+fn without_wake_phrase(text: &str) -> &str {
+    let word = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect()
+    };
+    let dot = |w: &str| {
+        matches!(
+            w,
+            "dot" | "dots" | "dott" | "dad" | "dat" | "dod" | "dodd" | "doc" | "dock" | "dog"
+        )
+    };
+    let mut rest = text.trim_start();
+    let mut words = rest.split_whitespace();
+    let first = words.next().map(word).unwrap_or_default();
+    let second = words.next().map(word).unwrap_or_default();
+    let skip = if matches!(first.as_str(), "hey" | "hay") && dot(&second) {
+        2
+    } else if first == "dot" {
+        1
+    } else {
+        0
+    };
+    for _ in 0..skip {
+        rest = rest.trim_start();
+        rest = rest.find(char::is_whitespace).map_or("", |at| &rest[at..]);
+    }
+    rest.trim_start()
+}
+
 const BABBLE_REPEATS: usize = 5;
 
 /// Whether `text` is what a recogniser makes of noise or music: the same word, or the same
@@ -585,6 +622,8 @@ struct Worker {
     /// Listening after "Hey Dot" with the tone on and no speech yet: the tone is played then,
     /// unless speech starts first.
     tone_due: Option<Instant>,
+    /// The clip being heard began at "Hey Dot": it may still hold the end of the phrase.
+    after_wake: bool,
     /// Idle with the wake phrase on: the last frames the spotter heard, newest last, so the
     /// words said after "Hey Dot" but before the spotter answered reach the ears.
     recent: VecDeque<Vec<f32>>,
@@ -679,6 +718,7 @@ impl Worker {
             deaf_until: None,
             tone_until: None,
             tone_due: None,
+            after_wake: false,
             recent: VecDeque::new(),
             halt_frames: false,
             frames_left: false,
@@ -1038,6 +1078,7 @@ impl Worker {
         }
         self.may_retry = true;
         self.from_rest = true;
+        self.after_wake = true;
         if self.settings.tone {
             self.tone_due = Some(self.clock.now() + TONE_WAIT);
         }
@@ -1077,6 +1118,7 @@ impl Worker {
         self.deaf_until = None;
         self.tone_until = None;
         self.tone_due = None;
+        self.after_wake = false;
         self.quiet_since = self.clock.now();
         self.listen_limit = limit;
         self.fresh_listen();
@@ -1100,6 +1142,7 @@ impl Worker {
         self.deaf_until = None;
         self.tone_until = None;
         self.tone_due = None;
+        self.after_wake = false;
         self.quiet_since = self.clock.now();
         self.listen_limit = ASK_LIMIT;
         self.enter(State::Asking);
@@ -1116,6 +1159,7 @@ impl Worker {
             }
             self.last_level = None;
             self.tone_due = None;
+            self.after_wake = false;
             self.recent.clear();
             if !new.hears() {
                 self.ears.reset();
@@ -1425,10 +1469,16 @@ impl Worker {
                 self.tone_due = None; // the person kept talking after "Hey Dot": no tone
             }
             EarEvent::Partial(text) => {
+                let text = self.without_wake(text);
+                if text.is_empty() {
+                    return; // only the wake phrase so far
+                }
                 self.partial_seen = true;
                 self.send(SessionEvent::Hearing { text });
             }
             EarEvent::Final(text) => {
+                let text = self.without_wake(text);
+                self.after_wake = false;
                 // What queued up while the sentence was transcribed is not fresh sound. Known
                 // limit: a "Dot, stop" said during that transcription is thrown away with it.
                 if !self.discard_backlog() {
@@ -1436,6 +1486,12 @@ impl Worker {
                 }
                 // Noise the recogniser made words of ("everywhere, everywhere, everywhere…")
                 // is not a sentence: nobody is asked about it and nothing acts on it.
+                if text.is_empty() {
+                    // Only the wake phrase was in the clip: nothing was asked yet.
+                    self.partial_seen = false;
+                    self.nothing_caught(now);
+                    return;
+                }
                 if babble(&text) {
                     self.partial_seen = true;
                     self.nothing_caught(now);
@@ -1444,7 +1500,19 @@ impl Worker {
                 let turn = self.shared.next_turn.fetch_add(1, Ordering::SeqCst) + 1;
                 self.heard(turn, text);
             }
-            EarEvent::Dropped => self.nothing_caught(now),
+            EarEvent::Dropped => {
+                self.after_wake = false;
+                self.nothing_caught(now);
+            }
+        }
+    }
+
+    /// `text` as heard, without the wake phrase when the clip began at it.
+    fn without_wake(&self, text: String) -> String {
+        if self.after_wake {
+            without_wake_phrase(&text).to_string()
+        } else {
+            text
         }
     }
 
@@ -1543,6 +1611,7 @@ impl Worker {
                 if self.tone_due.is_some_and(|at| now >= at) {
                     // A pause after "Hey Dot": the person waits to be acknowledged.
                     self.tone_due = None;
+                    self.after_wake = false;
                     if !self.in_speech {
                         self.play_tone();
                     }
@@ -2425,6 +2494,45 @@ mod tests {
         assert_eq!(lens.last().copied(), Some(7 * FRAME), "clips: {lens:?}");
     }
 
+    /// The clip after "Hey Dot" is cut from the sound by the spotter's time for the phrase,
+    /// which is not exact: when the phrase is still in it, it is not passed on as part of the
+    /// sentence, live or at the end. Said after a click, the same words stay whole.
+    #[test]
+    fn the_wake_phrase_left_in_the_clip_is_not_part_of_the_sentence() {
+        let heard = |wake: bool| {
+            let mut r = rig(Opts {
+                wake,
+                recognizer: Some(FakeRecognizer::new("Hey dad, what needs me?")),
+                ..Opts::default()
+            });
+            r.expect_state(State::Idle, wake);
+            if wake {
+                r.mic.send(HEY_DOT, 1);
+                r.mic.send(SPEECH, 3);
+                r.mic.send(QUIET, 2);
+                assert_eq!(r.next(), SessionEvent::Woke);
+                r.expect_state(State::Listening, true);
+            } else {
+                r.session.open();
+                r.expect_state(State::Listening, true);
+                r.sentence();
+            }
+            let live = match r.next() {
+                SessionEvent::Hearing { text } => text,
+                other => panic!("expected Hearing, got {other:?}"),
+            };
+            let whole = match r.next() {
+                SessionEvent::Heard { text, .. } => text,
+                other => panic!("expected Heard, got {other:?}"),
+            };
+            (live, whole)
+        };
+        let said = "what needs me?".to_string();
+        assert_eq!(heard(true), (said.clone(), said));
+        let said = "Hey dad, what needs me?".to_string();
+        assert_eq!(heard(false), (said.clone(), said));
+    }
+
     #[test]
     fn words_said_before_the_spotter_answers_are_kept() {
         let mut r = toned(true);
@@ -3066,10 +3174,10 @@ mod tests {
         r.nothing_more();
     }
 
-    /// Words shown live, then nothing heard when the sentence ends: Dot says so (once) and
-    /// listens once more, instead of going back to rest in silence.
+    /// Words shown live, then nothing from the recogniser when the sentence ends: the words
+    /// shown are the sentence, and Dot answers them (the ears fall back on them).
     #[test]
-    fn words_heard_live_then_lost_are_answered_and_listened_for_again() {
+    fn words_heard_live_then_lost_at_the_end_are_the_sentence() {
         let mut r = rig(Opts {
             recognizer: Some(FakeRecognizer::empty_from(2)),
             ..Opts::default()
@@ -3084,17 +3192,8 @@ mod tests {
                 text: "hello".into()
             }
         );
-        r.expect_state(State::Speaking, false);
-        r.expect_saying(DIDNT_CATCH);
-        r.until_speech_done();
-        r.clock.advance(250);
-        r.expect_state(State::Listening, true);
-        // a second one in the same listen is not answered again
-        r.sentence();
-        r.sync();
-        r.clock.advance(6_000);
-        r.expect_state(State::Idle, false);
-        r.nothing_more();
+        expect_heard(&mut r, "hello", 1);
+        r.expect_state(State::Thinking, false);
     }
 
     /// Noise heard as the same word over and over is not passed on as a sentence: from rest
@@ -3124,6 +3223,33 @@ mod tests {
         r.clock.advance(6_000);
         r.expect_state(State::Idle, false);
         r.nothing_more();
+    }
+
+    #[test]
+    fn the_wake_phrase_is_taken_off_the_start_of_what_was_heard() {
+        for (heard, left) in [
+            ("Hey Dot, what needs me?", "what needs me?"),
+            ("Hey dad, what needs me?", "what needs me?"),
+            ("Hey dots what needs me", "what needs me"),
+            ("hey dat, please read.", "please read."),
+            ("Hey, doc, what meets me?", "what meets me?"),
+            ("Dot. What needs me?", "What needs me?"),
+            ("Hey Dot.", ""),
+            ("Dot", ""),
+            ("What needs me?", "What needs me?"),
+            (
+                "Hey, do that again tomorrow.",
+                "Hey, do that again tomorrow.",
+            ),
+            (
+                "Hey, don't touch the hot pot.",
+                "Hey, don't touch the hot pot.",
+            ),
+            ("Dots that failed today", "Dots that failed today"),
+            ("", ""),
+        ] {
+            assert_eq!(without_wake_phrase(heard), left, "{heard:?}");
+        }
     }
 
     #[test]
