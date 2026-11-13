@@ -138,4 +138,4 @@ That is slower than the two-second goal. Most of the time is the Claude CLI star
 
 **"Hey Dot" was missed.** It is a small on-device detector and it will miss sometimes, more in a noisy room, from far away or with music playing. Say it a little slower, or use the hotkey. "Hey Dot" must be turned on in Settings, and the microphone must be allowed. Say "Hey Dot" and then wait a moment, or carry straight on with your request in the same breath.
 
-**Dot says "Sorry, I didn't catch that."** It saw words appear but could not make a sentence of them. Say it again.
+**Dot says "Sorry, I didn't catch that."** It heard sound it could not make a sentence of (noise can come out as one word over and over). Say it again.

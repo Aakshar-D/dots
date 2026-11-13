@@ -57,6 +57,10 @@ impl EarSettings {
     }
 }
 
+/// Frames of the end quiet kept when a clip that came back empty is transcribed again, tried
+/// in this order.
+const RETRY_END_QUIET: [usize; 2] = [6, 2];
+
 #[derive(Debug, PartialEq)]
 pub enum EarEvent {
     Started,
@@ -232,16 +236,41 @@ impl Ears {
 
     fn finish(&mut self) -> EarEvent {
         let enough = self.longest_run >= self.min_speech;
-        let event = if enough {
-            match self.recognizer.transcribe(&self.clip_audio()) {
-                Ok(text) if !text.trim().is_empty() => EarEvent::Final(text.trim().to_string()),
-                _ => EarEvent::Dropped,
-            }
-        } else {
-            EarEvent::Dropped
+        let event = match enough.then(|| self.sentence()).flatten() {
+            Some(text) => EarEvent::Final(text),
+            None => EarEvent::Dropped,
         };
         self.end_clip();
         event
+    }
+
+    /// The finished clip as text. The recogniser now and then returns nothing at all for a
+    /// short clip it gave words for a moment before, and whether it does turns on the clip's
+    /// exact length (measured on clips of "What needs me?" said straight after "Hey Dot": 4
+    /// of 17 came back empty whole, each of them had its words with less of the quiet at its
+    /// end). So an empty answer is asked for again with the end quiet cut down, and should
+    /// that give nothing either, the words last shown while the person spoke are the sentence.
+    fn sentence(&self) -> Option<String> {
+        let heard = |samples: &[f32]| {
+            let clip = Clip {
+                samples: samples.to_vec(),
+                rate: EAR_RATE,
+            };
+            let text = self.recognizer.transcribe(&clip).ok()?;
+            let text = text.trim();
+            (!text.is_empty()).then(|| text.to_string())
+        };
+        heard(&self.clip)
+            .or_else(|| {
+                RETRY_END_QUIET
+                    .iter()
+                    .filter(|keep| self.quiet_run > **keep)
+                    .find_map(|keep| {
+                        let cut = (self.quiet_run - keep) * FRAME;
+                        heard(&self.clip[..self.clip.len() - cut])
+                    })
+            })
+            .or_else(|| (!self.last_partial.is_empty()).then(|| self.last_partial.clone()))
     }
 }
 
@@ -288,6 +317,8 @@ mod tests {
         Empty,
         Fail,
         Slow,
+        /// Nothing for a clip longer than this many frames.
+        EmptyOver(usize),
     }
 
     struct FakeRecognizer {
@@ -302,6 +333,8 @@ mod tests {
                 Mode::Count => Ok(format!("{} frames", clip.samples.len() / FRAME)),
                 Mode::Empty => Ok(String::new()),
                 Mode::Fail => Err(EngineError::Failed("no".into())),
+                Mode::EmptyOver(most) if clip.samples.len() / FRAME > most => Ok(String::new()),
+                Mode::EmptyOver(_) => Ok(format!("{} frames", clip.samples.len() / FRAME)),
                 Mode::Slow => {
                     std::thread::sleep(Duration::from_millis(5));
                     Ok(format!("{} frames", clip.samples.len() / FRAME))
@@ -347,6 +380,44 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, EarEvent::Final(_)))
             .collect()
+    }
+
+    #[test]
+    fn a_clip_that_comes_back_empty_is_heard_again_with_less_quiet_at_its_end() {
+        // 40 frames of speech and the 22 of quiet that end it: nothing whole, nor with 6
+        // frames of the quiet kept (46), but with 2 kept (42).
+        for (most, heard) in [(50, "46 frames"), (43, "42 frames")] {
+            let mut r = rig(Mode::EmptyOver(most), EarSettings::default());
+            let mut events = feed(&mut r.ears, true, 40, 1.0);
+            events.extend(feed(&mut r.ears, false, 30, 1.0));
+            assert_eq!(
+                events.last(),
+                Some(&EarEvent::Final(heard.into())),
+                "{most}"
+            );
+            assert_eq!(finals(&events).len(), 1);
+        }
+    }
+
+    #[test]
+    fn a_clip_empty_however_it_is_cut_is_the_words_last_shown() {
+        let mut r = rig(Mode::EmptyOver(41), EarSettings::default());
+        let mut events = feed(&mut r.ears, true, 40, 1.0);
+        events.extend(feed(&mut r.ears, false, 30, 1.0));
+        let shown = events
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                EarEvent::Partial(text) => Some(text.clone()),
+                _ => None,
+            })
+            .expect("words were shown while the person spoke");
+        assert_eq!(events.last(), Some(&EarEvent::Final(shown)));
+        // Never shown anything, and empty however it is cut: no sentence.
+        let mut r = rig(Mode::Empty, EarSettings::default());
+        let mut events = feed(&mut r.ears, true, 40, 1.0);
+        events.extend(feed(&mut r.ears, false, 30, 1.0));
+        assert_eq!(events, vec![EarEvent::Started, EarEvent::Dropped]);
     }
 
     #[test]
