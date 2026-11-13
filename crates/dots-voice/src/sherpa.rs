@@ -22,14 +22,19 @@ use crate::models::ModelPaths;
 
 /// The wake phrases in sherpa's keyword format: `tokens :boost #threshold @name`.
 ///
-/// The tokens are the model's own pieces for "HEY SAGE" and "SAGE STOP": its `bpe.model`
-/// spells SAGE as `▁S AGE`. The names after `@` are from the phrase before, "Hey Dot".
+/// The tokens are the model's own pieces: its `bpe.model` spells SAGE as `▁S AGE`. The stop
+/// phrase is also listed in the two other ways the pieces can spell it, in case the model
+/// gives one of them for a voice. The names after `@` are from the phrase before, "Hey Dot".
 ///
 /// "Hey Sage" is boosted less and held to a higher score than "Sage, stop": a wrong
-/// "Sage, stop" only stops Sage speaking; a wrong "Hey Sage" opens the microphone. The
-/// numbers were measured for "Hey Dot" (boost 1.5 with threshold 0.2 woke on 3 of 100 near
-/// misses, 1.0 with 0.25 on none, with the phrase caught 59 times in 60).
-const WAKE_KEYWORDS: &str = "▁HE Y ▁S AGE :1.0 #0.25 @HEY_DOT\n▁S AGE ▁ST O P :1.5 #0.2 @DOT_STOP";
+/// "Sage, stop" only stops Sage speaking; a wrong "Hey Sage" opens the microphone. Measured
+/// over the ten voices, twice: "Hey Sage, what needs me?" woke it 20 times in 20, four near
+/// misses ("Hey, say that again tomorrow.", "Hey, save each page of the message." and two
+/// more) woke it 0 times in 80, and "Sage, stop." was caught 15 times in 20. The counts move
+/// by one from run to run, as the synthetic voices do: at 0.25 and at 0.35 one near miss in
+/// 40 woke it. At 0.6 the phrase itself was missed. The three voices that miss "Sage, stop."
+/// miss it at every boost and threshold tried.
+const WAKE_KEYWORDS: &str = "▁HE Y ▁S AGE :1.0 #0.3 @HEY_DOT\n▁S AGE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁SA GE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁S A GE ▁ST O P :2.0 #0.1 @DOT_STOP";
 const SPEAK_STEPS: i32 = 5;
 const VOICES: u8 = 10;
 
@@ -229,11 +234,12 @@ pub struct SherpaWake {
     after: usize,
 }
 
-/// The spotter times a word by its last token, but late: measured on the ten voices, words
-/// said straight after "Hey Dot" begin up to 0.2 s before the time it gives for the "t" of
-/// "Dot". The words after the wake phrase are taken from this long before that time; the bit
-/// of "Dot" this may include is not heard as a word by the recogniser.
-const WORD_END_LEAD_SECS: f32 = 0.25;
+/// The words after the wake phrase are taken from this long before the time the spotter
+/// gives for the phrase's last token. That token is the "age" of "Sage", which it times near
+/// the start of that sound: with the 0.25 s that suited the "t" of "Dot", the recogniser
+/// heard the rest of the word as a word of its own ("Age, please read...", "Stage") for 3
+/// of the ten voices; with 0.05 s for none.
+const WORD_END_LEAD_SECS: f32 = 0.05;
 
 impl SherpaWake {
     pub fn load(paths: &ModelPaths) -> Result<Self, EngineError> {

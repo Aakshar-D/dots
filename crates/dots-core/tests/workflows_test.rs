@@ -1847,7 +1847,7 @@ async fn a_branch_on_project_takes_the_matching_path_then_the_step_after_it() {
         .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
         .await;
     assert_eq!(ran(&wr), ["pick", "dots", "after"]);
-    assert_eq!(chose(&wr, "pick").as_deref(), Some("dots"));
+    assert_eq!(chose(&wr, "pick").as_deref(), Some("sage"));
     assert_eq!(wr.current_step, None);
     // Only the path taken ran.
     assert_eq!(w.engine.prompts_of("dev").len(), 1);

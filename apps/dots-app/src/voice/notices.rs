@@ -993,7 +993,7 @@ mod tests {
     #[test]
     fn no_fixed_wording_says_dot() {
         for line in [PRIVATE, AN_APPROVAL, A_QUESTION] {
-            assert!(!says_sage(&line), "{line}");
+            assert!(!says_sage(line), "{line}");
         }
         let mut n = Notices::new();
         let line = n.rested(&others(3), Instant::now());
