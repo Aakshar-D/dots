@@ -889,8 +889,9 @@ impl Store {
     }
 
     /// What the person narrowed on the made dot `dot_id` since its maker last set it
-    /// (`Narrowed`, dots-make-dots design section 9); empty when nothing was. `NotFound` for a
-    /// dot that does not exist.
+    /// (`Narrowed`, dots-make-dots design section 9); empty when nothing was. A stored value that
+    /// cannot be read is logged and read as `reach::narrowed_unread` gives it. `NotFound` for
+    /// a dot that does not exist.
     pub async fn made_narrowed(&self, dot_id: &str) -> Result<Vec<Narrowed>> {
         let kept: Option<Option<String>> =
             sqlx::query_scalar("SELECT made_narrowed FROM dots WHERE id = ?")
@@ -900,7 +901,17 @@ impl Store {
         match kept {
             None => Err(Error::NotFound(format!("dot {dot_id}"))),
             Some(None) => Ok(Vec::new()),
-            Some(Some(text)) => Ok(serde_json::from_str(&text)?),
+            Some(Some(text)) => match serde_json::from_str(&text) {
+                Ok(kept) => Ok(kept),
+                Err(e) => {
+                    // A value that cannot be read must neither stop every edit of the dot nor
+                    // let its maker undo what the person narrowed: it is read as narrowing all
+                    // it can name on the dot as it is (`narrowed_unread`).
+                    tracing::warn!(dot = %dot_id, "what the person narrowed could not be read: {e}");
+                    let dot = self.get_dot(dot_id).await?;
+                    Ok(crate::making::reach::narrowed_unread(&text, &dot.spec))
+                }
+            },
         }
     }
 

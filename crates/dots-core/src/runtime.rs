@@ -2497,7 +2497,7 @@ impl Runtime {
     /// account, the role must allow changing dots, and giving secrets to them when the grants
     /// change (members spec §6.3).
     pub async fn update_dot(&self, id: &str, spec: DotSpec) -> Result<Dot> {
-        self.dot_admin.update(id, spec, false).await
+        self.dot_admin.update(id, spec, None).await
     }
 
     /// Deletes the dot; its schedule row goes with it (`ON DELETE CASCADE`). In an account, the

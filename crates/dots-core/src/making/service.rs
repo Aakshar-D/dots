@@ -402,7 +402,8 @@ impl Makers {
         // The person's own edits do not take this lock, so a narrowing of the maker may land
         // between this judgement and the dot's insert. The dot then stands as one made just
         // before the edit, which section 6 leaves as it is (narrowing a maker leaves its made
-        // dots), and every later make and change is judged on the edit.
+        // dots), and every later make and change is judged on the edit. Unlike `change_dot`,
+        // nothing is saved over an edit of the person's: the new dot is a new row.
         let maker = maker_now;
         self.check_name_free(&reach.spec.name).await?;
         let over = self.over_limit(&maker, &run.id).await?;

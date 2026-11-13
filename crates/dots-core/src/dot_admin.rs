@@ -28,6 +28,16 @@ pub const MADE_NOT_A_REPO: &str = "The new dot would work in copies of that fold
     maker does, but the folder is not the top of a git repository with a commit. Leave the \
     folder blank for a new one.";
 
+/// Why a maker's change to the made dot named `name` is not saved: the dot changed after the
+/// change was judged (`DotAdmin::update`). Read by the model, and by the person when it was their
+/// answer to a change request.
+pub fn changed_while_saving(name: &str) -> String {
+    format!(
+        "\"{name}\" was changed while this change was being saved, so nothing was saved. Try \
+         again: it is judged against the dot as it is now."
+    )
+}
+
 /// What `DotAdmin::delete_rows` read of a dot before its row went, for `after_delete`.
 pub(crate) struct Deleted {
     dot: Dot,
@@ -192,15 +202,23 @@ impl DotAdmin {
     /// account, the role must allow changing dots, and giving secrets to them when the grants
     /// change (members spec §6.3).
     ///
-    /// With `exact`, the change is a maker's to a dot it made (dots-make-dots design section
-    /// 9): the grants are stored exactly as `spec` gives them, with no grant of a newly used
-    /// server's variables (`Store::update_dot_exact`). Without, on a made dot, what the person
-    /// takes away or lowers is kept (`Store::set_made_narrowed`).
-    pub async fn update(&self, id: &str, spec: DotSpec, exact: bool) -> Result<Dot> {
+    /// With `judged`, the change is a maker's to a dot it made (dots-make-dots design section
+    /// 9), judged against the dot as `judged` gives it: the grants are stored exactly as `spec`
+    /// gives them, with no grant of a newly used server's variables (`Store::update_dot_exact`).
+    /// Without, on a made dot, what the person takes away or lowers is kept
+    /// (`Store::set_made_narrowed`).
+    pub async fn update(&self, id: &str, spec: DotSpec, judged: Option<&DotSpec>) -> Result<Dot> {
         let p = &self.parts;
+        let exact = judged.is_some();
         let old = p.store.get_dot(id).await?;
         if let Some(text) = p.vault.org_removed(&old) {
             return Err(Error::Conflict(text));
+        }
+        // The person's own edits do not wait for the makers, so one may have landed since the
+        // maker's change was judged. Saved over it, the change would undo it with no card: it is
+        // refused, and asked again it is judged against the dot as it is now.
+        if judged.is_some_and(|judged| *judged != old.spec) {
+            return Err(Error::Conflict(changed_while_saving(&old.spec.name)));
         }
         self.require_dot(&old, Permission::EditDots).await?;
         if spec.variables != old.spec.variables {
@@ -228,8 +246,10 @@ impl DotAdmin {
         }
         // On a made dot, what the person narrows with their own edit is kept, so its maker's
         // change that gives it back asks them; what the dot has again is no longer kept
-        // (dots-make-dots design section 9). Kept before the dot is saved: a save that fails
-        // after it leaves at most a setting that asks once more than it needs.
+        // (dots-make-dots design section 9). What this save adds to the record is kept before
+        // the dot is saved, and what it drops goes only once the dot is saved: a save that
+        // fails leaves at most a setting that asks once more than it needs.
+        let mut narrowed_after = None;
         if old.made.is_some() {
             let kept = p.store.made_narrowed(id).await?;
             let now = if exact {
@@ -237,8 +257,17 @@ impl DotAdmin {
             } else {
                 crate::making::reach::narrowed_by_person(&kept, &old.spec, &spec)
             };
-            if now != kept {
-                p.store.set_made_narrowed(id, &now).await?;
+            let mut first = kept.clone();
+            for n in &now {
+                if !first.contains(n) {
+                    first.push(n.clone());
+                }
+            }
+            if first != kept {
+                p.store.set_made_narrowed(id, &first).await?;
+            }
+            if now != first {
+                narrowed_after = Some(now);
             }
         }
         let was_enabled = old.spec.enabled;
@@ -247,6 +276,12 @@ impl DotAdmin {
         } else {
             p.store.update_dot(id, &spec).await?
         };
+        if let Some(now) = narrowed_after {
+            // The dot is saved either way; a record not updated keeps more than is narrowed.
+            if let Err(e) = p.store.set_made_narrowed(id, &now).await {
+                tracing::warn!(dot = %id, "what the person narrowed could not be updated: {e}");
+            }
+        }
         // A run held past the policy ceiling may start now (guardrails spec §4.3).
         p.runner.nudge();
         if dot.spec.name != old.spec.name {

@@ -179,6 +179,18 @@ fn hide(text: &str, values: &[String]) -> String {
     out
 }
 
+/// What a wake says in place of the job's result when the values the made dot holds beyond its
+/// maker's reach cannot be read (`Makers::values_to_hide`): nothing could be hidden, so nothing
+/// of the made dot's text goes back.
+pub const WITHHELD: &str = "Its final message and error text were left out: Dots could not check \
+                            them for the values this dot holds beyond yours.";
+
+/// What the maker is woken with when a job of the dot `dot` ended as `how` and its result is
+/// left out (`WITHHELD`).
+pub fn withheld_message(dot: &str, how: &str) -> String {
+    format!("\"{dot}\" {how}.\n\n{WITHHELD}")
+}
+
 /// How a job ended whose last run parked on a call the person refused, with no note.
 pub const REFUSED: &str = "was stopped: the person refused what it asked to do";
 
@@ -361,6 +373,8 @@ impl Makers {
         // check and the job's insert in `start_job`. That is no hole: the job then stands as one
         // given just before the edit, which the edit would not have stopped either, and every
         // later job is judged on the edit. Making every edit wait for the makes is not worth it.
+        // Unlike `change_dot`, nothing is saved over the edit: the job's run reads the dot as it
+        // is when it starts.
         let held = self.held_now(&maker, &made).await?;
         if !held.is_empty() {
             self.store_job_request(&maker, &run, &made, message, &held)
@@ -742,9 +756,13 @@ impl Makers {
                 }
                 Some(question) if question.dismissed_at.is_some() => {
                     // Nothing can answer it any more, so nothing would end the job.
-                    let hidden = self.held_values(&job.maker_dot_id, &dot).await?;
-                    let text = final_text.map(|text| hide(text, &hidden));
-                    let said = ended_message(name, "was stopped", None, text.as_deref());
+                    let said = match self.values_to_hide(&job, &dot).await {
+                        Some(hidden) => {
+                            let text = final_text.map(|text| hide(text, &hidden));
+                            ended_message(name, "was stopped", None, text.as_deref())
+                        }
+                        None => withheld_message(name, "was stopped"),
+                    };
                     return self.end_job(&job, name, JobEnd::Cancelled, &said).await;
                 }
                 Some(question) => {
@@ -768,17 +786,37 @@ impl Makers {
             } else {
                 run_end(&last)
             };
-            let hidden = self.held_values(&job.maker_dot_id, &dot).await?;
-            let error = last.error.as_deref().filter(|_| with_error);
-            let error = error.map(|error| hide(error, &hidden));
-            let text = final_text.map(|text| hide(text, &hidden));
-            let said = ended_message(name, words, error.as_deref(), text.as_deref());
+            let said = match self.values_to_hide(&job, &dot).await {
+                Some(hidden) => {
+                    let error = last.error.as_deref().filter(|_| with_error);
+                    let error = error.map(|error| hide(error, &hidden));
+                    let text = final_text.map(|text| hide(text, &hidden));
+                    ended_message(name, words, error.as_deref(), text.as_deref())
+                }
+                None => withheld_message(name, words),
+            };
             return self.end_job(&job, name, how, &said).await;
         }
         Err(Error::Other(format!(
             "job {} went through {MAX_HOPS} runs in one pass",
             job.id
         )))
+    }
+
+    /// `held_values` for the job `job` of `made`, or `None` when they cannot be read (a vault or
+    /// store error): logged, and the wake then leaves the result out (`WITHHELD`), so the job
+    /// still ends and its maker is woken rather than the job staying open.
+    async fn values_to_hide(&self, job: &MakingJob, made: &Dot) -> Option<Vec<String>> {
+        match self.held_values(&job.maker_dot_id, made).await {
+            Ok(values) => Some(values),
+            Err(e) => {
+                tracing::warn!(
+                    job = %job.id,
+                    "the dot's own values could not be read, so the wake leaves its result out: {e}"
+                );
+                None
+            }
+        }
     }
 
     /// The values of the variables `made` holds beyond the reach of its maker `maker_id` as the
@@ -841,11 +879,12 @@ impl Makers {
     /// for all of them. `true` when a wake was stored here.
     ///
     /// The maker is told only when that wake could start: not while a cap holds the maker too,
-    /// as the cap it shares with the dots it made does, and, when the wake would be background
+    /// as the cap it shares with the dots it made does; when the wake would be background
     /// (`unattended`), not while Claude's usage hold or the role hold would hold it
-    /// (`background_wake_held`). Such a wake would wait as long as the job, keep the maker's
-    /// topic busy meanwhile, and arrive when it is no longer true. The job is then left
-    /// untold, and may be told on a later pass.
+    /// (`background_wake_held`); and in a topic the person watches, not while this PC may not
+    /// run the maker, as the wake then waits (`wake::deliver_wake`). Such a wake would wait as
+    /// long as the job or the role, keep the maker's topic busy meanwhile, and arrive when it is
+    /// no longer true. The job is then left untold, and may be told on a later pass.
     async fn tell_held(&self, held: Vec<MaybeHeld>) -> Result<bool> {
         let p = &self.parts;
         let mut untold = Vec::with_capacity(held.len());
@@ -863,24 +902,25 @@ impl Makers {
         let mut told = false;
         for (one, run) in untold.iter().zip(runs) {
             let MaybeHeld { job, dot_name, .. } = one;
+            let usage_held = run.wait_reason == Some(WaitReason::UsageHold);
             let why = match run.wait_reason {
                 Some(WaitReason::SpendCap) => run
                     .wait_detail
                     .unwrap_or_else(|| WaitReason::SpendCap.text().to_string()),
-                Some(WaitReason::UsageHold) => {
-                    if self.topic_unattended(&job.maker_root_run_id).await? {
-                        continue;
-                    }
-                    "it is held for Claude's usage limit".to_string()
-                }
+                Some(WaitReason::UsageHold) => "it is held for Claude's usage limit".to_string(),
                 _ => continue,
             };
+            let unattended = self.topic_unattended(&job.maker_root_run_id).await?;
+            if unattended && usage_held {
+                continue;
+            }
             if ledger.hit_for(&p.store, &job.maker_dot_id).await?.is_some() {
                 continue;
             }
-            if self.topic_unattended(&job.maker_root_run_id).await?
-                && self.background_wake_held(&job.maker_dot_id).await?
-            {
+            if unattended && self.background_wake_held(&job.maker_dot_id).await? {
+                continue;
+            }
+            if !unattended && self.role_holds(&job.maker_dot_id).await? {
                 continue;
             }
             let said = held_message(dot_name, &why);
@@ -914,6 +954,23 @@ impl Makers {
             Err(e) => return Err(e),
         }
         Ok(p.runner.ceiling_hold(&maker).await.is_some())
+    }
+
+    /// Whether this PC may not run the maker `maker_id` now (`Runner::require_run`): a wake in
+    /// a topic the person watches then waits (`wake::deliver_wake`). A maker that is gone holds
+    /// nothing.
+    async fn role_holds(&self, maker_id: &str) -> Result<bool> {
+        let p = &self.parts;
+        let maker = match p.store.get_dot(maker_id).await {
+            Ok(maker) => maker,
+            Err(Error::NotFound(_)) => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        match p.runner.require_run(&maker).await {
+            Ok(()) => Ok(false),
+            Err(Error::NotAllowed(_)) => Ok(true),
+            Err(e) => Err(e),
+        }
     }
 
     /// Whether the job that is at the run `last` has been at the run `run_id`: `last` itself,

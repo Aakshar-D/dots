@@ -321,6 +321,9 @@ pub enum Narrowed {
     Timeout { limit_secs: u64 },
     /// The permissions set to a narrower plain preset.
     Preset { preset: Preset },
+    /// The permissions narrowed in another way, to `policy`: a rule of the person's own, or
+    /// Custom permissions that allow less than before.
+    Policy { policy: Policy },
 }
 
 impl Narrowed {
@@ -334,9 +337,12 @@ impl Narrowed {
             Self::Schedule => spec.schedule.is_some(),
             Self::MaxTurns { limit } => spec.max_turns > *limit,
             Self::Timeout { limit_secs } => spec.timeout_secs > *limit_secs,
-            Self::Preset { preset } => {
-                !(plain_preset(&spec.policy) && rank(spec.policy.preset) <= rank(*preset))
+            Self::Preset { preset } if plain_preset(&spec.policy) => {
+                rank(spec.policy.preset) > rank(*preset)
             }
+            // Custom permissions give it back only when they allow more than the preset.
+            Self::Preset { preset } => !covers(&Policy::preset(*preset), &spec.policy),
+            Self::Policy { policy } => !covers(policy, &spec.policy),
         }
     }
 
@@ -369,6 +375,13 @@ impl Narrowed {
                 "Permissions with rules of their own (you set {})",
                 preset_label(*preset)
             ),
+            Self::Policy { .. } if plain_preset(&spec.policy) => format!(
+                "The preset {} (you set narrower permissions)",
+                preset_label(spec.policy.preset)
+            ),
+            Self::Policy { .. } => {
+                "Permissions with rules of their own (you set narrower ones)".to_string()
+            }
         }
     }
 
@@ -393,25 +406,28 @@ impl Narrowed {
             Self::Timeout { limit_secs } => {
                 without.timeout_secs = without.timeout_secs.min(*limit_secs)
             }
-            Self::Preset { .. } => without.policy = made.policy.clone(),
+            Self::Preset { .. } | Self::Policy { .. } => without.policy = made.policy.clone(),
         }
     }
 }
 
 /// What the person has narrowed on a made dot after their own edit from `before` to `after`
 /// (design section 9): of `kept`, what they narrowed before, what `after` does not give back,
-/// and what this edit takes away or lowers. A lowered limit or preset replaces the one kept.
+/// and what this edit takes away or lowers. A lowered limit, or narrower permissions, replace
+/// the ones kept.
 pub fn narrowed_by_person(kept: &[Narrowed], before: &DotSpec, after: &DotSpec) -> Vec<Narrowed> {
     let mut list: Vec<Narrowed> = kept
         .iter()
         .filter(|n| !n.given_back(after))
         .cloned()
         .collect();
+    let permissions = |n: &Narrowed| matches!(n, Narrowed::Preset { .. } | Narrowed::Policy { .. });
     let mut add = |n: Narrowed| {
         list.retain(|old| {
-            std::mem::discriminant(old) != std::mem::discriminant(&n) || {
-                matches!(n, Narrowed::Item { .. } | Narrowed::Variable { .. }) && *old != n
-            }
+            !(permissions(old) && permissions(&n))
+                && (std::mem::discriminant(old) != std::mem::discriminant(&n) || {
+                    matches!(n, Narrowed::Item { .. } | Narrowed::Variable { .. }) && *old != n
+                })
         });
         list.push(n);
     };
@@ -456,13 +472,57 @@ pub fn narrowed_by_person(kept: &[Narrowed], before: &DotSpec, after: &DotSpec) 
     }
     let lower = rank(after.policy.preset) < rank(before.policy.preset)
         && rank(after.policy.preset).is_some();
-    if after.policy != before.policy
-        && plain_preset(&after.policy)
-        && (lower || covers(&before.policy, &after.policy))
-    {
-        add(Narrowed::Preset {
-            preset: after.policy.preset,
-        });
+    if after.policy != before.policy {
+        if plain_preset(&after.policy) && (lower || covers(&before.policy, &after.policy)) {
+            add(Narrowed::Preset {
+                preset: after.policy.preset,
+            });
+        } else if !plain_preset(&after.policy) && !covers(&after.policy, &before.policy) {
+            // A rule of the person's own, or Custom permissions that allow less than before.
+            // Kept whole: a maker's change asks when it allows anything these do not.
+            add(Narrowed::Policy {
+                policy: after.policy.clone(),
+            });
+        }
+    }
+    list
+}
+
+/// What the person narrowed on a made dot whose stored record `text` cannot be read (design
+/// section 9): each entry of it that can still be read and, so that the person is still asked,
+/// everything else the record can name, as `spec`, the dot as it is, has it: the browser and
+/// the person's Claude settings when off, no schedule, the limits and the permissions. A
+/// Library item or variable named only in the part that cannot be read is not known.
+pub fn narrowed_unread(text: &str, spec: &DotSpec) -> Vec<Narrowed> {
+    let mut list: Vec<Narrowed> = serde_json::from_str::<Vec<serde_json::Value>>(text)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|entry| serde_json::from_value(entry).ok())
+        .collect();
+    let mut all = vec![
+        Narrowed::MaxTurns {
+            limit: spec.max_turns,
+        },
+        Narrowed::Timeout {
+            limit_secs: spec.timeout_secs,
+        },
+        Narrowed::Policy {
+            policy: spec.policy.clone(),
+        },
+    ];
+    if !spec.browser {
+        all.push(Narrowed::Browser);
+    }
+    if !spec.use_user_settings {
+        all.push(Narrowed::UserSettings);
+    }
+    if spec.schedule.is_none() {
+        all.push(Narrowed::Schedule);
+    }
+    for n in all {
+        if !list.contains(&n) {
+            list.push(n);
+        }
     }
     list
 }

@@ -2927,3 +2927,126 @@ async fn a_first_job_the_store_could_not_start_tells_the_model_a_plain_sentence(
          give_job."
     );
 }
+
+/// The values a made dot holds beyond its maker's reach are hidden in a failed run's error text
+/// too, and in another spelling the vault's redactor knows (base64 here), before they go into
+/// the maker's wake (dots-make-dots design section 8).
+#[tokio::test]
+async fn a_failed_jobs_wake_hides_the_dots_own_values_in_its_error_and_in_other_spellings() {
+    use base64::Engine as _;
+    let t = quiet().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    let token = "tok-4f9a2c71e0";
+    t.rt.vault()
+        .add("SITE_TOKEN", EntryKind::Plain, token)
+        .await
+        .unwrap();
+    let mut spec = t.rt.store().get_dot(&made.id).await.unwrap().spec;
+    spec.variables = Grants([("shell".to_string(), vec!["SITE_TOKEN".to_string()])].into());
+    t.rt.update_dot(&made.id, spec).await.unwrap();
+    t.rt.makers()
+        .give_job(&run.id, "Blog Watcher", "Post the list.")
+        .await
+        .unwrap();
+    let request = the_waiting_request(&t, &maker).await;
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    t.rt.makers()
+        .decide_request(
+            &request.id,
+            MakeDecision::Allow,
+            None,
+            card.shown.as_deref(),
+        )
+        .await
+        .unwrap();
+    let job = jobs(&t, &run).await.pop().expect("the job started");
+    let its = run_of(&t, &job).await;
+    start(&t, &its.id).await;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(token);
+    let text = format!("Sent {encoded} as the header.");
+    let error = format!("curl: 401 for the token {token}");
+    finish(&t, &its.id, RunStatus::Failed, Some(&text), Some(&error)).await;
+
+    settle(&t).await;
+
+    let said = wakes(&t).await.pop().expect("the maker is woken");
+    assert!(said.starts_with("\"Blog Watcher\" failed."), "{said}");
+    assert!(
+        said.contains("> curl: 401 for the token [hidden]"),
+        "{said}"
+    );
+    assert!(said.contains("> Sent [hidden] as the header."), "{said}");
+    assert!(!said.contains(token) && !said.contains(&encoded), "{said}");
+}
+
+/// A job whose made dot's own values cannot be read when it ends still ends (dots-make-dots
+/// design section 8): the vault fails to read the secret the dot holds beyond its maker, so the
+/// wake leaves the final text and the error out and says why, rather than the job staying open
+/// with its maker never woken.
+#[tokio::test]
+async fn a_job_whose_dots_values_cannot_be_read_ends_with_its_result_left_out() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("work")).unwrap();
+    let mut cfg = Config::new(dir.path().join("data"));
+    cfg.port = 0;
+    cfg.claude_path = Some(PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    cfg.new_dot_root = dir.path().join("Dots");
+    cfg.secrets = Some(Arc::new(common::secrets::FailingSecrets::new("SITE_KEY")));
+    cfg.max_concurrent_runs = 0;
+    let rt = Runtime::start(cfg).await.unwrap();
+    let t = T {
+        dir,
+        secrets: Arc::new(MemorySecrets::new()),
+        rt,
+    };
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    // A secret kept from before, whose value Credential Manager now fails to give.
+    t.rt.store()
+        .add_env_entry("SITE_KEY", EntryKind::Secret, None)
+        .await
+        .unwrap();
+    let mut spec = t.rt.store().get_dot(&made.id).await.unwrap().spec;
+    spec.variables = Grants([("shell".to_string(), vec!["SITE_KEY".to_string()])].into());
+    t.rt.update_dot(&made.id, spec).await.unwrap();
+    t.rt.makers()
+        .give_job(&run.id, "Blog Watcher", "Post the list.")
+        .await
+        .unwrap();
+    let request = the_waiting_request(&t, &maker).await;
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    t.rt.makers()
+        .decide_request(
+            &request.id,
+            MakeDecision::Allow,
+            None,
+            card.shown.as_deref(),
+        )
+        .await
+        .unwrap();
+    let job = jobs(&t, &run).await.pop().expect("the job started");
+    let its = run_of(&t, &job).await;
+    start(&t, &its.id).await;
+    finish(
+        &t,
+        &its.id,
+        RunStatus::Failed,
+        Some("Posted with the key."),
+        Some("curl: 401"),
+    )
+    .await;
+
+    let settled = t.rt.makers().settle_jobs().await;
+
+    assert!(settled.is_ok(), "{settled:?}");
+    assert_eq!(stored(&t, &job).await.status, JobStatus::Ended);
+    // After the wake that told the maker the person allowed the job.
+    assert_eq!(
+        wakes(&t).await.last().unwrap(),
+        "\"Blog Watcher\" failed.\n\nIts final message and error text were left out: Dots could \
+         not check them for the values this dot holds beyond yours."
+    );
+}

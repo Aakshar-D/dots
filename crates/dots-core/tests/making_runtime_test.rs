@@ -1334,3 +1334,136 @@ async fn the_inbox_names_a_renamed_dot_as_its_card_does() {
     // And by its name now.
     assert_eq!(item.name, "Feeds");
 }
+
+/// The person gives the made dot `made` a daily cap, which a run of it has spent: the run of a
+/// job given to it then waits for its cap.
+async fn spend_its_cap(t: &T, made: &Dot) {
+    let mut s = t.rt.store().get_dot(&made.id).await.unwrap().spec;
+    s.spend_cap.daily_usd = Some(0.5);
+    t.rt.update_dot(&made.id, s).await.unwrap();
+    let new = NewRun::new(&made.id, TriggerKind::Schedule);
+    let spent = t.rt.store().create_run(&new).await.unwrap();
+    started(t, &spent.id).await;
+    t.rt.store()
+        .add_usage(&spent.id, 10, 10, 0, Some(0.6))
+        .await
+        .unwrap();
+    t.rt.store()
+        .finish_run(&spent.id, RunStatus::Succeeded, Some("Done."), None)
+        .await
+        .unwrap();
+}
+
+/// A job held by its dot's cap is not told to its maker in a topic the person watches while this
+/// PC may not run the maker (dots-make-dots design section 8): the tell would wait as a wake
+/// until the role came back, and then say the job has not started when that may no longer be
+/// true. Once the role allows running dots again, the next pass tells it.
+#[tokio::test]
+async fn a_held_job_is_not_told_in_a_watched_topic_while_this_pc_may_not_run_the_maker() {
+    let a = Acme::start().await;
+    let t = &a.t;
+    a.join_as("member").await;
+    let maker =
+        t.rt.create_dot(maker_spec(t), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let run = live_run(t, &maker).await;
+    let made = make(t, &run, "Blog Watcher").await;
+    spend_its_cap(t, &made).await;
+    t.rt.makers()
+        .give_job(&run.id, "Blog Watcher", "Read the blogs now.")
+        .await
+        .unwrap();
+    let job = jobs(t, &run).await.pop().expect("a job was stored");
+    a.become_(2, "viewer").await;
+
+    t.rt.makers().settle_jobs().await.unwrap();
+
+    assert!(wakes(t).await.is_empty());
+    assert!(!t.rt.store().making_job_held_told(&job.id).await.unwrap());
+    a.become_(3, "member").await;
+    t.rt.makers().settle_jobs().await.unwrap();
+    assert!(t.rt.store().making_job_held_told(&job.id).await.unwrap());
+    assert_eq!(wakes(t).await.len(), 1);
+    t.rt.shutdown();
+}
+
+/// In a topic nobody watches, the tell of a job held by its dot's cap is skipped while the role
+/// hold would hold the maker's background wake (dots-make-dots design section 8): this PC is a
+/// Viewer in the maker's workspace. Once it may run dots again, the next pass tells it.
+#[tokio::test]
+async fn a_held_job_is_not_told_in_an_unattended_topic_while_the_role_holds_the_maker() {
+    let a = Acme::start().await;
+    let t = &a.t;
+    a.join_as("member").await;
+    let maker =
+        t.rt.create_dot(maker_spec(t), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let scheduled = live_run_with(t, &maker, TriggerKind::Schedule, json!({})).await;
+    let made = make(t, &scheduled, "Blog Watcher").await;
+    spend_its_cap(t, &made).await;
+    t.rt.makers()
+        .give_job(&scheduled.id, "Blog Watcher", "Read the blogs now.")
+        .await
+        .unwrap();
+    let job = jobs(t, &scheduled).await.pop().expect("a job was stored");
+    a.become_(2, "viewer").await;
+
+    t.rt.makers().settle_jobs().await.unwrap();
+
+    assert!(wakes(t).await.is_empty());
+    assert!(!t.rt.store().making_job_held_told(&job.id).await.unwrap());
+    a.become_(3, "member").await;
+    t.rt.makers().settle_jobs().await.unwrap();
+    assert!(t.rt.store().making_job_held_told(&job.id).await.unwrap());
+    assert_eq!(wakes(t).await.len(), 1);
+    t.rt.shutdown();
+}
+
+/// The wake that carries the person's answer to a request is a wake like any other: in a topic
+/// the person typed in, a Viewer's refusal stores it, and no run of the maker is made while this
+/// PC may not run the maker. It is delivered once the role allows running dots again.
+#[tokio::test]
+async fn the_wake_with_the_persons_answer_waits_while_this_pc_may_not_run_the_maker() {
+    let a = Acme::start().await;
+    let t = &a.t;
+    t.rt.makers()
+        .set_wake_retry(std::time::Duration::from_millis(100));
+    a.join_as("member").await;
+    let maker =
+        t.rt.create_dot(maker_spec(t), Some(ACME.into()), None)
+            .await
+            .unwrap();
+    let run = live_run(t, &maker).await;
+    let request = request(t, &run, ask_browser("Blog Watcher")).await;
+    t.rt.store()
+        .finish_run(&run.id, RunStatus::Succeeded, Some("Asked."), None)
+        .await
+        .unwrap();
+    a.become_(2, "viewer").await;
+
+    let answered =
+        t.rt.decide_make_request(&request.id, MakeDecision::Refuse, None, None)
+            .await
+            .unwrap();
+
+    assert_eq!(answered.status, RequestStatus::Refused);
+    let topic = |t: &T| {
+        let store = t.rt.store().clone();
+        let root = run.root_run_id.clone();
+        async move { store.list_thread(&root).await.unwrap() }
+    };
+    assert_eq!(topic(t).await.len(), 1, "{:#?}", topic(t).await);
+    tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    assert_eq!(topic(t).await.len(), 1);
+    assert_eq!(wakes(t).await.len(), 1);
+
+    a.become_(3, "member").await;
+    t.rt.makers().deliver_wakes().await.unwrap();
+    let runs = topic(t).await;
+    assert_eq!(runs.len(), 2, "{runs:#?}");
+    assert!(dots_core::prompt::is_wake(&runs[1]));
+    assert!(wakes(t).await.is_empty());
+    t.rt.shutdown();
+}

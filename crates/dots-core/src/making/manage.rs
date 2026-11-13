@@ -738,8 +738,9 @@ impl Makers {
     /// dot the maker did not make, nothing named (`Invalid`), a dot that would not be valid
     /// (`reach_change`), a Library item, variable or consumer that does not exist
     /// (`check_exists`), a new name another dot has (`Conflict`), a change of the folder
-    /// while the dot has a run going (`Conflict`, the store's own sentence), and a refusal of
-    /// this PC's role (`NotAllowed`).
+    /// while the dot has a run going (`Conflict`, the store's own sentence), a dot the person
+    /// changed between the judgement and the save (`Conflict`, asking the model to try again),
+    /// and a refusal of this PC's role (`NotAllowed`).
     pub async fn change_dot(&self, run_id: &str, ask: ChangeDot) -> Result<ChangeOutcome> {
         self.change_dot_as(run_id, ask, None).await
     }
@@ -788,8 +789,9 @@ impl Makers {
         }
         // The person's own edits do not take the service's lock, so one may land between this
         // judgement and the save. A narrowing of the maker then is as one just after the save.
-        // An edit of the made dot itself is overwritten by the save, as any two saves of one dot
-        // are, last one wins; the "changed" card says what the maker set.
+        // An edit of the made dot itself is not saved over: the save is judged against the dot
+        // as it is here (`apply_change`, `DotAdmin::update`) and refused when it changed, and
+        // the maker's change asked again is judged against the dot as it is then.
         let (maker, made) = (maker_now, made_now);
         let Judged {
             reach,
@@ -989,9 +991,11 @@ impl Makers {
     /// publishes `MakingUpdated`. Returns the dot as it is after and what changed, in plain
     /// words. `spec` is already checked: within the maker's reach, or allowed by the person.
     ///
-    /// It goes through `DotAdmin::update` with `exact`, so the name, the Library items and
-    /// this PC's rights are checked as for a change the person makes, and a change of the
-    /// folder is refused while the dot has a run going. `create_folder` (of `Reach`) is made
+    /// It goes through `DotAdmin::update` as a maker's save judged against `made`, so the name,
+    /// the Library items and this PC's rights are checked as for a change the person makes, a
+    /// change of the folder is refused while the dot has a run going, and the save is refused
+    /// (`Conflict`, `dot_admin::changed_while_saving`) when the dot is no longer `made`: the
+    /// person edited it after the change was judged. `create_folder` (of `Reach`) is made
     /// first, and removed again when the dot is not saved. When nothing differs from the dot
     /// as it is, nothing is written and nothing is logged.
     #[allow(clippy::too_many_arguments)]
@@ -1013,7 +1017,7 @@ impl Makers {
         }
         let new_folders = make_folders(create_folder.as_deref()).await?;
         // Also when only the purpose changes: the role is checked there.
-        let mut dot = match p.dot_admin.update(&made.id, spec, true).await {
+        let mut dot = match p.dot_admin.update(&made.id, spec, Some(&made.spec)).await {
             Ok(dot) => dot,
             Err(e) => {
                 remove_folders(&new_folders).await;

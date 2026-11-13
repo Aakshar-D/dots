@@ -18,6 +18,7 @@ use common::spec;
 use dots_core::accounts::identity;
 use dots_core::events::RuntimeEvent;
 use dots_core::library::{LibraryConfig, McpServerConfig};
+use dots_core::making::reach::Narrowed;
 use dots_core::model::{Dot, DotSpec, Made, WorkspaceMode};
 use dots_core::schedule::Schedule;
 use dots_core::vault::{Grants, MemorySecrets};
@@ -267,13 +268,19 @@ async fn an_exact_update_stores_grants_as_given() {
         .unwrap();
     let mut uses_it = plain.spec.clone();
     uses_it.uses.mcp_servers = vec!["github".into()];
-    let exact = admin.update(&plain.id, uses_it, true).await.unwrap();
+    let exact = admin
+        .update(&plain.id, uses_it, Some(&plain.spec))
+        .await
+        .unwrap();
     assert_eq!(exact.spec.uses.mcp_servers, ["github"]);
     assert_eq!(exact.spec.variables, Grants::default());
     // And what it is given is what it holds.
     let mut given = exact.spec.clone();
     given.variables = github_token();
-    let exact = admin.update(&plain.id, given, true).await.unwrap();
+    let exact = admin
+        .update(&plain.id, given, Some(&exact.spec))
+        .await
+        .unwrap();
     assert_eq!(exact.spec.variables, github_token());
 
     // The same change saved as the person saves it grants the server its variables.
@@ -288,7 +295,7 @@ async fn an_exact_update_stores_grants_as_given() {
         .unwrap();
     let mut uses_it = other.spec.clone();
     uses_it.uses.mcp_servers = vec!["github".into()];
-    let synced = admin.update(&other.id, uses_it, false).await.unwrap();
+    let synced = admin.update(&other.id, uses_it, None).await.unwrap();
     assert_eq!(synced.spec.variables, github_token());
     t.rt.shutdown();
 }
@@ -313,7 +320,10 @@ async fn an_update_keeps_who_made_the_dot() {
     let mut s = dot.spec.clone();
     s.name = "Feed Watcher".into();
     s.schedule = Some(every(600));
-    let saved = admin.update(&dot.id, s.clone(), true).await.unwrap();
+    let saved = admin
+        .update(&dot.id, s.clone(), Some(&dot.spec))
+        .await
+        .unwrap();
     assert_eq!(saved.made, dot.made);
     assert_eq!(saved.spec.name, "Feed Watcher");
     assert!(t
@@ -327,7 +337,7 @@ async fn an_update_keeps_who_made_the_dot() {
 
     // The person's edits, through the admin and through the runtime.
     s.instructions = "Watch the feeds.".into();
-    let saved = admin.update(&dot.id, s.clone(), false).await.unwrap();
+    let saved = admin.update(&dot.id, s.clone(), None).await.unwrap();
     assert_eq!(saved.made, dot.made);
     s.schedule = None;
     let saved = t.rt.update_dot(&dot.id, s).await.unwrap();
@@ -538,10 +548,14 @@ async fn the_admin_applies_the_role_checks() {
     let mut changed = dot.spec.clone();
     changed.instructions = "something else".into();
     assert_eq!(
-        refused(admin.update(&dot.id, changed.clone(), true).await),
+        refused(
+            admin
+                .update(&dot.id, changed.clone(), Some(&dot.spec))
+                .await
+        ),
         edit
     );
-    assert_eq!(refused(admin.update(&dot.id, changed, false).await), edit);
+    assert_eq!(refused(admin.update(&dot.id, changed, None).await), edit);
     assert_eq!(refused(admin.delete(&dot.id).await), edit);
     assert_eq!(t.rt.store().get_dot(&dot.id).await.unwrap().spec, dot.spec);
 
@@ -566,5 +580,100 @@ async fn the_admin_applies_the_role_checks() {
         .await;
     assert!(matches!(nowhere, Err(Error::NotFound(_))), "{nowhere:?}");
     assert!(folders(&t.root).is_empty());
+    t.rt.shutdown();
+}
+
+/// What a maker's save is refused with when the dot changed after its change was judged.
+fn changed_while_saving(name: &str) -> String {
+    format!(
+        "\"{name}\" was changed while this change was being saved, so nothing was saved. Try \
+         again: it is judged against the dot as it is now."
+    )
+}
+
+/// A maker's save is judged against the dot as its change was judged (dots-make-dots design
+/// section 9). The person's edits do not wait for the makers, so one can land between
+/// `change_dot`'s check and its save; no test can stop a change there, so the save is given
+/// the dot as it was judged directly. The person turned the browser off in between: the save
+/// is refused, and the browser stays off and their narrowing stays kept.
+#[tokio::test]
+async fn a_makers_save_onto_a_dot_changed_since_it_was_judged_is_refused() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let admin = t.rt.dot_admin();
+    let mut s = folder_spec(&t.dir, "Blog Watcher");
+    s.browser = true;
+    let dot = admin
+        .create(s, None, None, Some(made_by(&maker)))
+        .await
+        .unwrap();
+    // The maker's change, judged against the dot with the browser on: new instructions.
+    let mut asked = dot.spec.clone();
+    asked.instructions = "List only the posts on Rust.".into();
+    // The person turns the browser off before it is saved.
+    let mut narrowed = dot.spec.clone();
+    narrowed.browser = false;
+    t.rt.update_dot(&dot.id, narrowed).await.unwrap();
+
+    let saved = admin.update(&dot.id, asked, Some(&dot.spec)).await;
+
+    match saved {
+        Err(Error::Conflict(text)) => assert_eq!(text, changed_while_saving("Blog Watcher")),
+        other => panic!("expected Conflict, got {other:?}"),
+    }
+    let now = t.rt.store().get_dot(&dot.id).await.unwrap();
+    assert!(!now.spec.browser);
+    assert_eq!(now.spec.instructions, dot.spec.instructions);
+    assert_eq!(
+        t.rt.store().made_narrowed(&dot.id).await.unwrap(),
+        [Narrowed::Browser]
+    );
+    // Judged against the dot as it is now, the same save goes through.
+    let mut asked = now.spec.clone();
+    asked.instructions = "List only the posts on Rust.".into();
+    let saved = admin.update(&dot.id, asked, Some(&now.spec)).await.unwrap();
+    assert_eq!(saved.spec.instructions, "List only the posts on Rust.");
+    assert!(!saved.spec.browser);
+    t.rt.shutdown();
+}
+
+/// What the person narrowed on a made dot stops being kept only once its maker's save that
+/// gives it back is done: a save that fails (here, on a name another dot has) keeps it, so the
+/// maker's next change that gives it back still asks.
+#[tokio::test]
+async fn a_makers_save_that_fails_keeps_the_persons_narrowing() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let admin = t.rt.dot_admin();
+    let mut s = folder_spec(&t.dir, "Blog Watcher");
+    s.browser = true;
+    let dot = admin
+        .create(s, None, None, Some(made_by(&maker)))
+        .await
+        .unwrap();
+    admin
+        .create(blank_spec("Other"), None, None, Some(made_by(&maker)))
+        .await
+        .unwrap();
+    let mut narrowed = dot.spec.clone();
+    narrowed.browser = false;
+    let narrowed = t.rt.update_dot(&dot.id, narrowed).await.unwrap();
+    assert_eq!(
+        t.rt.store().made_narrowed(&dot.id).await.unwrap(),
+        [Narrowed::Browser]
+    );
+
+    // A change the person allowed: the browser on again, saved under a name that is taken.
+    let mut back = narrowed.spec.clone();
+    back.browser = true;
+    back.name = "Other".into();
+    let saved = admin.update(&dot.id, back, Some(&narrowed.spec)).await;
+
+    assert!(matches!(saved, Err(Error::Conflict(_))), "{saved:?}");
+    assert!(!t.rt.store().get_dot(&dot.id).await.unwrap().spec.browser);
+    assert_eq!(
+        t.rt.store().made_narrowed(&dot.id).await.unwrap(),
+        [Narrowed::Browser]
+    );
     t.rt.shutdown();
 }

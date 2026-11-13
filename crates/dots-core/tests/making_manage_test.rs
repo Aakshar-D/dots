@@ -15,10 +15,11 @@ use dots_core::making::log::{MakingEvent, MakingEventKind};
 use dots_core::making::manage::{
     change_went_message, made_dots_text, not_the_same_dot, ChangeDot, ChangeOutcome, MadeDotLine,
 };
-use dots_core::making::reach::{Extra, Wanted};
+use dots_core::making::reach::{Extra, Narrowed, Wanted, WantedPermissions};
 use dots_core::making::requests::{MakeDecision, MakeRequest, RequestKind, RequestStatus};
 use dots_core::making::service::{MakeDot, MakeOutcome, OverLimit};
 use dots_core::model::{Dot, DotSpec, Making, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode};
+use dots_core::policy::{Action, Policy, Preset, Rule};
 use dots_core::vault::{EntryKind, Grants, MemorySecrets};
 use dots_core::{Config, Error, Runtime};
 use serde_json::json;
@@ -2038,4 +2039,126 @@ async fn a_change_that_undoes_the_persons_narrowing_asks() {
     assert!(stored(&t, &made).await.spec.browser);
     let (after, _) = changed(&t, &run, change("Blog Watcher", on)).await;
     assert!(after.spec.browser);
+}
+
+/// A rule of the person's own that narrows a made dot's permissions counts as their narrowing
+/// too (dots-make-dots design section 9): they add a deny rule, and the maker's change back to
+/// the plain preset, which would drop it, asks the person.
+#[tokio::test]
+async fn a_change_that_drops_the_persons_deny_rule_asks() {
+    let t = start().await;
+    let maker = maker(&t).await;
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    assert_eq!(made.spec.policy, Policy::preset(Preset::Sandboxed));
+    let ruled = person_edits(&t, &made, |s| {
+        s.policy.rules.push(Rule::new("WebFetch", Action::Deny));
+    })
+    .await;
+
+    let plain = Wanted {
+        permissions: Some(WantedPermissions::Preset(Preset::Sandboxed)),
+        ..Wanted::default()
+    };
+    let request = change_request(&t, &run, change("Blog Watcher", plain)).await;
+
+    assert_eq!(stored(&t, &made).await.spec.policy, ruled.spec.policy);
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.lines,
+        ["The preset Sandboxed (you set narrower permissions), which undoes your change to this \
+          dot"]
+    );
+    // The person allows it: the rule goes, as they said.
+    decide(&t, &request, MakeDecision::Allow).await;
+    assert_eq!(
+        stored(&t, &made).await.spec.policy,
+        Policy::preset(Preset::Sandboxed)
+    );
+}
+
+/// A narrower preset the person set stays their narrowing when they then move the dot on to
+/// Custom permissions that allow no more (the review's sequence: Trusted, then Sandboxed, then
+/// Custom): it is still kept, and the maker's change back to its own Trusted says it undoes
+/// their change. (Custom permissions on the dot of a Trusted maker also count as held, so the
+/// change asks for that too.)
+#[tokio::test]
+async fn a_narrower_preset_stays_kept_when_the_person_moves_on_to_custom() {
+    let t = start().await;
+    let mut s = maker_spec(&t, "Researcher");
+    s.policy = Policy::preset(Preset::Trusted);
+    let maker = t.rt.create_dot(s, None, None).await.unwrap();
+    let run = live_run(&t, &maker).await;
+    let mut asked = ask("Blog Watcher");
+    asked.wanted.permissions = Some(WantedPermissions::Preset(Preset::Trusted));
+    let made = match t.rt.makers().make_dot(&run.id, asked).await.unwrap() {
+        MakeOutcome::Made { dot, .. } => dot,
+        other => panic!("not made: {other:?}"),
+    };
+    person_edits(&t, &made, |s| s.policy = Policy::preset(Preset::Sandboxed)).await;
+    // Custom starts from the Sandboxed rules: it allows nothing Sandboxed does not.
+    person_edits(&t, &made, |s| s.policy = Policy::preset(Preset::Custom)).await;
+
+    assert_eq!(
+        t.rt.store().made_narrowed(&made.id).await.unwrap(),
+        [Narrowed::Preset {
+            preset: Preset::Sandboxed
+        }]
+    );
+    let trusted = Wanted {
+        permissions: Some(WantedPermissions::Preset(Preset::Trusted)),
+        ..Wanted::default()
+    };
+    let request = change_request(&t, &run, change("Blog Watcher", trusted)).await;
+    assert_eq!(
+        stored(&t, &made).await.spec.policy,
+        Policy::preset(Preset::Custom)
+    );
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.lines,
+        [
+            "The preset Trusted (you set Sandboxed), which undoes your change to this dot",
+            "The preset Custom (Researcher has Trusted)"
+        ]
+    );
+}
+
+/// A stored record of the person's narrowing that cannot be read blocks no edit, and is read as
+/// narrowing everything it can name on the dot as it is, so the person is still asked: their
+/// own edit is saved, and the maker's change that turns the browser on asks.
+#[tokio::test]
+async fn a_narrowing_record_that_cannot_be_read_blocks_no_edit_and_still_asks() {
+    let t = start().await;
+    let mut s = maker_spec(&t, "Researcher");
+    s.browser = true;
+    let maker = t.rt.create_dot(s, None, None).await.unwrap();
+    let run = live_run(&t, &maker).await;
+    let made = make(&t, &run, "Blog Watcher").await;
+    assert!(!made.spec.browser);
+    let mut conn = SqliteConnectOptions::new()
+        .filename(t.dir.path().join("data").join("dots.db"))
+        .connect()
+        .await
+        .unwrap();
+    sqlx::query("UPDATE dots SET made_narrowed = 'not a list' WHERE id = ?")
+        .bind(&made.id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
+
+    let edited = person_edits(&t, &made, |s| s.instructions = "Read four blogs.".into()).await;
+    assert_eq!(edited.spec.instructions, "Read four blogs.");
+
+    let on = Wanted {
+        browser: Some(true),
+        ..Wanted::default()
+    };
+    let request = change_request(&t, &run, change("Blog Watcher", on)).await;
+    assert!(!stored(&t, &made).await.spec.browser);
+    let card = t.rt.makers().request_card(&request.id).await.unwrap();
+    assert_eq!(
+        card.lines,
+        ["The browser, which undoes your change to this dot"]
+    );
 }
