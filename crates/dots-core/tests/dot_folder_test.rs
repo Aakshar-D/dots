@@ -245,7 +245,7 @@ async fn update_refuses_worktree_on_a_subfolder_or_a_repo_without_a_commit() {
     empty_repo(&fresh);
     for folder in [&sub, &fresh] {
         let mut s = spec(&format!(
-            "Dot {}",
+            "Sol {}",
             folder.file_name().unwrap().to_string_lossy()
         ));
         s.workdir = folder.to_string_lossy().to_string();

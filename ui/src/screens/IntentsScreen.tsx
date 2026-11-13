@@ -88,11 +88,11 @@ function GoalFields(props: {
         Urgent
       </label>
       <NativeSelect
-        aria-label="Dot"
+        aria-label="Sol"
         value={value.dot_id ?? ""}
         onChange={(e) => onChange({ ...value, dot_id: e.target.value || null })}
       >
-        <NativeSelectOption value="">No dot</NativeSelectOption>
+        <NativeSelectOption value="">No sol</NativeSelectOption>
         {props.dots.map((dot) => (
           <NativeSelectOption key={dot.id} value={dot.id}>
             {dot.name}

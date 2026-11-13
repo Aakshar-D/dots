@@ -5,14 +5,14 @@ import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
-const REPORT = "Dots problem report\n\n== What went wrong ==\n(not described)\n";
+const REPORT = "Sage problem report\n\n== What went wrong ==\n(not described)\n";
 
 /// Settings, with a report that names what it was asked for.
 function settings() {
   backend.on("get_settings", () => sample.settings);
   backend.on("problem_report", (args) =>
     args.includeLogs
-      ? `${REPORT}${String(args.description)}\n== Recent log lines (1, scrubbed) ==\nstarting Dots\n`
+      ? `${REPORT}${String(args.description)}\n== Recent log lines (1, scrubbed) ==\nstarting Sage\n`
       : `${REPORT}${String(args.description)}\n== Recent log lines ==\n(not included)\n`,
   );
   return renderApp("/settings/help");
@@ -31,7 +31,7 @@ describe("report a problem", () => {
     const { user } = settings();
     const dialog = await openDialog(user);
     expect(within(dialog).getByLabelText("Include recent log lines")).toBeChecked();
-    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Dots"));
+    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Sage"));
     expect(backend.callsTo("problem_report")[0]).toEqual({ description: "", includeLogs: true });
   });
 
@@ -42,7 +42,7 @@ describe("report a problem", () => {
     await waitFor(() => expect(preview(dialog)).toHaveTextContent("It froze"));
     await user.click(within(dialog).getByLabelText("Include recent log lines"));
     await waitFor(() => expect(preview(dialog)).toHaveTextContent("(not included)"));
-    expect(preview(dialog)).not.toHaveTextContent("starting Dots");
+    expect(preview(dialog)).not.toHaveTextContent("starting Sage");
     expect(backend.callsTo("problem_report").at(-1)).toEqual({
       description: "It froze",
       includeLogs: false,
@@ -52,7 +52,7 @@ describe("report a problem", () => {
   it("copies exactly the previewed text", async () => {
     const { user } = settings();
     const dialog = await openDialog(user);
-    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Dots"));
+    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Sage"));
     const shown = (preview(dialog) as HTMLTextAreaElement).value;
     await user.click(within(dialog).getByRole("button", { name: "Copy" }));
     expect(await navigator.clipboard.readText()).toBe(shown);
@@ -63,7 +63,7 @@ describe("report a problem", () => {
     const { user } = settings();
     backend.on("save_problem_report", () => "C:/Users/u/Downloads/dots-report-20261103-1405.txt");
     const dialog = await openDialog(user);
-    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Dots"));
+    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Sage"));
     const shown = (preview(dialog) as HTMLTextAreaElement).value;
     await user.click(within(dialog).getByRole("button", { name: "Save to file…" }));
     expect(
@@ -76,7 +76,7 @@ describe("report a problem", () => {
     const { user } = settings();
     backend.on("save_problem_report", () => null);
     const dialog = await openDialog(user);
-    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Dots"));
+    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Sage"));
     await user.click(within(dialog).getByRole("button", { name: "Save to file…" }));
     await waitFor(() => expect(backend.callsTo("save_problem_report")).toHaveLength(1));
     expect(screen.queryByText(/^Saved to/)).toBeNull();
@@ -86,7 +86,7 @@ describe("report a problem", () => {
     const { user } = settings();
     let release: () => void = () => {};
     const dialog = await openDialog(user);
-    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Dots"));
+    await waitFor(() => expect(preview(dialog)).toHaveTextContent("starting Sage"));
     const copy = within(dialog).getByRole("button", { name: "Copy" });
     const save = within(dialog).getByRole("button", { name: "Save to file…" });
     expect(copy).toBeEnabled();

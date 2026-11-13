@@ -259,7 +259,7 @@ async fn team_with(t: &Rt, helper: &Dot, steps: Vec<Step>) -> (String, String) {
             .create(&TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: vec![MemberSpec {
                     dot_id: helper.id.clone(),
@@ -355,7 +355,7 @@ async fn a_local_helper_starts_the_teams_workflow_from_a_chat() {
         call(
             "c4",
             "start_workflow",
-            json!({"workflow": "Dots management/Fix", "project": "Dots",
+            json!({"workflow": "Sage management/Fix", "project": "Dots",
                    "task": "The tray icon is invisible in dark mode."}),
         ),
         text("Started it."),
@@ -873,7 +873,7 @@ async fn run_steps(t: &Rt, members: &[&Dot], steps: Vec<Step>) -> WorkflowRun {
             .create(&TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: members
                     .iter()

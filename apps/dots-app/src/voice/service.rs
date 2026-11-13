@@ -30,14 +30,14 @@ use super::notices::{Needs, Notices, WaitKind, Waiting};
 use crate::error::CmdError;
 
 /// Said once after the first install, and by the voice preview.
-pub const GREETING: &str = "Hi, I'm Dot.";
-pub const OFF: &str = "Open Dot is off. Turn it on in Settings, under Voice.";
-pub const GETTING_READY: &str = "Open Dot is still getting ready.";
+pub const GREETING: &str = "Hi, I'm Sage.";
+pub const OFF: &str = "Open Sage is off. Turn it on in Settings, under Voice.";
+pub const GETTING_READY: &str = "Open Sage is still getting ready.";
 pub const NOT_READY: &str =
-    "Open Dot is not ready yet. Turn it on in Settings, under Voice, and wait until it is ready.";
-pub const IN_USE: &str = "The speech files are in use. Close Dots and try again.";
+    "Open Sage is not ready yet. Turn it on in Settings, under Voice, and wait until it is ready.";
+pub const IN_USE: &str = "The speech files are in use. Close Sage and try again.";
 pub const MODELS_BROKEN: &str = "The speech files could not be loaded. Remove them in Settings, \
-     under Voice, and turn Open Dot on again.";
+     under Voice, and turn Open Sage on again.";
 pub const NO_SPEAKER: &str = "The speaker could not be opened. Check your sound settings.";
 
 /// How long `shutdown` waits for the session to let go of its devices.

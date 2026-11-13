@@ -712,7 +712,7 @@ impl Mind {
         tracing::debug!(
             ms = started.elapsed().as_millis() as u64,
             step = kind,
-            "open dot turn"
+            "open sage turn"
         );
     }
 
@@ -1155,7 +1155,7 @@ impl Mind {
         let picture = match Picture::take(rt, view).await {
             Ok(p) => p,
             Err(_) => {
-                tracing::warn!("open dot could not take the picture");
+                tracing::warn!("open sage could not take the picture");
                 self.finish(o, heard, WENT_WRONG, Then::Rest);
                 return "picture failed";
             }
@@ -1208,7 +1208,7 @@ impl Mind {
         };
         if let Some(usage) = &answer.usage {
             if rt.store().add_open_dot_usage(&model, usage).await.is_err() {
-                tracing::warn!("open dot usage could not be recorded");
+                tracing::warn!("open sage usage could not be recorded");
             }
         }
         // What the stream held back and turned out to be speech; never the words twice.
@@ -1446,7 +1446,7 @@ impl Mind {
             .map(|d| d.handle.clone())
         else {
             self.finish(o, heard, DOT_GONE, Then::Rest);
-            return "dot gone";
+            return "sol gone";
         };
         let wish = match wish.clone() {
             Wish::Run { .. } => Wish::Run { d: handle },
@@ -1515,7 +1515,7 @@ impl Mind {
                 .await
                 .is_err()
             {
-                tracing::warn!("open dot usage could not be recorded");
+                tracing::warn!("open sage usage could not be recorded");
             }
         }
         // Written by the setup agent: cleaned and capped before they are said or shown.
@@ -1579,7 +1579,7 @@ async fn capped(rt: &Runtime, settings: &crate::settings::Settings) -> Option<St
     match cap_hit(rt.store(), settings, chrono::Utc::now()).await {
         Ok(hit) => hit,
         Err(_) => {
-            tracing::warn!("open dot could not read the spending caps");
+            tracing::warn!("open sage could not read the spending caps");
             Some(WENT_WRONG.into())
         }
     }
@@ -1744,7 +1744,7 @@ fn create_question(p: &SetupProposal) -> String {
     let name = name
         .trim_end_matches(['.', '!', '?', ':', ';', ','])
         .trim_end();
-    let name = if name.is_empty() { "The new dot" } else { name };
+    let name = if name.is_empty() { "The new sol" } else { name };
     let runs = runs(p.schedule.as_ref());
     let mut chars = runs.chars();
     let runs = match chars.next() {
@@ -1794,7 +1794,7 @@ fn error_said(e: Error) -> String {
         _ => String::new(),
     };
     // The CLI's own words after this are not said.
-    const CLI_FAILED: &str = "Claude could not set up the dot";
+    const CLI_FAILED: &str = "Claude could not set up the sol";
     let text = if text.starts_with(CLI_FAILED) {
         CLI_FAILED.to_string()
     } else {

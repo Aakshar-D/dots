@@ -311,7 +311,7 @@ async fn can_start_dots_needs_the_code_to_ask_for_it() {
         .to_string();
     assert_eq!(
         err,
-        "invalid input: the app expenses does not ask to start dots"
+        "invalid input: the app expenses does not ask to start sols"
     );
     let mut manifest: serde_json::Value = serde_json::from_str(common::apps::MANIFEST).unwrap();
     manifest["permissions"] = serde_json::json!(["start_dots"]);
@@ -587,7 +587,7 @@ async fn a_run_refuses_a_tool_that_began_to_write_after_it_started() {
     assert_eq!(
         err,
         "expenses__month_total: the app expenses changed during this run: month_total now \
-         writes, and this run checked the dot's rules for it as a tool that does not; a new run \
+         writes, and this run checked the sol's rules for it as a tool that does not; a new run \
          has the new version"
     );
 }

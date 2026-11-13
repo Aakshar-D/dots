@@ -392,7 +392,7 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             startup::log_panics(log_dir.clone());
         }
     }
-    tracing::info!("starting Dots {}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("starting Sage {}", env!("CARGO_PKG_VERSION"));
     // The lock comes before the runtime touches the database; failing to get it is a failed
     // start like any other.
     let mut restarted = false;
@@ -550,7 +550,7 @@ pub fn run() {
         })
         .invoke_handler(invoke_handler())
         .build(tauri::generate_context!())
-        .expect("failed to build the Dots app");
+        .expect("failed to build the Sage app");
     app.run(|app, event| {
         if let RunEvent::Exit = event {
             // The microphone and speaker are let go before the process ends.

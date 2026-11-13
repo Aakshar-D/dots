@@ -132,9 +132,9 @@ export function ConnectorsScreen() {
     <Page title="Connectors" actions={actions}>
       {list.isError && <ErrorNote error={list.error} />}
       <p className="text-xs text-muted-foreground">
-        Connect the apps you use so your dots can work with them. Each one shows how to get its
+        Connect the apps you use so your sols can work with them. Each one shows how to get its
         key or sign in. Keys and sign-ins are kept in Windows Credential Manager, and only the
-        dots you pick can use them. For any other MCP server, add it in the Library.
+        sols you pick can use them. For any other MCP server, add it in the Library.
       </p>
       {groups.map((group) => (
         <section key={group.title} aria-label={group.title} className="flex flex-col gap-2">

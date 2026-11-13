@@ -78,14 +78,14 @@ pub trait PairApprover: Send + Sync {
 /// The words of the PC's dialog.
 pub fn pair_question(request: &PairRequest) -> (String, String) {
     (
-        "Pair a phone with Dots?".to_string(),
+        "Pair a phone with Sage?".to_string(),
         format!(
-            "A phone on your network asks to answer your Dots Inbox.\n\n\
+            "A phone on your network asks to answer your Sage Inbox.\n\n\
              Name it gives: {}\nAddress: {}\nNumber on the phone: {}\n\n\
              Allow only if you just scanned or typed the pairing code yourself and your phone \
              shows {}, and the address is your phone's (on the phone: Wi-Fi settings, this \
              network's details); another address means another device is in between. Once \
-             allowed, it can approve or deny the calls your dots ask about, \
+             allowed, it can approve or deny the calls your sols ask about, \
              answer their questions and start runs held for usage, until you remove it in \
              Settings > Phone.",
             request.name, request.ip, request.match_code, request.match_code
@@ -295,7 +295,7 @@ impl Phone {
             None => origins.first().cloned(),
             Some(a) => origins.iter().find(|o| o.as_str() == a).cloned(),
         }
-        .ok_or_else(|| Error::Invalid("that address is not one Dots listens on".into()))?;
+        .ok_or_else(|| Error::Invalid("that address is not one Sage listens on".into()))?;
         let now = Instant::now();
         let pairing = self.inner.pairings.lock().unwrap().start(now);
         let url = format!(
@@ -665,7 +665,7 @@ mod tests {
             ip: "192.168.1.9".parse().unwrap(),
             match_code: "0421".into(),
         });
-        assert_eq!(title, "Pair a phone with Dots?");
+        assert_eq!(title, "Pair a phone with Sage?");
         assert!(text.contains("iPhone") && text.contains("192.168.1.9") && text.contains("0421"));
     }
 }

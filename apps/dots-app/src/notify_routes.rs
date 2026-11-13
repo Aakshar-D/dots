@@ -97,7 +97,7 @@ pub fn listen(app: &AppHandle) {
         .notification()
         .on_action(move |performed| on_action(&handle, performed));
     if let Err(e) = registered {
-        tracing::warn!("a click on a notification will not open Dots: {e}");
+        tracing::warn!("a click on a notification will not open Sage: {e}");
     }
 }
 

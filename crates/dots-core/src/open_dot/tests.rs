@@ -457,12 +457,12 @@ async fn stop_and_cancel_clear_pending() {
 #[tokio::test]
 async fn repeat_says_the_last_reply() {
     let t = T::start().await;
-    t.fake.push(says("Two dots are idle. Nothing needs you."));
+    t.fake.push(says("Two sols are idle. Nothing needs you."));
     let got = t.hear("how are things").await;
-    assert_eq!(said(&got), "Two dots are idle. Nothing needs you.");
+    assert_eq!(said(&got), "Two sols are idle. Nothing needs you.");
     assert_eq!(ended(&got), Some(Then::FollowUp));
     let got = t.hear("say that again").await;
-    assert_eq!(said(&got), "Two dots are idle. Nothing needs you.");
+    assert_eq!(said(&got), "Two sols are idle. Nothing needs you.");
     assert_eq!(ended(&got), Some(Then::FollowUp));
     assert_eq!(t.fake.calls(), 1);
     // with a question waiting, the question is asked again
@@ -913,7 +913,7 @@ async fn a_refused_pick_ends_the_turn_in_flight() {
         .push(held(says("DO {\"act\":\"run\",\"d\":\"d1\"}"), &hold));
     let (tx, mut rx) = mpsc::unbounded_channel();
     let view = home();
-    let heard = t.mind.hear(&t.rt, "run the backup dot", &view, &tx);
+    let heard = t.mind.hear(&t.rt, "run the backup sol", &view, &tx);
     let click = async {
         while t.fake.calls() == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -945,7 +945,7 @@ async fn which_dot_then_still_confirms_a_run() {
     assert_eq!(
         asks(&got),
         Some((
-            "Which dot did you mean?".into(),
+            "Which sol did you mean?".into(),
             vec!["Deploy watcher".to_string()]
         ))
     );
@@ -1248,7 +1248,7 @@ async fn a_dot_gone_at_yes_is_not_run() {
     assert!(t.mind.pending());
     t.rt.delete_dot(&dot.id).await.unwrap();
     let got = t.hear("yes").await;
-    assert_eq!(said(&got), "I can't find that dot anymore.");
+    assert_eq!(said(&got), "I can't find that sol anymore.");
     assert_eq!(ended(&got), Some(Then::Rest));
     t.rt.shutdown();
 }
@@ -1420,7 +1420,7 @@ async fn common_words_do_not_name_a_dot() {
     }
     let cases = [
         ("The helper", "send the message to it", false),
-        ("The helper", "tell the dot to look at it please", false),
+        ("The helper", "tell the sol to look at it please", false),
         ("Yes please", "yes please tell it to look", false),
         ("Yes please", "ok yes please ask it", false),
         // "deploy" is in two dots' names: it names neither
@@ -1657,7 +1657,7 @@ fn create_question_says_only_the_name_and_when() {
     // the first message, instructions and access are on the card, never partly spoken
     assert_eq!(
         create_question(&p),
-        "Downloads digest. Runs every day at 09:00. The rest is on screen. Create this dot?"
+        "Downloads digest. Runs every day at 09:00. The rest is on screen. Create this sol?"
     );
     let none = SetupProposal {
         name: "N".repeat(200),
@@ -1668,7 +1668,7 @@ fn create_question_says_only_the_name_and_when() {
     assert_eq!(
         create_question(&none),
         format!(
-            "{}. Runs when you ask. The rest is on screen. Create this dot?",
+            "{}. Runs when you ask. The rest is on screen. Create this sol?",
             "N".repeat(80)
         )
     );
@@ -1899,7 +1899,7 @@ async fn nothing_heard_asks_nothing() {
 async fn repeat_says_only_the_question_when_it_came_alone() {
     let t = T::start().await;
     t.dot("Research").await;
-    t.fake.push(says("Two dots are idle."));
+    t.fake.push(says("Two sols are idle."));
     t.hear("how are things").await;
     let dot = t.dot("Backup").await;
     t.approval(&dot, "ls -la").await;
@@ -2278,7 +2278,7 @@ async fn setup_rounds_stop_at_a_cap() {
         }),
         ..says("Let's make it.\nDO {\"act\":\"create\",\"description\":\"digest my downloads\"}")
     });
-    let got = t.hear("make a dot that digests my downloads").await;
+    let got = t.hear("make a sol that digests my downloads").await;
     assert_eq!(
         said(&got),
         "Let's make it. Let me set that up. You've reached today's spending limit, so I can't \

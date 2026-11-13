@@ -334,7 +334,7 @@ impl RunTools {
             return (
                 self,
                 Some(
-                    "browser: an MCP server this dot uses is named browser, so the built-in \
+                    "browser: an MCP server this sol uses is named browser, so the built-in \
                      browser is left out of this run; rename that server in the Library to use \
                      both"
                         .to_string(),

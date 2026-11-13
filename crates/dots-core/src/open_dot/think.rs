@@ -110,7 +110,7 @@ impl Thinker for CliThinker {
         tracing::debug!(
             ms = started.elapsed().as_millis() as u64,
             ended,
-            "open dot request"
+            "open sage request"
         );
         asked
     }
@@ -138,7 +138,7 @@ impl Drop for Folder {
                     return;
                 }
             }
-            tracing::warn!("an Open Dot request folder could not be removed");
+            tracing::warn!("an Open Sage request folder could not be removed");
         });
     }
 }

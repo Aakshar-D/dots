@@ -364,7 +364,7 @@ impl Store {
             if res.rows_affected() != 1 {
                 tx.rollback().await?;
                 return Err(Error::Conflict(format!(
-                    "approval {id} is not an approved call of run {parent_id} for Dots to perform"
+                    "approval {id} is not an approved call of run {parent_id} for Sage to perform"
                 )));
             }
         }

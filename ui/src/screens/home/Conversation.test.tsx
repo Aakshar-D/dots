@@ -15,7 +15,7 @@ const card = async (run: Run) =>
     name: `Scheduled · ${localTime(run.queued_at)}`,
   });
 
-describe("a dot's conversation", () => {
+describe("a sol's conversation", () => {
   it("shows the current chat topic and the run topics after it, in order", async () => {
     const old = chat("old", "08:00");
     const early = scheduled("early", "09:00");
@@ -100,7 +100,7 @@ describe("a dot's conversation", () => {
     home([run]);
     backend.on("messages_list", () => [question]);
     renderApp(`/home/${dot.id}`);
-    const asked = await within(await card(run)).findByRole("group", { name: "Question from the dot" });
+    const asked = await within(await card(run)).findByRole("group", { name: "Question from the sol" });
     expect(asked).toHaveTextContent(question.text);
     expect(asked).toHaveTextContent("Question · waiting for your answer");
   });
@@ -159,7 +159,7 @@ describe("a dot's conversation", () => {
     expect(await view.findAllByText(/Schedule skipped at/)).toHaveLength(3);
     const counts = () => {
       const rail = screen.getByRole("navigation", { name: "Main" });
-      const column = screen.getByRole("navigation", { name: "Dots" });
+      const column = screen.getByRole("navigation", { name: "Sols" });
       return [
         within(rail).getByRole("link", { name: /^Home, \d+ unread$/ }).getAttribute("aria-label"),
         within(column).getByText(/^\d+ unread$/).textContent,
@@ -175,7 +175,7 @@ describe("a dot's conversation", () => {
     expect(counts()).toEqual(["Home, 2 unread", "2 unread"]);
   });
 
-  it("tells the last skipped slot in the dot's header, and nothing without one", async () => {
+  it("tells the last skipped slot in the sol's header, and nothing without one", async () => {
     home([scheduled("cron", "09:00")]);
     const state = sample.overview.schedule_state!;
     const last = "2026-10-09T09:00:00Z";
@@ -203,7 +203,7 @@ describe("a dot's conversation", () => {
     expect(await screen.findByText("could not read the skipped slots")).toBeVisible();
   });
 
-  it("shows no skip line in the header of a dot that never skipped", async () => {
+  it("shows no skip line in the header of a sol that never skipped", async () => {
     const run = scheduled("cron", "09:00");
     home([run]);
     const state = sample.overview.schedule_state!;
@@ -215,7 +215,7 @@ describe("a dot's conversation", () => {
     expect(screen.queryByText(/Last skipped/)).toBeNull();
   });
 
-  it("shows the last 20 run topics of a dot that never chatted", async () => {
+  it("shows the last 20 run topics of a sol that never chatted", async () => {
     home(
       Array.from({ length: 25 }, (_, i) =>
         scheduled(`r${i}`, `0${Math.floor(i / 10)}:${String((i % 10) * 5).padStart(2, "0")}`),
@@ -229,7 +229,7 @@ describe("a dot's conversation", () => {
     expect(within(conversation()).queryByText("Summary of r4")).toBeNull();
   });
 
-  it("adds a new run of the dot at the end, and changes a status in place", async () => {
+  it("adds a new run of the sol at the end, and changes a status in place", async () => {
     const current = chat("a", "10:00", { status: "running", ended_at: null });
     const runs = home([current]);
     renderApp(`/home/${dot.id}`);
@@ -317,7 +317,7 @@ describe("a dot's conversation", () => {
     ).toBeVisible();
   });
 
-  it("shows the scheduled messages after the topics, and does not greet a dot with one", async () => {
+  it("shows the scheduled messages after the topics, and does not greet a sol with one", async () => {
     home([]);
     backend.on("scheduled_messages", () => [{ ...sample.scheduledMessage, root_run_id: null }]);
     renderApp(`/home/${dot.id}`);
@@ -328,7 +328,7 @@ describe("a dot's conversation", () => {
     expect(screen.queryByText(`Ask ${dot.name} something`)).toBeNull();
   });
 
-  it("greets with the dot's name over the composer when the conversation is empty", async () => {
+  it("greets with the sol's name over the composer when the conversation is empty", async () => {
     home([]);
     renderApp(`/home/${dot.id}`);
     const name = await screen.findByRole("heading", { level: 2, name: dot.name });
@@ -344,7 +344,7 @@ describe("a dot's conversation", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeVisible();
   });
 
-  it("does not greet when the dot's runs could not be loaded", async () => {
+  it("does not greet when the sol's runs could not be loaded", async () => {
     home([]);
     backend.on("list_runs", () => {
       throw { kind: "internal", message: "database is locked" };
@@ -387,7 +387,7 @@ describe("a dot's conversation", () => {
     expect(view.getByRole("alert")).toHaveTextContent("engine: boom");
   });
 
-  it("says a message was resent after Dots restarted, and not for one sent once", async () => {
+  it("says a message was resent after Sage restarted, and not for one sent once", async () => {
     home([
       chat("a", "10:00", { status: "failed", error: "interrupted" }),
       chat("b", "10:01", {
@@ -399,7 +399,7 @@ describe("a dot's conversation", () => {
     renderApp(`/home/${dot.id}`);
     const view = within(await screen.findByRole("region", { name: "Conversation" }));
     expect(await view.findAllByText("question a")).toHaveLength(2);
-    expect(view.getAllByText("Resent after Dots restarted")).toHaveLength(1);
+    expect(view.getAllByText("Resent after Sage restarted")).toHaveLength(1);
     // Only the topic's last run is failed-and-last; the resend succeeded, so no Send again.
     expect(view.queryByRole("button", { name: "Send again" })).toBeNull();
   });
@@ -469,7 +469,7 @@ describe("a dot's conversation", () => {
     expect(view.getByText("question a")).toBeVisible();
   });
 
-  it("shows a failed load of the dot's runs", async () => {
+  it("shows a failed load of the sol's runs", async () => {
     home([]);
     backend.on("list_runs", () => {
       throw { kind: "internal", message: "database is locked" };
@@ -479,7 +479,7 @@ describe("a dot's conversation", () => {
     expect(await view.findByRole("alert")).toHaveTextContent("database is locked");
   });
 
-  it("says what became of a call Dots performed", async () => {
+  it("says what became of a call Sage performed", async () => {
     const performed: Approval = {
       ...sample.approval,
       run_id: "a",
@@ -491,10 +491,10 @@ describe("a dot's conversation", () => {
     home([chat("a", "10:00")], [], [performed]);
     renderApp(`/home/${dot.id}`);
     const calls = await screen.findByRole("list", { name: "Approved calls" });
-    expect(within(calls).getByText("Performed by Dots")).toBeVisible();
+    expect(within(calls).getByText("Performed by Sage")).toBeVisible();
   });
 
-  it("names the dot in the rules a pending call in a chat topic offers", async () => {
+  it("names the sol in the rules a pending call in a chat topic offers", async () => {
     const waiting = chat("a", "10:00", { status: "awaiting_approval", ended_at: null });
     home([waiting], [], [{ ...sample.approval, run_id: "a" }]);
     backend.on("approval_rule_candidates", () => sample.rules);
@@ -503,7 +503,7 @@ describe("a dot's conversation", () => {
     expect(screen.getByRole("group", { name: `Always allow for ${dot.name}` })).toBeVisible();
   });
 
-  it("shows the dot's browser calls as lines", async () => {
+  it("shows the sol's browser calls as lines", async () => {
     const events: RunEventRecord[] = [
       {
         run_id: "a",
@@ -525,7 +525,7 @@ describe("a dot's conversation", () => {
         data: {
           kind: "tool_result",
           id: "b1",
-          output: "Dots: Opened shop.com/cart\n### Page",
+          output: "Sage: Opened shop.com/cart\n### Page",
           is_error: false,
         },
       },
@@ -547,7 +547,7 @@ describe("the run's plan in the conversation", () => {
   const todos = (...steps: [string, string][]) =>
     steps.map(([content, status]) => ({ content, status, activeForm: `Doing ${content}` }));
 
-  it("shows the dot's plan above its reply and follows it live", async () => {
+  it("shows the sol's plan above its reply and follows it live", async () => {
     const events = [
       event(1, {
         kind: "tool_call",
@@ -623,7 +623,7 @@ describe("what the self-QA found", () => {
     expect(new Set(names).size).toBe(3);
   });
 
-  it("goes back to the dot's conversation when an older topic is gone", async () => {
+  it("goes back to the sol's conversation when an older topic is gone", async () => {
     home([chat("current", "10:00")]);
     backend.on("run_thread", (args) => {
       if (args.runId === "gone") throw { kind: "not_found", message: "run gone" };

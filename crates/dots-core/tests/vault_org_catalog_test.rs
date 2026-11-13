@@ -525,7 +525,7 @@ async fn a_check_of_a_name_the_orgs_use_rules_deny_fails_without_a_value() {
     assert_clean(&error);
     assert_clean(&format!("{c:?}"));
     assert!(fake.log().is_empty(), "the server was not started");
-    assert!(!error.contains("dot"), "a check names no dot: {error}");
+    assert!(!error.contains("dot"), "a check names no sol: {error}");
 }
 
 #[tokio::test]

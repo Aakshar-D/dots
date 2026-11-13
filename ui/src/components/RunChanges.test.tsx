@@ -32,7 +32,7 @@ const changes: RunChanges = {
       path: "dump.sql",
       status: "modified",
       undoable: false,
-      reason: "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+      reason: "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.",
     },
   ],
   note: null,
@@ -54,7 +54,7 @@ const preview: ChangesPreview = {
       path: "dump.sql",
       status: "modified",
       action: "cannot",
-      reason: "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+      reason: "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.",
     },
   ],
   diff: {
@@ -207,7 +207,7 @@ describe("a folder run's page", () => {
       ...changes,
       state: "unavailable",
       files: [],
-      note: "This folder has more than 20000 files to back up, so Dots did not back it up and this run can't be undone.",
+      note: "This folder has more than 20000 files to back up, so Sage did not back it up and this run can't be undone.",
     }));
     const { user } = renderApp(`/runs/${run.id}`);
     await user.click(await screen.findByRole("tab", { name: "Changes" }));
@@ -228,7 +228,7 @@ describe("a folder run's page", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe("/runs/01J0AGAIN"));
   });
 
-  it("runs a manual run's dot again with Run now", async () => {
+  it("runs a manual run's sol again with Run now", async () => {
     const manual: Run = { ...run, trigger: "manual", payload: null };
     thread([manual]);
     backend.on("run_now", () => ({ ...manual, id: "01J0AGAIN", status: "queued" }));

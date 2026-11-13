@@ -96,7 +96,7 @@ function assigneeOf(ctx, ref) {
   if (ref === "person") return { kind: "person" };
   if (ref === "me") return isDot(ctx) ? { kind: "dot", id: ctx.actor.id } : { kind: "person" };
   const dot = dotNamed(ctx, ref);
-  if (dot === null) fail(`No dot ${ref} uses Projects; list_dots names those that do`);
+  if (dot === null) fail(`No sol ${ref} uses Projects; list_dots names those that do`);
   return { kind: "dot", id: dot.id };
 }
 
@@ -302,7 +302,7 @@ function startAssigned(ctx, taskId, actor) {
   if (isDot(ctx) && ctx.actor.id === task.assignee_dot_id) return;
   if (typeof ctx.dots.start !== "function") return;
   const dot = dotNamed(ctx, task.assignee_dot_id);
-  const runner = { kind: "dot", dot_id: task.assignee_dot_id, name: dot?.name ?? "removed dot" };
+  const runner = { kind: "dot", dot_id: task.assignee_dot_id, name: dot?.name ?? "removed sol" };
   let run;
   try {
     run = ctx.dots.start(task.assignee_dot_id, startMessage(task), task.id);
@@ -683,7 +683,7 @@ export function run_ended(e, ctx) {
     "SELECT actor_name FROM activity WHERE task_id = ? AND field = 'started' AND run_id = ?",
     [task.id, e.root_run_id],
   );
-  const name = dotNamed(ctx, e.dot_id)?.name ?? started?.actor_name ?? "removed dot";
+  const name = dotNamed(ctx, e.dot_id)?.name ?? started?.actor_name ?? "removed sol";
   const runner = { kind: "dot", dot_id: e.dot_id, name };
   const text = e.status === "succeeded" ? (e.summary ?? "") : (e.error ?? e.summary ?? "");
   record(ctx, task.id, runner, {

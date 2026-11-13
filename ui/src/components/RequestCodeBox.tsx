@@ -26,7 +26,7 @@ export function RequestCodeBox({ account, code }: { account: string; code: strin
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        Send this to an Admin of {account}. Dots checks again on its normal refresh.
+        Send this to an Admin of {account}. Sage checks again on its normal refresh.
       </p>
     </div>
   );

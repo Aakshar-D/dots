@@ -55,7 +55,7 @@ export function ReportProblemDialog(props: {
         <DialogHeader>
           <DialogTitle>Report a problem</DialogTitle>
           <DialogDescription>
-            Dots does not send this anywhere. Copy it or save it, then send it yourself. Secrets,
+            Sage does not send this anywhere. Copy it or save it, then send it yourself. Secrets,
             email addresses and your home folder are taken out of the log lines.
           </DialogDescription>
         </DialogHeader>

@@ -68,7 +68,7 @@ describe("topics", () => {
     expect(ids(olderTopics(topics, conversation(topics)))).toEqual(["before", "old"]);
   });
 
-  it("shows the last 20 run topics of a dot that has no chat topic", () => {
+  it("shows the last 20 run topics of a sol that has no chat topic", () => {
     const runs = Array.from({ length: 25 }, (_, i) =>
       root(`r${String(i).padStart(2, "0")}`, i, { trigger: "schedule" }),
     );

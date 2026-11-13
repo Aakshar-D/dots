@@ -20,9 +20,9 @@ pub const MAX_TEXT: usize = 500;
 /// The refusal of a text that is blank or too long.
 pub const LENGTH_RULE: &str = "A memory is 1 to 500 characters.";
 /// The refusal of a text the dot remembers already.
-pub const DUPLICATE: &str = "This dot already remembers that.";
+pub const DUPLICATE: &str = "This sol already remembers that.";
 /// The refusal of a memory past `MAX_PER_DOT`.
-pub const FULL: &str = "This dot remembers 200 things already: forget something first.";
+pub const FULL: &str = "This sol remembers 200 things already: forget something first.";
 /// The refusal of a text that matches a secret pattern (`looks_secret`).
 pub const SECRET: &str =
     "That looks like a secret. Don't store secrets in memory; ask the person to keep it in the vault.";

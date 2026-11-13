@@ -64,7 +64,7 @@ pub fn verify_policy(
         serde_json::from_str(signed).map_err(|e| PolicyError::Envelope(plain_serde(&e)))?;
     if envelope.v != ENVELOPE_VERSION {
         return Err(PolicyError::Envelope(format!(
-            "version {} is not supported; this Dots reads version {ENVELOPE_VERSION}",
+            "version {} is not supported; this Sage reads version {ENVELOPE_VERSION}",
             envelope.v
         )));
     }

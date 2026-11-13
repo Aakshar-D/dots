@@ -191,7 +191,7 @@ async fn a_message_that_has_just_reached_the_dot_is_neither_retried_nor_discarde
     let dot = dot(&rt, &dir).await;
     let run = queued(&rt, chat_run(&dot, "Ship it", None), None).await;
     rt.store()
-        .mark_undelivered(&run.id, "Dots is updating", Utc::now())
+        .mark_undelivered(&run.id, "Sage is updating", Utc::now())
         .await
         .unwrap()
         .unwrap();
@@ -262,7 +262,7 @@ async fn discard_dismisses_and_cancels_a_waiting_message() {
     let dot = dot(&rt, &dir).await;
     let run = queued(&rt, chat_run(&dot, "Ship it", None), None).await;
     rt.store()
-        .mark_undelivered(&run.id, "Dots is updating", Utc::now())
+        .mark_undelivered(&run.id, "Sage is updating", Utc::now())
         .await
         .unwrap()
         .unwrap();
@@ -298,7 +298,7 @@ async fn retry_of_a_waiting_message_cancels_it_and_sends_it_again() {
     let dot = dot(&rt, &dir).await;
     let old = queued(&rt, chat_run(&dot, "Ship it", None), None).await;
     rt.store()
-        .mark_undelivered(&old.id, "Dots is updating", Utc::now())
+        .mark_undelivered(&old.id, "Sage is updating", Utc::now())
         .await
         .unwrap()
         .unwrap();

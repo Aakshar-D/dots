@@ -17,9 +17,9 @@ import { VaultChooser } from "@/screens/dot-editor/WatchersTab";
 
 /// "Dots 0.3.0 · up to date · checked 10:42", "· 0.3.1 is ready", "· never checked".
 function statusLine(s: UpdateStatus): string {
-  if (s.ready) return `Dots ${s.version} · ${s.ready} is ready`;
-  if (s.checked_at) return `Dots ${s.version} · up to date · checked ${localTime(s.checked_at)}`;
-  return `Dots ${s.version} · never checked`;
+  if (s.ready) return `Sage ${s.version} · ${s.ready} is ready`;
+  if (s.checked_at) return `Sage ${s.version} · up to date · checked ${localTime(s.checked_at)}`;
+  return `Sage ${s.version} · never checked`;
 }
 
 function outcomeLine(o: CheckOutcome): string | null {
@@ -116,13 +116,13 @@ export function UpdatesSection(props: {
           </p>
           <div className="flex flex-wrap gap-2">
             <ConfirmButton
-              title="Repair Dots"
-              description={`Dots will download version ${status.version} again, back up your data and reinstall it. It waits for runs that are working to finish.`}
+              title="Repair Sage"
+              description={`Sage will download version ${status.version} again, back up your data and reinstall it. It waits for runs that are working to finish.`}
               confirmLabel="Repair"
               disabled={repair.isPending}
               onConfirm={() => repair.mutate()}
             >
-              Repair Dots…
+              Repair Sage…
             </ConfirmButton>
             {status.go_back && (
               <ConfirmButton
@@ -145,12 +145,12 @@ export function UpdatesSection(props: {
       )}
       {status?.publisher ? (
         <Link to="/releases" className="text-sm underline">
-          Publish versions of Dots…
+          Publish versions of Sage…
         </Link>
       ) : (
         <div className="flex flex-col items-start gap-2">
           <Button size="sm" variant="ghost" onClick={() => setChoosing((c) => !c)}>
-            Publish versions of Dots (for its developers)…
+            Publish versions of Sage (for its developers)…
           </Button>
           {refused && (
             <p role="alert" className="text-sm text-destructive">

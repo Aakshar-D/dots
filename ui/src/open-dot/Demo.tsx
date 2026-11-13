@@ -65,7 +65,7 @@ const CARDS: [string, OpenDotCard][] = [
       kind: "proposal",
       proposal: {
         ...PROPOSAL,
-        name: "A dot with a very long name that keeps going and going",
+        name: "A sol with a very long name that keeps going and going",
         instructions: LONG.repeat(8),
         folder: "C:\\Users\\me\\Documents\\Projects\\a-folder-with-a-name-that-does-not-stop\\and-a-subfolder",
         schedule: { rule: { kind: "every", minutes: 120, anchor: null }, catch_up: true, until: { count: 5 } },
@@ -235,7 +235,7 @@ export default function Demo() {
       say("Triage wants to push a branch.");
       setTalking(true);
     });
-    later(5800, () => say("It is the open dot branch, to origin."));
+    later(5800, () => say("It is the open sage branch, to origin."));
     later(8000, () => {
       setTalking(false);
       // The question is spoken as a reply line too: the stage prints it once, above the options.
@@ -277,7 +277,7 @@ export default function Demo() {
           </Button>
           <div className={controls ? "relative z-50 flex max-w-3xl flex-col gap-3 rounded-xl bg-background/95" : "hidden"}>
             <div>
-              <h1 className="text-base font-semibold">Open Dot demo</h1>
+              <h1 className="text-base font-semibold">Open Sage demo</h1>
               <p className="text-xs text-muted-foreground">
                 Development only. Writes to the voice store directly; the commands are answered here. Now:{" "}
                 <span className="font-mono">
@@ -338,8 +338,8 @@ export default function Demo() {
               <B onClick={() => set({ ask: { question: "Long options", options: [LONG, LONG.slice(0, 80)], seq: nextSeq() } })}>Long options</B>
               <B
                 onClick={() => {
-                  say("What should the new dot be called?");
-                  set({ state: "asking", micOpen: true, ask: { question: "What should the new dot be called?", options: [], seq: nextSeq() } });
+                  say("What should the new sol be called?");
+                  set({ state: "asking", micOpen: true, ask: { question: "What should the new sol be called?", options: [], seq: nextSeq() } });
                 }}
               >
                 Open question

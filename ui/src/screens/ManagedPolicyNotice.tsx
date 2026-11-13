@@ -54,8 +54,8 @@ export function ManagedPolicyNotice(props: { check: ManagedCheck | null }) {
   return (
     <div role="note" className="flex flex-col gap-1 rounded-md border p-3 text-xs text-needs">
       <p>
-        Your company&apos;s Claude Code policy refuses these for every dot, whatever this
-        dot&apos;s rules say:
+        Your company&apos;s Claude Code policy refuses these for every sol, whatever this
+        sol&apos;s rules say:
       </p>
       <ul className="list-disc pl-5">
         {check.conflicts.map((c) => (
@@ -64,8 +64,8 @@ export function ManagedPolicyNotice(props: { check: ManagedCheck | null }) {
       </ul>
       {asks && (
         <p className="text-muted-foreground">
-          Your company&apos;s policy also asks before some actions; in Dots, those requests go to
-          Dots&apos; own approval check, which follows this dot&apos;s rules.
+          Your company&apos;s policy also asks before some actions; in Sage, those requests go to
+          Sage&apos;s own approval check, which follows this sol&apos;s rules.
         </p>
       )}
       {managed.path && (

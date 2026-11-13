@@ -751,6 +751,6 @@ async fn a_dot_has_at_most_five_proposals_waiting() {
 fn the_deciding_notice_keeps_its_exact_words() {
     assert_eq!(
         dots_core::checkins::DECIDING,
-        "Dots is still adding the app you accepted in this chat; send your message again in a moment"
+        "Sage is still adding the app you accepted in this chat; send your message again in a moment"
     );
 }

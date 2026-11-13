@@ -69,10 +69,10 @@ const BROKE: &str = "Speech stopped working and was turned off.";
 /// Said when a question's 20 seconds pass with no answer.
 const NO_ANSWER: &str = "No answer, so I did nothing.";
 /// Said when the microphone gave only silence for a whole listen.
-const SILENT_MIC: &str = "I can't hear anything from the microphone. Check that Dots may use it.";
+const SILENT_MIC: &str = "I can't hear anything from the microphone. Check that Sage may use it.";
 /// Said when listening was asked for and the microphone would not open (the details are shown).
 const MIC_WONT_OPEN: &str =
-    "I can't open the microphone. Check that one is connected and that Dots may use it.";
+    "I can't open the microphone. Check that one is connected and that Sage may use it.";
 /// Said once when words were heard live but the finished sentence came out empty.
 const DIDNT_CATCH: &str = "Sorry, I didn't catch that.";
 /// Shown when a question was not said in full: it is not asked, and nothing waits on it.
@@ -83,8 +83,8 @@ const QUESTION_CUT: &str = "The question could not be said in full, so nothing w
 /// it: "Hey Dot,", "Hey dad,", "Hey, doc," and "Hey dots" were all seen for it, and a lone "Dot." when the
 /// clip began in the middle of the phrase. The words after the wake phrase are cut from the
 /// microphone's sound by the time the spotter gives for the phrase's end, which is not exact,
-/// so the phrase can still be in the clip. Only a short word starting with "d" after "hey"
-/// is taken for "Dot": "Hey, do that again" stays whole.
+/// so the phrase can still be in the clip. Only a word that sounds like "Sage" after "hey"
+/// is taken for it: "Hey, say that again" stays whole.
 fn without_wake_phrase(text: &str) -> &str {
     let word = |s: &str| -> String {
         s.chars()
@@ -92,19 +92,19 @@ fn without_wake_phrase(text: &str) -> &str {
             .flat_map(char::to_lowercase)
             .collect()
     };
-    let dot = |w: &str| {
+    let sage = |w: &str| {
         matches!(
             w,
-            "dot" | "dots" | "dott" | "dad" | "dat" | "dod" | "dodd" | "doc" | "dock" | "dog"
+            "sage" | "sages" | "saige" | "sayge" | "seige" | "siege" | "stage" | "sedge"
         )
     };
     let mut rest = text.trim_start();
     let mut words = rest.split_whitespace();
     let first = words.next().map(word).unwrap_or_default();
     let second = words.next().map(word).unwrap_or_default();
-    let skip = if matches!(first.as_str(), "hey" | "hay") && dot(&second) {
+    let skip = if matches!(first.as_str(), "hey" | "hay") && sage(&second) {
         2
-    } else if first == "dot" {
+    } else if first == "sage" {
         1
     } else {
         0
@@ -3228,24 +3228,24 @@ mod tests {
     #[test]
     fn the_wake_phrase_is_taken_off_the_start_of_what_was_heard() {
         for (heard, left) in [
-            ("Hey Dot, what needs me?", "what needs me?"),
-            ("Hey dad, what needs me?", "what needs me?"),
-            ("Hey dots what needs me", "what needs me"),
-            ("hey dat, please read.", "please read."),
-            ("Hey, doc, what meets me?", "what meets me?"),
-            ("Dot. What needs me?", "What needs me?"),
-            ("Hey Dot.", ""),
-            ("Dot", ""),
+            ("Hey Sage, what needs me?", "what needs me?"),
+            ("Hey Saige, what needs me?", "what needs me?"),
+            ("Hey sages what needs me", "what needs me"),
+            ("hey siege, please read.", "please read."),
+            ("Hey, stage, what meets me?", "what meets me?"),
+            ("Sage. What needs me?", "What needs me?"),
+            ("Hey Sage.", ""),
+            ("Sage", ""),
             ("What needs me?", "What needs me?"),
             (
-                "Hey, do that again tomorrow.",
-                "Hey, do that again tomorrow.",
+                "Hey, say that again tomorrow.",
+                "Hey, say that again tomorrow.",
             ),
             (
                 "Hey, don't touch the hot pot.",
                 "Hey, don't touch the hot pot.",
             ),
-            ("Dots that failed today", "Dots that failed today"),
+            ("Sols that failed today", "Sols that failed today"),
             ("", ""),
         ] {
             assert_eq!(without_wake_phrase(heard), left, "{heard:?}");
@@ -3270,7 +3270,7 @@ mod tests {
             "What needs me?",
             "Tell it the answer is twenty twenty twenty four",
             "Thank you. Thank you. Thank you.",
-            "Set up a dot that checks my inbox every morning and tells me what is new",
+            "Set up a sol that checks my inbox every morning and tells me what is new",
         ] {
             assert!(!babble(said), "{said}");
         }

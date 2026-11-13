@@ -57,7 +57,7 @@ pub(super) fn initialize_result(req: &Value, name: &str) -> Value {
 fn approve_tool() -> Value {
     json!({
         "name": "approve",
-        "description": "Permission gate for dots runs. Decides whether a tool call may proceed.",
+        "description": "Permission gate for sols runs. Decides whether a tool call may proceed.",
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -637,7 +637,7 @@ async fn call_approve(s: &ServerState, run_id: &str, req: &Value) -> Result<Valu
             json!({ "behavior": "deny", "message": message })
         }
         Err(e) => {
-            json!({ "behavior": "deny", "message": format!("dots permission check failed: {e}") })
+            json!({ "behavior": "deny", "message": format!("sols permission check failed: {e}") })
         }
     };
     Ok(json!({ "content": [{ "type": "text", "text": decision.to_string() }] }))

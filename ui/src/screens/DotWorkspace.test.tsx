@@ -28,8 +28,8 @@ const viewer = (action: string) =>
 const OUTSIDE =
   "Acme Engineering: you aren't in the Payments workspace. Ask an Admin or Owner to add you.";
 const asViewer: Refusals = {
-  edit: viewer("create or change dots"),
-  run: viewer("run dots"),
+  edit: viewer("create or change sols"),
+  run: viewer("run sols"),
   answer: viewer("answer approvals"),
   create_api_keys: viewer("create API keys"),
 };
@@ -43,8 +43,8 @@ const acmeSpaces = (payments: Refusals) => [
 
 const basics = { name: "nightly", instructions: "Run the tests.", workdir: "C:/dev/app" };
 
-describe("the workspace of a dot", () => {
-  it("new dot uses the current workspace", async () => {
+describe("the workspace of a sol", () => {
+  it("new sol uses the current workspace", async () => {
     backend.on("scope_get", () => ({ account: "personal", workspace: "ops" }));
     backend.on("workspace_list", () => [ws("default", "Default"), ws("ops", "Ops")]);
     backend.on("create_dot", (args) => ({ ...sample.dot, ...(args.spec as object), id: "dot-new" }));
@@ -54,14 +54,14 @@ describe("the workspace of a dot", () => {
     await user.type(screen.getByLabelText("Name"), basics.name);
     await user.type(screen.getByLabelText("Instructions"), basics.instructions);
     await user.type(screen.getByLabelText("Folder"), basics.workdir);
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     await waitFor(() => expect(backend.callsTo("create_dot")).toHaveLength(1));
     expect(backend.callsTo("create_dot")).toEqual([
       { spec: { ...blankSpec, ...basics }, orgId: null, workspaceId: "ops" },
     ]);
   });
 
-  it("moving a dot calls dot_move and shows refusals", async () => {
+  it("moving a sol calls dot_move and shows refusals", async () => {
     const dot = { ...sample.dot, workspace_id: "default" };
     backend.on("workspace_list", () => [ws("default", "Default"), ws("ops", "Ops")]);
     backend.on("get_dot", () => dot);
@@ -84,7 +84,7 @@ describe("the workspace of a dot", () => {
   });
 });
 
-describe("what the core lets the person do with a dot", () => {
+describe("what the core lets the person do with a sol", () => {
   const dot = { ...sample.dot, org_id: "acme-eng", workspace_id: "payments" };
 
   function open(access: DotAccess) {
@@ -95,21 +95,21 @@ describe("what the core lets the person do with a dot", () => {
     return renderApp(`/dots/${dot.id}`);
   }
 
-  it("a workspace Viewer can't save, run or move the dot, and is told why", async () => {
+  it("a workspace Viewer can't save, run or move the sol, and is told why", async () => {
     open(asViewer);
     const save = await screen.findByRole("button", { name: "Save" });
     await waitFor(() => expect(save).toBeDisabled());
-    expect(save).toHaveAttribute("title", viewer("create or change dots"));
+    expect(save).toHaveAttribute("title", viewer("create or change sols"));
     const run = screen.getByRole("button", { name: "Run now" });
     expect(run).toBeDisabled();
-    expect(run).toHaveAttribute("title", viewer("run dots"));
+    expect(run).toHaveAttribute("title", viewer("run sols"));
     const move = await screen.findByLabelText("Workspace");
     expect(move).toBeDisabled();
-    expect(move).toHaveAttribute("title", viewer("create or change dots"));
+    expect(move).toHaveAttribute("title", viewer("create or change sols"));
     expect(backend.callsTo("dot_access")).toContainEqual({ dotId: dot.id });
   });
 
-  it("outside the dot's workspace, each says the person isn't in it", async () => {
+  it("outside the sol's workspace, each says the person isn't in it", async () => {
     open(outside);
     const save = await screen.findByRole("button", { name: "Save" });
     await waitFor(() => expect(save).toBeDisabled());
@@ -128,7 +128,7 @@ describe("what the core lets the person do with a dot", () => {
     expect(await screen.findByLabelText("Workspace")).toBeEnabled();
   });
 
-  it("a move offers a workspace the person can't change dots in switched off, with why", async () => {
+  it("a move offers a workspace the person can't change sols in switched off, with why", async () => {
     const home = { ...dot, workspace_id: "default" };
     backend.on("org_list", () => [acme]);
     backend.on("get_dot", () => home);
@@ -137,13 +137,13 @@ describe("what the core lets the person do with a dot", () => {
     const move = await screen.findByLabelText("Workspace");
     const payments = await within(move).findByRole("option", { name: "Payments" });
     expect(payments).toBeDisabled();
-    expect(payments).toHaveAttribute("title", viewer("create or change dots"));
+    expect(payments).toHaveAttribute("title", viewer("create or change sols"));
     expect(within(move).getByRole("option", { name: "Default" })).toBeEnabled();
   });
 });
 
-describe("the workspace a new dot starts in", () => {
-  it("offers one the person can't make dots in switched off, with why", async () => {
+describe("the workspace a new sol starts in", () => {
+  it("offers one the person can't make sols in switched off, with why", async () => {
     backend.on("org_list", () => [acme]);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     backend.on("workspace_list", () => acmeSpaces(asViewer));
@@ -151,23 +151,23 @@ describe("the workspace a new dot starts in", () => {
     const picker = await screen.findByLabelText("Workspace");
     const payments = within(picker).getByRole("option", { name: "Payments" });
     expect(payments).toBeDisabled();
-    expect(payments).toHaveAttribute("title", viewer("create or change dots"));
-    expect(screen.getByRole("button", { name: "Create dot" })).toBeEnabled();
+    expect(payments).toHaveAttribute("title", viewer("create or change sols"));
+    expect(screen.getByRole("button", { name: "Create sol" })).toBeEnabled();
   });
 
-  it("can't be created in a workspace the person isn't in, which Create dot says", async () => {
+  it("can't be created in a workspace the person isn't in, which Create sol says", async () => {
     backend.on("org_list", () => [acme]);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "payments" }));
     backend.on("workspace_list", () => acmeSpaces(outside));
     renderApp("/dots/new");
-    const create = await screen.findByRole("button", { name: "Create dot" });
+    const create = await screen.findByRole("button", { name: "Create sol" });
     await waitFor(() => expect(create).toBeDisabled());
     expect(create).toHaveAttribute("title", OUTSIDE);
   });
 });
 
 describe("an open editor and an org event", () => {
-  it("keeps what was typed in a dot opened from the cache, and asks the access again", async () => {
+  it("keeps what was typed in a sol opened from the cache, and asks the access again", async () => {
     const dot = { ...sample.dot, org_id: "acme-eng" };
     backend.on("org_list", () => [acme]);
     backend.on("get_dot", () => dot);
@@ -204,12 +204,12 @@ describe("a failed question about what the person may do", () => {
     expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
   });
 
-  it("of a new dot's workspaces is shown too, and Create dot stays on", async () => {
+  it("of a new sol's workspaces is shown too, and Create sol stays on", async () => {
     backend.on("workspace_list", () => {
       throw { kind: "internal", message: "database is locked" };
     });
     renderApp("/dots/new");
     expect(await screen.findByText(/database is locked/)).toBeVisible();
-    expect(screen.getByRole("button", { name: "Create dot" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Create sol" })).toBeEnabled();
   });
 });

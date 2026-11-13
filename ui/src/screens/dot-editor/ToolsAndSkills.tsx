@@ -45,12 +45,12 @@ function Detail({ entry }: { entry: LibraryEntry }) {
               entry.config.description,
               entry.context &&
                 `${entry.context.complete ? "" : "at least "}${plural(entry.context.documents, "document")}`,
-              entry.config.every_dot && "every dot",
+              entry.config.every_dot && "every sol",
             ]
               .filter(Boolean)
               .join(" · ")
           : entry.kind === "app"
-            ? [entry.config.description, entry.config.every_dot && "every dot"]
+            ? [entry.config.description, entry.config.every_dot && "every sol"]
                 .filter(Boolean)
                 .join(" · ")
             : null;
@@ -116,7 +116,7 @@ export function ToolsAndSkills(props: {
           const parts = unusedParts(p);
           return parts
             ? [
-                `On a local dot, ${p.name} gives its skills and MCP servers only. Its ${parts} do not apply.`,
+                `On a local sol, ${p.name} gives its skills and MCP servers only. Its ${parts} do not apply.`,
               ]
             : [];
         })
@@ -138,7 +138,7 @@ export function ToolsAndSkills(props: {
             )}
             {items.length === 0 && stale.length === 0 && kind === "app" && (
               <p className="text-xs text-muted-foreground">
-                No apps yet. Ask a dot for one; the apps you add show in{" "}
+                No apps yet. Ask a sol for one; the apps you add show in{" "}
                 <Link to="/apps" className="underline">Apps</Link>.
               </p>
             )}

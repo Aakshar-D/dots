@@ -101,7 +101,7 @@ const BACKGROUND: TriggerKind[] = ["schedule", "watcher", "follow_up", "webhook"
 export const overridable = (trigger: TriggerKind) => !BACKGROUND.includes(trigger);
 
 /// The core's words for the cap of every dot together begin so.
-const ALL_DOTS = "All dots reached the ";
+const ALL_DOTS = "All sols reached the ";
 
 /// Where **Raise cap** goes: the dot's editor for its own cap, Settings for the cap of all dots.
 export function raiseCapLink(dotId: string, text: string): string {

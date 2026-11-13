@@ -28,7 +28,7 @@ function loseFocus() {
 }
 
 describe("sending on the home", () => {
-  it("starts the first topic of a dot with its first message", async () => {
+  it("starts the first topic of a sol with its first message", async () => {
     home([]);
     const { user } = renderApp(`/home/${dot.id}`);
     expect(await screen.findByText("New topic")).toBeVisible();
@@ -224,7 +224,7 @@ describe("sending on the home", () => {
     expect(box()).toBeDisabled();
   });
 
-  it("holds the composer while the dot works and frees it when the run ends", async () => {
+  it("holds the composer while the sol works and frees it when the run ends", async () => {
     const working = chat("a", "10:00", { status: "running", ended_at: null });
     const runs = home([working]);
     renderApp(`/home/${dot.id}`);
@@ -337,14 +337,14 @@ describe("sending on the home", () => {
     await waitFor(() => expect(found).toBeDisabled());
     loseFocus();
 
-    await act(async () => refusal.fail({ kind: "conflict", message: "the dot is disabled" }));
-    expect(await screen.findByText("the dot is disabled")).toBeVisible();
+    await act(async () => refusal.fail({ kind: "conflict", message: "the sol is disabled" }));
+    expect(await screen.findByText("the sol is disabled")).toBeVisible();
     await waitFor(() => expect(found).toBeEnabled());
     expect(found).toHaveFocus();
     expect(found).toHaveValue("hello");
   });
 
-  it("leaves the focus where the user put it while the dot worked", async () => {
+  it("leaves the focus where the user put it while the sol worked", async () => {
     const working = chat("a", "10:00", { status: "running", ended_at: null });
     const runs = home([working]);
     renderApp(`/home/${dot.id}`);
@@ -403,7 +403,7 @@ describe("sending on the home", () => {
     expect(backend.callsTo("chat")).toEqual([]);
   });
 
-  it("sends to a disabled dot, whose conversation stays readable", async () => {
+  it("sends to a disabled sol, whose conversation stays readable", async () => {
     const off = { ...dot, enabled: false };
     home([chat("a", "10:00")]);
     backend.on("dot_overview", () => [
@@ -430,7 +430,7 @@ describe("a chat while Claude's limit is reached", () => {
   });
 });
 
-describe("a failed reload of the dots while a conversation is open", () => {
+describe("a failed reload of the sols while a conversation is open", () => {
   it("keeps the conversation and the text being typed, and says the load failed", async () => {
     const runs = home([chat("a", "10:00")]);
     const { user } = renderApp(`/home/${dot.id}`);

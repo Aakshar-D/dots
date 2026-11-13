@@ -113,7 +113,7 @@ async fn seen(events: &mut Receiver<RuntimeEvent>, dot_id: &str) {
     };
     tokio::time::timeout(Duration::from_secs(5), wait)
         .await
-        .expect("a dot_seen event for the dot");
+        .expect("a dot_seen event for the sol");
 }
 
 #[tokio::test]

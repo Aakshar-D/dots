@@ -9,13 +9,13 @@ import { createBreath, LOGO, type BreathState } from "./breath-model";
 const COLOURS = ["#f2c94c", "#56ccf2", "#6fcf97", "#22c3a6"] as const;
 
 const LABELS: Record<BreathState, string> = {
-  resting: "Dot is resting",
-  done: "Dot is resting",
-  listening: "Dot is listening",
-  thinking: "Dot is thinking",
-  speaking: "Dot is speaking",
-  asking: "Dot is asking",
-  trouble: "Dot has a problem",
+  resting: "Sage is resting",
+  done: "Sage is resting",
+  listening: "Sage is listening",
+  thinking: "Sage is thinking",
+  speaking: "Sage is speaking",
+  asking: "Sage is asking",
+  trouble: "Sage has a problem",
 };
 
 /// The prototype's blurs (9 and 26 in its units), in the 200 box. They are in the box's units,

@@ -30,7 +30,7 @@ export function BrowserSection(props: {
         <Label htmlFor="dot-browser">Browser</Label>
       </div>
       <p className="-mt-2 text-xs text-muted-foreground">
-        Opens a visible Microsoft Edge window with this dot's own profile.
+        Opens a visible Microsoft Edge window with this sol's own profile.
       </p>
       {spec.browser && (
         <>
@@ -39,7 +39,7 @@ export function BrowserSection(props: {
           </h3>
           {sites.length === 0 ? (
             <p className="text-xs text-muted-foreground">
-              No site is approved yet: the dot asks before it opens a site or acts on one, and an
+              No site is approved yet: the sol asks before it opens a site or acts on one, and an
               approval can always allow the site.
             </p>
           ) : (
@@ -78,7 +78,7 @@ export function BrowserSection(props: {
               </Button>
             </div>
           ) : (
-            <p className="text-xs text-muted-foreground">Save the dot to open its browser.</p>
+            <p className="text-xs text-muted-foreground">Save the sol to open its browser.</p>
           )}
         </>
       )}

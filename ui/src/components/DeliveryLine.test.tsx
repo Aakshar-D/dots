@@ -46,12 +46,12 @@ describe("the delivery line", () => {
 
   it("shows the reason a Discard was refused next to the buttons", async () => {
     backend.on("discard_delivery", () => {
-      throw { kind: "conflict", message: "this message has just reached the dot" };
+      throw { kind: "conflict", message: "this message has just reached the sol" };
     });
     const user = show(marked());
     await user.click(screen.getByRole("button", { name: "Discard" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "this message has just reached the dot",
+      "this message has just reached the sol",
     );
   });
 

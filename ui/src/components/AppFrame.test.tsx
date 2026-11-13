@@ -170,7 +170,7 @@ describe("an app's screen in its frame", () => {
     // The navigated page got no port: the one message was the first load's.
     expect(post).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "The app's screen left its page, so Dots stopped answering it.",
+      "The app's screen left its page, so Sage stopped answering it.",
     );
     expect(screen.queryByTitle("Expenses")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Load the app again" }));

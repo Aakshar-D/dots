@@ -62,7 +62,7 @@ async fn open_the_browser_opens_the_dots_edge_and_deleting_the_dot_removes_it() 
     assert!(edges.gone_within(&dot.id, Duration::from_secs(10)).await);
     assert!(
         !root.join(&dot.id).exists(),
-        "the profile goes with its dot"
+        "the profile goes with its sol"
     );
     rt.shutdown();
 }

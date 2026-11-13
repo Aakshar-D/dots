@@ -430,8 +430,8 @@ fn actor_of(options: &Value) -> Result<Actor, String> {
         None | Some("person") => Ok(Actor::Person),
         Some("dots") => Ok(Actor::Dots),
         Some("dot") => Ok(Actor::Dot {
-            id: field("id").ok_or("a dot actor needs an id")?,
-            name: field("name").ok_or("a dot actor needs a name")?,
+            id: field("id").ok_or("a sol actor needs an id")?,
+            name: field("name").ok_or("a sol actor needs a name")?,
             run_id: field("run_id").unwrap_or_else(|| "test-run".to_string()),
         }),
         Some(other) => Err(format!(

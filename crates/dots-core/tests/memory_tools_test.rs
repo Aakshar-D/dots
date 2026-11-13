@@ -75,7 +75,7 @@ async fn a_local_dot_remembers_recalls_and_forgets_and_its_next_run_knows() {
     let dot = t.rt.create_dot(s.clone(), None, None).await.unwrap();
     let other = t.rt.create_dot(spec("other"), None, None).await.unwrap();
     let theirs = memories
-        .add(&other.id, "Another dot's fact.")
+        .add(&other.id, "Another sol's fact.")
         .await
         .unwrap();
     let persons = memories.add(&dot.id, "Sends on Fridays.").await.unwrap();

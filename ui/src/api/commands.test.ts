@@ -124,7 +124,7 @@ describe("commands", () => {
     ]);
   });
 
-  it("dismisses a schedule's attention by its dot", async () => {
+  it("dismisses a schedule's attention by its sol", async () => {
     reply = async () => null;
     expect(await commands.dismissScheduleAttention("d1")).toBeNull();
     expect(calls).toEqual([["dismiss_schedule_attention", { dotId: "d1" }]]);
@@ -239,7 +239,7 @@ describe("commands", () => {
     expect((await failure(commands.orgRefresh("acme-eng"))).kind).toBe("internal");
   });
 
-  it("asks what the person may not do with a dot", async () => {
+  it("asks what the person may not do with a sol", async () => {
     reply = async () => fixture.DotAccess[0];
     expect(await commands.dotAccess("D1")).toEqual(fixture.DotAccess[0]);
     expect(calls).toEqual([["dot_access", { dotId: "D1" }]]);
@@ -264,7 +264,7 @@ describe("commands", () => {
     expect((await failure(commands.identityGet())).kind).toBe("internal");
   });
 
-  it("refuses to remove a used Library item without a yes, with the dots named", async () => {
+  it("refuses to remove a used Library item without a yes, with the sols named", async () => {
     reply = async () => {
       throw {
         kind: "conflict",

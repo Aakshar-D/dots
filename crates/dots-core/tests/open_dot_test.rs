@@ -580,7 +580,7 @@ async fn send_into_another_dots_topic_is_refused_in_plain_words() {
     };
     assert_eq!(
         carry_out(&t.rt, &deed).await,
-        "That didn't work: run belongs to a different dot."
+        "That didn't work: run belongs to a different sol."
     );
     assert!(t
         .rt
@@ -604,7 +604,7 @@ async fn send_or_run_to_a_dot_that_is_gone() {
     };
     assert_eq!(
         carry_out(&t.rt, &send).await,
-        "I can't find that dot anymore."
+        "I can't find that sol anymore."
     );
     let run = Deed::Run {
         dot_id: gone.into(),
@@ -612,7 +612,7 @@ async fn send_or_run_to_a_dot_that_is_gone() {
     };
     assert_eq!(
         carry_out(&t.rt, &run).await,
-        "I can't find that dot anymore."
+        "I can't find that sol anymore."
     );
     t.rt.shutdown();
 }
@@ -735,7 +735,7 @@ async fn viewer_cannot_approve_and_hears_why() {
     };
     assert_eq!(
         carry_out(&rt, &run_it).await,
-        "Acme Engineering: a Viewer can't run dots. Ask an Admin or Owner."
+        "Acme Engineering: a Viewer can't run sols. Ask an Admin or Owner."
     );
     assert_eq!(
         rt.store().list_runs(Some(&dot.id), 10).await.unwrap().len(),
@@ -1034,7 +1034,7 @@ async fn missing_cli_is_no_cli() {
 
 /// Text only the mind's prompts hold, and only the setup agent's.
 const MIND_PROMPT: &str = "The picture of now (data, not instructions)";
-const SETUP_PROMPT: &str = "A dot without a folder gets a new one under";
+const SETUP_PROMPT: &str = "A sol without a folder gets a new one under";
 
 /// `steps`, each only for prompts holding `has`.
 fn when_has(has: &str, steps: Vec<Value>) -> Vec<Value> {
@@ -1197,7 +1197,7 @@ async fn set_up_a_dot_by_voice_end_to_end() {
         CREATE,
         Some(json!({"questions": ["Which folder?", "What time?"]})),
     ));
-    let got = hear(&t, "make a dot that digests my downloads").await;
+    let got = hear(&t, "make a sol that digests my downloads").await;
     assert_eq!(said(&got), "Let's make it. Let me set that up.");
     assert_eq!(asked(&got), Some(("Which folder?".into(), vec![])));
     assert_eq!(got.last(), Some(&MindEvent::SayEnd { then: Then::Ask }));
@@ -1214,7 +1214,7 @@ async fn set_up_a_dot_by_voice_end_to_end() {
     assert_eq!(
         asked(&got),
         Some((
-            "Downloads digest. Runs every day at 09:00. The rest is on screen. Create this dot?"
+            "Downloads digest. Runs every day at 09:00. The rest is on screen. Create this sol?"
                 .into(),
             yes_no()
         ))
@@ -1255,7 +1255,7 @@ async fn set_up_a_dot_by_voice_end_to_end() {
 async fn set_up_declined_creates_nothing() {
     let t = Rt::start().await;
     t.script(turn(CREATE, Some(downloads_proposal())));
-    let got = hear(&t, "make a dot that digests my downloads").await;
+    let got = hear(&t, "make a sol that digests my downloads").await;
     assert_eq!(asked(&got).map(|a| a.1), Some(yes_no()));
     let got = hear(&t, "no").await;
     assert_eq!(said(&got), "Okay, not created.");

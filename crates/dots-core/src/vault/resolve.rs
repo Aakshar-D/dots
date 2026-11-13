@@ -104,7 +104,7 @@ pub struct Missing {
 /// What a dot whose org is not joined on this PC says: at its run's start, when it is saved,
 /// and for each of its variables.
 pub fn org_removed_text(dot: &str, org_id: &str) -> String {
-    format!("dot '{dot}': its org '{org_id}' was removed")
+    format!("sol '{dot}': its org '{org_id}' was removed")
 }
 
 impl Missing {
@@ -114,16 +114,16 @@ impl Missing {
         let name = &self.name;
         let org = self.org.as_deref().unwrap_or("Personal");
         match &self.why {
-            Unresolved::NotGranted => format!("{name}: not granted to {consumer} in dot '{dot}'"),
-            Unresolved::NotDefined => format!("{name}: not in {org} (dot '{dot}', {consumer})"),
+            Unresolved::NotGranted => format!("{name}: not granted to {consumer} in sol '{dot}'"),
+            Unresolved::NotDefined => format!("{name}: not in {org} (sol '{dot}', {consumer})"),
             Unresolved::DeniedByPolicy => {
-                format!("{name}: {org}'s policy does not allow it (dot '{dot}')")
+                format!("{name}: {org}'s policy does not allow it (sol '{dot}')")
             }
             Unresolved::DeniedByWorkspace(workspace) => {
                 format!("the {workspace} workspace doesn't allow {name}")
             }
             Unresolved::ShellSecretsForbidden => {
-                format!("{name}: {org} does not allow secrets in the shell (dot '{dot}')")
+                format!("{name}: {org} does not allow secrets in the shell (sol '{dot}')")
             }
             Unresolved::OrgExpired => {
                 format!("{org}: secrets expired offline; reconnect to refresh")

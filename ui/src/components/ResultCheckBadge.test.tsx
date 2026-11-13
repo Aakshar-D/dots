@@ -65,7 +65,7 @@ describe("the result check badge", () => {
     expect(failed.container).toBeEmptyDOMElement();
   });
 
-  it("opens the concerns and asks the dot to fix them in one click", async () => {
+  it("opens the concerns and asks the sol to fix them in one click", async () => {
     const run = withCheck(done("has_concerns", ["Two tests were skipped.", "No numbers."]));
     backend.on("result_check_fix", () => ({ ...sample.run, id: "fix-run" }));
     const { user } = show(run);
@@ -75,24 +75,24 @@ describe("the result check badge", () => {
     const list = screen.getByRole("region", { name: "Result check concerns" });
     expect(list).toHaveTextContent("Two tests were skipped.");
     expect(list).toHaveTextContent("No numbers.");
-    await user.click(screen.getByRole("button", { name: "Ask the dot to fix this" }));
+    await user.click(screen.getByRole("button", { name: "Ask the sol to fix this" }));
     await waitFor(() => expect(backend.callsTo("result_check_fix")).toEqual([{ runId: run.id }]));
   });
 
-  it("waits while the dot is still busy in the conversation, and shows a refusal", async () => {
+  it("waits while the sol is still busy in the conversation, and shows a refusal", async () => {
     const run = withCheck(done("failed_task", ["Nothing was written."]));
     const busy = show(run, false);
     await busy.user.click(screen.getByRole("button", { name: "⚠ May have missed the task" }));
-    expect(screen.getByRole("button", { name: "Ask the dot to fix this" })).toBeDisabled();
-    expect(screen.getByText("Wait until the dot has finished in this conversation.")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Ask the sol to fix this" })).toBeDisabled();
+    expect(screen.getByText("Wait until the sol has finished in this conversation.")).toBeVisible();
     busy.unmount();
 
     backend.on("result_check_fix", () => {
-      throw { kind: "conflict", message: "the dot is still working on this chat" };
+      throw { kind: "conflict", message: "the sol is still working on this chat" };
     });
     const { user } = show(run);
     await user.click(screen.getByRole("button", { name: "⚠ May have missed the task" }));
-    await user.click(screen.getByRole("button", { name: "Ask the dot to fix this" }));
+    await user.click(screen.getByRole("button", { name: "Ask the sol to fix this" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("still working");
   });
 

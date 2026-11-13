@@ -49,11 +49,11 @@ impl Permission {
     /// What the permission lets a person do, as a refusal names it.
     pub fn action(&self) -> &'static str {
         match self {
-            Self::View => "see this account's dots",
-            Self::EditDots => "create or change dots",
-            Self::RunDots => "run dots",
+            Self::View => "see this account's sols",
+            Self::EditDots => "create or change sols",
+            Self::RunDots => "run sols",
             Self::AnswerApprovals => "answer approvals",
-            Self::GrantEntries => "give secrets to dots",
+            Self::GrantEntries => "give secrets to sols",
             Self::AddMcp => "add MCP servers",
             Self::CreateApiKeys => "create API keys",
             Self::ManageMembers => "manage members",
@@ -102,13 +102,13 @@ pub fn role_matrix() -> Vec<RoleRow> {
         .map(|&p| {
             let note = match p {
                 Permission::EditDots => Some(
-                    "A Member's dot stays within the workspace's guardrails: its tool policy goes no higher than the workspace allows, and protected paths, git actions and commands are refused.",
+                    "A Member's sol stays within the workspace's guardrails: its tool policy goes no higher than the workspace allows, and protected paths, git actions and commands are refused.",
                 ),
                 Permission::AnswerApprovals => Some(
                     "A Member can't approve a call the workspace's guardrails protect; an Admin's protected calls always ask.",
                 ),
                 Permission::SignRoster => Some(
-                    "An Admin signs once the owner has added their Dots ID to the policy's admins.",
+                    "An Admin signs once the owner has added their Sage ID to the policy's admins.",
                 ),
                 _ => None,
             };

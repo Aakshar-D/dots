@@ -112,7 +112,7 @@ function SetupCard({ keyPending }: { keyPending: boolean }) {
         <li className="flex flex-col gap-2">
           <span className="font-medium">Save a backup {savedTo && ticked && "✓"}</span>
           <p>
-            If this key and its password are both lost, no installed Dots can ever take another
+            If this key and its password are both lost, no installed Sage can ever take another
             update.
           </p>
           <Button
@@ -139,7 +139,7 @@ function SetupCard({ keyPending }: { keyPending: boolean }) {
           <span className="font-medium">Put it in GitHub's secrets {secretsIn && "✓"}</span>
           <ConfirmButton
             title="Put it in GitHub's secrets"
-            description="Dots stores the key and its password as the repository's two signing secrets, then forgets them. Your backup is the only other copy."
+            description="Sage stores the key and its password as the repository's two signing secrets, then forgets them. Your backup is the only other copy."
             confirmLabel="Put it in GitHub's secrets"
             variant="default"
             disabled={!made || !savedTo || !ticked || secretsIn || put.isPending}
@@ -149,16 +149,16 @@ function SetupCard({ keyPending }: { keyPending: boolean }) {
           </ConfirmButton>
         </li>
         <li className="flex flex-col gap-2">
-          <span className="font-medium">Put the public key into Dots</span>
+          <span className="font-medium">Put the public key into Sage</span>
           <ConfirmButton
-            title="Put the public key into Dots"
-            description={`Dots opens a pull request, "Use the release signing key", that puts the public key into Dots.`}
+            title="Put the public key into Sage"
+            description={`Sage opens a pull request, "Use the release signing key", that puts the public key into Sage.`}
             confirmLabel="Open the pull request"
             variant="default"
             disabled={!secretsIn || pull.isPending || !!pull.data}
             onConfirm={() => pull.mutate()}
           >
-            Put the public key into Dots
+            Put the public key into Sage
           </ConfirmButton>
           {pull.data && (
             <a href={pull.data.url} target="_blank" rel="noreferrer" className="underline">
@@ -203,7 +203,7 @@ function ReadyCard({ page }: { page: PageState }) {
       {page.live && liveVersion && (
         <ConfirmButton
           title="Withdraw a release"
-          description={`No more Dots will take ${liveVersion}. Dots already on it will be offered to go back to the version before it.`}
+          description={`No more Sage will take ${liveVersion}. Sage already on it will be offered to go back to the version before it.`}
           confirmLabel="Withdraw"
           disabled={withdraw.isPending}
           onConfirm={() => withdraw.mutate(liveVersion)}
@@ -233,7 +233,7 @@ function ReadyCard({ page }: { page: PageState }) {
         </div>
         <ConfirmButton
           title="Publish trial"
-          description={`Publish ${version}-rc.${rc} from master as it is now? It goes only to publishers' Dots.`}
+          description={`Publish ${version}-rc.${rc} from master as it is now? It goes only to publishers' Sage.`}
           confirmLabel="Publish trial"
           disabled={publish.isPending}
           onConfirm={() => publish.mutate()}
@@ -298,7 +298,7 @@ function TrialCard({ trial }: { trial: NonNullable<PageState["trial"]> }) {
       <div className="flex flex-wrap gap-2">
         <ConfirmButton
           title="Save notes"
-          description={`Dots commits these notes on release/${trial.version}; they become what's new in ${trial.version}.`}
+          description={`Sage commits these notes on release/${trial.version}; they become what's new in ${trial.version}.`}
           confirmLabel="Save notes"
           disabled={saveNotes.isPending}
           onConfirm={() => saveNotes.mutate()}
@@ -307,7 +307,7 @@ function TrialCard({ trial }: { trial: NonNullable<PageState["trial"]> }) {
         </ConfirmButton>
         <ConfirmButton
           title="Promote to everyone"
-          description={`Every Dots will be offered ${trial.version} within six hours. It is exactly the code of ${trial.version}-rc.${trial.rc}.`}
+          description={`Every Sage will be offered ${trial.version} within six hours. It is exactly the code of ${trial.version}-rc.${trial.rc}.`}
           confirmLabel="Promote"
           variant="default"
           // Only a trial whose tests passed and that was published (final review I2).
@@ -318,7 +318,7 @@ function TrialCard({ trial }: { trial: NonNullable<PageState["trial"]> }) {
         </ConfirmButton>
         <ConfirmButton
           title="Drop trial"
-          description={`Drop ${trial.tag}? Publishers' Dots stop being offered it.`}
+          description={`Drop ${trial.tag}? Publishers' Sage stop being offered it.`}
           confirmLabel="Drop trial"
           disabled={drop.isPending}
           onConfirm={() => drop.mutate()}
@@ -357,7 +357,7 @@ function PromotionCard({ promotion }: { promotion: NonNullable<PageState["promot
       {promotion.stage.stage === "failed" && (
         <ConfirmButton
           title="Retry the build"
-          description={`GitHub runs the build of ${promotion.tag} again. If it passes, every Dots is offered ${promotion.version}.`}
+          description={`GitHub runs the build of ${promotion.tag} again. If it passes, every Sage is offered ${promotion.version}.`}
           confirmLabel="Retry"
           variant="default"
           disabled={retry.isPending}
@@ -395,7 +395,7 @@ export function ReleasesScreen() {
       <h1 className="text-lg font-semibold">Releases</h1>
       {publisher && !isPublisher && (
         <p className="text-sm text-muted-foreground">
-          Dots is not set up to publish. Choose a GitHub token in Settings › Updates.
+          Sage is not set up to publish. Choose a GitHub token in Settings › Updates.
         </p>
       )}
       {page.isError && <ErrorNote error={page.error} />}

@@ -110,11 +110,11 @@ export function ResultCheckBadge({ run, canFix = true }: { run: Run; canFix?: bo
             disabled={!canFix || fix.isPending || fix.isSuccess}
             onClick={onSingleClick(() => fix.mutate())}
           >
-            Ask the dot to fix this
+            Ask the sol to fix this
           </Button>
           {!canFix && (
             <p className="text-xs text-muted-foreground">
-              Wait until the dot has finished in this conversation.
+              Wait until the sol has finished in this conversation.
             </p>
           )}
           {fix.isError && (

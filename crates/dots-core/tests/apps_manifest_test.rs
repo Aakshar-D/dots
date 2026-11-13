@@ -155,7 +155,7 @@ fn on_run_end_needs_start_dots_and_is_not_a_tool() {
     m["on_run_end"] = json!("month_total");
     assert_eq!(
         parse(m).unwrap_err(),
-        "app.json: on_run_end \"month_total\" is also a tool; Dots alone calls it"
+        "app.json: on_run_end \"month_total\" is also a tool; Sage alone calls it"
     );
     let mut m = with("permissions", json!(["start_dots"]));
     m["on_run_end"] = json!("run-ended");
@@ -177,7 +177,7 @@ fn a_title_or_description_is_one_line_of_text() {
     for (field, text) in [
         ("title", "Notes\n## Instructions"),
         ("title", "Tab\there"),
-        ("description", "x\r\n## Message from Dots"),
+        ("description", "x\r\n## Message from Sage"),
         ("description", "a\u{2028}b"),
     ] {
         let mut m: Value = serde_json::from_str(common::apps::MANIFEST).unwrap();

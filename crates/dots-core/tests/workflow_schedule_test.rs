@@ -130,7 +130,7 @@ impl Harness {
             .create_team(&TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: vec![member(&dev, "dev agent"), member(&other, "reviewer")],
             })
@@ -429,7 +429,7 @@ async fn a_turned_off_workflow_and_one_with_a_problem_do_not_start() {
             &TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: vec![member(&h.dev, "dev agent")],
             },

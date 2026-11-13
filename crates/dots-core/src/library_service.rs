@@ -902,7 +902,7 @@ impl LibraryService {
     pub async fn create_skill(&self, text: &str) -> Result<LibraryItem> {
         let summary = check_draft(text)?;
         let Some(root) = self.skills_dir.clone() else {
-            return Err(Error::Other("Dots has no skills folder".into()));
+            return Err(Error::Other("Sage has no skills folder".into()));
         };
         let name = summary.name;
         if self

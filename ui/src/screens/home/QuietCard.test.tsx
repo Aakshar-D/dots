@@ -41,7 +41,7 @@ describe("the quiet card", () => {
     expect(screen.getByText("Stops by itself in 7 min")).toBeVisible();
   });
 
-  it("takes its minutes from the run's limit, whatever the dot says now", () => {
+  it("takes its minutes from the run's limit, whatever the sol says now", () => {
     // The dot's limit was edited to 60 s while the run was quiet; the run keeps its 900 s.
     backend.on("get_dot", () => ({ ...sample.dot, quiet_limit_secs: 60 }));
     show(quiet(0, 900));

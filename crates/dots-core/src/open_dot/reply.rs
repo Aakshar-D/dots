@@ -811,7 +811,7 @@ Third, still going!"
 
     #[test]
     fn gate_releases_a_line_starting_with_do_that_is_not_a_block() {
-        let text = "Sure.\nDo you want me to run it?\nDOT is ready.\nDONE.\n";
+        let text = "Sure.\nDo you want me to run it?\nSOL is ready.\nDONE.\n";
         let mut gate = SpeechGate::new();
         let mut live = String::new();
         // a char at a time: the held "D", "DO" and "DOT" are let go once they fail to match
@@ -819,7 +819,7 @@ Third, still going!"
             live.push_str(&gate.push(&text[i..i + c.len_utf8()]));
         }
         assert!(live.contains("Do you want me to run it?"), "{live:?}");
-        assert!(live.contains("DOT is ready."), "{live:?}");
+        assert!(live.contains("SOL is ready."), "{live:?}");
         let tail = gate.finish();
         assert_eq!(squash(&format!("{live}{tail}")), squash(text));
     }

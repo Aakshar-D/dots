@@ -125,8 +125,8 @@ async fn the_runner_starts_the_prompt_with_the_global_instructions_of_settings()
         .find(|ev| ev.kind == "assistant_text")
         .unwrap();
     assert!(text.data["text"].as_str().unwrap().starts_with(
-        "## Instructions for every dot\n\nUse British spelling.\n\n\
-         ## Instructions for this dot\n\nDo the thing."
+        "## Instructions for every sol\n\nUse British spelling.\n\n\
+         ## Instructions for this sol\n\nDo the thing."
     ));
 }
 

@@ -35,7 +35,7 @@ const COPY_TO_SOPS: &str = "Copy the signed list into the SOPS file (see the adm
 
 /// A draft's error when the source took the list but the fetch after it did not show it yet.
 const NOT_READ_BACK: &str =
-    "The source took the list but Dots couldn't read it back yet. Retry in a moment.";
+    "The source took the list but Sage couldn't read it back yet. Retry in a moment.";
 
 /// Why an edit waits: the account has a draft (accounts spec §6.5). One change at a time, so
 /// that a new one never silently takes the place of a change not yet published.
@@ -667,7 +667,7 @@ impl Orgs {
         } else {
             None
         })
-        .or_else(|| listed.then(|| "This Dots ID is already on the member list.".to_string()))
+        .or_else(|| listed.then(|| "This Sage ID is already on the member list.".to_string()))
         // Approving would add a PC to an Owner, which only the owner's key may do.
         .or_else(|| {
             joins_member
@@ -833,7 +833,7 @@ fn admins(state: &MemberState) -> &[String] {
 
 fn not_a_signer(account: &str) -> String {
     format!(
-        "{account}: your Dots ID isn't one of the account's signing admins yet. Ask the owner \
+        "{account}: your Sage ID isn't one of the account's signing admins yet. Ask the owner \
          to add it with dots-admin policy admins add."
     )
 }

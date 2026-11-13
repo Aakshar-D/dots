@@ -25,7 +25,7 @@ const active = (status: Run["status"]): Run => ({
 });
 /// The banner's restart button, once it knows whether it has to ask first.
 async function restartButton() {
-  const button = () => screen.getByRole("button", { name: "Restart Dots" });
+  const button = () => screen.getByRole("button", { name: "Restart Sage" });
   await waitFor(() => expect(button()).toBeEnabled());
   return button();
 }
@@ -63,7 +63,7 @@ describe("the app frame", () => {
     expect(usage).toHaveAttribute("aria-current", "page");
   });
 
-  it("counts approvals of the dots of an account that is not the current one", async () => {
+  it("counts approvals of the sols of an account that is not the current one", async () => {
     backend.on("inbox", () => sample.inbox);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     backend.on("dot_overview", () => [{ ...idle, dot: { ...sample.dot, org_id: null } }]);
@@ -111,10 +111,10 @@ describe("the app frame", () => {
     expect(await within(nav).findByRole("link", { name: "Inbox, 63 waiting" })).toBeVisible();
   });
 
-  it("shows why Dots could not start instead of the app", async () => {
+  it("shows why Sage could not start instead of the app", async () => {
     backend.on("startup_error", () => sample.startupError);
     renderApp("/dots");
-    expect(await screen.findByRole("heading", { name: "Dots could not start" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "Sage could not start" })).toBeVisible();
     expect(screen.getByRole("alert")).toHaveTextContent(sample.startupError.message);
     expect(screen.getByText(sample.startupError.log_dir)).toBeVisible();
     // The newest backup an update made, and where the previous installer is.
@@ -139,12 +139,12 @@ describe("the app frame", () => {
     expect(
       await screen.findByText(/Claude CLI 2\.1\.300 has not been tested.*2\.1\.295/),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "Restart Dots" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Restart Sage" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Resume schedules" })).toBeVisible();
     expect(screen.getAllByRole("link", { name: "Open Settings" })).toHaveLength(2);
   });
 
-  it("keeps the untested-CLI banner away until the person has a dot", async () => {
+  it("keeps the untested-CLI banner away until the person has a sol", async () => {
     backend.on("status", () => ({
       ...quietStatus,
       claude: { ...quietStatus.claude, version: "2.1.300", mismatch: true },
@@ -231,7 +231,7 @@ describe("the app frame", () => {
       backend.on("restart_app", () => null);
       const { user } = renderApp("/settings");
       await user.click(await restartButton());
-      const dialog = within(await screen.findByRole("alertdialog", { name: "Restart Dots now?" }));
+      const dialog = within(await screen.findByRole("alertdialog", { name: "Restart Sage now?" }));
       // The dot whose run has not ended is named, and what the restart does to a working run.
       expect(dialog.getByText(/triage has a run that has not ended/)).toBeVisible();
       expect(dialog.getByText(/ends as failed/)).toBeVisible();
@@ -267,7 +267,7 @@ describe("the app frame", () => {
     overview = [{ ...idle, active_run: run }];
     await changed(run);
     await user.click(await restartButton());
-    const dialog = within(await screen.findByRole("alertdialog", { name: "Restart Dots now?" }));
+    const dialog = within(await screen.findByRole("alertdialog", { name: "Restart Sage now?" }));
     await user.click(dialog.getByRole("button", { name: "Cancel" }));
     expect(backend.callsTo("restart_app")).toEqual([]);
 
@@ -286,21 +286,21 @@ describe("the app frame", () => {
     backend.on("restart_app", () => null);
     const { user } = renderApp("/settings");
     await user.click(await restartButton());
-    const dialog = within(await screen.findByRole("alertdialog", { name: "Restart Dots now?" }));
+    const dialog = within(await screen.findByRole("alertdialog", { name: "Restart Sage now?" }));
     expect(dialog.getByText(/could not check whether a run is active/)).toBeVisible();
     expect(backend.callsTo("restart_app")).toEqual([]);
     await user.click(dialog.getByRole("button", { name: "Restart now" }));
     await waitFor(() => expect(backend.callsTo("restart_app")).toHaveLength(1));
   });
 
-  it("does not ask for the dots' runs while no restart is on offer", async () => {
+  it("does not ask for the sols' runs while no restart is on offer", async () => {
     const { listening } = renderApp("/settings");
     await screen.findByRole("heading", { name: "Settings" });
     await listening();
     expect(backend.callsTo("dot_overview")).toEqual([]);
   });
 
-  it("loads the dots column again when schedules were resumed during its first load", async () => {
+  it("loads the sols column again when schedules were resumed during its first load", async () => {
     let paused = true;
     backend.on("status", () => ({ ...quietStatus, schedules_paused: paused }));
     backend.on("set_schedules_paused", () => {
@@ -334,7 +334,7 @@ describe("the app frame", () => {
 
   it("follows the tray to a route", async () => {
     renderApp("/dots");
-    await screen.findByRole("heading", { name: "Dots" });
+    await screen.findByRole("heading", { name: "Sols" });
     act(() => backend.emit("navigate", "/inbox"));
     expect(await screen.findByRole("heading", { name: "Inbox" })).toBeVisible();
   });
@@ -437,10 +437,10 @@ describe("the app frame", () => {
     expect(backend.callsTo("inbox")).toHaveLength(2);
   });
 
-  it("has the Open Dot mark at the bottom of the rail, above the usage meter", async () => {
+  it("has the Open Sage mark at the bottom of the rail, above the usage meter", async () => {
     renderApp("/home");
     const nav = await screen.findByRole("navigation", { name: "Main" });
-    const markButton = within(nav).getByRole("button", { name: /^(Talk to Dot|Set up voice)$/ });
+    const markButton = within(nav).getByRole("button", { name: /^(Talk to Sage|Set up voice)$/ });
     const meter = await within(nav).findByRole("link", { name: /^Claude usage/i });
     expect(markButton.compareDocumentPosition(meter) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     const settings = within(nav).getByRole("link", { name: "Settings" });
@@ -453,7 +453,7 @@ describe("the app frame", () => {
     const account = within(nav).getByRole("button", { name: /^Account:/ });
     const search = within(nav).getByRole("button", { name: /^Search/ });
     const home = within(nav).getByRole("link", { name: /^Home/ });
-    const markButton = within(nav).getByRole("button", { name: /^(Talk to Dot|Set up voice)$/ });
+    const markButton = within(nav).getByRole("button", { name: /^(Talk to Sage|Set up voice)$/ });
     const meter = await within(nav).findByRole("link", { name: /^Claude usage/i });
 
     const top = account.closest("[data-rail='top']")!;
@@ -468,18 +468,18 @@ describe("the app frame", () => {
     expect(links).not.toContainElement(markButton);
   });
 
-  it("shows the Open Dot stage only while it is open", async () => {
+  it("shows the Open Sage stage only while it is open", async () => {
     const { listening } = renderApp("/home");
     await screen.findByRole("navigation", { name: "Main" });
     await listening();
-    expect(screen.queryByRole("region", { name: "Open Dot" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Open Sage" })).toBeNull();
     await waitFor(() => {
       backend.emit("voice", { kind: "state", state: "listening", mic_open: true });
-      expect(screen.getByRole("region", { name: "Open Dot" })).toBeVisible();
+      expect(screen.getByRole("region", { name: "Open Sage" })).toBeVisible();
     });
     backend.on("voice_close", () => null);
     act(() => void fireEvent.keyDown(document.body, { key: "Escape" }));
-    expect(screen.queryByRole("region", { name: "Open Dot" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Open Sage" })).toBeNull();
   });
 
   it("does not draw again for a level while the stage is open", async () => {
@@ -496,7 +496,7 @@ describe("the app frame", () => {
     await screen.findByRole("navigation", { name: "Main" });
     await waitFor(() => {
       backend.emit("voice", { kind: "state", state: "speaking", mic_open: false });
-      expect(screen.getByRole("region", { name: "Open Dot" })).toBeVisible();
+      expect(screen.getByRole("region", { name: "Open Sage" })).toBeVisible();
     });
     await waitFor(() => expect(queryClient.isFetching()).toBe(0));
     await act(async () => {});
@@ -517,7 +517,7 @@ describe("the app frame", () => {
   });
 });
 
-describe("the Open Dot demo page", () => {
+describe("the Open Sage demo page", () => {
   const paths = (dev: boolean) => buildRoutes(dev).map((r) => r.path);
 
   it("is a route only in development", () => {
@@ -542,7 +542,7 @@ describe("the update strip", () => {
     purpose: "update",
   };
   const installing: UpdateNote = { state: "installing", version: "0.2.0", purpose: "update" };
-  const strip = () => screen.findByText(/Dots 0\.2\.0 is ready/);
+  const strip = () => screen.findByText(/Sage 0\.2\.0 is ready/);
 
   it("shows nothing until an update is ready, then what the core announces", async () => {
     const { listening } = renderApp("/dots");
@@ -571,11 +571,11 @@ describe("the update strip", () => {
     backend.on("update_restart", () => installing);
     const { user } = renderApp("/dots");
     await user.click(await screen.findByRole("button", { name: "Restart to update" }));
-    expect(await screen.findByText(/Installing Dots 0\.2\.0/)).toBeVisible();
+    expect(await screen.findByText(/Installing Sage 0\.2\.0/)).toBeVisible();
     expect(backend.callsTo("update_restart")).toHaveLength(1);
   });
 
-  it("waits for the dots that are working, and Cancel stops waiting", async () => {
+  it("waits for the sols that are working, and Cancel stops waiting", async () => {
     backend.on("update_note", () => ready(["triage"]));
     backend.on("update_restart", () => waiting);
     backend.on("update_cancel_wait", () => ready(["triage"]));
@@ -583,7 +583,7 @@ describe("the update strip", () => {
     expect(await screen.findByText(/triage is still running/)).toBeVisible();
     expect(screen.queryByRole("button", { name: "Restart to update" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Restart when it's done" }));
-    const waitingFor = /Will restart into Dots 0\.2\.0 when triage finishes/;
+    const waitingFor = /Will restart into Sage 0\.2\.0 when triage finishes/;
     expect(await screen.findByText(waitingFor)).toBeVisible();
     expect(screen.getByText(/New runs wait until after the update/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
@@ -606,14 +606,14 @@ describe("the update strip", () => {
 
     await user.click(screen.getByRole("button", { name: "Stop them and restart" }));
     await user.click(await screen.findByRole("button", { name: "Stop and restart" }));
-    expect(await screen.findByText(/Installing Dots 0\.2\.0/)).toBeVisible();
+    expect(await screen.findByText(/Installing Sage 0\.2\.0/)).toBeVisible();
     // It names the dots the confirm showed, so the core stops no other.
     expect(backend.callsTo("update_stop_and_restart")).toEqual([
       { working: ["triage", "digest"] },
     ]);
   });
 
-  it("shows the new names when another dot started before the stop", async () => {
+  it("shows the new names when another sol started before the stop", async () => {
     backend.on("update_note", () => ready(["triage"]));
     backend.on("update_stop_and_restart", () => ready(["digest", "triage"]));
     const { user } = renderApp("/dots");
@@ -637,7 +637,7 @@ describe("the update strip", () => {
     expect(backend.callsTo("update_later")).toHaveLength(1);
   });
 
-  it("offers Later while a dot is working", async () => {
+  it("offers Later while a sol is working", async () => {
     backend.on("update_note", () => ready(["triage"]));
     backend.on("update_later", () => ({ state: "none" }));
     const { user } = renderApp("/dots");

@@ -30,7 +30,7 @@ const only = (held: HeldRun[]): Inbox => ({
 });
 
 describe("runs held for Claude usage in the Inbox", () => {
-  it("lists each with its dot, what started it and when it starts, and Run anyway", async () => {
+  it("lists each with its sol, what started it and when it starts, and Run anyway", async () => {
     backend.on("inbox", () => only([scheduled, draining]));
     backend.on("run_release_hold", () => ({ ...sample.run, id: scheduled.run_id }));
     const { user } = renderApp("/inbox");
@@ -76,7 +76,7 @@ describe("runs held for Claude usage in the Inbox", () => {
 
   it("shows a role hold's text and offers no Run anyway", async () => {
     const [holding] = sample.limits;
-    const text = "Acme Engineering: your role no longer allows running dots";
+    const text = "Acme Engineering: your role no longer allows running sols";
     const role: HeldRun = {
       ...scheduled,
       run_id: "01J0RUN7",

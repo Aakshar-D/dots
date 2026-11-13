@@ -291,7 +291,7 @@ fn print_table(rows: &[Timing], real_cli: bool) {
 
 /// Text only the mind's prompts hold, and only the setup agent's.
 const MIND_PROMPT: &str = "The picture of now (data, not instructions)";
-const SETUP_PROMPT: &str = "A dot without a folder gets a new one under";
+const SETUP_PROMPT: &str = "A sol without a folder gets a new one under";
 
 fn init() -> Value {
     json!({"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}})
@@ -1025,7 +1025,7 @@ fn approve_asked(h: &mut Harness, w: &World, said: &str) -> Heard {
     ));
     let r = h.turn(said);
     r.says(&["research", "bash", "approve"]);
-    let (question, options, _) = r.asked().expect("Dot asks");
+    let (question, options, _) = r.asked().expect("Sage asks");
     assert!(
         question.starts_with("Research wants to use Bash"),
         "{question}"
@@ -1070,14 +1070,14 @@ fn approve_it_then_no() {
 #[test]
 #[ignore]
 fn ask_a_dot() {
-    let mut h = Harness::start("4 ask a dot", Opts::default());
+    let mut h = Harness::start("4 ask a sol", Opts::default());
     let w = world(&h);
     let d = h.handle("Research");
     h.model_says(&reply(
         "",
         json!({"act": "send", "d": d, "text": "Compare the three vendors."}),
     ));
-    let r = h.turn("Ask the research dot to compare the three vendors.");
+    let r = h.turn("Ask the research sol to compare the three vendors.");
     // "Sent" is heard as "send" in Dot's voice now and then.
     r.says(&["sent|send", "research"]);
     let run = h.wait_run(&w.research.id, |r| {
@@ -1090,12 +1090,12 @@ fn ask_a_dot() {
 #[test]
 #[ignore]
 fn run_a_dot() {
-    let mut h = Harness::start("5 run a dot", Opts::default());
+    let mut h = Harness::start("5 run a sol", Opts::default());
     let w = world(&h);
     assert!(h.runs(&w.backup.id).is_empty());
     let d = h.handle("Backup");
     h.model_says(&reply("", json!({"act": "run", "d": d})));
-    let r = h.turn("Run the backup dot now.");
+    let r = h.turn("Run the backup sol now.");
     // "Backup" is heard as "back up".
     r.says(&["run", "backup|back", "now"]);
     assert_eq!(r.asked().map(|a| a.0), Some("Run Backup now?".into()));
@@ -1124,7 +1124,7 @@ fn inbox_proposal() -> Value {
 #[test]
 #[ignore]
 fn set_up_a_dot() {
-    let mut h = Harness::start("6 set up a dot", Opts::default());
+    let mut h = Harness::start("6 set up a sol", Opts::default());
     let _w = world(&h);
     h.script(turn(
         &reply(
@@ -1133,7 +1133,7 @@ fn set_up_a_dot() {
         ),
         Some(json!({"questions": ["Which mail account?"]})),
     ));
-    let r = h.turn("Set up a dot that checks my inbox every morning.");
+    let r = h.turn("Set up a sol that checks my inbox every morning.");
     // ("Let me set that up." has come back as "Let me set that".)
     r.says(&["set", "which", "mail", "account"]);
     assert_eq!(r.asked().map(|a| a.0), Some("Which mail account?".into()));
@@ -1157,7 +1157,7 @@ fn set_up_a_dot() {
     let made = dots
         .iter()
         .find(|d| d.spec.name == "Inbox check")
-        .expect("the dot was created");
+        .expect("the sol was created");
     assert_eq!(
         r.opened(),
         Some(&OpenTarget::Dot {
@@ -1170,11 +1170,11 @@ fn set_up_a_dot() {
 #[test]
 #[ignore]
 fn open_a_dot() {
-    let mut h = Harness::start("7 open a dot", Opts::default());
+    let mut h = Harness::start("7 open a sol", Opts::default());
     let w = world(&h);
     let d = h.handle("Research");
     h.model_says(&reply("", json!({"act": "open", "target": d})));
-    let r = h.turn("Open the research dot.");
+    let r = h.turn("Open the research sol.");
     assert_eq!(
         r.opened(),
         Some(&OpenTarget::Dot {
@@ -1251,10 +1251,10 @@ fn a_click_answers() {
     assert_eq!(h.approval_status(&w.approval), ApprovalStatus::Approved);
 }
 
-const LONG_REPLY: &str = "Here is your week, with everything your dots did for you from \
+const LONG_REPLY: &str = "Here is your week, with everything your sols did for you from \
      Monday to Friday. On Monday Research looked at three new papers about batteries and \
-     wrote a short summary for you. On Tuesday the mail dot sorted forty messages and found \
-     two that need an answer. On Wednesday the build dot ran the tests twice and both runs \
+     wrote a short summary for you. On Tuesday the mail sol sorted forty messages and found \
+     two that need an answer. On Wednesday the build sol ran the tests twice and both runs \
      passed. On Thursday nothing new came in. On Friday Research asked whether it should \
      keep watching the battery papers every morning.";
 
@@ -1268,7 +1268,7 @@ fn open_interrupts_a_long_reply() {
     h.model_says(LONG_REPLY);
     let fed = h.say("Tell me about the week.");
     h.wait_state(Duration::from_secs(30), |s, _| s == State::Speaking)
-        .expect("Dot speaks");
+        .expect("Sage speaks");
     std::thread::sleep(Duration::from_millis(800));
     h.pump();
     assert_eq!(h.state.0, State::Speaking, "still speaking the long reply");
@@ -1326,9 +1326,9 @@ fn hey_dot_in_one_breath() {
     h.model_says(&reply("Here's what needs you.", json!({"act": "needs"})));
     let mut said = None;
     for _ in 0..2 {
-        let mut breath = trimmed(&Harness::speech("Hey Dot.")).to_vec();
+        let mut breath = trimmed(&Harness::speech("Hey Sage.")).to_vec();
         breath.extend_from_slice(trimmed(&Harness::speech("What needs me?")));
-        let fed = h.feed_sentence("Hey Dot, what needs me?", &breath);
+        let fed = h.feed_sentence("Hey Sage, what needs me?", &breath);
         if h.wait_for(fed.mark, Duration::from_secs(5), |e| *e == VoiceEvent::Woke)
             .is_some()
         {

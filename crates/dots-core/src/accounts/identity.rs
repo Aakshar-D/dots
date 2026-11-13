@@ -37,11 +37,11 @@ pub async fn ensure_identity(store: &Store, secrets: &dyn SecretStore) -> Result
     let have_marker = text_marker(store, PUBLIC_KEY_MARKER).await?.is_some();
     if !have_marker || secrets.get(IDENTITY_SECRET)?.is_none() {
         let keys = minisign::KeyPair::generate_unencrypted_keypair()
-            .map_err(|e| Error::Invalid(format!("could not make the Dots ID: {e}")))?;
+            .map_err(|e| Error::Invalid(format!("could not make the Sage ID: {e}")))?;
         let secret = keys
             .sk
             .to_box(Some("dots identity secret key"))
-            .map_err(|e| Error::Invalid(format!("could not encode the Dots ID: {e}")))?
+            .map_err(|e| Error::Invalid(format!("could not encode the Sage ID: {e}")))?
             .into_string();
         secrets.put(IDENTITY_SECRET, &secret)?;
         store
@@ -55,7 +55,7 @@ pub async fn ensure_identity(store: &Store, secrets: &dyn SecretStore) -> Result
 pub async fn identity(store: &Store) -> Result<Identity> {
     let public_key = text_marker(store, PUBLIC_KEY_MARKER)
         .await?
-        .ok_or_else(|| Error::Invalid("this install has no Dots ID yet".into()))?;
+        .ok_or_else(|| Error::Invalid("this install has no Sage ID yet".into()))?;
     Ok(Identity {
         fingerprint: key_fingerprint(&public_key)?,
         public_key,
@@ -107,12 +107,12 @@ pub async fn sign_with_identity(
     let public_key = identity(store).await?.public_key;
     let boxed = secrets
         .get(IDENTITY_SECRET)?
-        .ok_or_else(|| Error::Other("the Dots ID's secret key is missing from this PC".into()))?;
+        .ok_or_else(|| Error::Other("the Sage ID's secret key is missing from this PC".into()))?;
     let secret_key = minisign::SecretKeyBox::from_string(&boxed)
         .and_then(|b| b.into_unencrypted_secret_key())
-        .map_err(|e| Error::Other(format!("the Dots ID's secret key is not readable: {e}")))?;
+        .map_err(|e| Error::Other(format!("the Sage ID's secret key is not readable: {e}")))?;
     let public_key = minisign::PublicKey::from_base64(&public_key)
-        .map_err(|e| Error::Other(format!("the Dots ID's public key is not readable: {e}")))?;
+        .map_err(|e| Error::Other(format!("the Sage ID's public key is not readable: {e}")))?;
     let signature = minisign::sign(
         Some(&public_key),
         &secret_key,
@@ -120,6 +120,6 @@ pub async fn sign_with_identity(
         Some(trusted_comment),
         None,
     )
-    .map_err(|e| Error::Other(format!("could not sign with the Dots ID: {e}")))?;
+    .map_err(|e| Error::Other(format!("could not sign with the Sage ID: {e}")))?;
     Ok(signature.into_string())
 }

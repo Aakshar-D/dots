@@ -344,7 +344,7 @@ impl Store {
                 let target = topic(&mut tx, root).await?;
                 if target[0].dot_id != dot_id {
                     return Err(Error::Invalid(
-                        "a message moves only to a topic of the same dot".into(),
+                        "a message moves only to a topic of the same sol".into(),
                     ));
                 }
                 check_changeable(&mut tx, &target).await?;
@@ -400,7 +400,7 @@ impl Store {
         let dot_id = target[0].dot_id.clone();
         if source[0].dot_id != dot_id {
             return Err(Error::Invalid(
-                "a topic merges only into a topic of the same dot".into(),
+                "a topic merges only into a topic of the same sol".into(),
             ));
         }
         check_changeable(&mut tx, &source).await?;

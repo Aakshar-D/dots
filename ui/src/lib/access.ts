@@ -43,8 +43,8 @@ export function accessOf(org: OrgSummary | undefined, orgId: string | null): Acc
 export type Refused = Action | "members";
 
 const ACTION: Record<Refused, string> = {
-  edit: "create or change dots",
-  run: "run dots",
+  edit: "create or change sols",
+  run: "run sols",
   answer: "answer approvals",
   members: "manage members",
 };
@@ -74,7 +74,7 @@ export function notAllowedText(accountName: string, access: Access, p: Refused):
     case "waiting":
       return (
         access.text ??
-        `${accountName}: you aren't on its member list yet. Send your Dots ID to an Admin.`
+        `${accountName}: you aren't on its member list yet. Send your Sage ID to an Admin.`
       );
     case "removed":
       return access.text ?? `${accountName}: you were removed from it.`;

@@ -559,7 +559,7 @@
         "config": {
           "can_start_dots": true,
           "changed": false,
-          "description": "Projects, tasks and to-dos, shared by you and your dots",
+          "description": "Projects, tasks and to-dos, shared by you and your sols",
           "every_dot": true,
           "last_version": 4,
           "origin": {
@@ -601,7 +601,7 @@
         "config": {
           "can_start_dots": true,
           "changed": false,
-          "description": "Projects, tasks and to-dos, shared by you and your dots",
+          "description": "Projects, tasks and to-dos, shared by you and your sols",
           "every_dot": true,
           "last_version": 4,
           "origin": {
@@ -755,7 +755,7 @@
   },
   "BundledOffer": [
     {
-      "description": "Projects, tasks and to-dos, shared by you and your dots",
+      "description": "Projects, tasks and to-dos, shared by you and your sols",
       "kept": {
         "bytes": 24576,
         "id": "01J0APP0",
@@ -769,7 +769,7 @@
       "title": "Projects"
     },
     {
-      "description": "Projects, tasks and to-dos, shared by you and your dots",
+      "description": "Projects, tasks and to-dos, shared by you and your sols",
       "kept": null,
       "name": "projects",
       "title": "Projects"
@@ -810,7 +810,7 @@
       {
         "action": "cannot",
         "path": "data/dump.sql",
-        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "reason": "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.",
         "status": "deleted"
       }
     ],
@@ -825,7 +825,7 @@
       "account": null,
       "configured": false,
       "expires_at": null,
-      "setup_error": "ChatGPT sign-in needs a registered OpenAI client for Dots.",
+      "setup_error": "ChatGPT sign-in needs a registered OpenAI client for Sage.",
       "signing_in": false
     },
     {
@@ -937,7 +937,7 @@
         },
         {
           "cwd": null,
-          "name": "Dots (all dots)",
+          "name": "Sage (all sols)",
           "totals": {
             "cache_creation_tokens": 400000,
             "cache_read_tokens": 3100000,
@@ -1345,7 +1345,7 @@
         "steps": [
           "App passwords need 2-Step Verification. If it is off, turn it on first at myaccount.google.com/security.",
           "Click Open Google App passwords below and sign in.",
-          "Type a name such as Dots and click Create.",
+          "Type a name such as Sage and click Create.",
           "Copy the 16-letter password Google shows. It is shown only once.",
           "Paste it below with your Gmail address. Spaces don't matter.",
           "To stop, click Disconnect here and delete the app password on the same Google page."
@@ -1423,8 +1423,8 @@
         "open_url": "https://github.com/settings/personal-access-tokens/new",
         "steps": [
           "Click Open GitHub below. It opens GitHub's New fine-grained token page; sign in if asked.",
-          "Name the token Dots and pick when it expires.",
-          "Under Repository access, choose the repositories your dots may work on.",
+          "Name the token Sage and pick when it expires.",
+          "Under Repository access, choose the repositories your sols may work on.",
           "Under Permissions, give what they need, for example Contents, Issues and Pull requests: Read and write.",
           "Click Generate token and copy it. GitHub shows it only once.",
           "Paste it below. To stop, click Disconnect here and delete the token on GitHub."
@@ -1485,7 +1485,7 @@
         "open_label": "Open Slack apps",
         "open_url": "https://api.slack.com/apps",
         "steps": [
-          "Click Open Slack apps below and sign in. Click Create New App, then From scratch, name it Dots and pick your workspace.",
+          "Click Open Slack apps below and sign in. Click Create New App, then From scratch, name it Sage and pick your workspace.",
           "Open OAuth & Permissions. Under User Token Scopes add: channels:history, channels:read, groups:history, groups:read, im:history, im:read, mpim:history, mpim:read, users:read and search:read.",
           "Scroll up and click Install to Workspace, then Allow. Your workspace admin may need to approve it.",
           "Copy the User OAuth Token (it starts with xoxp-).",
@@ -1494,7 +1494,7 @@
       },
       "maker": "korotovsky",
       "name": "Slack",
-      "note": "Made by korotovsky, not Slack. Its program runs on this PC and gets your Slack token. Slack's own server needs an app registered by Dots, which is not available yet.",
+      "note": "Made by korotovsky, not Slack. Its program runs on this PC and gets your Slack token. Slack's own server needs an app registered by Sage, which is not available yet.",
       "runtime": {
         "command": "node",
         "download_url": "https://nodejs.org/en/download",
@@ -1620,7 +1620,7 @@
         "open_url": "https://huggingface.co/settings/tokens/new?tokenType=read",
         "steps": [
           "Click Open Hugging Face below and sign in.",
-          "Choose the Read token type and name it Dots.",
+          "Choose the Read token type and name it Sage.",
           "Click Create token and copy it.",
           "Paste it below. To stop, click Disconnect here and delete the token on Hugging Face."
         ]
@@ -1659,11 +1659,11 @@
         "open_label": "Read Notion's guide",
         "open_url": "https://developers.notion.com/docs/mcp",
         "steps": [
-          "Pick the dots that may use Notion below, then click Sign in with Notion.",
+          "Pick the sols that may use Notion below, then click Sign in with Notion.",
           "Your browser opens Notion. Sign in if it asks you to.",
-          "Pick the workspace Dots may use. Then click Allow (or Approve).",
-          "Come back to Dots: it finishes on its own and checks the connection.",
-          "To stop, click Disconnect here. You can also remove Dots from Notion's connected apps."
+          "Pick the workspace Sage may use. Then click Allow (or Approve).",
+          "Come back to Sage: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Sage from Notion's connected apps."
         ]
       },
       "maker": "Notion",
@@ -1705,11 +1705,11 @@
         "open_label": "Read Linear's guide",
         "open_url": "https://linear.app/docs/mcp",
         "steps": [
-          "Pick the dots that may use Linear below, then click Sign in with Linear.",
+          "Pick the sols that may use Linear below, then click Sign in with Linear.",
           "Your browser opens Linear. Sign in if it asks you to.",
-          "Pick the workspace Dots may use. Then click Allow (or Approve).",
-          "Come back to Dots: it finishes on its own and checks the connection.",
-          "To stop, click Disconnect here. You can also remove Dots from Linear's connected apps."
+          "Pick the workspace Sage may use. Then click Allow (or Approve).",
+          "Come back to Sage: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Sage from Linear's connected apps."
         ]
       },
       "maker": "Linear",
@@ -1750,11 +1750,11 @@
         "open_label": "Read Atlassian's guide",
         "open_url": "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/",
         "steps": [
-          "Pick the dots that may use Jira and Confluence below, then click Sign in with Jira and Confluence.",
+          "Pick the sols that may use Jira and Confluence below, then click Sign in with Jira and Confluence.",
           "Your browser opens Jira and Confluence. Sign in if it asks you to.",
-          "Pick the Atlassian site Dots may use. Then click Allow (or Approve).",
-          "Come back to Dots: it finishes on its own and checks the connection.",
-          "To stop, click Disconnect here. You can also remove Dots from Jira and Confluence's connected apps."
+          "Pick the Atlassian site Sage may use. Then click Allow (or Approve).",
+          "Come back to Sage: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Sage from Jira and Confluence's connected apps."
         ]
       },
       "maker": "Atlassian",
@@ -1790,11 +1790,11 @@
         "open_label": "Read Sentry's guide",
         "open_url": "https://docs.sentry.io/product/sentry-mcp/",
         "steps": [
-          "Pick the dots that may use Sentry below, then click Sign in with Sentry.",
+          "Pick the sols that may use Sentry below, then click Sign in with Sentry.",
           "Your browser opens Sentry. Sign in if it asks you to.",
-          "Pick the organization Dots may use. Then click Allow (or Approve).",
-          "Come back to Dots: it finishes on its own and checks the connection.",
-          "To stop, click Disconnect here. You can also remove Dots from Sentry's connected apps."
+          "Pick the organization Sage may use. Then click Allow (or Approve).",
+          "Come back to Sage: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Sage from Sentry's connected apps."
         ]
       },
       "maker": "Sentry",
@@ -1830,11 +1830,11 @@
         "open_label": "Read Doist's guide",
         "open_url": "https://github.com/Doist/todoist-ai",
         "steps": [
-          "Pick the dots that may use Todoist below, then click Sign in with Todoist.",
+          "Pick the sols that may use Todoist below, then click Sign in with Todoist.",
           "Your browser opens Todoist. Sign in if it asks you to.",
-          "Check what Dots may do. Then click Allow (or Approve).",
-          "Come back to Dots: it finishes on its own and checks the connection.",
-          "To stop, click Disconnect here. You can also remove Dots from Todoist's connected apps."
+          "Check what Sage may do. Then click Allow (or Approve).",
+          "Come back to Sage: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Sage from Todoist's connected apps."
         ]
       },
       "maker": "Doist",
@@ -1870,11 +1870,11 @@
         "open_label": "Read Airtable's guide",
         "open_url": "https://support.airtable.com/docs/using-the-airtable-mcp-server",
         "steps": [
-          "Pick the dots that may use Airtable below, then click Sign in with Airtable.",
+          "Pick the sols that may use Airtable below, then click Sign in with Airtable.",
           "Your browser opens Airtable. Sign in if it asks you to.",
-          "Pick the bases Dots may use. Then click Allow (or Approve).",
-          "Come back to Dots: it finishes on its own and checks the connection.",
-          "To stop, click Disconnect here. You can also remove Dots from Airtable's connected apps."
+          "Pick the bases Sage may use. Then click Allow (or Approve).",
+          "Come back to Sage: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Sage from Airtable's connected apps."
         ]
       },
       "maker": "Airtable",
@@ -1911,11 +1911,11 @@
         "open_label": "Read Stripe's guide",
         "open_url": "https://docs.stripe.com/mcp",
         "steps": [
-          "Pick the dots that may use Stripe below, then click Sign in with Stripe.",
+          "Pick the sols that may use Stripe below, then click Sign in with Stripe.",
           "Your browser opens Stripe. Sign in if it asks you to.",
-          "Pick the Stripe account Dots may use. Then click Allow (or Approve).",
-          "Come back to Dots: it finishes on its own and checks the connection.",
-          "To stop, click Disconnect here. You can also remove Dots from Stripe's connected apps."
+          "Pick the Stripe account Sage may use. Then click Allow (or Approve).",
+          "Come back to Sage: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Sage from Stripe's connected apps."
         ]
       },
       "maker": "Stripe",
@@ -1951,11 +1951,11 @@
         "open_label": "Read Cloudflare's guide",
         "open_url": "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
         "steps": [
-          "Pick the dots that may use Cloudflare below, then click Sign in with Cloudflare.",
+          "Pick the sols that may use Cloudflare below, then click Sign in with Cloudflare.",
           "Your browser opens Cloudflare. Sign in if it asks you to.",
-          "Pick the account Dots may use. Then click Allow (or Approve).",
-          "Come back to Dots: it finishes on its own and checks the connection.",
-          "To stop, click Disconnect here. You can also remove Dots from Cloudflare's connected apps."
+          "Pick the account Sage may use. Then click Allow (or Approve).",
+          "Come back to Sage: it finishes on its own and checks the connection.",
+          "To stop, click Disconnect here. You can also remove Sage from Cloudflare's connected apps."
         ]
       },
       "maker": "Cloudflare",
@@ -1988,13 +1988,13 @@
         "open_label": "About Google Workspace APIs",
         "open_url": "https://developers.google.com/workspace",
         "steps": [
-          "Not available yet. Google does not let apps register themselves for sign-in the way the other apps here do: Dots needs its own Google sign-in, reviewed by Google, first.",
+          "Not available yet. Google does not let apps register themselves for sign-in the way the other apps here do: Sage needs its own Google sign-in, reviewed by Google, first.",
           "Until then, Gmail works with an app password (see the Gmail connector)."
         ]
       },
       "maker": "Google",
       "name": "Google Calendar",
-      "note": "Coming soon: needs Google sign-in for Dots.",
+      "note": "Coming soon: needs Google sign-in for Sage.",
       "runtime": null,
       "server": null,
       "server_id": null,
@@ -2018,13 +2018,13 @@
         "open_label": "About Google Workspace APIs",
         "open_url": "https://developers.google.com/workspace",
         "steps": [
-          "Not available yet. Google does not let apps register themselves for sign-in the way the other apps here do: Dots needs its own Google sign-in, reviewed by Google, first.",
+          "Not available yet. Google does not let apps register themselves for sign-in the way the other apps here do: Sage needs its own Google sign-in, reviewed by Google, first.",
           "Until then, Gmail works with an app password (see the Gmail connector)."
         ]
       },
       "maker": "Google",
       "name": "Google Drive",
-      "note": "Coming soon: needs Google sign-in for Dots.",
+      "note": "Coming soon: needs Google sign-in for Sage.",
       "runtime": null,
       "server": null,
       "server_id": null,
@@ -3140,7 +3140,7 @@
       "secret": false,
       "source": null,
       "status": "not_defined",
-      "text": "API_KEY: not in Acme Engineering (dot 'acme-release', mcp:github)"
+      "text": "API_KEY: not in Acme Engineering (sol 'acme-release', mcp:github)"
     },
     {
       "consumer": "mcp:github",
@@ -3148,7 +3148,7 @@
       "secret": false,
       "source": null,
       "status": "denied_by_policy",
-      "text": "PROD_DB_URL: Acme Engineering's policy does not allow it (dot 'acme-release')"
+      "text": "PROD_DB_URL: Acme Engineering's policy does not allow it (sol 'acme-release')"
     },
     {
       "consumer": "shell",
@@ -3156,7 +3156,7 @@
       "secret": true,
       "source": "org",
       "status": "shell_secrets_forbidden",
-      "text": "GITHUB_TOKEN: Acme Engineering does not allow secrets in the shell (dot 'acme-release')"
+      "text": "GITHUB_TOKEN: Acme Engineering does not allow secrets in the shell (sol 'acme-release')"
     },
     {
       "consumer": "shell",
@@ -3164,7 +3164,7 @@
       "secret": false,
       "source": null,
       "status": "org_removed",
-      "text": "dot 'acme-release': its org 'acme-eng' was removed"
+      "text": "sol 'acme-release': its org 'acme-eng' was removed"
     }
   ],
   "GraphStatus": [
@@ -3374,7 +3374,7 @@
   "GuardrailsView": [
     {
       "applies_as": "admin",
-      "compat_note": "Dots 0.4.0 and older can't read a member list with guardrails: they keep the last list they accepted, or show the account as Waiting. Update every Dots in the account first.",
+      "compat_note": "Dots 0.4.0 and older can't read a member list with guardrails: they keep the last list they accepted, or show the account as Waiting. Update every Sage in the account first.",
       "defaults": {
         "member_max_preset": "sandboxed",
         "protected_commands": [
@@ -3490,7 +3490,7 @@
     },
     {
       "applies_as": null,
-      "compat_note": "Dots 0.4.0 and older can't read a member list with guardrails: they keep the last list they accepted, or show the account as Waiting. Update every Dots in the account first.",
+      "compat_note": "Dots 0.4.0 and older can't read a member list with guardrails: they keep the last list they accepted, or show the account as Waiting. Update every Sage in the account first.",
       "defaults": {
         "member_max_preset": "sandboxed",
         "protected_commands": [
@@ -3699,7 +3699,7 @@
         "reason": {
           "account": "Acme Engineering",
           "kind": "role",
-          "text": "Acme Engineering: your role no longer allows running dots"
+          "text": "Acme Engineering: your role no longer allows running sols"
         },
         "run_id": "01J0RUN5",
         "starts_after": null,
@@ -4151,7 +4151,7 @@
       "address": "https://bao.acme.internal",
       "auth": "token",
       "changes": [
-        "path changes from dots to dots2",
+        "path changes from sols to dots2",
         "the policy key changes from 6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607 to 0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9: the key that signs the org's policy is new, so accept this code only if your admin told you the key changed"
       ],
       "existing": true,
@@ -4242,7 +4242,7 @@
       "config": {
         "can_start_dots": true,
         "changed": false,
-        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "description": "Projects, tasks and to-dos, shared by you and your sols",
         "every_dot": true,
         "last_version": 4,
         "origin": {
@@ -4260,7 +4260,7 @@
       "config": {
         "can_start_dots": true,
         "changed": false,
-        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "description": "Projects, tasks and to-dos, shared by you and your sols",
         "every_dot": true,
         "last_version": 4,
         "origin": {
@@ -4701,7 +4701,7 @@
       "config": {
         "can_start_dots": true,
         "changed": false,
-        "description": "Projects, tasks and to-dos, shared by you and your dots",
+        "description": "Projects, tasks and to-dos, shared by you and your sols",
         "every_dot": true,
         "last_version": 4,
         "origin": {
@@ -5175,7 +5175,7 @@
       "kind": "note",
       "read_at": "2026-10-09T12:00:00.000Z",
       "run_id": null,
-      "text": "A follow-up was skipped because the dot is off. It was due Tue 21 Oct 09:00: check CI"
+      "text": "A follow-up was skipped because the sol is off. It was due Tue 21 Oct 09:00: check CI"
     }
   ],
   "ModelOption": [
@@ -5495,7 +5495,7 @@
       "member_count": 4,
       "membership": "waiting",
       "name": "Acme Engineering",
-      "not_member_text": "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.",
+      "not_member_text": "Acme Engineering: you aren't on its member list yet. Send your Sage ID to an Admin.",
       "personal_mode": "fallback",
       "policy_summary": [
         "org: acme-eng",
@@ -5723,7 +5723,7 @@
         "body": "- Watchers",
         "draft": false,
         "id": 41,
-        "name": "Dots 0.2.0",
+        "name": "Sage 0.2.0",
         "prerelease": false,
         "published_at": "2026-10-09T12:00:00.000Z",
         "tag": "v0.2.0",
@@ -5855,9 +5855,9 @@
   "PolicyCeiling": [
     {
       "applies_as": "member",
-      "held": "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin.",
+      "held": "Acme Engineering: this sol's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin.",
       "max_preset": "sandboxed",
-      "policy_refusal": "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner.",
+      "policy_refusal": "Acme Engineering: a Member's sol in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner.",
       "presets": [
         {
           "preset": "read-only",
@@ -5869,7 +5869,7 @@
         },
         {
           "preset": "trusted",
-          "refusal": "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner."
+          "refusal": "Acme Engineering: a Member's sol in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner."
         },
         {
           "preset": "custom",
@@ -5949,7 +5949,7 @@
     "created_at": "2026-10-09T12:00:00.000Z",
     "default_branch": "main",
     "id": "01J0PRJ",
-    "name": "Dots",
+    "name": "Sage",
     "remote": "origin",
     "repo_path": "C:/Users/u/src/dots",
     "team_id": "01J0TEAM",
@@ -5958,13 +5958,13 @@
   "ProjectSpec": [
     {
       "default_branch": "main",
-      "name": "Dots",
+      "name": "Sage",
       "remote": "origin",
       "repo_path": "C:/Users/u/src/dots"
     },
     {
       "default_branch": null,
-      "name": "Dots",
+      "name": "Sage",
       "remote": "origin",
       "repo_path": "C:/Users/u/src/dots"
     }
@@ -6003,7 +6003,7 @@
   },
   "ReleaseNotes": [
     {
-      "body": "- Dots holds background runs when your Claude usage is high.",
+      "body": "- Sage holds background runs when your Claude usage is high.",
       "url": "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0",
       "version": "0.2.0"
     },
@@ -6072,7 +6072,7 @@
   ],
   "RoleRow": [
     {
-      "action": "see this account's dots",
+      "action": "see this account's sols",
       "note": null,
       "permission": "view",
       "roles": [
@@ -6083,8 +6083,8 @@
       ]
     },
     {
-      "action": "create or change dots",
-      "note": "A Member's dot stays within the workspace's guardrails: its tool policy goes no higher than the workspace allows, and protected paths, git actions and commands are refused.",
+      "action": "create or change sols",
+      "note": "A Member's sol stays within the workspace's guardrails: its tool policy goes no higher than the workspace allows, and protected paths, git actions and commands are refused.",
       "permission": "edit_dots",
       "roles": [
         "owner",
@@ -6093,7 +6093,7 @@
       ]
     },
     {
-      "action": "run dots",
+      "action": "run sols",
       "note": null,
       "permission": "run_dots",
       "roles": [
@@ -6113,7 +6113,7 @@
       ]
     },
     {
-      "action": "give secrets to dots",
+      "action": "give secrets to sols",
       "note": null,
       "permission": "grant_entries",
       "roles": [
@@ -6181,7 +6181,7 @@
     },
     {
       "action": "sign the member list",
-      "note": "An Admin signs once the owner has added their Dots ID to the policy's admins.",
+      "note": "An Admin signs once the owner has added their Sage ID to the policy's admins.",
       "permission": "sign_roster",
       "roles": [
         "owner",
@@ -6416,7 +6416,7 @@
       },
       {
         "path": "data/dump.sql",
-        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "reason": "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.",
         "status": "deleted",
         "undoable": false
       }
@@ -6431,7 +6431,7 @@
   "RunChangesUnavailable": {
     "files": [],
     "git": false,
-    "note": "This folder has more than 20000 files to back up, so Dots did not back it up and this run can't be undone.",
+    "note": "This folder has more than 20000 files to back up, so Sage did not back it up and this run can't be undone.",
     "run_id": "01J0RUN",
     "state": "unavailable",
     "undone_at": null
@@ -7497,7 +7497,7 @@
         "origin_run_id": "01J0RUN",
         "project": {
           "default_branch": "main",
-          "name": "Dots",
+          "name": "Sage",
           "remote": "origin",
           "repo_path": "C:/Users/u/src/dots"
         },
@@ -7656,7 +7656,7 @@
         "created_at": "2026-10-09T12:00:00.000Z",
         "dot_id": "01J0DOT",
         "due_at": "2026-11-05T09:00:00.000Z",
-        "error": "dot 'builder': its org 'acme' was removed",
+        "error": "sol 'builder': its org 'acme' was removed",
         "id": "01J0SCHED2",
         "root_run_id": null,
         "run_id": null,
@@ -7711,7 +7711,7 @@
       ],
       "warnings": [
         "Bash asks before each use.",
-        "Frob is left out: Dots does not know this tool."
+        "Frob is left out: Sage does not know this tool."
       ]
     },
     {
@@ -7855,7 +7855,7 @@
     "created_at": "2026-10-09T12:00:00.000Z",
     "dot_id": "01J0DOT",
     "due_at": "2026-11-05T09:00:00.000Z",
-    "error": "dot 'builder': its org 'acme' was removed",
+    "error": "sol 'builder': its org 'acme' was removed",
     "id": "01J0SCHED2",
     "root_run_id": null,
     "run_id": null,
@@ -8440,7 +8440,7 @@
         "workspace_id": "default",
         "workspace_mode": "worktree"
       },
-      "notes": "Left out the extra telepathy: Dots does not know it.",
+      "notes": "Left out the extra telepathy: Sage does not know it.",
       "run_error": "The first run could not start.",
       "run_id": null
     }
@@ -8571,7 +8571,7 @@
     "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",
     "go_back": "0.1.0",
     "log_dir": "C:/Users/u/AppData/Local/dots/logs",
-    "message": "Dots could not start: database disk image is malformed"
+    "message": "Sage could not start: database disk image is malformed"
   },
   "Status": {
     "claude": {
@@ -8627,7 +8627,7 @@
   "Team": [
     {
       "created_at": "2026-10-09T12:00:00.000Z",
-      "description": "Fixes and ships Dots.",
+      "description": "Fixes and ships Sage.",
       "id": "01J0TEAM",
       "members": [
         {
@@ -8648,7 +8648,7 @@
           "created_at": "2026-10-09T12:00:00.000Z",
           "default_branch": "main",
           "id": "01J0PRJ",
-          "name": "Dots",
+          "name": "Sage",
           "remote": "origin",
           "repo_path": "C:/Users/u/src/dots",
           "team_id": "01J0TEAM",
@@ -8681,7 +8681,7 @@
     }
   ],
   "TeamSpec": {
-    "description": "Fixes and ships Dots.",
+    "description": "Fixes and ships Sage.",
     "members": [
       {
         "dot_id": "01J0DOT",
@@ -8766,7 +8766,7 @@
         },
         {
           "path": "data/dump.sql",
-          "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+          "reason": "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.",
           "status": "deleted",
           "undoable": false
         }
@@ -8797,7 +8797,7 @@
       {
         "action": "cannot",
         "path": "data/dump.sql",
-        "reason": "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.",
+        "reason": "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.",
         "status": "deleted"
       }
     ]
@@ -9142,7 +9142,7 @@
     },
     {
       "kind": "trouble",
-      "message": "Open Dot is off. Turn it on in Settings, under Voice."
+      "message": "Open Sage is off. Turn it on in Settings, under Voice."
     },
     {
       "done_bytes": 1000000,
@@ -9379,7 +9379,7 @@
         "from": "billing@acme.com",
         "has_attachment": null,
         "kind": "email",
-        "label": "Dots",
+        "label": "Sage",
         "secret": "GMAIL_APP_PASSWORD",
         "subject": "invoice"
       },
@@ -9605,7 +9605,7 @@
             "otherwise": [],
             "paths": [
               {
-                "label": "Dots",
+                "label": "Sage",
                 "steps": [
                   {
                     "id": "pr",
@@ -9631,7 +9631,7 @@
         ],
         "trigger": {
           "kind": "schedule",
-          "project": "Dots",
+          "project": "Sage",
           "schedule": {
             "catch_up": false,
             "rule": {
@@ -9806,7 +9806,7 @@
       "origin_run_id": "01J0RUN",
       "project": {
         "default_branch": "main",
-        "name": "Dots",
+        "name": "Sage",
         "remote": "origin",
         "repo_path": "C:/Users/u/src/dots"
       },
@@ -10000,7 +10000,7 @@
       "origin_run_id": "01J0RUN",
       "project": {
         "default_branch": "main",
-        "name": "Dots",
+        "name": "Sage",
         "remote": "origin",
         "repo_path": "C:/Users/u/src/dots"
       },
@@ -10359,7 +10359,7 @@
       "origin_run_id": "01J0RUN",
       "project": {
         "default_branch": "main",
-        "name": "Dots",
+        "name": "Sage",
         "remote": "origin",
         "repo_path": "C:/Users/u/src/dots"
       },
@@ -10495,7 +10495,7 @@
       "origin_run_id": null,
       "project": {
         "default_branch": "main",
-        "name": "Dots",
+        "name": "Sage",
         "remote": "origin",
         "repo_path": "C:/Users/u/src/dots"
       },
@@ -10592,7 +10592,7 @@
             "otherwise": [],
             "paths": [
               {
-                "label": "Dots",
+                "label": "Sage",
                 "steps": [
                   {
                     "id": "pr",
@@ -10618,7 +10618,7 @@
         ],
         "trigger": {
           "kind": "schedule",
-          "project": "Dots",
+          "project": "Sage",
           "schedule": {
             "catch_up": false,
             "rule": {
@@ -10854,7 +10854,7 @@
             "otherwise": [],
             "paths": [
               {
-                "label": "Dots",
+                "label": "Sage",
                 "steps": [
                   {
                     "id": "pr",
@@ -10880,7 +10880,7 @@
         ],
         "trigger": {
           "kind": "schedule",
-          "project": "Dots",
+          "project": "Sage",
           "schedule": {
             "catch_up": false,
             "rule": {
@@ -10948,8 +10948,8 @@
       "refusals": {
         "answer": "Acme Engineering: a Viewer in the Platform workspace can't answer approvals. Ask an Admin or Owner.",
         "create_api_keys": "Acme Engineering: a Viewer in the Platform workspace can't create API keys. Ask an Admin or Owner.",
-        "edit": "Acme Engineering: a Viewer in the Platform workspace can't create or change dots. Ask an Admin or Owner.",
-        "run": "Acme Engineering: a Viewer in the Platform workspace can't run dots. Ask an Admin or Owner."
+        "edit": "Acme Engineering: a Viewer in the Platform workspace can't create or change sols. Ask an Admin or Owner.",
+        "run": "Acme Engineering: a Viewer in the Platform workspace can't run sols. Ask an Admin or Owner."
       },
       "scope": "acme-eng",
       "use_rules": {

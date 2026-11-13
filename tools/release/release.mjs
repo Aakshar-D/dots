@@ -99,7 +99,7 @@ export function manifest({ version, signature, installer, date, notes, mac }) {
   }
   return {
     version,
-    notes: notes?.trim() || `Dots ${version}`,
+    notes: notes?.trim() || `Sage ${version}`,
     pub_date: date.toISOString(),
     platforms,
   };

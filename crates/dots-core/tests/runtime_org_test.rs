@@ -25,7 +25,7 @@ use minisign::KeyPair;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
-const REMOVED: &str = "dot 'triage': its org 'acme-eng' was removed";
+const REMOVED: &str = "sol 'triage': its org 'acme-eng' was removed";
 const LEVEL_ONE: &str = "org-plain-level-one-4e1c";
 const LEVEL_TWO: &str = "org-plain-level-two-93ab";
 

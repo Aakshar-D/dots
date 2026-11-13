@@ -81,8 +81,8 @@ export function WebhookPanel({ dot }: { dot: Dot }) {
       ) : (
         <p className="text-sm text-muted-foreground">
           {dot.has_webhook_token
-            ? "This dot has a token. It was shown once, when it was made."
-            : "This dot has no token yet, so its webhook refuses every request."}
+            ? "This sol has a token. It was shown once, when it was made."
+            : "This sol has no token yet, so its webhook refuses every request."}
         </p>
       )}
       <div>

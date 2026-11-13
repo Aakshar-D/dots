@@ -73,7 +73,7 @@ fn it_hears_what_it_says() {
     let speaker = SherpaSpeaker::load(&paths, 2).unwrap();
     let recognizer = SherpaRecognizer::load(&paths).unwrap();
     assert_eq!(speaker.voices(), 10);
-    let said = "I created a dot called Morning Brief.";
+    let said = "I created a sol called Morning Brief.";
     for voice in [0u8, 5] {
         let clip = speaker.speak(said, voice, 1.0).unwrap();
         assert_eq!(clip.rate, 44_100);
@@ -89,12 +89,12 @@ fn hey_dot_is_caught_and_near_misses_are_not() {
     let speaker = SherpaSpeaker::load(&paths, 2).unwrap();
     let mut wake = SherpaWake::load(&paths).unwrap();
     let cases = [
-        ("Hey Dot, what needs me?", Some(WakeWord::HeyDot)),
+        ("Hey Sage, what needs me?", Some(WakeWord::HeyDot)),
         (
-            "Hey Dad, I connected the dots on that report.",
+            "Hey Sam, I saved the message on that page.",
             None::<WakeWord>,
         ),
-        ("Dot, stop.", Some(WakeWord::DotStop)),
+        ("Sage, stop.", Some(WakeWord::DotStop)),
     ];
     let mut wrong = Vec::new();
     for voice in [0u8, 3, 7] {
@@ -160,17 +160,17 @@ fn wake_hit_rates_over_all_voices() {
     let mut wake = SherpaWake::load(&paths).unwrap();
     let mut rates = Vec::new();
     for (sentence, want) in [
-        ("Hey Dot, what needs me?", Some(WakeWord::HeyDot)),
-        ("Dot, stop.", Some(WakeWord::DotStop)),
-        ("Hey Dad, I connected the dots on that report.", None),
+        ("Hey Sage, what needs me?", Some(WakeWord::HeyDot)),
+        ("Sage, stop.", Some(WakeWord::DotStop)),
+        ("Hey Sam, I saved the message on that page.", None),
         (
             "Please stop the music before the dog gets a hot donut.",
             None,
         ),
         // These two woke it now and then with the wake phrase boosted more (see
         // `WAKE_KEYWORDS`).
-        ("Hey, don't touch the hot pot.", None),
-        ("Hey, do that again tomorrow.", None),
+        ("Hey, say that again tomorrow.", None),
+        ("Hey, save each page of the message.", None),
     ] {
         let hits = (0..speaker.voices())
             .filter(|&v| {
@@ -497,10 +497,10 @@ impl Drop for Live {
     }
 }
 
-const LONG_REPLY: &str = "Here is your week, with everything your dots did for you from \
+const LONG_REPLY: &str = "Here is your week, with everything your sols did for you from \
      Monday to Friday. On Monday Research looked at three new papers \
-     about batteries and wrote a short summary for you. On Tuesday the mail dot sorted forty \
-     messages and found two that need an answer. On Wednesday the build dot ran the tests \
+     about batteries and wrote a short summary for you. On Tuesday the mail sol sorted forty \
+     messages and found two that need an answer. On Wednesday the build sol ran the tests \
      twice and both runs passed. On Thursday nothing new came in. On Friday Research asked \
      whether it should keep watching the battery papers every morning.";
 
@@ -527,7 +527,7 @@ fn hey_dot_then_a_sentence_wakes_the_session_and_is_heard() {
     let engines = Engines::load();
     let (mut woke, mut heard, mut misses) = (0, 0, Vec::new());
     for voice in 0..engines.speaker.voices() {
-        let wake = engines.said("Hey Dot.", voice);
+        let wake = engines.said("Hey Sage.", voice);
         let sentence = engines.said("Please read me the first message.", voice);
         let mut live = engines.session(session_settings(true, false));
         assert!(
@@ -599,7 +599,7 @@ fn hey_dot_and_a_sentence_in_one_breath_are_heard_whole_with_the_tone_on() {
     let said = "Please read me the first message.";
     let once = |voice: u8| -> Result<(), String> {
         // The speaker pads each clip with silence; without it the two run together.
-        let mut breath = trimmed(&engines.said("Hey Dot.", voice)).to_vec();
+        let mut breath = trimmed(&engines.said("Hey Sage.", voice)).to_vec();
         breath.extend_from_slice(trimmed(&engines.said(said, voice)));
         let mut live = engines.session(SessionSettings {
             tone: true,
@@ -668,7 +668,7 @@ fn dot_stop_stops_a_long_reply() {
     let engines = Engines::load();
     let (mut stopped, mut misses) = (0, Vec::new());
     for voice in 0..engines.speaker.voices() {
-        let stop = engines.said("Dot, stop.", voice);
+        let stop = engines.said("Sage, stop.", voice);
         let mut live = engines.session(session_settings(true, false));
         assert!(
             resting_with_the_mic_open(&mut live),
@@ -731,7 +731,7 @@ fn talking_over_dot_stops_it_only_when_that_is_on() {
     }
     let voices = engines.speaker.voices();
     println!(
-        "talking over Dot, on: stopped {stopped_on}/{voices}; off: kept speaking {kept_off}/{voices}"
+        "talking over Sage, on: stopped {stopped_on}/{voices}; off: kept speaking {kept_off}/{voices}"
     );
     for miss in &misses {
         println!("  {miss}");
@@ -739,10 +739,10 @@ fn talking_over_dot_stops_it_only_when_that_is_on() {
     assert_eq!(
         kept_off,
         usize::from(voices),
-        "a sentence stopped Dot with the setting off"
+        "a sentence stopped Sage with the setting off"
     );
     assert!(
         stopped_on >= usize::from(voices) * 9 / 10,
-        "talking over Dot stopped it {stopped_on}/{voices}"
+        "talking over Sage stopped it {stopped_on}/{voices}"
     );
 }

@@ -378,7 +378,7 @@ async fn world_with(clock: Arc<dyn Clock>, budget: Budget) -> World {
         .create_team(&TeamSpec {
             org_id: None,
             workspace_id: "default".into(),
-            name: "Dots management".into(),
+            name: "Sage management".into(),
             description: String::new(),
             members: vec![
                 MemberSpec {
@@ -1757,7 +1757,7 @@ async fn a_step_whose_member_was_deleted_fails_instead_of_queueing_again() {
     let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
     assert_eq!(
         wr.error.as_deref(),
-        Some("Fix it: its member is no longer a dot")
+        Some("Fix it: its member is no longer a sol")
     );
     assert_eq!(wr.steps[0].status, StepRunStatus::Failed);
 }
@@ -1834,7 +1834,7 @@ async fn a_branch_on_project_takes_the_matching_path_then_the_step_after_it() {
                     vec![
                         ("Other app", vec![agent("other", "Other", &w.dev, "No.")]),
                         // The project is "Dots": labels match without case.
-                        ("dots", vec![agent("dots", "Ship Dots", &w.dev, "Ship it.")]),
+                        ("dots", vec![agent("dots", "Ship Sage", &w.dev, "Ship it.")]),
                     ],
                     vec![agent("else", "Else", &w.dev, "No.")],
                 ),
@@ -2018,7 +2018,7 @@ async fn the_step_after_a_branch_gets_the_hand_offs_of_the_path_taken() {
     );
     w.engine.set(
         &w.dev.spec.name,
-        vec![Act::Write("fix.txt", "Fixed on Dots.")],
+        vec![Act::Write("fix.txt", "Fixed on Sage.")],
     );
     let flow = w
         .workflow(
@@ -2030,7 +2030,7 @@ async fn the_step_after_a_branch_gets_the_hand_offs_of_the_path_taken() {
                     BranchOn::Project,
                     vec![
                         ("Other app", vec![agent("skip", "Skipped", &w.dev, "No.")]),
-                        ("Dots", vec![agent("fix", "Fix Dots", &w.dev, "Fix it.")]),
+                        ("Dots", vec![agent("fix", "Fix Sage", &w.dev, "Fix it.")]),
                     ],
                     vec![],
                 ),
@@ -2046,7 +2046,7 @@ async fn the_step_after_a_branch_gets_the_hand_offs_of_the_path_taken() {
     // The step on the path gets the hand-off before the branch, numbered in the whole tree.
     let fix = &w.engine.prompts_of("dev")[0];
     for part in [
-        "- Step: Fix Dots (4 of 5)",
+        "- Step: Fix Sage (4 of 5)",
         "#### Write the task\n\nTask: ship the fix.",
     ] {
         assert!(fix.contains(part), "missing {part:?} in:\n{fix}");
@@ -2055,7 +2055,7 @@ async fn the_step_after_a_branch_gets_the_hand_offs_of_the_path_taken() {
     let review = &w.engine.prompts_of("helper")[1];
     for part in [
         "- Step: Review (5 of 5)",
-        "### Earlier steps\n\n#### Write the task\n\nTask: ship the fix.\n\n#### Fix Dots\n\nFixed on Dots.",
+        "### Earlier steps\n\n#### Write the task\n\nTask: ship the fix.\n\n#### Fix Sage\n\nFixed on Sage.",
     ] {
         assert!(review.contains(part), "missing {part:?} in:\n{review}");
     }

@@ -23,7 +23,7 @@ const run = (status: Run["status"], over: Partial<Run> = {}): Run => ({
 const attention = sample.overview.schedule_state!;
 const [openQuestion] = sample.messages;
 
-describe("a dot's status mark", () => {
+describe("a sol's status mark", () => {
   it("is not waiting for a question the person snoozed or marked done", () => {
     const question: Message = { ...openQuestion, dot_id: "dot-a" };
     expect(dotStatus(row("a"), [question])).toBe("waiting");
@@ -56,7 +56,7 @@ describe("a dot's status mark", () => {
     expect(dotStatus(row("a"), [])).toBe("idle");
   });
 
-  it("counts only the dot's own questions that are still open", () => {
+  it("counts only the sol's own questions that are still open", () => {
     const [, answered, , note] = sample.messages;
     const mine = (m: Message): Message => ({ ...m, dot_id: "dot-a" });
     expect(dotStatus(row("a"), [mine(answered), mine(note)])).toBe("idle");
@@ -65,7 +65,7 @@ describe("a dot's status mark", () => {
 });
 
 describe("the column", () => {
-  it("puts the newest activity first and the dots that never ran after, by name", () => {
+  it("puts the newest activity first and the sols that never ran after, by name", () => {
     const at = (h: number) => `2026-10-09T${String(h).padStart(2, "0")}:00:00.000Z`;
     const rows = [
       row("zed"),
@@ -91,7 +91,7 @@ describe("the column", () => {
     expect(lastLine(row("a"))).toBe("");
   });
 
-  it("says when the dot runs next, else when its next follow-up fires", () => {
+  it("says when the sol runs next, else when its next follow-up fires", () => {
     const [pending] = sample.followUps;
     const soon = new Date(Date.now() + 3 * 3_600_000).toISOString();
     const followUp = { ...pending, dot_id: "dot-a", due_at: soon };

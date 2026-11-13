@@ -60,7 +60,7 @@ export function InviteDialog(props: { orgId: string; account: string; onClose: (
             {made
               ? "Send this code to them. It holds their invite, good until " +
                 `${localDateTime(made.invite.expires_at)}.`
-              : "They join with the code Dots makes, then send you their request to approve."}
+              : "They join with the code Sage makes, then send you their request to approve."}
           </DialogDescription>
         </DialogHeader>
         {made ? (

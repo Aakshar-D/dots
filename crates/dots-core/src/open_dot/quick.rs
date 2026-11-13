@@ -171,7 +171,7 @@ fn trimmed(mut w: Vec<String>) -> Vec<String> {
         let n = w.len();
         if n >= 3 && w[n - 2] == "thank" && w[n - 1] == "you" {
             w.truncate(n - 2);
-        } else if n >= 2 && matches!(w[n - 1].as_str(), "please" | "dot" | "thanks") {
+        } else if n >= 2 && matches!(w[n - 1].as_str(), "please" | "sage" | "thanks") {
             w.pop();
         } else {
             break;
@@ -179,9 +179,9 @@ fn trimmed(mut w: Vec<String>) -> Vec<String> {
     }
     loop {
         let n = w.len();
-        if n >= 3 && w[0] == "hey" && w[1] == "dot" {
+        if n >= 3 && w[0] == "hey" && w[1] == "sage" {
             w.drain(..2);
-        } else if n >= 2 && matches!(w[0].as_str(), "dot" | "okay" | "ok" | "um" | "uh") {
+        } else if n >= 2 && matches!(w[0].as_str(), "sage" | "okay" | "ok" | "um" | "uh") {
             w.remove(0);
         } else {
             break;
@@ -299,8 +299,8 @@ const COMMON_WORDS: &[&str] = &[
     "shall", "should", "may", "might", "must", "want", "need", "say", "says", "said", "tell",
     "tells", "told", "ask", "asks", "asked", "send", "sends", "sent", "give", "take", "put", "use",
     "run", "now", "just", "also", "too", "very", "really", "here", "there", "what", "which", "who",
-    "how", "when", "where", "why", "dot", "dots", "please", "message", "answer", "reply", "thanks",
-    "hey", "hi", "hello", "um", "uh",
+    "how", "when", "where", "why", "sol", "sols", "soul", "souls", "sole", "sage", "dot", "dots",
+    "please", "message", "answer", "reply", "thanks", "hey", "hi", "hello", "um", "uh",
 ];
 
 /// Whether `word` (as `words_of` gives it) is too common to name a dot.
@@ -404,14 +404,14 @@ mod tests {
         for (p, want) in &phrases {
             assert_eq!(quick(p, &[]), Some(want.clone()), "bare: {p}");
             assert_eq!(
-                quick(&format!("Hey Dot, {p}"), &[]),
+                quick(&format!("Hey Sage, {p}"), &[]),
                 Some(want.clone()),
-                "hey dot: {p}"
+                "hey sage: {p}"
             );
             assert_eq!(
-                quick(&format!("{p}, dot"), &[]),
+                quick(&format!("{p}, sage"), &[]),
                 Some(want.clone()),
-                "dot: {p}"
+                "sage: {p}"
             );
             assert_eq!(
                 quick(&format!("{p} thanks"), &[]),
@@ -494,7 +494,7 @@ mod tests {
                 }
                 assert!(firm_yes(p, kind), "{kind:?}: {p}");
                 assert!(
-                    firm_yes(&format!("Hey Dot, {p}, please."), kind),
+                    firm_yes(&format!("Hey Sage, {p}, please."), kind),
                     "{kind:?}: {p}"
                 );
                 assert!(
@@ -561,22 +561,22 @@ mod tests {
         assert_eq!(quick("okay", &[]), Some(Quick::Yes));
         assert_eq!(quick("OK.", &[]), Some(Quick::Yes));
         assert_eq!(quick("ok please", &[]), Some(Quick::Yes));
-        assert_eq!(quick("okay dot", &[]), Some(Quick::Yes));
+        assert_eq!(quick("okay sage", &[]), Some(Quick::Yes));
         assert_eq!(quick("please", &[]), None);
         assert_eq!(quick("okay but wait", &[]), None);
         assert_eq!(quick("um", &[]), None);
-        assert_eq!(quick("hey dot", &[]), None);
+        assert_eq!(quick("hey sage", &[]), None);
         assert_eq!(quick("", &[]), None);
     }
 
     #[test]
     fn whole_utterance_only() {
         assert_eq!(quick("yes but use the other server", &[]), None);
-        assert_eq!(quick("stop the backup dot", &[]), None);
+        assert_eq!(quick("stop the backup sol", &[]), None);
         assert_eq!(quick("no idea what you mean", &[]), None);
         let o = opts(&["A", "B"]);
         assert_eq!(quick("the first thing I want is a report", &o), None);
-        assert_eq!(quick("stop the backup dot", &o), None);
+        assert_eq!(quick("stop the backup sol", &o), None);
     }
 
     #[test]
@@ -589,7 +589,7 @@ mod tests {
             "number one",
             "1",
             "option one",
-            "Hey Dot, the first one please",
+            "Hey Sage, the first one please",
         ] {
             assert_eq!(quick(form, &o), Some(Quick::Pick(0)), "{form}");
         }

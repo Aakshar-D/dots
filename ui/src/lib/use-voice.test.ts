@@ -146,7 +146,7 @@ describe("useVoice", () => {
     expect(voiceStore.get().state).toBe(sample.voiceReady.state);
   });
 
-  it("clears a trouble when a status without one arrives or Open Dot listens", async () => {
+  it("clears a trouble when a status without one arrives or Open Sage listens", async () => {
     mount("/home");
     await hear({ kind: "trouble", message: "No microphone." }, () =>
       expect(voiceStore.get().trouble).toBe("No microphone."),
@@ -160,7 +160,7 @@ describe("useVoice", () => {
     expect(voiceStore.get().trouble).toBeNull();
   });
 
-  it("forgets a reply's lines once Open Dot listens again", async () => {
+  it("forgets a reply's lines once Open Sage listens again", async () => {
     mount("/home");
     await hear({ kind: "saying", text: "Nothing needs you." }, () =>
       expect(voiceStore.get().said.map((l) => l.text)).toEqual(["Nothing needs you."]),

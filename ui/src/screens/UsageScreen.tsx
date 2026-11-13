@@ -88,7 +88,7 @@ function Spending() {
   return (
     <section aria-label="Spending" className="flex flex-col gap-1">
       <SpendLine
-        label="Today, all dots"
+        label="Today, all sols"
         spend={spend.today}
         usdCap={spend.caps.daily_usd}
         tokenCap={spend.caps.daily_tokens}
@@ -174,7 +174,7 @@ function UsageTable(props: { period: UsagePeriod; span: string }) {
   if (summary.data.rows.length === 0 && openDot === null) {
     return <p className="text-muted-foreground">No runs in the last {props.span}.</p>;
   }
-  const caption = `Dots' runs in the last ${props.span}`;
+  const caption = `Sage's runs in the last ${props.span}`;
   return (
     // A box that may scroll sideways is a named stop for the keyboard (axe scrollable-region).
     <div
@@ -187,7 +187,7 @@ function UsageTable(props: { period: UsagePeriod; span: string }) {
         <caption className="sr-only">{caption}</caption>
         <thead className="text-xs text-muted-foreground">
           <tr>
-            <th scope="col" className="pb-1 pr-4 font-medium">Dot</th>
+            <th scope="col" className="pb-1 pr-4 font-medium">Sol</th>
             <th scope="col" className="pb-1 pr-4 font-medium">Runs</th>
             <th scope="col" className="pb-1 pr-4 font-medium">Tokens</th>
             <th scope="col" className="pb-1 pr-4 font-medium">Run time</th>
@@ -207,7 +207,7 @@ function UsageTable(props: { period: UsagePeriod; span: string }) {
           {openDot !== null && (
             <tr className="border-t">
               <td className="py-1.5 pr-4 pl-[1.125rem]">
-                Open Dot <span className="text-xs text-muted-foreground">(voice)</span>
+                Open Sage <span className="text-xs text-muted-foreground">(voice)</span>
               </td>
               <td className="py-1.5 pr-4 tabular-nums">{count(openDot.requests, "request")}</td>
               <td className="py-1.5 pr-4 tabular-nums">
@@ -296,7 +296,7 @@ function AllClaudeBody(props: { period: UsagePeriod; span: string }) {
     <>
       <dl className="flex flex-col gap-1">
         <Total label="Your own sessions" totals={data.own} />
-        <Total label="Dots" totals={data.dots} />
+        <Total label="Sols" totals={data.dots} />
         <Total label="All" totals={sum(data.own, data.dots)} />
       </dl>
       {data.projects.length === 0 ? (
@@ -323,7 +323,7 @@ function AllClaudeBody(props: { period: UsagePeriod; span: string }) {
               {data.projects.map((p, i) => (
                 <tr key={p.cwd ?? ""} className="border-t">
                   <td className="py-1.5 pr-4">
-                    <span title={p.cwd ?? "Every dot's runs"}>{names[i]}</span>
+                    <span title={p.cwd ?? "Every sol's runs"}>{names[i]}</span>
                   </td>
                   <td className="py-1.5 pr-4 tabular-nums">{p.totals.messages}</td>
                   <td className="py-1.5 pr-4 tabular-nums">{p.totals.sessions}</td>
@@ -387,7 +387,7 @@ export function UsageScreen() {
           <TabsContent key={p.value} value={p.value} className="flex flex-col gap-3">
             <UsageTable period={p.value} span={p.span} />
             <p className="text-xs text-muted-foreground">
-              A deleted dot's runs are deleted with it and not counted.
+              A deleted sol's runs are deleted with it and not counted.
             </p>
             <AllClaude period={p.value} span={p.span} scanning={scanning} />
           </TabsContent>

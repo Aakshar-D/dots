@@ -240,7 +240,7 @@ fn release(id: u64, tag: &str, prerelease: bool) -> ReleaseInfo {
     ReleaseInfo {
         id,
         tag: tag.into(),
-        name: format!("Dots {}", tag.trim_start_matches('v')),
+        name: format!("Sage {}", tag.trim_start_matches('v')),
         body: "- Notes".into(),
         prerelease,
         draft: false,
@@ -432,7 +432,7 @@ async fn drop_and_withdraw_mark_the_release_withdrawn() {
     flow::drop_trial(&fake, "0.3.0").await.unwrap();
     let dropped = fake.0.borrow().releases[0].clone();
     assert!(dropped.prerelease);
-    assert_eq!(dropped.name, "Dots 0.3.0-rc.1 (withdrawn)");
+    assert_eq!(dropped.name, "Sage 0.3.0-rc.1 (withdrawn)");
     assert!(dropped.body.starts_with(WITHDRAWN_MARKER));
     assert!(!fake.0.borrow().branches.contains_key("release/0.3.0"));
 
@@ -441,7 +441,7 @@ async fn drop_and_withdraw_mark_the_release_withdrawn() {
     flow::withdraw(&fake, &live).await.unwrap();
     let withdrawn = fake.0.borrow().releases[1].clone();
     assert!(withdrawn.prerelease);
-    assert_eq!(withdrawn.name, "Dots 0.2.0 (withdrawn)");
+    assert_eq!(withdrawn.name, "Sage 0.2.0 (withdrawn)");
     assert_eq!(withdrawn.body, format!("{WITHDRAWN_MARKER}\n- Notes"));
     // The page no longer counts it as live.
     let page = page_state(&fake).await.unwrap();

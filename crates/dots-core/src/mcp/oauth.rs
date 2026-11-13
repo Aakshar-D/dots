@@ -31,7 +31,7 @@ pub const SIGN_IN_LIMIT: Duration = Duration::from_secs(5 * 60);
 /// The callback's path on the loopback listener.
 const CALLBACK_PATH: &str = "/callback";
 /// The name Dots registers under.
-const CLIENT_NAME: &str = "Dots";
+const CLIENT_NAME: &str = "Sage";
 /// The MCP protocol version the discovery request names.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -440,7 +440,7 @@ pub async fn auth_server(http: &Client, issuer: &str, loopback_ok: bool) -> Resu
         .any(|m| m == "S256")
     {
         return Err(invalid(
-            "the sign-in server does not offer PKCE (S256), so Dots does not sign in to it",
+            "the sign-in server does not offer PKCE (S256), so Sage does not sign in to it",
         ));
     }
     parse_secure(
@@ -455,7 +455,7 @@ pub async fn auth_server(http: &Client, issuer: &str, loopback_ok: bool) -> Resu
         }
         None => {
             return Err(invalid(
-                "the sign-in server does not let apps register, so Dots cannot sign in to it yet",
+                "the sign-in server does not let apps register, so Sage cannot sign in to it yet",
             ))
         }
     }
@@ -497,7 +497,7 @@ pub async fn register(
         .map_err(|_| unreachable_error())?;
     if !response.status().is_success() {
         return Err(Error::Other(format!(
-            "The sign-in server refused to register Dots (HTTP {}).",
+            "The sign-in server refused to register Sage (HTTP {}).",
             response.status().as_u16()
         )));
     }
@@ -600,7 +600,7 @@ fn signed(
         .as_deref()
         .is_some_and(|t| !t.eq_ignore_ascii_case("bearer"))
     {
-        return Err(invalid("the sign-in server gave a token Dots cannot use"));
+        return Err(invalid("the sign-in server gave a token Sage cannot use"));
     }
     if answer.access_token.is_empty() {
         return Err(invalid("the sign-in server gave an empty token"));
@@ -835,12 +835,12 @@ async fn callback_handler(State(cb): State<Arc<Callback>>, RawQuery(raw): RawQue
     if ok {
         page(
             StatusCode::OK,
-            "Signed in. You can close this tab and go back to Dots.",
+            "Signed in. You can close this tab and go back to Sage.",
         )
     } else {
         page(
             StatusCode::OK,
-            "Sign-in did not finish. Go back to Dots to try again.",
+            "Sign-in did not finish. Go back to Sage to try again.",
         )
     }
 }
@@ -857,8 +857,8 @@ fn page(status: StatusCode, message: &str) -> Response {
             ),
         ],
         Html(format!(
-            "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Dots sign-in</title>\
-             <body><h1>Dots</h1><p>{message}</p></body></html>"
+            "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Sage sign-in</title>\
+             <body><h1>Sage</h1><p>{message}</p></body></html>"
         )),
     )
         .into_response()

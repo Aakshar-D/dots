@@ -67,7 +67,7 @@ export function SetupCard(props: {
     (sendable && preview.isError ? errorMessage(preview.error) : undefined);
 
   function chooseFolder() {
-    open({ directory: true, title: "Choose the folder the dot works in" }).then((picked) => {
+    open({ directory: true, title: "Choose the folder the sol works in" }).then((picked) => {
       if (typeof picked === "string") set("folder", picked);
     }, notifyError);
   }
@@ -102,7 +102,7 @@ export function SetupCard(props: {
       <Field
         label="What it does"
         htmlFor={`${id}-instructions`}
-        error={proposal.instructions.trim() === "" ? "Say what the dot should do." : undefined}
+        error={proposal.instructions.trim() === "" ? "Say what the sol should do." : undefined}
       >
         <Textarea
           id={`${id}-instructions`}

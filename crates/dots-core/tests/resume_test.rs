@@ -413,7 +413,7 @@ async fn resume_parked_on_non_awaiting_parent_conflicts_and_changes_nothing() {
     assert_eq!(
         store.get_approval(&a.id).await.unwrap().apply_state,
         None,
-        "nothing was queued for Dots to perform"
+        "nothing was queued for Sage to perform"
     );
     assert_eq!(
         store.get_run(&parent.id).await.unwrap().status,
@@ -806,7 +806,7 @@ async fn a_resumed_run_fails_before_the_engine_starts_when_its_row_names_no_dots
     );
     let child = wait_status(&e.store, &child.id, RunStatus::Failed, 5).await;
     let error = child.error.unwrap_or_default();
-    assert!(error.contains("not a dots worktree"), "{error}");
+    assert!(error.contains("not a sols worktree"), "{error}");
     // The scripted engine records an event as soon as it starts.
     let events = e.store.list_events(&child.id, 0).await.unwrap();
     assert!(events.is_empty(), "{events:?}");

@@ -149,8 +149,8 @@ async fn projects_is_installed_once_for_every_dot_and_removing_it_lasts() {
     apps.sync_bundled().await.unwrap();
     let first = config(&apps).await;
     assert_eq!(first.origin, AppOrigin::Bundled { release: release() });
-    assert!(first.every_dot, "Projects is on for every dot");
-    assert!(!first.can_start_dots, "starting dots waits for the person");
+    assert!(first.every_dot, "Projects is on for every sol");
+    assert!(!first.can_start_dots, "starting sols waits for the person");
     assert_eq!(first.version, 1);
     assert!(apps.bundled_offers().await.unwrap().is_empty());
 
@@ -255,7 +255,7 @@ async fn projects_the_person_changed_or_rolled_back_is_left_as_it_is() {
     apps.sync_bundled().await.unwrap();
     let now = config(&apps).await;
     assert!(now.changed);
-    assert_eq!(now.version, 2, "Dots no longer updates it");
+    assert_eq!(now.version, 2, "Sage no longer updates it");
 
     // A bundled update the person rolled back stays rolled back.
     let (_dir, _store, apps) = fixture().await;

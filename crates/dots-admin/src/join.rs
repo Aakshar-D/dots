@@ -86,7 +86,7 @@ pub(crate) fn join_code_command(args: &[String], io: &mut Io<'_>) -> Result<()> 
             code.source.shown_address()
         ),
         format!(
-            "policy key fingerprint: {}; Dots shows it on joining, so tell people to expect it",
+            "policy key fingerprint: {}; Sage shows it on joining, so tell people to expect it",
             key_fingerprint(&code.policy_key).map_err(core_failed)?
         ),
     ];

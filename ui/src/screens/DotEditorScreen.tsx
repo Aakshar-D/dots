@@ -161,7 +161,7 @@ function Editor(props: {
       {save.isError && <ErrorNote error={save.error} />}
       {checkError && (
         <ErrorNote
-          error={`Couldn't check what you may do with this dot: ${errorMessage(checkError)}`}
+          error={`Couldn't check what you may do with this sol: ${errorMessage(checkError)}`}
         />
       )}
       {tried && Object.keys(errors).length > 0 && (
@@ -234,20 +234,20 @@ function NewDot() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const blank = useQuery({ queryKey: keys.newDotSpec, queryFn: commands.newDotSpec });
-  if (blank.isPending) return <Page title="New dot" />;
+  if (blank.isPending) return <Page title="New sol" />;
   if (blank.isError) {
     return (
-      <Page title="New dot">
+      <Page title="New sol">
         <ErrorNote error={blank.error} />
       </Page>
     );
   }
   return (
     <Editor
-      title="New dot"
+      title="New sol"
       initial={blank.data}
       existing={null}
-      saveLabel="Create dot"
+      saveLabel="Create sol"
       onSave={async (spec, org, workspace) => {
         // Personal sends no org, and the default workspace sends none.
         const dot = await commands.createDot(spec, org, workspace);
@@ -255,8 +255,8 @@ function NewDot() {
         qc.setQueryData(keys.dot(dot.id), dot);
         toast.success(
           spec.workspace_mode === "worktree" && dot.workspace_mode === "folder"
-            ? "Dot created. Runs in the folder itself, because it is not a git repository."
-            : "Dot created",
+            ? "Sol created. Runs in the folder itself, because it is not a git repository."
+            : "Sol created",
         );
         void navigate(`/dots/${dot.id}`);
       }}
@@ -297,7 +297,7 @@ function ExistingDot({ dotId }: { dotId: string }) {
       // Removed first: the deleted dot must not be loaded again.
       qc.removeQueries({ queryKey: keys.dot(dotId) });
       invalidateDots(qc);
-      toast.success("Dot deleted");
+      toast.success("Sol deleted");
       void navigate("/home");
     },
     onError: notifyError,
@@ -309,7 +309,7 @@ function ExistingDot({ dotId }: { dotId: string }) {
   // a switch the query is off, and the switch's answer is the copy.
   const refreshing = dot.isFetching && !dot.isFetchedAfterMount;
   if (dot.data === undefined || refreshing) {
-    return <Page title="Dot">{dot.isError && <ErrorNote error={dot.error} />}</Page>;
+    return <Page title="Sol">{dot.isError && <ErrorNote error={dot.error} />}</Page>;
   }
   return (
     <Editor
@@ -337,8 +337,8 @@ function ExistingDot({ dotId }: { dotId: string }) {
         <>
           <ConfirmButton
             title={`Delete ${dot.data.name}?`}
-            description="The dot, its runs, their transcripts and its memories are deleted. Worktrees and branches its runs left behind stay in your repository."
-            confirmLabel="Delete the dot"
+            description="The sol, its runs, their transcripts and its memories are deleted. Worktrees and branches its runs left behind stay in your repository."
+            confirmLabel="Delete the sol"
             onConfirm={() => remove.mutate()}
             disabled={remove.isPending}
           >

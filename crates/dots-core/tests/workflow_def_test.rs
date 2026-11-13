@@ -749,7 +749,7 @@ fn a_branch_s_labels_are_given_once() {
         "step \"Branch br\": every path needs a label"
     );
     assert_eq!(
-        refusal(&labels(&["Dots", "dots "])),
+        refusal(&labels(&["Dots", "sols "])),
         "step \"Branch br\": two paths have the label \"dots\""
     );
     assert_eq!(

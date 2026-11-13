@@ -52,7 +52,7 @@ async function add(user: UserEvent, kind: string, title: string) {
   return screen.findByRole("dialog", { name: title });
 }
 
-describe("a dot's Watchers tab", () => {
+describe("a sol's Watchers tab", () => {
   it("lists each watcher with its summary, last event and state, after Memory", async () => {
     holding([folder, email, github]);
     await openTab();
@@ -74,12 +74,12 @@ describe("a dot's Watchers tab", () => {
     expect(within(g).getByText("paused: too many runs")).toBeVisible();
   });
 
-  it("says what a watcher is for when the dot has none", async () => {
+  it("says what a watcher is for when the sol has none", async () => {
     holding([]);
     await openTab();
     expect(
       await screen.findByText(
-        "No watchers. A watcher starts this dot when a file changes, an email arrives or something happens on GitHub.",
+        "No watchers. A watcher starts this sol when a file changes, an email arrives or something happens on GitHub.",
       ),
     ).toBeVisible();
   });
@@ -111,12 +111,12 @@ describe("a dot's Watchers tab", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("notes a folder the dot cannot open files in", async () => {
+  it("notes a folder the sol cannot open files in", async () => {
     holding([], { ...sample.dot, workdir: "C:\\work", workspace_mode: "folder" });
     const { user } = await openTab();
     const dialog = await add(user, "Folder", "New folder watcher");
     await user.click(within(dialog).getByRole("button", { name: "Browse…" }));
-    const note = "The dot can only open files inside its folder (C:\\work); this folder is outside it.";
+    const note = "The sol can only open files inside its folder (C:\\work); this folder is outside it.";
     expect(await within(dialog).findByText(note)).toBeVisible();
     const path = within(dialog).getByLabelText("Folder");
     await user.clear(path);
@@ -321,7 +321,7 @@ describe("a dot's Watchers tab", () => {
     expect(screen.getByRole("dialog", { name: "New folder watcher" })).toBeVisible();
   });
 
-  it("switches a watcher off, on, and resumes one Dots paused", async () => {
+  it("switches a watcher off, on, and resumes one Sage paused", async () => {
     holding([folder, email, { ...github, paused_reason: null, enabled: false }]);
     backend.on("watcher_set_enabled", () => folder);
     backend.on("watcher_resume", () => email);

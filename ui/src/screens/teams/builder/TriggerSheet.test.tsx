@@ -98,7 +98,7 @@ describe("the trigger's settings sheet", () => {
     expect(task).toHaveAttribute("maxlength", "8000");
     await user.type(task, "Update the dependencies.");
     const project = sheet.getByRole("combobox", { name: "Project" });
-    expect(project).toHaveValue("Dots");
+    expect(project).toHaveValue("Sage");
     await user.selectOptions(project, "Site");
     expect(trigger()).toHaveTextContent("Update the dependencies. · on Site");
     expect(await saved(user)).toEqual({
@@ -138,7 +138,7 @@ describe("the trigger's settings sheet", () => {
     expect(project).toHaveValue("");
     expect(within(project).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "None: the call names it",
-      "Dots",
+      "Sage",
       "Site",
     ]);
     await user.selectOptions(project, "Site");
@@ -175,12 +175,12 @@ describe("the trigger's settings sheet", () => {
       "Update the dependencies.",
     );
     expect(sheet.getByRole("combobox", { name: "Project when the call has none" })).toHaveValue(
-      "Dots",
+      "Sage",
     );
     expect(await saved(user)).toEqual({
       kind: "webhook",
       task: "Update the dependencies.",
-      project: "Dots",
+      project: "Sage",
     });
   });
 });

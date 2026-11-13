@@ -43,7 +43,7 @@ describe("the model picker", () => {
     expect(screen.getByLabelText("Saved")).toHaveTextContent(/^x-1$/);
   });
 
-  it("offers Auto first for a Claude dot, with what it does", async () => {
+  it("offers Auto first for a Claude sol, with what it does", async () => {
     const user = userEvent.setup();
     render(<Held options={claudeModels} start="sonnet" />);
     const select = screen.getByLabelText("Model");

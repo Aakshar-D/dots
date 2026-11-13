@@ -109,7 +109,7 @@ pub(crate) fn keygen_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     say(io.out, &format!("key fingerprint: {}", keys.fingerprint))?;
     say(
         io.out,
-        "Keep policy.key offline. Join codes carry policy.pub; Dots shows the fingerprint above, \
+        "Keep policy.key offline. Join codes carry policy.pub; Sage shows the fingerprint above, \
          not the key id in policy.pub's comment.",
     )
 }

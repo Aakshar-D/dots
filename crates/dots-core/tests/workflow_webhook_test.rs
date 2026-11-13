@@ -54,7 +54,7 @@ impl Rt {
             .create(&TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: vec![member(&dev), member(&other)],
             })
@@ -455,7 +455,7 @@ async fn a_workflow_without_a_webhook_trigger_turned_off_or_with_a_problem_is_40
             &TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: vec![member(&t.dev)],
             },

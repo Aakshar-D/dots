@@ -1,23 +1,23 @@
 # Accounts
 
-An account is a group of people and dots that belong together, such as your team or company.
-Your own dots live in **Personal**, which is always there. This guide explains how Dots knows who
+An account is a group of people and sols that belong together, such as your team or company.
+Your own sols live in **Personal**, which is always there. This guide explains how Sage knows who
 you are, how to switch between accounts, and how to join one.
 
 This guide covers your identity, the switcher, joining (with an invite or by asking), the member
 list with roles, workspaces, and API keys.
 
-## Your Dots ID
+## Your Sage ID
 
-The first time Dots starts, it makes a key pair for you on this PC. The private half never leaves
-the PC. The public half is your **Dots ID**, shown as a short **fingerprint** so it is easy to read
+The first time Sage starts, it makes a key pair for you on this PC. The private half never leaves
+the PC. The public half is your **Sage ID**, shown as a short **fingerprint** so it is easy to read
 out and compare.
 
 - Open **Settings › Profile** to see your fingerprint.
-- Choose **Copy my Dots ID** to copy it. Send it to an account's admin when they ask who you are.
-- Your fingerprint stays the same across restarts and updates. It changes if you delete the Dots
+- Choose **Copy my Sage ID** to copy it. Send it to an account's admin when they ask who you are.
+- Your fingerprint stays the same across restarts and updates. It changes if you delete the Sage
   data folder, or if this PC's saved key is lost from Windows Credential Manager (for example after
-  a reset of your Windows profile). Dots then makes a new key, and your Dots ID is a new one: send
+  a reset of your Windows profile). Sage then makes a new key, and your Sage ID is a new one: send
   it to your admins again.
 
 ## Your profile
@@ -30,24 +30,24 @@ switcher in the rail come from that name. Save the name and the initials change 
 At the top of the rail is the account switcher. Click it to see **Personal** and every account you
 have joined.
 
-- Pick one and **Home** shows only that account's dots. Your pick is remembered. If a dot was
-  open, Home opens the dot you last opened, if it is in the account you picked, or else that
-  account's first dot.
-- A new dot you create starts in the selected account.
-- If you follow a link to a dot in another account, Dots switches to that account for you.
+- Pick one and **Home** shows only that account's sols. Your pick is remembered. If a sol was
+  open, Home opens the sol you last opened, if it is in the account you picked, or else that
+  account's first sol.
+- A new sol you create starts in the selected account.
+- If you follow a link to a sol in another account, Sage switches to that account for you.
 - Next to each account the menu shows how many things are waiting for you there.
 
 If the account has more than one workspace, they are listed under it in the switcher. Pick one and
-**Home** shows only that workspace's dots, and a new dot starts in it. Your pick is remembered.
+**Home** shows only that workspace's sols, and a new sol starts in it. Your pick is remembered.
 
-Switching only narrows **Home**'s dot list and where new dots start.
+Switching only narrows **Home**'s sol list and where new sols start.
 **Inbox**, **Needs you**, notifications, runs and Usage always show everything,
 from every account and workspace, so an approval is never hidden because you are looking at another
 one.
 
 ## Joining an account
 
-Your admin gives you a join code. See [Setting up Dots for an organisation](vault-admin.md) for
+Your admin gives you a join code. See [Setting up Sage for an organisation](vault-admin.md) for
 what the admin does.
 
 1. Go to **Settings › Accounts** and choose **Join an account**. (**Join an account** in the
@@ -65,8 +65,8 @@ An admin can invite you by email. They send you an invite code or a `.dotsorg` f
 invite expires. An invite is good for 7 days. If it has expired, ask for a new one.
 
 Fill in your name and email in **Settings › Profile** first, because your request carries them.
-After you join, Dots shows a **request code**. Choose **Copy request code** and send it to the
-admin. They approve you in Dots, and you become Active at the next refresh.
+After you join, Sage shows a **request code**. Choose **Copy request code** and send it to the
+admin. They approve you in Sage, and you become Active at the next refresh.
 
 If the Join dialog shows a key for this PC instead of a sign-in, send that key to the admin first.
 The join waits until they have added it; then choose **Try again**, the join completes, and the
@@ -74,8 +74,8 @@ request code appears.
 
 ### Asking for access
 
-If your Dots ID is not on the member list, the account shows Waiting. Choose **Request access** to
-get a request code, copy it, and send it to an Admin. Dots checks again on its normal refresh, or
+If your Sage ID is not on the member list, the account shows Waiting. Choose **Request access** to
+get a request code, copy it, and send it to an Admin. Sage checks again on its normal refresh, or
 you can choose Refresh. Nothing is lost while you wait.
 
 If you see **waiting for the admin to add this PC's key**, the join worked but the admin has not
@@ -83,10 +83,10 @@ added your key yet. Nothing is wrong on your side. Once they have, open **Settin
 and choose Refresh on the account.
 
 **Manage accounts** in the switcher opens **Settings › Accounts**, where you can update an
-account's sign-in or remove it (leave it). If you remove the account that is selected, Dots goes back to
+account's sign-in or remove it (leave it). If you remove the account that is selected, Sage goes back to
 **Personal**.
 
-The dots of an account you removed are not deleted. They appear under **Personal**, marked
+The sols of an account you removed are not deleted. They appear under **Personal**, marked
 **account removed**, so you can still open them, turn them off or delete them. They can't run until
 you join the account again, and then they move back to it.
 
@@ -98,11 +98,11 @@ Some accounts keep a **member list**, signed by the account's Owner or an Admin.
 you have a role:
 
 - **Owner** and **Admin** can do everything a Member can, and change the member list.
-- **Member** can make and edit the account's dots, run them, answer approvals and grant the
+- **Member** can make and edit the account's sols, run them, answer approvals and grant the
   account's values.
-- **Viewer** can look at the account's dots and runs, but not change or run them. **New dot**,
+- **Viewer** can look at the account's sols and runs, but not change or run them. **New sol**,
   **Save** and the approval buttons are greyed out with the reason. A manual run, an app's start
-  of a dot and a webhook call are refused (the webhook answers HTTP 403 with the reason). A
+  of a sol and a webhook call are refused (the webhook answers HTTP 403 with the reason). A
   scheduled run, watcher or follow-up waits in the Inbox under **Waiting to run**, with the
   reason, and runs by itself when your role is back to Member or above.
 
@@ -111,44 +111,44 @@ you have a role:
 Next to each account you see one of these states:
 
 - **Active**: you are on the list, with your role.
-- **Waiting**: the account has a member list and you are not on it yet. Choose **Copy my Dots ID**
+- **Waiting**: the account has a member list and you are not on it yet. Choose **Copy my Sage ID**
   (in **Settings › Profile**) and send it to your admin. Nothing is lost while you wait. When they
   have added you, choose Refresh on the account.
-- **Waiting, "this PC's Dots ID changed"**: the saved key on this PC was lost, so your Dots ID is a
+- **Waiting, "this PC's Sage ID changed"**: the saved key on this PC was lost, so your Sage ID is a
   new one. Send the new ID to an Admin. Nothing is wiped meanwhile.
-- **Removed**: an admin took you off the list. Dots deletes that account's secrets from this PC.
-  Your dots stay. Join the account again to come back.
+- **Removed**: an admin took you off the list. Sage deletes that account's secrets from this PC.
+  Your sols stay. Join the account again to come back.
 
-While you are waiting or removed you can still clean up: switch the account's dots off or delete
+While you are waiting or removed you can still clean up: switch the account's sols off or delete
 them. Turning them on, editing them and changing their watchers wait until you are on the list
 again. To drop the account altogether, leave it: **Remove** it in **Settings › Accounts**.
 
 Owners and Admins also see a **Members** tab on each account. It lists the members and lets an
 Admin invite people, approve requests, change roles and remove people. See
-[Setting up Dots for an organisation](vault-admin.md), section 10. Owners can only be changed with
+[Setting up Sage for an organisation](vault-admin.md), section 10. Owners can only be changed with
 `dots-admin`.
 
 ## Workspaces
 
 A workspace is a part of an account, such as a team or a project. Every account has **Default**.
-Your dots are listed in one workspace. Dots you made before workspaces are in Default.
+Your sols are listed in one workspace. Sage you made before workspaces are in Default.
 
 - On an account with a member list, an Owner or Admin sees every workspace. A Member or Viewer
   sees only the workspaces the list puts them in. Their role there can narrow what they can do:
   in a workspace where you are a **viewer** you can look but not change or run, even if you are a
-  Member of the account. A workspace you are not in is hidden. If you open one of its dots by a
+  Member of the account. A workspace you are not in is hidden. If you open one of its sols by a
   link, it refuses everything except delete and turning it off: "... you aren't in the ...
   workspace. Ask an Admin or Owner to add you."
 - An Owner or Admin adds, renames and deletes workspaces and sets who is in each, on the account's
-  **Workspaces** tab and **Members** tab. Deleting a workspace moves its dots and teams to Default.
-  The **Workspaces** tab also shows each workspace's `use` rules (which variable names its dots may
-  use). Only `dots-admin` changes those. See [Setting up Dots for an
+  **Workspaces** tab and **Members** tab. Deleting a workspace moves its sols and teams to Default.
+  The **Workspaces** tab also shows each workspace's `use` rules (which variable names its sols may
+  use). Only `dots-admin` changes those. See [Setting up Sage for an
   organisation](vault-admin.md), section 10.
 - **Personal** has workspaces too. They are only on this PC. Add, rename and delete them in
   **Settings › Accounts**, under Personal.
-- To move a dot, change its **Workspace** in the dot's editor. It moves at once. You need Member
-  rights in both workspaces. A dot can move within its account only, and not while it is in a team.
-  A team's dots must be in the team's workspace.
+- To move a sol, change its **Workspace** in the sol's editor. It moves at once. You need Member
+  rights in both workspaces. A sol can move within its account only, and not while it is in a team.
+  A team's sols must be in the team's workspace.
 
 An account without a member list has only Default, and Personal is not narrowed.
 
@@ -156,36 +156,36 @@ An account without a member list has only Default, and Personal is not narrowed.
 
 An Owner or Admin can put guardrails on a workspace. They mark what is critical there: paths like
 `.github/**` or `**/migrations/**`, git actions like pushing to `main`, and commands like
-`rm -rf` or `terraform apply`. They also set the highest tool policy a Member's dot may use there,
+`rm -rf` or `terraform apply`. They also set the highest tool policy a Member's sol may use there,
 Sandboxed by default.
 
-What they do depends on your role in the dot's workspace:
+What they do depends on your role in the sol's workspace:
 
-- **Member**: your dot can't do a protected thing. Dots refuses the call and tells the dot "This
+- **Member**: your sol can't do a protected thing. Sage refuses the call and tells the sol "This
   needs an Admin: pushing to main or master is protected in the Payments workspace." You can't
-  approve such a call or save a rule that allows it. Your dots can't use a policy above the
+  approve such a call or save a rule that allows it. Your sols can't use a policy above the
   workspace's ceiling: **Save** and **Run now** are refused with the reason, for example "a
-  Member's dot in the Payments workspace may use up to Sandboxed, and this policy is Trusted". A
-  dot that was already above it waits in the Inbox under **Waiting to run** until you lower its
+  Member's sol in the Payments workspace may use up to Sandboxed, and this policy is Trusted". A
+  sol that was already above it waits in the Inbox under **Waiting to run** until you lower its
   policy, or your role rises.
-- **Owner** or **Admin**: your dot always asks before a protected thing, even when its policy
+- **Owner** or **Admin**: your sol always asks before a protected thing, even when its policy
   would allow it, and no rule can be saved for it. There is no ceiling.
-- **Viewer**: nothing changes, since a Viewer's dots don't run.
+- **Viewer**: nothing changes, since a Viewer's sols don't run.
 
 Personal, an account without a member list, and a workspace without guardrails have none.
 
 ## API keys
 
-An API key lets an app or a script on this PC list a workspace's dots, run one, and read how a run
-went. Keys are made and used in Dots on this PC. They never leave it.
+An API key lets an app or a script on this PC list a workspace's sols, run one, and read how a run
+went. Keys are made and used in Sage on this PC. They never leave it.
 
 ### Making a key
 
 1. Open **Settings › Accounts**. On an account, open its **API keys** tab. For Personal, the
    **API keys** list is under **Personal**.
 2. Choose **Create key**, give it a name and pick the workspace.
-3. The key appears once, with a **Copy** button and a ready `curl` line (`curl.exe` on Windows): "Copy it now. Dots won't
-   show it again." Dots keeps only the first 12 characters, to recognise it by, and a hash. Close
+3. The key appears once, with a **Copy** button and a ready `curl` line (`curl.exe` on Windows): "Copy it now. Sage won't
+   show it again." Sage keeps only the first 12 characters, to recognise it by, and a hash. Close
    the dialog and the key is gone. If you lose it, revoke it and make another.
 
 A key looks like `dots_sk_` followed by 43 letters and digits. Treat it like a password.
@@ -239,24 +239,24 @@ curl -X POST -H "Authorization: Bearer dots_sk_..." -d '{"order":"A-17"}' \
 curl -H "Authorization: Bearer dots_sk_..." http://127.0.0.1:PORT/v1/runs/RUN_ID
 ```
 
-- `GET /v1/dots` lists the dots of the key's workspace: `id`, `name`, `enabled`, `org_id` and
+- `GET /v1/dots` lists the sols of the key's workspace: `id`, `name`, `enabled`, `org_id` and
   `workspace_id`.
 - `POST /v1/dots/{id}/trigger` starts a run. The body is the run's payload, the same as for the
-  dot's webhook, up to 256 KB. It answers 202 with `{"run_id": "..."}`. A disabled dot answers
+  sol's webhook, up to 256 KB. It answers 202 with `{"run_id": "..."}`. A disabled sol answers
   409 "dot is disabled"; a larger body answers 413 "body must be 256 KB or less".
 - `GET /v1/runs/{id}` gives the run's status: `id`, `dot_id`, `status`, `queued_at`, `started_at`,
   `ended_at`, `summary` and `error`. Only status, no events.
 
 What a key can reach:
 
-- Only the dots and runs of **its own workspace**. A dot or run anywhere else, or one that does not
+- Only the sols and runs of **its own workspace**. A sol or run anywhere else, or one that does not
   exist, answers 404 "Not found." so a caller can't tell them apart.
 - Every request checks your **current role** in that workspace. A Viewer key can list and read
   runs, but a trigger answers 403 with the reason. If your role changes, or you are removed from
   the account, the key follows at once.
 - A key that is wrong, revoked, or whose workspace was deleted gets the same 401: "That API key
-  isn't valid. Make a new one in Dots."
-- Runs started this way show as **API** in Dots. They are background runs: like webhooks, they wait
+  isn't valid. Make a new one in Sage."
+- Runs started this way show as **API** in Sage. They are background runs: like webhooks, they wait
   while Claude usage is high.
 
 ### Revoking a key
@@ -271,5 +271,5 @@ in the list, marked **Revoked**.
 
 Every route of the local server (webhooks, MCP and `/v1`) only answers requests addressed to
 `127.0.0.1:PORT` or `localhost:PORT`. Any other `Host` gets 403. This stops a web page that
-re-points its own name at your PC (DNS rebinding) from reaching Dots. Normal use of webhooks and
+re-points its own name at your PC (DNS rebinding) from reaching Sage. Normal use of webhooks and
 MCP is unchanged. If you forward webhooks through a tunnel, have it rewrite Host to 127.0.0.1:PORT (ngrok `--host-header=rewrite`, cloudflared `httpHostHeader`).

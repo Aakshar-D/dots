@@ -629,7 +629,7 @@ async fn the_gateway_answers_a_running_runs_open_servers_and_checks_each_call() 
     assert_eq!(
         drop["result"],
         json!({"content": [{"type": "text",
-               "text": "Denied by the policy of dot 'gw': mcp__files__drop is not permitted."}],
+               "text": "Denied by the policy of sol 'gw': mcp__files__drop is not permitted."}],
                "isError": true})
     );
     // A writing tool asks, and asking parks at once.
@@ -1002,7 +1002,7 @@ async fn dots_own_server_offers_context_only_with_collections_and_checks_each_ca
     assert_eq!(denied["result"]["isError"], true, "{denied}");
     let text = denied["result"]["content"][0]["text"].as_str().unwrap();
     assert!(
-        text.contains("Denied by the policy of dot 'denying'"),
+        text.contains("Denied by the policy of sol 'denying'"),
         "{denied}"
     );
     assert!(!text.contains("style.md"), "{denied}");

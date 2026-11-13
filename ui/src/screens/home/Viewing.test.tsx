@@ -64,14 +64,14 @@ describe("the conversation the person is reading", () => {
     expect(seen()).toEqual([]);
   });
 
-  it("follows a switch to another dot, an older topic, and another screen", async () => {
+  it("follows a switch to another sol, an older topic, and another screen", async () => {
     const other = { ...dot, id: "dot-other", name: "other" };
     home([chat("a", "10:00"), chat("b", "11:00")]);
     backend.on("dot_overview", () => [overview, { ...overview, dot: other }]);
     const { user, router } = renderApp(`/home/${dot.id}`);
     await waitFor(() => expect(viewing()).toEqual([dot.id]));
 
-    const column = screen.getByRole("navigation", { name: "Dots" });
+    const column = screen.getByRole("navigation", { name: "Sols" });
     await user.click(
       within(within(column).getByRole("listitem", { name: "other" })).getByRole("link"),
     );

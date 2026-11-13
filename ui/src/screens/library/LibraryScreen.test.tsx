@@ -65,7 +65,7 @@ describe("the Library screen", () => {
     expect(await screen.findByRole("heading", { name: "Library" })).toBeVisible();
   });
 
-  it("lists the servers with their status, their dots and the variables they miss", async () => {
+  it("lists the servers with their status, their sols and the variables they miss", async () => {
     listing([github, owned, plugin]);
     renderApp("/library");
     const row = await screen.findByRole("listitem", { name: "github" });
@@ -353,7 +353,7 @@ describe("the review of a changed tool list", () => {
 });
 
 describe("removing an item", () => {
-  it("asks first and names the dots, then removes it from them", async () => {
+  it("asks first and names the sols, then removes it from them", async () => {
     listing([github]);
     backend.on("library_remove", () => null);
     const { user } = renderApp("/library");
@@ -368,14 +368,14 @@ describe("removing an item", () => {
     );
   });
 
-  it("does not claim dots use an item no dot uses", async () => {
+  it("does not claim sols use an item no sol uses", async () => {
     listing([{ ...github, used_by: [] }]);
     backend.on("library_remove", () => null);
     const { user } = renderApp("/library");
     const row = await screen.findByRole("listitem", { name: "github" });
     await user.click(within(row).getByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog).toHaveTextContent("No dot uses it.");
+    expect(dialog).toHaveTextContent("No sol uses it.");
     await user.click(within(dialog).getByRole("button", { name: "Remove server" }));
     await waitFor(() =>
       expect(backend.callsTo("library_remove")).toEqual([{ id: github.id, confirm: false }]),
@@ -631,14 +631,14 @@ describe("creating a skill", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  it("says that removing a skill Dots made deletes its folder", async () => {
+  it("says that removing a skill Sage made deletes its folder", async () => {
     listing([{ ...skill, dots_folder: true }]);
     const { user } = renderApp("/library");
     await user.click(await screen.findByRole("tab", { name: "Skills" }));
     const row = await screen.findByRole("listitem", { name: "pdf" });
     await user.click(within(row).getByRole("button", { name: "Remove" }));
     expect(await screen.findByRole("alertdialog")).toHaveTextContent(
-      "Its folder in Dots' skills folder is deleted too.",
+      "Its folder in Sage's skills folder is deleted too.",
     );
   });
 });
@@ -842,8 +842,8 @@ describe("the Library's Context tab", () => {
     const row = await screen.findByRole("listitem", { name: "company" });
     expect(within(row).getByText("How we work: style, people, runbooks")).toBeVisible();
     expect(within(row).getByText("42 documents")).toBeVisible();
-    expect(within(row).getByText("every dot")).toBeVisible();
-    expect(within(row).getByText("Every dot reads it")).toBeVisible();
+    expect(within(row).getByText("every sol")).toBeVisible();
+    expect(within(row).getByText("Every sol reads it")).toBeVisible();
     expect(within(row).getByText("C:/notes/company")).toBeVisible();
   });
 
@@ -858,7 +858,7 @@ describe("the Library's Context tab", () => {
     expect(within(dialog).getByText(/Only add folders whose writers you trust/)).toBeVisible();
     expect(within(dialog).getByLabelText("Name")).toHaveValue("company-wiki");
     await user.type(within(dialog).getByLabelText("Description"), "How we work");
-    await user.click(within(dialog).getByLabelText("Every dot reads it"));
+    await user.click(within(dialog).getByLabelText("Every sol reads it"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(backend.callsTo("library_add")).toEqual([
@@ -901,7 +901,7 @@ describe("the Library's Context tab", () => {
     await user.click(within(row).getByRole("button", { name: "Edit" }));
     const dialog = await screen.findByRole("dialog", { name: "Edit company" });
     expect(within(dialog).getByLabelText("Name")).toBeDisabled();
-    await user.click(within(dialog).getByLabelText("Every dot reads it"));
+    await user.click(within(dialog).getByLabelText("Every sol reads it"));
     await user.click(within(dialog).getByRole("button", { name: "Save" }));
     await waitFor(() =>
       expect(backend.callsTo("library_update")).toEqual([
@@ -1023,26 +1023,26 @@ describe("the Context tab's other paths", () => {
     );
   });
 
-  it("says every dot reads an every-dot collection, never that no dot uses it", async () => {
+  it("says every sol reads an every-dot collection, never that no sol uses it", async () => {
     const everyDot = { ...company, used_by: [] };
     expect(everyDot.kind === "context" && everyDot.config.every_dot).toBe(true);
     const { user } = await context([everyDot]);
     const row = await screen.findByRole("listitem", { name: "company" });
     await user.click(within(row).getByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog).toHaveTextContent("Every dot reads it.");
-    expect(dialog).not.toHaveTextContent("No dot uses it.");
+    expect(dialog).toHaveTextContent("Every sol reads it.");
+    expect(dialog).not.toHaveTextContent("No sol uses it.");
   });
 
-  it("names the dots that tick an every-dot collection too", async () => {
+  it("names the sols that tick an every-dot collection too", async () => {
     const dot = github.used_by[0]!;
     const { user } = await context([{ ...company, used_by: [dot] }]);
     const row = await screen.findByRole("listitem", { name: "company" });
     await user.click(within(row).getByRole("button", { name: "Remove" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog).toHaveTextContent("Every dot reads it.");
+    expect(dialog).toHaveTextContent("Every sol reads it.");
     expect(dialog).toHaveTextContent(dot.name);
-    expect(dialog).not.toHaveTextContent("No dot uses it.");
+    expect(dialog).not.toHaveTextContent("No sol uses it.");
   });
 });
 

@@ -68,7 +68,7 @@ export function AppFrame(props: {
         role="alert"
         className="m-4 flex flex-col items-start gap-2 rounded-md border border-needs-border bg-needs-surface p-3"
       >
-        <p>The app's screen left its page, so Dots stopped answering it.</p>
+        <p>The app's screen left its page, so Sage stopped answering it.</p>
         <Button
           size="sm"
           onClick={() => {

@@ -37,7 +37,7 @@ impl VoiceHandle {
     pub fn get(&self) -> Result<Arc<Service>, CmdError> {
         self.0
             .clone()
-            .ok_or_else(|| CmdError::internal("Dots did not start; see the startup error"))
+            .ok_or_else(|| CmdError::internal("Sage did not start; see the startup error"))
     }
 
     /// Applies saved settings to voice, in the background, when the service is there; without

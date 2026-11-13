@@ -18,11 +18,11 @@ function settings() {
 }
 
 describe("the Claude usage settings", () => {
-  it("hold background dots at 60% of the 5-hour window and 70% of the week by default", async () => {
+  it("hold background sols at 60% of the 5-hour window and 70% of the week by default", async () => {
     settings();
     const section = await screen.findByRole("group", { name: "Claude usage" });
     expect(section).toBeVisible();
-    expect(screen.getByLabelText("Hold background dots when Claude usage is high")).toBeChecked();
+    expect(screen.getByLabelText("Hold background sols when Claude usage is high")).toBeChecked();
     expect(screen.getByLabelText("5-hour window share (%)")).toHaveValue(60);
     expect(screen.getByLabelText("Weekly window share (%)")).toHaveValue(70);
   });
@@ -54,7 +54,7 @@ describe("the Claude usage settings", () => {
 
   it("save the switch and both shares with the other settings", async () => {
     const { user } = settings();
-    await user.click(await screen.findByLabelText("Hold background dots when Claude usage is high"));
+    await user.click(await screen.findByLabelText("Hold background sols when Claude usage is high"));
     const weekly = screen.getByLabelText("Weekly window share (%)");
     await user.clear(weekly);
     await user.type(weekly, "85");

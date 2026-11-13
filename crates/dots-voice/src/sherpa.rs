@@ -22,12 +22,14 @@ use crate::models::ModelPaths;
 
 /// The wake phrases in sherpa's keyword format: `tokens :boost #threshold @name`.
 ///
-/// "Hey Dot" is boosted less and held to a higher score than "Dot, stop": measured over the
-/// ten voices, boost 1.5 with threshold 0.2 woke on "Hey, don't touch the hot pot." and
-/// "Hey, do that again tomorrow." 3 times in 100 near misses, and 1.0 with 0.25 on none,
-/// while "Hey Dot" was still caught 59 times in 60. A wrong "Dot, stop" only stops Dot
-/// speaking; a wrong "Hey Dot" opens the microphone.
-const WAKE_KEYWORDS: &str = "▁HE Y ▁DO T :1.0 #0.25 @HEY_DOT\n▁DO T ▁ST O P :1.5 #0.2 @DOT_STOP";
+/// The tokens are the model's own pieces for "HEY SAGE" and "SAGE STOP": its `bpe.model`
+/// spells SAGE as `▁S AGE`. The names after `@` are from the phrase before, "Hey Dot".
+///
+/// "Hey Sage" is boosted less and held to a higher score than "Sage, stop": a wrong
+/// "Sage, stop" only stops Sage speaking; a wrong "Hey Sage" opens the microphone. The
+/// numbers were measured for "Hey Dot" (boost 1.5 with threshold 0.2 woke on 3 of 100 near
+/// misses, 1.0 with 0.25 on none, with the phrase caught 59 times in 60).
+const WAKE_KEYWORDS: &str = "▁HE Y ▁S AGE :1.0 #0.25 @HEY_DOT\n▁S AGE ▁ST O P :1.5 #0.2 @DOT_STOP";
 const SPEAK_STEPS: i32 = 5;
 const VOICES: u8 = 10;
 

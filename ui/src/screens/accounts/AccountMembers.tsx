@@ -51,7 +51,7 @@ export const OWNER_TEXT =
   "Owners can only be changed with the account owner's key, using dots-admin.";
 
 /// An Admin whose Dots ID isn't in the policy's `admins` (members spec §6.1).
-const NOT_SIGNING = "Can sign the list once the owner adds their Dots ID to the policy's admins.";
+const NOT_SIGNING = "Can sign the list once the owner adds their Sage ID to the policy's admins.";
 
 /// Why a control is off for the moment while the last change is sent.
 export const BUSY = "Waiting for the last change to finish.";
@@ -66,11 +66,11 @@ const WORKSPACE_ROLES: WorkspaceRole[] = ["admin", "member", "viewer"];
 const OWN_ROLE = "You're changing your own role. You may lose the right to manage members.";
 
 const REMOVE_PC_TEXT =
-  "Also revoke its access in the source: the list stops Dots honouring this PC, only the " +
+  "Also revoke its access in the source: the list stops Sage honouring this PC, only the " +
   "source cuts it off.";
 
 const REMOVE_TEXT =
-  "Also revoke their access in the source: the list stops Dots honouring them, only the " +
+  "Also revoke their access in the source: the list stops Sage honouring them, only the " +
   "source cuts them off.";
 
 /// What the member-list edits of an account share (Members and Workspaces tabs): the list, the
@@ -119,7 +119,7 @@ export function rosterBlockers(org: OrgSummary, view: MembersView) {
     manageBlocker ??
     (view.can_sign
       ? undefined
-      : (view.sign_blocker ?? `${org.name}: this PC's Dots ID can't sign the member list.`));
+      : (view.sign_blocker ?? `${org.name}: this PC's Sage ID can't sign the member list.`));
   // An approval, a role change or a removal also waits for a draft to be published or
   // discarded; inviting and revoking don't touch the list.
   const editBlocker = blocker ?? (view.draft ? `${org.name}: ${DRAFT_WAITING}` : undefined);

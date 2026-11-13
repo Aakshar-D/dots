@@ -203,7 +203,7 @@ pub async fn open_pubkey_pull(h: &impl Hub, public_b64: &str) -> Result<(u64, St
         KEY_BRANCH,
         "master",
         KEY_PULL_TITLE,
-        "Replaces the prototype's updater key with the release signing key. Made by Dots' Releases page.",
+        "Replaces the prototype's updater key with the release signing key. Made by Sage's Releases page.",
     )
     .await
 }
@@ -409,7 +409,7 @@ pub async fn publish_trial(h: &impl Hub, version: &str) -> Result<Trial> {
     }
     files.push((NOTES_FILE.to_string(), mark_notes(version, &notes)));
     let commit = h
-        .commit_files(&master, &files, &format!("Dots {full}"))
+        .commit_files(&master, &files, &format!("Sage {full}"))
         .await?;
     // The tag first: a branch moved without its tag would hold an untested tree.
     let tag = format!("v{full}");
@@ -494,13 +494,13 @@ pub async fn promote(h: &impl Hub, version: &str) -> Result<()> {
     }
     files.push((NOTES_FILE.to_string(), mark_notes(version, &notes)));
     let commit = h
-        .commit_files(&base, &files, &format!("Dots {version}"))
+        .commit_files(&base, &files, &format!("Sage {version}"))
         .await?;
     h.set_branch(&branch(version), &commit, true).await?;
     if h.merge(
         "master",
         &branch(version),
-        &format!("Release Dots {version}"),
+        &format!("Release Sage {version}"),
     )
     .await?
         == MergeOutcome::Conflict
@@ -530,7 +530,7 @@ pub async fn withdraw(h: &impl Hub, release: &ReleaseInfo) -> Result<()> {
     };
     h.edit_release(
         release.id,
-        Some(&format!("Dots {version} (withdrawn)")),
+        Some(&format!("Sage {version} (withdrawn)")),
         Some(&body),
         Some(true),
     )

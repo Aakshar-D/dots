@@ -69,7 +69,7 @@ fn make() -> Result<(Vec<u8>, Vec<u8>)> {
     let mut params =
         rcgen::CertificateParams::new(vec!["dots-phone.local".to_string()]).map_err(err)?;
     let mut name = rcgen::DistinguishedName::new();
-    name.push(rcgen::DnType::CommonName, "Dots phone view");
+    name.push(rcgen::DnType::CommonName, "Sage phone view");
     params.distinguished_name = name;
     let year = chrono::Datelike::year(&chrono::Utc::now());
     params.not_before = rcgen::date_time_ymd(year - 1, 1, 1);

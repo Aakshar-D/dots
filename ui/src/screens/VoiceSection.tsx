@@ -222,14 +222,14 @@ export function VoiceSection({
   const on = enabling || downloading || (s?.enabled ?? false);
   const busy = !s || enable.isPending || remove.isPending || downloading;
   const needsSession = !s?.enabled
-    ? "Turn Open Dot on to try the voices and choose devices."
+    ? "Turn Open Sage on to try the voices and choose devices."
     : !ready
-      ? "Open Dot is still getting ready."
+      ? "Open Sage is still getting ready."
       : null;
 
   return (
     <>
-      <Section title="Open Dot">
+      <Section title="Open Sage">
         <div className="flex items-center gap-2">
           <Switch
             id="settings-voice"
@@ -241,17 +241,17 @@ export function VoiceSection({
               if (!busy) enable.mutate(next);
             }}
           />
-          <Label htmlFor="settings-voice">Open Dot</Label>
+          <Label htmlFor="settings-voice">Open Sage</Label>
         </div>
         <p className="text-xs text-muted-foreground">
-          Open Dot lets you talk to Dots and hear it answer.
+          Open Sage lets you talk to Sage and hear it answer.
         </p>
         {s && !s.installed && !downloading && (
           <p className="text-xs text-muted-foreground">
             Turning it on downloads about 260 MB of speech files once; they stay on this computer.
           </p>
         )}
-        <p role="status" aria-label="Open Dot status" className="flex gap-1.5 text-xs">
+        <p role="status" aria-label="Open Sage status" className="flex gap-1.5 text-xs">
           <span className={s?.enabled && trouble && !downloading ? "text-destructive" : undefined}>
             {statusText(s, enabling, trouble)}
           </span>
@@ -360,10 +360,10 @@ export function VoiceSection({
             checked={draft.voice_wake_phrase}
             onCheckedChange={(voice_wake_phrase) => set({ voice_wake_phrase })}
           />
-          <Label htmlFor="settings-voice-wake">Hey Dot</Label>
+          <Label htmlFor="settings-voice-wake">Hey Sage</Label>
         </div>
         <p className="text-xs text-muted-foreground">
-          The microphone stays on while Dots is running so it can hear the phrase. Audio never
+          The microphone stays on while Sage is running so it can hear the phrase. Audio never
           leaves this computer.
         </p>
         <div className="flex items-center gap-2">
@@ -381,7 +381,7 @@ export function VoiceSection({
             checked={draft.voice_tone}
             onCheckedChange={(voice_tone) => set({ voice_tone })}
           />
-          <Label htmlFor="settings-voice-tone">Play a tone when Dot starts listening</Label>
+          <Label htmlFor="settings-voice-tone">Play a tone when Sage starts listening</Label>
         </div>
       </Section>
 
@@ -435,7 +435,7 @@ export function VoiceSection({
           <div>
             <ConfirmButton
               title="Remove the speech files?"
-              description="Open Dot turns off. Turning it on again downloads them again."
+              description="Open Sage turns off. Turning it on again downloads them again."
               confirmLabel="Remove"
               disabled={remove.isPending || enable.isPending}
               onConfirm={() => remove.mutate()}

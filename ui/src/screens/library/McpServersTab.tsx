@@ -178,7 +178,7 @@ export function McpServersTab(props: {
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <p className="flex-1 text-xs text-muted-foreground">
-          Tools that dots can call. Each server's tool list is accepted by you and checked at
+          Tools that sols can call. Each server's tool list is accepted by you and checked at
           every run.
         </p>
         <Button size="sm" onClick={() => setForm("new")}>

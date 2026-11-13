@@ -85,7 +85,7 @@ impl Updates {
 
 fn updates(app: &AppHandle) -> Result<tauri::State<'_, Updates>, CmdError> {
     app.try_state::<Updates>()
-        .ok_or_else(|| CmdError::internal("Dots did not start; see the startup error"))
+        .ok_or_else(|| CmdError::internal("Sage did not start; see the startup error"))
 }
 
 /// The note as it stands, with the dots that have a run working now.
@@ -298,7 +298,7 @@ async fn download_version(
         .check()
         .await
         .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("No installer was found for Dots {version}."))?;
+        .ok_or_else(|| format!("No installer was found for Sage {version}."))?;
     let bytes = found
         .download(|_, _| {}, || {})
         .await
@@ -469,7 +469,7 @@ pub async fn idle_tick(c: &impl IdleControls, updates: &Updates) -> bool {
         return true;
     }
     updates.state.lock().unwrap().abandon(&format!(
-        "Dots could not install {version} by itself. It tries again at the next check."
+        "Sage could not install {version} by itself. It tries again at the next check."
     ));
     c.hold_runs(false).await;
     false
@@ -664,7 +664,7 @@ async fn download_quiet(app: &AppHandle, version: &str) -> Result<Downloaded, St
         .await
         .map_err(|e| e.to_string())?
         .filter(|u| u.version == version)
-        .ok_or_else(|| format!("Dots {version} is no longer offered."))?;
+        .ok_or_else(|| format!("Sage {version} is no longer offered."))?;
     let bytes = found
         .download(|_, _| {}, || {})
         .await
@@ -834,7 +834,7 @@ pub async fn act(
 
 /// Why an install with no downloaded update did not begin.
 const NO_DOWNLOAD: &str =
-    "The downloaded update was lost, so it was not installed. Dots downloads it again.";
+    "The downloaded update was lost, so it was not installed. Sage downloads it again.";
 
 /// An install that could not begin: the state lets go of it, the queue is released and the
 /// note says why. Returns the note. The caller holds the turn.
@@ -893,7 +893,7 @@ pub fn spawn(app: AppHandle, rt: Arc<Runtime>) {
                 rt: &idle_rt,
             };
             if idle_tick(&controls, &updates).await {
-                tracing::info!("installing the update by itself while Dots is idle");
+                tracing::info!("installing the update by itself while Sage is idle");
             }
         }
     });
@@ -1045,12 +1045,12 @@ async fn check_once(
         });
         state.offer(&version)
     };
-    tracing::info!("Dots {version} is downloaded and ready to install");
+    tracing::info!("Sage {version} is downloaded and ready to install");
     if shown {
         let working = match rt.working_dots().await {
             Ok(working) => working,
             Err(e) => {
-                tracing::warn!("reading the working dots failed: {e}");
+                tracing::warn!("reading the working sols failed: {e}");
                 Vec::new()
             }
         };
@@ -1217,7 +1217,7 @@ impl InstallSteps for AppSteps {
     }
 
     fn install(&self) -> Result<(), String> {
-        tracing::info!("installing Dots {}", self.downloaded.update.version);
+        tracing::info!("installing Sage {}", self.downloaded.update.version);
         self.downloaded
             .update
             .install(&self.downloaded.bytes)
@@ -1559,7 +1559,7 @@ mod tests {
         );
         let release = dots_core::releases::Release {
             version: "0.3.0".into(),
-            name: "Dots 0.3.0".into(),
+            name: "Sage 0.3.0".into(),
             body: String::new(),
             url: String::new(),
             prerelease: false,
@@ -1787,7 +1787,7 @@ mod tests {
         };
         let release = |withdrawn| dots_core::releases::Release {
             version: "0.2.0".into(),
-            name: "Dots 0.2.0".into(),
+            name: "Sage 0.2.0".into(),
             body: String::new(),
             url: String::new(),
             prerelease: withdrawn,

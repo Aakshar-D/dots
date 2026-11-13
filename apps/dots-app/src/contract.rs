@@ -172,7 +172,7 @@ fn context_config() -> LibraryConfig {
 fn app_config() -> LibraryConfig {
     LibraryConfig::App(AppConfig {
         title: "Projects".into(),
-        description: "Projects, tasks and to-dos, shared by you and your dots".into(),
+        description: "Projects, tasks and to-dos, shared by you and your sols".into(),
         version: 3,
         previous_version: Some(2),
         last_version: 4,
@@ -402,7 +402,7 @@ fn messages() -> Vec<Message> {
             id: "01J0MSG4".into(),
             run_id: None,
             kind: MessageKind::Note,
-            text: "A follow-up was skipped because the dot is off. It was due Tue 21 Oct 09:00: \
+            text: "A follow-up was skipped because the sol is off. It was due Tue 21 Oct 09:00: \
                    check CI"
                 .into(),
             choices: None,
@@ -489,7 +489,7 @@ fn watchers() -> Vec<Watcher> {
             config: WatcherConfig::Email(EmailConfig {
                 address: "me@gmail.com".into(),
                 secret: "GMAIL_APP_PASSWORD".into(),
-                label: "Dots".into(),
+                label: "Sage".into(),
                 from: Some("billing@acme.com".into()),
                 subject: Some("invoice".into()),
                 has_attachment: None,
@@ -580,7 +580,7 @@ fn run_changes() -> RunChanges {
                 status: FileStatus::Deleted,
                 undoable: false,
                 reason: Some(
-                    "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.".into(),
+                    "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.".into(),
                 ),
             },
         ],
@@ -614,7 +614,7 @@ fn planned_files() -> Vec<PlannedFile> {
             status: FileStatus::Deleted,
             action: FileAction::Cannot,
             reason: Some(
-                "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.".into(),
+                "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.".into(),
             ),
         },
     ]
@@ -918,7 +918,7 @@ fn held_runs() -> Vec<HeldRun> {
             starts_after: None,
             reason: HoldReason::Role {
                 account: "Acme Engineering".into(),
-                text: "Acme Engineering: your role no longer allows running dots".into(),
+                text: "Acme Engineering: your role no longer allows running sols".into(),
             },
         },
         HeldRun {
@@ -1282,7 +1282,7 @@ fn page_states() -> Vec<dots_core::publish::flow::PageState> {
     let live = ReleaseInfo {
         id: 41,
         tag: "v0.2.0".into(),
-        name: "Dots 0.2.0".into(),
+        name: "Sage 0.2.0".into(),
         body: "- Watchers".into(),
         prerelease: false,
         draft: false,
@@ -1632,7 +1632,7 @@ pub fn samples() -> Value {
             "max_watcher_name": dots_core::watchers::MAX_NAME_CHARS,
         },
         "StartupError": to(StartupError {
-            message: "Dots could not start: database disk image is malformed".into(),
+            message: "Sage could not start: database disk image is malformed".into(),
             log_dir: "C:/Users/u/AppData/Local/dots/logs".into(),
             backup: "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db".into(),
             go_back: Some("0.1.0".into()),
@@ -1647,7 +1647,7 @@ pub fn samples() -> Value {
             state: ChangesState::Unavailable,
             git: false,
             files: vec![],
-            note: Some("This folder has more than 20000 files to back up, so Dots did not back it up and this run can't be undone.".into()),
+            note: Some("This folder has more than 20000 files to back up, so Sage did not back it up and this run can't be undone.".into()),
             undone_at: None,
         });
     samples["ChangesPreview"] = to(ChangesPreview {
@@ -1887,7 +1887,7 @@ pub fn samples() -> Value {
             signing_in: false,
             account: None,
             expires_at: None,
-            setup_error: Some("ChatGPT sign-in needs a registered OpenAI client for Dots.".into()),
+            setup_error: Some("ChatGPT sign-in needs a registered OpenAI client for Sage.".into()),
         },
         dots_core::chatgpt::ChatGptStatus {
             configured: true,
@@ -1919,7 +1919,7 @@ pub fn samples() -> Value {
     samples["ReleaseNotes"] = to(vec![
         Some(crate::update_service::ReleaseNotes {
             version: "0.2.0".into(),
-            body: "- Dots holds background runs when your Claude usage is high.".into(),
+            body: "- Sage holds background runs when your Claude usage is high.".into(),
             url: "https://github.com/Aakshar-D/dots/releases/tag/v0.2.0".into(),
         }),
         None,
@@ -2031,7 +2031,7 @@ pub fn samples() -> Value {
             dot: dot(),
             run_id: None,
             run_error: Some("The first run could not start.".into()),
-            notes: "Left out the extra telepathy: Dots does not know it.".into(),
+            notes: "Left out the extra telepathy: Sage does not know it.".into(),
         },
     ]);
     samples["EnvEntry"] = to([
@@ -2212,8 +2212,8 @@ pub fn samples() -> Value {
             my_role: Some(WorkspaceRole::Viewer),
             can_manage: false,
             refusals: Refusals {
-                edit: Some(viewer_in_platform("create or change dots")),
-                run: Some(viewer_in_platform("run dots")),
+                edit: Some(viewer_in_platform("create or change sols")),
+                run: Some(viewer_in_platform("run sols")),
                 answer: Some(viewer_in_platform("answer approvals")),
                 create_api_keys: Some(viewer_in_platform("create API keys")),
             },
@@ -2508,7 +2508,7 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
         VoiceEvent::Cleared,
         VoiceEvent::Woke,
         VoiceEvent::Trouble {
-            message: "Open Dot is off. Turn it on in Settings, under Voice.".into(),
+            message: "Open Sage is off. Turn it on in Settings, under Voice.".into(),
         },
         VoiceEvent::Download {
             done_bytes: 1_000_000,
@@ -2618,7 +2618,7 @@ fn guardrails_samples(samples: &mut Value) {
     });
     samples["RoleRow"] = to(role_matrix());
     let too_high = format!(
-        "Acme Engineering: a Member's dot in the Platform workspace may use up to {}, and this policy is Trusted. Ask an Admin or Owner.",
+        "Acme Engineering: a Member's sol in the Platform workspace may use up to {}, and this policy is Trusted. Ask an Admin or Owner.",
         preset_label(Preset::Sandboxed)
     );
     let preset = |p: Preset, refusal: Option<&str>| PresetCeiling {
@@ -2638,7 +2638,7 @@ fn guardrails_samples(samples: &mut Value) {
             ],
             policy_refusal: Some(too_high.clone()),
             held: Some(
-                "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin."
+                "Acme Engineering: this sol's tool policy is past what a Member may use in the Platform workspace (this policy is Trusted). Change the policy, or ask an Admin."
                     .into(),
             ),
             protected: Some(Guardrails::defaults()),
@@ -2743,7 +2743,7 @@ fn send_later_samples(samples: &mut Value) {
         root_run_id: None,
         status: ScheduledStatus::Failed,
         waiting: None,
-        error: Some("dot 'builder': its org 'acme' was removed".into()),
+        error: Some("sol 'builder': its org 'acme' was removed".into()),
         ..waiting.clone()
     };
     let sent_late = Run {
@@ -3092,7 +3092,7 @@ fn apps_samples(samples: &mut Value) {
         dots_core::apps::bundled::BundledOffer {
             name: "projects".into(),
             title: "Projects".into(),
-            description: "Projects, tasks and to-dos, shared by you and your dots".into(),
+            description: "Projects, tasks and to-dos, shared by you and your sols".into(),
             kept: Some(dots_core::apps::kept::KeptOffer {
                 id: "01J0APP0".into(),
                 title: "Projects".into(),
@@ -3104,7 +3104,7 @@ fn apps_samples(samples: &mut Value) {
         dots_core::apps::bundled::BundledOffer {
             name: "projects".into(),
             title: "Projects".into(),
-            description: "Projects, tasks and to-dos, shared by you and your dots".into(),
+            description: "Projects, tasks and to-dos, shared by you and your sols".into(),
             kept: None,
         },
     ]);
@@ -3371,7 +3371,7 @@ fn org_summaries() -> Vec<OrgSummary> {
             membership: Membership::Waiting,
             role: None,
             not_member_text: Some(
-                "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin."
+                "Acme Engineering: you aren't on its member list yet. Send your Sage ID to an Admin."
                     .into(),
             ),
             request_code: Some("dotsreq_c2FtcGxlLXJlcXVlc3Q".into()),
@@ -3452,7 +3452,7 @@ fn join_previews() -> Vec<JoinPreview> {
             existing: true,
             key_fingerprint: "0A1B 2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9".into(),
             changes: vec![
-                "path changes from dots to dots2".into(),
+                "path changes from sols to dots2".into(),
                 "the policy key changes from 6E2F 0A1B 9C3D 4E5F 7A81 B2C3 D4E5 F607 to 0A1B \
                  2C3D 4E5F 6071 8293 A4B5 C6D7 E8F9: the key that signs the org's policy is new, \
                  so accept this code only if your admin told you the key changed"
@@ -3627,7 +3627,7 @@ fn scanned_agents() -> Vec<ScannedAgent> {
             tools: Some(vec!["Read".into(), "Bash".into(), "Frob".into()]),
             warnings: vec![
                 "Bash asks before each use.".into(),
-                "Frob is left out: Dots does not know this tool.".into(),
+                "Frob is left out: Sage does not know this tool.".into(),
             ],
             ..agent(
                 AgentSourceKind::User,

@@ -42,7 +42,7 @@ use tempfile::TempDir;
 
 const LEVEL: &str = "org-plain-level-roles-7d21";
 const WAITING_TEXT: &str =
-    "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.";
+    "Acme Engineering: you aren't on its member list yet. Send your Sage ID to an Admin.";
 
 fn viewer_cant(action: &str) -> String {
     format!("Acme Engineering: a Viewer can't {action}. Ask an Admin or Owner.")
@@ -218,7 +218,7 @@ async fn viewer_cannot_create_edit_run_or_answer() {
             .await
             .unwrap();
     t.become_(2, Some("viewer")).await;
-    let edit = viewer_cant("create or change dots");
+    let edit = viewer_cant("create or change sols");
     assert_eq!(
         refused(t.rt.create_dot(t.triage(), Some(ACME.into()), None).await),
         edit
@@ -234,7 +234,7 @@ async fn viewer_cannot_create_edit_run_or_answer() {
     assert_eq!(stored.spec, dot.spec);
     assert!(!stored.has_webhook_token);
 
-    let run_text = viewer_cant("run dots");
+    let run_text = viewer_cant("run sols");
     assert_eq!(refused(t.rt.run_now(&dot.id).await), run_text);
     assert_eq!(refused(t.rt.chat(&dot.id, "hello", None).await), run_text);
     // No run was enqueued.
@@ -296,7 +296,7 @@ async fn a_viewer_sees_scheduled_messages_but_cannot_change_them() {
         t.rt.scheduled_messages(&dot.id).await.unwrap(),
         std::slice::from_ref(&message)
     );
-    let run_text = viewer_cant("run dots");
+    let run_text = viewer_cant("run sols");
     assert_eq!(
         refused(t.rt.schedule_message(&dot.id, "Again", None, &due).await),
         run_text
@@ -613,9 +613,9 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
     let team = t.rt.teams().get(&team.id).await.unwrap();
     // As it is now: it counts the run above in flight.
     let workflow = t.rt.teams().get_workflow(&workflow.id).await.unwrap();
-    let edit = viewer_cant("create or change dots");
+    let edit = viewer_cant("create or change sols");
     let answer = viewer_cant("answer approvals");
-    let run_text = viewer_cant("run dots");
+    let run_text = viewer_cant("run sols");
 
     // Answers.
     assert_eq!(refused(t.rt.reply(&question.id, "main").await), answer);
@@ -809,7 +809,7 @@ async fn scheduled_run_held_for_role_then_runs_when_role_returns() {
         inbox.held[0].reason,
         HoldReason::Role {
             account: ACME_NAME.into(),
-            text: "Acme Engineering: your role no longer allows running dots".into(),
+            text: "Acme Engineering: your role no longer allows running sols".into(),
         }
     );
     // It is not a usage hold.
@@ -839,7 +839,7 @@ async fn release_refused_for_role_hold() {
             .unwrap();
     assert_eq!(
         refused(t.rt.run_release_hold(&run.id).await),
-        "this run waits for Acme Engineering to let you run dots again"
+        "this run waits for Acme Engineering to let you run sols again"
     );
     assert_eq!(
         t.rt.store().get_run(&run.id).await.unwrap().status,
@@ -892,14 +892,14 @@ async fn the_delivery_sweeper_never_marks_a_role_hold() {
         step += 1;
         assert!(
             step <= 100,
-            "the sweeper never marked the personal dot's message"
+            "the sweeper never marked the personal sol's message"
         );
         t.clock.set(start + TimeDelta::seconds(30 * step));
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     };
     assert_eq!(
         control.undelivered_reason.as_deref(),
-        Some("Dots is updating")
+        Some("Sage is updating")
     );
     let held = store.get_run(&held.id).await.unwrap();
     assert_eq!(held.status, RunStatus::Queued);
@@ -994,7 +994,7 @@ async fn a_webhook_is_refused_when_the_role_cannot_run_dots() {
     let resp = call().await.unwrap();
     assert_eq!(resp.status(), 403);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["error"], viewer_cant("run dots"));
+    assert_eq!(body["error"], viewer_cant("run sols"));
 
     t.become_(3, None).await;
     let resp = call().await.unwrap();
@@ -1067,10 +1067,10 @@ async fn a_workflow_webhook_is_refused_when_the_role_cannot_run_dots() {
     let resp = call().await.unwrap();
     assert_eq!(resp.status(), 403);
     let body: Value = resp.json().await.unwrap();
-    assert_eq!(body["error"], viewer_cant("run dots"));
+    assert_eq!(body["error"], viewer_cant("run sols"));
     assert_eq!(
         refused(t.rt.teams().regenerate_workflow_token(&workflow.id).await),
-        viewer_cant("create or change dots")
+        viewer_cant("create or change sols")
     );
 
     t.become_(3, None).await;
@@ -1144,11 +1144,11 @@ async fn waiting_or_removed_may_switch_off_and_delete_but_not_change() {
 const STARTER_MANIFEST: &str = r#"{
   "name": "chores",
   "title": "Chores",
-  "description": "Chores dots do",
+  "description": "Chores sols do",
   "tools": [
     {
       "name": "assign",
-      "description": "Give a chore to a dot",
+      "description": "Give a chore to a sol",
       "input": { "type": "object", "properties": { "dot": { "type": "string" } }, "required": ["dot"] },
       "writes": true
     }

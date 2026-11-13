@@ -279,7 +279,7 @@ impl DotSpec {
         }
         // Auto picks among Claude models; a local endpoint has its own (auto model spec 1).
         if self.engine == EngineKind::Local && crate::auto_model::is_auto(&self.model) {
-            return invalid("Auto is only for Claude dots: pick a model the endpoint lists.");
+            return invalid("Auto is only for Claude sols: pick a model the endpoint lists.");
         }
         if self.workdir.trim().is_empty() {
             return invalid("workdir must not be empty");

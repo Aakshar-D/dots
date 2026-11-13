@@ -42,7 +42,7 @@ const adminHit: ApprovalGuardrail = {
 const card = (name = "Approval for Bash") => screen.findByRole("article", { name });
 
 describe("an approval the guardrails protect", () => {
-  it("needs an Admin on a Member's dot: Approve is off with the reason, Deny works", async () => {
+  it("needs an Admin on a Member's sol: Approve is off with the reason, Deny works", async () => {
     backend.on("inbox", () => ({ ...empty, approvals: [approval] }));
     backend.on("approval_guardrail", () => memberHit);
     backend.on("decide_approval", () => ({ ...sample.approval, status: "denied" }));
@@ -76,7 +76,7 @@ describe("an approval the guardrails protect", () => {
     ).toBeDisabled();
   });
 
-  it("only says it always asks on an Admin's dot, and Approve works", async () => {
+  it("only says it always asks on an Admin's sol, and Approve works", async () => {
     backend.on("inbox", () => ({ ...empty, approvals: [approval] }));
     backend.on("approval_guardrail", () => adminHit);
     backend.on("decide_approval", () => ({ ...sample.approval, status: "approved" }));
@@ -121,11 +121,11 @@ describe("an approval the guardrails protect", () => {
   });
 });
 
-describe("a dot past its workspace's policy ceiling", () => {
+describe("a sol past its workspace's policy ceiling", () => {
   it("waits to run in the Inbox with the core's hold text, and no Run anyway", async () => {
     const [scheduled] = sample.inbox.held as [HeldRun];
     const text =
-      "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (it is Trusted). Change the policy, or ask an Admin.";
+      "Acme Engineering: this sol's tool policy is past what a Member may use in the Platform workspace (it is Trusted). Change the policy, or ask an Admin.";
     const held: HeldRun = {
       ...scheduled,
       run_id: "01J0RUN8",

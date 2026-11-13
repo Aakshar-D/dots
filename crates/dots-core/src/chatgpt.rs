@@ -21,7 +21,7 @@ const ISSUER: &str = "https://auth.openai.com";
 pub const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:47322/auth/openai/callback";
 const SIGN_IN_LIMIT: Duration = Duration::from_secs(5 * 60);
 const SESSION_LIMIT: Duration = Duration::from_secs(8 * 60 * 60);
-const SETUP: &str = "ChatGPT sign-in needs a registered OpenAI client for Dots.";
+const SETUP: &str = "ChatGPT sign-in needs a registered OpenAI client for Sage.";
 
 #[derive(Clone)]
 pub struct ChatGptConfig {
@@ -363,7 +363,7 @@ async fn callback_handler(
     let _ = send.send(result);
     callback_page(
         StatusCode::OK,
-        "Sign-in received. Return to Dots to check your account.",
+        "Sign-in received. Return to Sage to check your account.",
     )
 }
 
@@ -375,7 +375,7 @@ fn callback_page(status: StatusCode, message: &str) -> Response {
             (header::REFERRER_POLICY, "no-referrer"),
             (header::CONTENT_SECURITY_POLICY, "default-src 'none'; frame-ancestors 'none'"),
         ],
-        Html(format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Dots sign-in</title><body><h1>Dots</h1><p>{message}</p></body></html>")),
+        Html(format!("<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><title>Sage sign-in</title><body><h1>Sage</h1><p>{message}</p></body></html>")),
     ).into_response()
 }
 

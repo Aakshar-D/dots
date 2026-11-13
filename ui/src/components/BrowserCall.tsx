@@ -49,7 +49,7 @@ export function BrowserCall(props: {
       {image.data && (
         <img
           src={image.data}
-          alt="Screenshot of the dot's browser"
+          alt="Screenshot of the sol's browser"
           className="max-h-80 self-start rounded-md border"
         />
       )}

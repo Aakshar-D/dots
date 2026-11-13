@@ -21,10 +21,10 @@ export function CopyDotsIdButton() {
         identity &&
         navigator.clipboard
           .writeText(identity.public_key)
-          .then(() => toast.success("Copied your Dots ID"), notifyError)
+          .then(() => toast.success("Copied your Sage ID"), notifyError)
       }
     >
-      <Copy aria-hidden /> Copy my Dots ID
+      <Copy aria-hidden /> Copy my Sage ID
     </Button>
   );
 }

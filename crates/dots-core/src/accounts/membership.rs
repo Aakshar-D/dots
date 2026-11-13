@@ -32,10 +32,10 @@ impl NotMember {
     pub fn text(&self, account: &str) -> String {
         match self {
             Self::Waiting => format!(
-                "{account}: you aren't on its member list yet. Send your Dots ID to an Admin."
+                "{account}: you aren't on its member list yet. Send your Sage ID to an Admin."
             ),
             Self::IdChanged => {
-                format!("{account}: this PC's Dots ID changed. Send the new one to an Admin.")
+                format!("{account}: this PC's Sage ID changed. Send the new one to an Admin.")
             }
             Self::Removed => format!("{account}: you were removed from it."),
         }

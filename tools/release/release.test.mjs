@@ -91,7 +91,7 @@ test("the manifest points the updater at the release's installer and its signatu
   });
   assert.deepEqual(body, {
     version: "0.2.0",
-    notes: "Dots 0.2.0",
+    notes: "Sage 0.2.0",
     pub_date: "2026-10-20T09:17:00.000Z",
     platforms: {
       "windows-x86_64": {

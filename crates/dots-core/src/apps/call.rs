@@ -28,7 +28,7 @@ pub const MAX_START_TAG: usize = 200;
 pub const STARTS_PER_HOUR: u32 = 20;
 /// What a start is told while schedules are paused (spec section 7).
 pub const STARTS_PAUSED: &str =
-    "schedules are paused, so this app cannot start dots until they are resumed";
+    "schedules are paused, so this app cannot start sols until they are resumed";
 
 /// Who is calling: set by Dots, never by the caller (spec section 5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -374,7 +374,7 @@ fn start(
         return Err(STARTS_PAUSED.to_string());
     }
     if !state.dots.iter().any(|d| d.id == dot_id) {
-        return Err(format!("no dot {dot_id} uses this app"));
+        return Err(format!("no sol {dot_id} uses this app"));
     }
     let message = message.trim().to_string();
     let len = message.chars().count();
@@ -403,7 +403,7 @@ fn start(
         return Ok(s.run_id.clone());
     }
     if state.starts.len() as u32 >= gate.budget {
-        return Err("this app has started as many dots as the hour allows; try again later".into());
+        return Err("this app has started as many sols as the hour allows; try again later".into());
     }
     let run_id = crate::util::new_id();
     state.starts.push(Start {

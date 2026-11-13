@@ -48,7 +48,7 @@ function Pairing({ pairing, onCancel }: { pairing: PairingView; onCancel: () => 
         <ol className="flex max-w-sm list-decimal flex-col gap-2 pl-5 text-sm">
           <li>Scan the code with your phone's camera, on the same Wi-Fi as this PC.</li>
           <li>
-            Your phone's browser warns that the connection is not private, because Dots made its
+            Your phone's browser warns that the connection is not private, because Sage made its
             own certificate. Check that the certificate's fingerprint is the one below, then
             continue to the page.
           </li>

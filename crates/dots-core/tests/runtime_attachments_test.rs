@@ -201,7 +201,7 @@ async fn a_file_the_dot_made_in_the_topic_folder_takes_its_name() {
     let first = wait_status(t.rt.store(), &first.id, RunStatus::Succeeded, 30).await;
     let folder = work(&t).join("attachments").join(&first.id);
     std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(folder.join("summary.txt"), "the dot's").unwrap();
+    std::fs::write(folder.join("summary.txt"), "the sol's").unwrap();
     let mine = stage(&t, &dot, "summary.txt", "the person's").await;
     let reply =
         t.rt.chat_with_files(&dot.id, "two", Some(&first.id), &ids(&[&mine]))
@@ -541,7 +541,7 @@ async fn a_worktree_keeps_what_the_dot_did_to_its_attachments() {
         let tree = PathBuf::from(ended.workspace_path.clone().unwrap());
         assert!(
             tree.exists(),
-            "{written}: the worktree went with the dot's work"
+            "{written}: the worktree went with the sol's work"
         );
         assert_eq!(
             std::fs::read_to_string(tree.join(&path)).unwrap(),

@@ -68,7 +68,7 @@ const walk = `
 
   check("theme", getComputedStyle(document.documentElement).getPropertyValue("--dots-primary"),
     document.documentElement.dataset.theme);
-  check("left column", await until(() => button("My tasks") && button("Assigned to dots")));
+  check("left column", await until(() => button("My tasks") && button("Assigned to sols")));
   enter('[aria-label="New project"]', name);
   check("new project opens", await until(() => $("h1")?.textContent === name), $("h1")?.textContent);
   enter('[aria-label="New section"]', "To do");
@@ -115,7 +115,7 @@ const openRun = `
   };
   const button = (text, root = document) =>
     [...root.querySelectorAll("button")].find((b) => b.textContent === text);
-  button("Assigned to dots").click();
+  button("Assigned to sols").click();
   const title = await until(() => button(${JSON.stringify(task)}));
   check("the task is assigned to a dot", title);
   title?.click();

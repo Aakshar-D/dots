@@ -1,7 +1,7 @@
 {
   "name": "projects",
   "title": "Projects",
-  "description": "Projects, tasks and to-dos, shared by you and your dots",
+  "description": "Projects, tasks and to-dos, shared by you and your sols",
   "tools": [
     {
       "name": "list_projects",
@@ -49,7 +49,7 @@
     },
     {
       "name": "list_tasks",
-      "description": "Tasks without their spec, filtered. assignee: \"me\" (you), \"person\", or a dot's id or name. view: \"my_tasks\" (the person's tasks and unassigned to-dos) or \"assigned_to_dots\". due_before: YYYY-MM-DD. At most limit tasks (100 by default), and for you at most about 28 KB of them; more: true means there are more. With many tasks, filter by status (and project_id or assignee) rather than reading them all.",
+      "description": "Tasks without their spec, filtered. assignee: \"me\" (you), \"person\", or a sol's id or name. view: \"my_tasks\" (the person's tasks and unassigned to-dos) or \"assigned_to_dots\". due_before: YYYY-MM-DD. At most limit tasks (100 by default), and for you at most about 28 KB of them; more: true means there are more. With many tasks, filter by status (and project_id or assignee) rather than reading them all.",
       "input": {
         "type": "object",
         "properties": {
@@ -78,7 +78,7 @@
     },
     {
       "name": "create_task",
-      "description": "Add a task: in a project's section, in a project, or with neither as a to-do. assignee: \"me\" (you), \"person\", a dot's id or name, or null. due_on: YYYY-MM-DD or null. A dot cannot create a task as done.",
+      "description": "Add a task: in a project's section, in a project, or with neither as a to-do. assignee: \"me\" (you), \"person\", a sol's id or name, or null. due_on: YYYY-MM-DD or null. A sol cannot create a task as done.",
       "input": {
         "type": "object",
         "properties": {
@@ -97,7 +97,7 @@
     },
     {
       "name": "update_task",
-      "description": "Change a task's fields; each change shows in its Activity. status: to_do, in_progress, in_review or done (only the person marks a task done: set in_review when your work is finished). assignee: \"me\" (you), \"person\", a dot's id or name, or null. due_on: YYYY-MM-DD or null. section_id: a section of any project (the task moves to that project), or null.",
+      "description": "Change a task's fields; each change shows in its Activity. status: to_do, in_progress, in_review or done (only the person marks a task done: set in_review when your work is finished). assignee: \"me\" (you), \"person\", a sol's id or name, or null. due_on: YYYY-MM-DD or null. section_id: a section of any project (the task moves to that project), or null.",
       "input": {
         "type": "object",
         "properties": {
@@ -159,7 +159,7 @@
     },
     {
       "name": "list_dots",
-      "description": "The dots a task can be assigned to: those that use Projects",
+      "description": "The sols a task can be assigned to: those that use Projects",
       "input": { "type": "object", "properties": {}, "additionalProperties": false }
     },
     {
@@ -179,7 +179,7 @@
     },
     {
       "name": "undo",
-      "description": "Undo a change in a task's Activity, while its field still holds what the change set. A dot undoes only dots' changes.",
+      "description": "Undo a change in a task's Activity, while its field still holds what the change set. A sol undoes only sols' changes.",
       "input": {
         "type": "object",
         "properties": { "activity_id": { "type": "string" } },

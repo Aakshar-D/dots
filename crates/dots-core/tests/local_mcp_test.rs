@@ -288,7 +288,7 @@ async fn the_dots_rules_and_mcp_default_come_before_and_after_the_read_only_hint
     assert_eq!(tool_result(&reqs[1], "c1"), "look: {}");
     for id in ["c2", "c3"] {
         let out = tool_result(&reqs[1], id);
-        assert!(out.contains("Denied by the policy of dot 'loco'"), "{out}");
+        assert!(out.contains("Denied by the policy of sol 'loco'"), "{out}");
     }
     assert_eq!(called(&fake), ["look"]);
     assert!(e.store.approvals_for_run(&r.id).await.unwrap().is_empty());

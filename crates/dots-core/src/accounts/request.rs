@@ -46,11 +46,11 @@ struct Envelope {
 /// Why a request code was not accepted.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum RequestError {
-    #[error("this is not a Dots request code")]
+    #[error("this is not a Sage request code")]
     NotACode,
     #[error("the request code is not readable: {0}")]
     Unreadable(String),
-    #[error("the request code's signature doesn't match its Dots ID")]
+    #[error("the request code's signature doesn't match its Sage ID")]
     Signature,
     #[error("request code version {0} is not supported")]
     Version(u32),

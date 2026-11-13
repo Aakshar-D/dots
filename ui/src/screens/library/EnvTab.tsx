@@ -94,7 +94,7 @@ export function VariableDialog(props: {
               ? "Its value is gone from Windows Credential Manager. The new one is not shown."
               : entry?.kind === "secret"
                 ? "The new value takes the old one's place. Neither is shown."
-                : "A dot can read it only where it is granted it."}
+                : "A sol can read it only where it is granted it."}
           </DialogDescription>
         </DialogHeader>
         {!entry && (
@@ -174,7 +174,7 @@ function RemoveVariable({ entry }: { entry: EnvEntry }) {
   return (
     <ConfirmButton
       title={`Remove ${entry.name}?`}
-      description="A dot that is granted it can no longer read it."
+      description="A sol that is granted it can no longer read it."
       confirmLabel="Remove variable"
       disabled={remove.isPending}
       onConfirm={() => remove.mutate()}
@@ -211,7 +211,7 @@ function ImportOffer({
   return (
     <div role="region" aria-label="Import" className="flex flex-col gap-2 rounded-lg border p-3">
       <p className="text-sm">
-        Dots no longer reads its own Windows environment. Library servers use these variables,
+        Sage no longer reads its own Windows environment. Library servers use these variables,
         which Windows sets: <span className="font-mono">{names.join(", ")}</span>. Import them
         into Personal as secrets?
       </p>
@@ -360,7 +360,7 @@ export function EnvTab() {
     <div className="flex flex-col gap-4">
       <div className="flex items-start justify-between gap-4">
         <p className="text-sm text-muted-foreground">
-          Variables your dots can be granted. A server's <code>{"${VAR}"}</code> reads them. A
+          Variables your sols can be granted. A server's <code>{"${VAR}"}</code> reads them. A
           secret is kept in Windows Credential Manager and never shown again.
         </p>
         <Button type="button" onClick={() => setEditing(null)}>

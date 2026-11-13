@@ -21,7 +21,7 @@ describe("the Auto line under a reply", () => {
     );
   });
 
-  it("shows nothing for a dot with its own model", () => {
+  it("shows nothing for a sol with its own model", () => {
     const run = { ...sample.run, model: "opus", model_tier: null, model_reason: null };
     const { container } = render(<AutoLine run={run} />);
     expect(container).toBeEmptyDOMElement();

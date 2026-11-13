@@ -25,7 +25,7 @@ pub const MAX_COMMAND: usize = 100;
 /// What an older Dots does with a list that has guardrails (guardrails spec §3.2), for
 /// `dots-admin` and the Guardrails tab to say before signing.
 pub const COMPAT_NOTE: &str = "Dots 0.4.0 and older can't read a member list with guardrails: \
-     they keep the last list they accepted, or show the account as Waiting. Update every Dots \
+     they keep the last list they accepted, or show the account as Waiting. Update every Sage \
      in the account first.";
 
 /// Why no rule can be saved with the approval of a protected call.
@@ -181,7 +181,7 @@ fn check_path(path: &str) -> Result<(), String> {
     let b = p.as_bytes();
     let drive = b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':';
     if p.starts_with('/') || drive || p.starts_with('~') {
-        return Err("must be relative to the dot's folder".into());
+        return Err("must be relative to the sol's folder".into());
     }
     if p.split('/').any(|c| c == "..") {
         return Err("may not hold '..'".into());
@@ -279,7 +279,7 @@ impl DotRails {
         let max = self.ceiling()?;
         let why = over_ceiling_spec(policy, own_settings, max)?;
         Some(format!(
-            "{account}: a Member's dot in the {} workspace may use up to {}, and {why}. Ask an \
+            "{account}: a Member's sol in the {} workspace may use up to {}, and {why}. Ask an \
              Admin or Owner.",
             self.workspace_name,
             preset_label(max)
@@ -296,7 +296,7 @@ impl DotRails {
         let max = self.ceiling()?;
         let why = over_ceiling_spec(policy, own_settings, max)?;
         Some(format!(
-            "{account}: this dot's tool policy is past what a Member may use in the {} \
+            "{account}: this sol's tool policy is past what a Member may use in the {} \
              workspace ({why}). Change the policy, or ask an Admin.",
             self.workspace_name
         ))
@@ -417,7 +417,7 @@ pub fn unknown_rails(
 ) -> Option<String> {
     match rails_state(orgs, dot.org_id.as_deref(), &dot.workspace_id) {
         RailsState::Unknown(reason) => Some(format!(
-            "{account}: Dots can't read the guardrails of this dot's workspace ({reason}), so it \
+            "{account}: Sage can't read the guardrails of this sol's workspace ({reason}), so it \
              doesn't run it. Refresh the account, or ask an Admin."
         )),
         _ => None,

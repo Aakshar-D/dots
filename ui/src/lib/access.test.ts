@@ -32,25 +32,25 @@ describe("notAllowedText", () => {
   it("names the role and the action", () => {
     const viewer = { kind: "role", role: "viewer" } as const;
     expect(notAllowedText("Acme", viewer, "edit")).toBe(
-      "Acme: a Viewer can't create or change dots. Ask an Admin or Owner.",
+      "Acme: a Viewer can't create or change sols. Ask an Admin or Owner.",
     );
     expect(notAllowedText("Acme", viewer, "run")).toBe(
-      "Acme: a Viewer can't run dots. Ask an Admin or Owner.",
+      "Acme: a Viewer can't run sols. Ask an Admin or Owner.",
     );
     expect(notAllowedText("Acme", viewer, "answer")).toBe(
       "Acme: a Viewer can't answer approvals. Ask an Admin or Owner.",
     );
   });
 
-  it("uses the core's own words for a PC off the list, e.g. a changed Dots ID", () => {
-    const changed = "Acme: this PC's Dots ID changed. Send the new one to an Admin.";
+  it("uses the core's own words for a PC off the list, e.g. a changed Sage ID", () => {
+    const changed = "Acme: this PC's Sage ID changed. Send the new one to an Admin.";
     const access = accessOf(org({ membership: "waiting", role: null, not_member_text: changed }), base.id);
     expect(notAllowedText("Acme", access, "run")).toBe(changed);
   });
 
   it("says why a PC off the list gets nothing", () => {
     expect(notAllowedText("Acme", { kind: "waiting" }, "edit")).toBe(
-      "Acme: you aren't on its member list yet. Send your Dots ID to an Admin.",
+      "Acme: you aren't on its member list yet. Send your Sage ID to an Admin.",
     );
     expect(notAllowedText("Acme", { kind: "removed" }, "run")).toBe(
       "Acme: you were removed from it.",

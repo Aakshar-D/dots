@@ -56,7 +56,7 @@ export function ReviewActions(props: {
           description={
             <>
               The worktree folder and the branch <code>{props.branch}</code> are deleted, with
-              every change the dot made there. This cannot be undone.
+              every change the sol made there. This cannot be undone.
             </>
           }
           confirmLabel="Discard the worktree"

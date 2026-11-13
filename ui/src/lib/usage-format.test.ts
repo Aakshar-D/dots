@@ -36,10 +36,10 @@ describe("the usage numbers", () => {
         { cwd: String.raw`C:\work\app\src`, name: "src" },
         { cwd: "/home/me/site/src/", name: "src" },
         { cwd: "C:/work/dots", name: "dots" },
-        { cwd: null, name: "Dots (all dots)" },
+        { cwd: null, name: "Sage (all sols)" },
         { cwd: "", name: "(unknown folder)" },
       ]),
-    ).toEqual(["app/src", "site/src", "dots", "Dots (all dots)", "(unknown folder)"]);
+    ).toEqual(["app/src", "site/src", "dots", "Sage (all sols)", "(unknown folder)"]);
   });
 
   it("say a run time in seconds, minutes or hours", () => {

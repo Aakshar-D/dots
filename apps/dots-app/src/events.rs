@@ -487,7 +487,7 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
             format!("{dot_name} didn't get your message"),
             first_line(
                 run.undelivered_reason.as_deref(),
-                "It did not reach the dot.",
+                "It did not reach the sol.",
             ),
         ),
         Notice::ScheduledNotSent { message } => (
@@ -707,7 +707,7 @@ async fn notify(app: &AppHandle, rt: &Runtime, notice: &Notice) {
         (_, Some(id)) => rt.get_dot(id).await.map(|d| d.spec.name).ok(),
         (_, None) => None,
     };
-    let (title, body) = notice_text(notice, name.as_deref().unwrap_or("A dot"));
+    let (title, body) = notice_text(notice, name.as_deref().unwrap_or("A sol"));
     // A click opens what the notice is about; without its dot, the home.
     let route = click_route(notice, dot_id.as_deref());
     let id = notify_routes::remember(app, route);
@@ -1166,12 +1166,12 @@ mod tests {
         );
         assert_eq!(
             notice_text(&undelivered(None), "nightly").1,
-            "It did not reach the dot."
+            "It did not reach the sol."
         );
         let not_sent = Notice::ScheduledNotSent {
             message: Box::new(scheduled(
                 ScheduledStatus::Failed,
-                Some("dot 'nightly': its org 'acme' was removed\nmore"),
+                Some("sol 'nightly': its org 'acme' was removed\nmore"),
                 "u1",
             )),
         };
@@ -1179,7 +1179,7 @@ mod tests {
             notice_text(&not_sent, "nightly"),
             (
                 "nightly didn't get your scheduled message".into(),
-                "dot 'nightly': its org 'acme' was removed".into()
+                "sol 'nightly': its org 'acme' was removed".into()
             )
         );
         let ask = Notice::ApprovalNeeded {
@@ -1426,10 +1426,10 @@ mod tests {
             })))
             .unwrap();
         assert_eq!(
-            notice_text(&started, "A dot"),
+            notice_text(&started, "A sol"),
             (
                 "Claude usage".to_string(),
-                "Dots is holding background runs: Claude 5-hour usage is at 64%".to_string()
+                "Sage is holding background runs: Claude 5-hour usage is at 64%".to_string()
             )
         );
         assert_eq!(notice_route(&started, ""), "/usage");
@@ -1440,12 +1440,12 @@ mod tests {
             })))
             .unwrap();
         assert_eq!(
-            notice_text(&weekly, "A dot").1,
-            "Dots is holding background runs: Claude weekly usage is at 72%"
+            notice_text(&weekly, "A sol").1,
+            "Sage is holding background runs: Claude weekly usage is at 72%"
         );
         let ended = notifier.decide(&update(Some(HoldChange::Ended))).unwrap();
         assert_eq!(
-            notice_text(&ended, "A dot"),
+            notice_text(&ended, "A sol"),
             (
                 "Claude usage".to_string(),
                 "Held runs are starting".to_string()
@@ -1705,7 +1705,7 @@ mod tests {
             items: vec![mark("courier asks: Ship it?")],
         };
         assert_eq!(
-            notice_text(&one, "A dot"),
+            notice_text(&one, "A sol"),
             (
                 "Back from snooze: courier asks: Ship it?".to_string(),
                 "It is at the top of your Inbox.".to_string()
@@ -1719,7 +1719,7 @@ mod tests {
             ],
         };
         assert_eq!(
-            notice_text(&three, "A dot"),
+            notice_text(&three, "A sol"),
             (
                 "Back from snooze: 3 items".to_string(),
                 "courier asks: Ship it?; courier: run to review; nightly's schedule needs attention"
@@ -1729,7 +1729,7 @@ mod tests {
         let long = Notice::BackFromSnooze {
             items: vec![mark(&"a".repeat(80)), mark(&"b".repeat(80))],
         };
-        let (_, body) = notice_text(&long, "A dot");
+        let (_, body) = notice_text(&long, "A sol");
         assert_eq!(body.chars().count(), 120);
         assert!(body.starts_with(&"a".repeat(80)));
         assert!(body.ends_with('…'));

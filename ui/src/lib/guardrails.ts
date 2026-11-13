@@ -32,10 +32,10 @@ export function capitalized(label: string): string {
 export function ceilingLine(ceiling: PolicyCeiling): string | null {
   const where = ceiling.workspace_name ?? "this workspace";
   if (ceiling.applies_as === "member" && ceiling.max_preset) {
-    return `Members' dots in ${where} can go up to ${PRESET_NAMES[ceiling.max_preset]}. Protected calls are refused; an Admin can make them.`;
+    return `Members' sols in ${where} can go up to ${PRESET_NAMES[ceiling.max_preset]}. Protected calls are refused; an Admin can make them.`;
   }
   if (ceiling.applies_as === "admin") {
-    return `${where} has guardrails: your dots always ask before a protected call.`;
+    return `${where} has guardrails: your sols always ask before a protected call.`;
   }
   return null;
 }

@@ -162,7 +162,7 @@ fn round_trip_from_keygen_to_a_join_code_that_dots_accepts() {
     let verify = ok(&["policy", "verify", &signed_file, "--pub", &pub_file]);
     assert!(verify
         .out
-        .starts_with("ok: a Dots client in org 'acme-eng' accepts this policy"));
+        .starts_with("ok: a Sage client in org 'acme-eng' accepts this policy"));
     assert!(verify
         .out
         .contains("plain entries, shown with their values: LOG_LEVEL"));
@@ -342,7 +342,7 @@ ok
   org: acme-eng
   issued at: 2026-10-21T09:00:00Z
   plain entries, shown with their values: LOG_LEVEL, API_BASE_URL; every other org entry is a secret
-  dots may be granted: every org entry except names matching PROD_*
+  sols may be granted: every org entry except names matching PROD_*
   personal entries: win over the org's entry of the same name
   secrets in the shell: allowed
   refresh: every 1 minute
@@ -420,7 +420,7 @@ fn policy_sign_rewrites_only_issued_at() {
     assert_eq!(envelope["policy"], expected);
     assert_eq!(signed.policy.issued_at, "2026-10-23T10:00:00Z");
     let signature = envelope["signature"].as_str().unwrap();
-    assert!(signature.contains("trusted comment: dots policy acme-eng 2026-10-23T10:00:00Z\n"));
+    assert!(signature.contains("trusted comment: sols policy acme-eng 2026-10-23T10:00:00Z\n"));
     verify_policy(&signed.text, &public_key, "acme-eng").unwrap();
 }
 
@@ -438,7 +438,7 @@ fn a_signature_by_another_key_fails_verify() {
     let error = failure(&["policy", "verify", &signed_file, "--pub", &other_pub]);
     assert_eq!(
         error,
-        AdminError::Failed("a Dots client would refuse it: signature does not match".into())
+        AdminError::Failed("a Sage client would refuse it: signature does not match".into())
     );
     assert_eq!(error.exit_code(), 1);
     assert_eq!(
@@ -456,13 +456,13 @@ fn policy_verify_checks_the_org() {
     assert_eq!(
         error,
         AdminError::Failed(
-            "a Dots client would refuse it: for org 'acme-eng', not 'other-org'".into()
+            "a Sage client would refuse it: for org 'acme-eng', not 'other-org'".into()
         )
     );
     let error = verify_signed("not signed", &public_key, None)
         .unwrap_err()
         .to_string();
-    assert!(error.starts_with("a Dots client would refuse it: the signed policy is not readable"));
+    assert!(error.starts_with("a Sage client would refuse it: the signed policy is not readable"));
     let not_a_key = verify_signed(&signed.text, "RWnope", None)
         .unwrap_err()
         .to_string();
@@ -1176,20 +1176,20 @@ fn bad_dots_id_refused() {
         "--out",
         &file,
     ]);
-    assert!(err.to_string().contains("not a Dots ID"), "{err}");
+    assert!(err.to_string().contains("not a Sage ID"), "{err}");
     assert!(!Path::new(&file).exists());
     let file = new_roster(dir.path(), &dots_id());
     let err = failure(&[
         "roster", "add", &file, "--name", "B", "--email", "b@a.test", "--key", "nope", "--role",
         "member",
     ]);
-    assert!(err.to_string().contains("not a Dots ID"), "{err}");
+    assert!(err.to_string().contains("not a Sage ID"), "{err}");
     let policy = path(dir.path(), "policy.json");
     ok(&[
         "policy", "new", "--org-id", "acme-eng", "--roster", "--out", &policy,
     ]);
     let err = failure(&["policy", "admins", "add", &policy, "nope"]);
-    assert!(err.to_string().contains("not a Dots ID"), "{err}");
+    assert!(err.to_string().contains("not a Sage ID"), "{err}");
 }
 
 #[test]
@@ -1218,7 +1218,7 @@ fn policy_new_roster_with_admins() {
     let err = failure(&[
         "policy", "new", "--org-id", "acme-eng", "--roster", "--admin", "nope",
     ]);
-    assert_eq!(err.to_string(), "'nope' is not a Dots ID");
+    assert_eq!(err.to_string(), "'nope' is not a Sage ID");
     let err = failure(&[
         "policy", "new", "--org-id", "acme-eng", "--roster", "--admin", &a, "--admin", &a,
     ]);
@@ -1341,7 +1341,7 @@ fn request_inspect_refuses_tampered() {
     let AdminError::Failed(text) = failure(&["request", "inspect", "hello"]) else {
         panic!("expected a failure")
     };
-    assert_eq!(text, "this is not a Dots request code");
+    assert_eq!(text, "this is not a Sage request code");
     // Change the request inside the envelope; the signature no longer matches.
     let body = code.strip_prefix("dotsreq_").unwrap();
     let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD

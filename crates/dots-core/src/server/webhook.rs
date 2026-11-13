@@ -44,7 +44,7 @@ pub async fn trigger(
 ) -> Response {
     let dot = match s.store.get_dot(&id).await {
         Ok(d) => d,
-        Err(Error::NotFound(_)) => return error(StatusCode::NOT_FOUND, "unknown dot"),
+        Err(Error::NotFound(_)) => return error(StatusCode::NOT_FOUND, "unknown sol"),
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
     // A bearer header only: a token in the URL ends up in proxy logs (env vault spec §11).
@@ -59,7 +59,7 @@ pub async fn trigger(
         return error(StatusCode::UNAUTHORIZED, "invalid token");
     }
     if !dot.spec.enabled {
-        return error(StatusCode::CONFLICT, "dot is disabled");
+        return error(StatusCode::CONFLICT, "sol is disabled");
     }
     // A role that may not run the account's dots is refused now, with the refusal's words: a
     // queued run would only be held, and fire with every other call once the role returns

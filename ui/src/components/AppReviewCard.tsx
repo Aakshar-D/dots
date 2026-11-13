@@ -116,7 +116,7 @@ function Preview({ proposal }: { proposal: AppProposal }) {
     return (
       <div role="alert" className="flex flex-col items-start gap-2 text-sm">
         <p>
-          Dots closed this preview to open another card's: it keeps 8 open at a time. Your changes
+          Sage closed this preview to open another card's: it keeps 8 open at a time. Your changes
           in it are gone.
         </p>
         <Button
@@ -162,7 +162,7 @@ function Preview({ proposal }: { proposal: AppProposal }) {
       </div>
       <p className="text-xs text-muted-foreground">
         Running in its sandbox on sample data. Your changes here vanish when the card closes, and
-        it cannot start dots.
+        it cannot start sols.
       </p>
     </div>
   );
@@ -234,7 +234,7 @@ function Summary({ proposal }: { proposal: AppProposal }) {
     <dl className="text-sm">
       <Label>What it does</Label>
       <dd>{summary.description}</dd>
-      <Label>Tools dots get</Label>
+      <Label>Tools sols get</Label>
       <dd>
         <ul className="flex flex-col gap-1">
           {summary.tools.map((tool) => (
@@ -249,10 +249,10 @@ function Summary({ proposal }: { proposal: AppProposal }) {
       <Label>Reaches outside its data</Label>
       <dd>
         {summary.permissions.includes("start_dots")
-          ? "Can start dots"
+          ? "Can start sols"
           : "Nothing (no files, no network)"}
       </dd>
-      <dd className="text-xs text-muted-foreground">Sees the names of the dots that use it.</dd>
+      <dd className="text-xs text-muted-foreground">Sees the names of the sols that use it.</dd>
       <Label>Tests</Label>
       <dd>
         {passed} of {plural(results.length, "test")} passed
@@ -309,7 +309,7 @@ function Decide({ proposal }: { proposal: AppProposal }) {
     <footer className="flex flex-col gap-2 border-t p-3">
       {starts && (
         <p className="text-xs text-muted-foreground">
-          It asks to start dots. It is added with "Can start dots" off; you can switch it on in{" "}
+          It asks to start sols. It is added with "Can start sols" off; you can switch it on in{" "}
           <Link to="/apps" className="text-foreground hover:underline">
             Apps
           </Link>
@@ -338,7 +338,7 @@ function Decide({ proposal }: { proposal: AppProposal }) {
             value={text}
             maxLength={MAX_ASK}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Say what the dot should change"
+            placeholder="Say what the sol should change"
           />
           <div className="flex gap-2">
             <Button
@@ -372,7 +372,7 @@ function Decide({ proposal }: { proposal: AppProposal }) {
         )}
         <ConfirmButton
           title={`Discard ${summary.title}?`}
-          description="The dot's files for it are deleted here, and the dot hears that you discarded it."
+          description="The sol's files for it are deleted here, and the sol hears that you discarded it."
           confirmLabel="Discard"
           disabled={decide.isPending}
           onConfirm={() => decide.mutate({ kind: "discard" })}

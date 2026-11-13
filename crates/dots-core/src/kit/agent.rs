@@ -83,7 +83,7 @@ pub fn read_agent(path: &Path) -> Result<AgentFile, String> {
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let fm = parse_frontmatter(&text);
     if !fm.parsed {
-        return Err("it has no frontmatter Dots can read".into());
+        return Err("it has no frontmatter Sage can read".into());
     }
     let prompt = fm.body.trim().to_string();
     if prompt.is_empty() {
@@ -242,10 +242,10 @@ pub fn agent_policy(tools: &AgentTools) -> (Policy, Vec<String>) {
             warnings.push(format!("{tool} asks before each use."));
         } else if tool.starts_with("mcp__") {
             warnings.push(format!(
-                "{tool} is left out: the dot does not have that MCP server."
+                "{tool} is left out: the sol does not have that MCP server."
             ));
         } else {
-            warnings.push(format!("{tool} is left out: Dots does not know this tool."));
+            warnings.push(format!("{tool} is left out: Sage does not know this tool."));
         }
     }
     (policy, warnings)

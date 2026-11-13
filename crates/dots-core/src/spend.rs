@@ -177,19 +177,19 @@ pub fn first_hit(
     }
     if let Some(cap) = cost_reached(all_today.cost_usd, global.daily_usd) {
         return Some(of_all(format!(
-            "All dots reached the {} daily cap",
+            "All sols reached the {} daily cap",
             usd(cap)
         )));
     }
     if let Some(cap) = tokens_reached(all_today.tokens, global.daily_tokens) {
         return Some(of_all(format!(
-            "All dots reached the {}-token daily cap",
+            "All sols reached the {}-token daily cap",
             thousands(cap)
         )));
     }
     if let Some(cap) = cost_reached(all_month.cost_usd, global.monthly_usd) {
         return Some(of_all(format!(
-            "All dots reached the {} monthly cap",
+            "All sols reached the {} monthly cap",
             usd(cap)
         )));
     }
