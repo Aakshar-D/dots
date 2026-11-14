@@ -473,3 +473,40 @@ async fn migration_0024_puts_what_was_there_in_default() {
     assert_eq!(store.get_team("T1").await.unwrap().workspace_id, "default");
     store.close().await;
 }
+
+/// A fetch mirrors an org's workspaces while other parts of the app write: no mirror may fail
+/// because another write was committed between its read and its first write.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_mirror_holds_while_others_write() {
+    let (_dir, store) = temp_store().await;
+    let roster = vec![Workspace {
+        id: "payments".into(),
+        name: "Payments".into(),
+        use_rules: None,
+        guardrails: None,
+    }];
+    let writer = {
+        let store = store.clone();
+        tokio::spawn(async move {
+            for n in 0..400 {
+                store
+                    .rename_workspace("personal", "default", &format!("Mine {n}"))
+                    .await
+                    .unwrap();
+            }
+        })
+    };
+    for n in 0..200 {
+        store
+            .mirror_workspaces("acme-eng", &roster)
+            .await
+            .unwrap_or_else(|e| panic!("mirror {n}: {e}"));
+    }
+    writer.await.unwrap();
+    assert!(store
+        .workspace("acme-eng", "payments")
+        .await
+        .unwrap()
+        .is_some());
+    store.close().await;
+}
