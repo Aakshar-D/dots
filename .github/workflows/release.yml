@@ -77,7 +77,7 @@ jobs:
   # The macOS app, one universal build for Apple silicon and Intel Macs: a .dmg to install from
   # and the updater's .app.tar.gz with its signature. Without the Apple secrets the app is not
   # code-signed or notarized, and a person opens it the first time with right-click → Open (or
-  # `xattr -d com.apple.quarantine /Applications/Dots.app`). A failure here never holds back
+  # `xattr -d com.apple.quarantine /Applications/Sage.app`). A failure here never holds back
   # the Windows release: it is published without the Mac files.
   macos:
     needs: test
@@ -132,7 +132,7 @@ jobs:
           # Tauri's own options go before "--"; what follows it is passed to cargo.
           bun run tauri build --target universal-apple-darwin --bundles app,dmg -- --locked
 
-      # The updater replaces the app from a .tar.gz of Dots.app, signed with the updater key
+      # The updater replaces the app from a .tar.gz of Sage.app, signed with the updater key
       # as the Windows installer is.
       - name: Pack and sign the updater archive
         shell: bash
@@ -143,10 +143,10 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           bundle="target/universal-apple-darwin/release/bundle"
           mkdir mac-release
-          tar -czf "mac-release/Dots_${version}_universal.app.tar.gz" -C "$bundle/macos" Dots.app
-          cp "$bundle"/dmg/*.dmg "mac-release/Dots_${version}_universal.dmg"
-          bun run tauri signer sign --app-version "$version" "mac-release/Dots_${version}_universal.app.tar.gz"
-          test -s "mac-release/Dots_${version}_universal.app.tar.gz.sig"
+          tar -czf "mac-release/Sage_${version}_universal.app.tar.gz" -C "$bundle/macos" Sage.app
+          cp "$bundle"/dmg/*.dmg "mac-release/Sage_${version}_universal.dmg"
+          bun run tauri signer sign --app-version "$version" "mac-release/Sage_${version}_universal.app.tar.gz"
+          test -s "mac-release/Sage_${version}_universal.app.tar.gz.sig"
           ls -l mac-release
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -232,7 +232,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          installer="target/release/bundle/nsis/Dots_${version}_x64-setup.exe"
+          installer="target/release/bundle/nsis/Sage_${version}_x64-setup.exe"
           bun run tauri signer sign --app-version "$version" "$installer"
           test -s "$installer.sig"
 
@@ -251,13 +251,13 @@ jobs:
           MAC_RESULT: ${{ needs.macos.result }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          installer="target/release/bundle/nsis/Dots_${version}_x64-setup.exe"
+          installer="target/release/bundle/nsis/Sage_${version}_x64-setup.exe"
           # The macOS files, when their build succeeded; the manifest then offers Macs the update.
           mac_archive=""
           mac_files=()
           if [ "$MAC_RESULT" = "success" ]; then
-            mac_archive="mac-release/Dots_${version}_universal.app.tar.gz"
-            mac_files=("$mac_archive" "$mac_archive.sig" "mac-release/Dots_${version}_universal.dmg")
+            mac_archive="mac-release/Sage_${version}_universal.app.tar.gz"
+            mac_files=("$mac_archive" "$mac_archive.sig" "mac-release/Sage_${version}_universal.dmg")
           else
             echo "release: the macOS build gave '$MAC_RESULT'; publishing without the Mac files"
           fi
