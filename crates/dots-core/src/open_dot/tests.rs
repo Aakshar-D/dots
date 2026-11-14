@@ -447,6 +447,36 @@ async fn stop_and_cancel_clear_pending() {
     );
     assert!(!t.mind.pending());
     assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+
+    // "thank you" and "close" end the conversation the same way: what waited is dropped,
+    // a short line is said, and the stage rests.
+    t.fake.push(approve_a1());
+    t.hear("approve the research one").await;
+    assert!(t.mind.pending());
+    let got = t.hear("Thank you, I'll call you later.").await;
+    assert_eq!(
+        got,
+        vec![
+            MindEvent::Cleared,
+            MindEvent::Say {
+                delta: "You're welcome.".into()
+            },
+            MindEvent::SayEnd { then: Then::Rest }
+        ]
+    );
+    assert!(!t.mind.pending());
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    let got = t.hear("close").await;
+    assert_eq!(
+        got,
+        vec![
+            MindEvent::Cleared,
+            MindEvent::Say {
+                delta: "Bye.".into()
+            },
+            MindEvent::SayEnd { then: Then::Rest }
+        ]
+    );
     // a yes now has nothing to answer
     let got = t.hear("yes").await;
     assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
