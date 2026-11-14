@@ -352,14 +352,14 @@ describe("the Open Sage stage", () => {
     expect(within(stage()!).getByText("Say your answer.")).toBeVisible();
     expect(screen.queryByRole("group", { name: "What should it be called?" })).toBeNull();
     const footer = stage()!.querySelector("[data-footer-line]");
-    expect(footer).toHaveTextContent("Not listening. Click the sols to answer by voice.");
+    expect(footer).toHaveTextContent("Not listening. Click the mark to answer by voice.");
     expect(footer).not.toHaveTextContent(/pick an option/);
   });
 
   it("names the shortcut to interrupt only when one is set", () => {
     render(<OpenDotStage />, "");
     show({ state: "speaking", micOpen: false });
-    expect(stage()!.querySelector("[data-footer-line]")).toHaveTextContent(/^Speaking\. Click the sols to interrupt\.$/);
+    expect(stage()!.querySelector("[data-footer-line]")).toHaveTextContent(/^Speaking\. Click the mark to interrupt\.$/);
   });
 
   it("lets the options be tried again when a pick fails", async () => {
@@ -533,10 +533,10 @@ describe("the Open Sage stage", () => {
     show({ state: "thinking", micOpen: false });
     expect(footer()).toHaveTextContent("Thinking…");
     show({ state: "speaking", micOpen: false });
-    expect(footer()).toHaveTextContent("Speaking. Click the sols or press the shortcut to interrupt.");
+    expect(footer()).toHaveTextContent("Speaking. Click the mark or press the shortcut to interrupt.");
     show({ state: "idle", micOpen: false, ask: { question: "Run it?", options: ["Yes", "No"], seq: 1 } });
     expect(footer()).toHaveTextContent(
-      "Not listening. Click the sols to answer by voice, or pick an option.",
+      "Not listening. Click the mark to answer by voice, or pick an option.",
     );
     show({ trouble: "No microphone was found." });
     expect(footer()).toHaveTextContent("No microphone was found.");
