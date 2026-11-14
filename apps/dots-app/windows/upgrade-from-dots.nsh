@@ -43,7 +43,12 @@ Var DotsDir
       Delete "$DESKTOP\${PRODUCTNAME}.lnk"
       Rename "$DESKTOP\${DOTS_NAME}.lnk" "$DESKTOP\${PRODUCTNAME}.lnk"
     ${EndIf}
-    ; Sage writes its own sign-in entry when it starts, if the setting is on.
+    ; The entry that starts it at sign-in takes the new name, so it still starts at the next
+    ; sign-in if Sage is not opened before then. Sage rewrites it from its setting when it starts.
+    ReadRegStr $R8 HKCU "${RUN_KEY}" "${DOTS_NAME}"
+    ${If} $R8 != ""
+      WriteRegStr HKCU "${RUN_KEY}" "${PRODUCTNAME}" $R8
+    ${EndIf}
     DeleteRegValue HKCU "${RUN_KEY}" "${DOTS_NAME}"
     DeleteRegValue HKCU "${RUN_APPROVED_KEY}" "${DOTS_NAME}"
     ; Windows' list of installed apps shows Sage only.
