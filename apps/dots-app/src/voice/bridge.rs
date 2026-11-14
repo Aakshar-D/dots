@@ -170,7 +170,7 @@ const WENT_WRONG: &str = "Something went wrong. Try again.";
 
 /// A card (a list, with no question waiting) stays this long after Dot rests, then clears:
 /// the stage closes and spoken notices may be said again.
-pub const CARD_LINGER: std::time::Duration = std::time::Duration::from_secs(20);
+pub const CARD_LINGER: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// A level the UI can read: anything not finite is 0.
 fn finite(level: f32) -> f32 {
@@ -240,6 +240,8 @@ impl Bridge {
                         self.mind.cancel();
                         self.drop_live(&mut s);
                     }
+                    // A new conversation: the card of the last one goes.
+                    self.drop_card(&mut s);
                 }
                 self.send(VoiceEvent::Woke);
             }
@@ -361,6 +363,10 @@ impl Bridge {
             s.owed = None;
             // An older turn's events are dropped from now on: it installs no step either.
             self.mind.input_arrived();
+            // A card left from an older turn (a list, with no question waiting) goes now: the
+            // person has moved on, and it must not show beside the next reply. A card with
+            // its question stays, since this sentence may be the answer.
+            self.drop_card(&mut s);
             // a card left from an older turn is no longer cleared on that turn's clock
             s.shown += 1;
             self.session.thinking();
@@ -427,6 +433,14 @@ impl Bridge {
                 hook();
             }
         });
+    }
+
+    /// A card showing with no question waiting is forgotten, and the UI is told.
+    fn drop_card(&self, s: &mut Inner) {
+        if s.showing && !s.asking {
+            s.forget();
+            self.send(VoiceEvent::Cleared);
+        }
     }
 
     /// `mind.lapse` (it ends the turn in flight and drops a step that waits); the live turn
@@ -1017,6 +1031,53 @@ mod tests {
         )));
     }
 
+    /// A list card left from the turn before goes when the next sentence is heard, and when
+    /// "Hey Sage" starts a new conversation: it never shows beside the next reply.
+    #[tokio::test(start_paused = true)]
+    async fn a_card_left_at_rest_goes_with_the_next_sentence_or_wake() {
+        let mut r = rig();
+        let card = || {
+            Step::Send(MindEvent::Card {
+                card: Card::List {
+                    title: "What needs you".into(),
+                    lines: vec!["Research wants to use Bash".into()],
+                },
+            })
+        };
+        r.mind.script(vec![
+            say("One thing needs you."),
+            card(),
+            end(Then::FollowUp),
+        ]);
+        r.heard("what needs me", 1);
+        settle().await;
+        r.ui();
+        r.mind
+            .script(vec![say("It is sunny."), end(Then::FollowUp)]);
+        r.heard("what is the weather", 2);
+        settle().await;
+        let ui = r.ui();
+        let cleared = ui.iter().position(|e| *e == VoiceEvent::Cleared);
+        let heard = ui
+            .iter()
+            .position(|e| *e == heard_ev("what is the weather"));
+        assert!(cleared.is_some() && cleared < heard, "{ui:?}");
+        assert!(r.bridge.at_rest() || !ui.iter().any(|e| matches!(e, VoiceEvent::Card { .. })));
+
+        r.mind
+            .script(vec![say("One thing needs you."), card(), end(Then::Rest)]);
+        r.heard("what needs me", 3);
+        settle().await;
+        r.bridge.on_session(SessionEvent::State {
+            state: State::Idle,
+            mic_open: false,
+        });
+        r.ui();
+        r.bridge.on_session(SessionEvent::Woke);
+        assert_eq!(r.ui(), vec![VoiceEvent::Cleared, VoiceEvent::Woke]);
+        assert!(r.bridge.at_rest());
+    }
+
     /// A list card ("what needs you") with no question waiting clears itself `CARD_LINGER`
     /// after Dot rests: the stage closes, and the bridge is at rest for spoken notices again
     /// (the service is told, to say what waits).
@@ -1070,7 +1131,7 @@ mod tests {
             state: State::Idle,
             mic_open: false,
         });
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        tokio::time::sleep(CARD_LINGER / 2).await;
         r.mind.script(vec![
             say("One thing needs you."),
             card(),
@@ -1083,10 +1144,10 @@ mod tests {
             mic_open: false,
         });
         r.ui();
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        tokio::time::sleep(CARD_LINGER * 3 / 4).await;
         settle().await;
         assert!(!r.bridge.at_rest(), "cleared on the older turn's clock");
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        tokio::time::sleep(CARD_LINGER / 4).await;
         settle().await;
         assert!(r.bridge.at_rest());
         assert_eq!(told.load(Ordering::SeqCst), 2);

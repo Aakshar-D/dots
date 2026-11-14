@@ -144,6 +144,9 @@ const SAID_BYTES: usize = 400;
 
 const FILLER: &str = "One moment.";
 const OKAY: &str = "Okay.";
+/// Said to "thank you", "goodbye" or "close" before the stage closes.
+const WELCOME: &str = "You're welcome.";
+const BYE: &str = "Bye.";
 const WONT: &str = "Okay, I won't.";
 const NOT_SENT: &str = "Okay, not sent.";
 const NOT_CREATED: &str = "Okay, not created.";
@@ -927,7 +930,7 @@ impl Mind {
         };
 
         match quick {
-            Some(Quick::Stop) | Some(Quick::Cancel) => {
+            Some(Quick::Stop) | Some(Quick::Cancel) | Some(Quick::Bye) => {
                 let setup = waiting
                     .as_ref()
                     .and_then(|w| w.kind.setup_id().map(str::to_string));
@@ -944,6 +947,17 @@ impl Mind {
                 if quick == Some(Quick::Cancel) {
                     self.finish(o, &heard, OKAY, Then::Rest);
                     return "cancel";
+                }
+                if quick == Some(Quick::Bye) {
+                    // What waited is dropped and the card goes: after the line the session
+                    // rests, and the stage closes.
+                    let line = if heard.to_lowercase().contains("thank") {
+                        WELCOME
+                    } else {
+                        BYE
+                    };
+                    self.finish(o, &heard, line, Then::Rest);
+                    return "bye";
                 }
                 o.end(Then::Rest);
                 return "stop";

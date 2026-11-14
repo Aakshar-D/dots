@@ -22,7 +22,7 @@ Any of these opens the stage, a small panel at the bottom of the window, and pla
 - In the tray menu, choose **Talk to Sage**. It is available once Open Sage is ready.
 - Say "Hey Sage". This is off until you turn on **Hey Sage** in Settings. See Privacy.
 
-You do not press a button to finish. Sage notices when you stop talking. After it answers, it listens a few more seconds so you can follow up. Esc closes the stage.
+You do not press a button to finish. Sage notices when you stop talking. After it answers, it listens a few more seconds so you can follow up. Esc closes the stage. So does "thank you", "goodbye" or "close". A list Sage showed stays 10 seconds after it rests, and goes at once when you say the next thing.
 
 ## What you can say
 
@@ -37,6 +37,7 @@ You do not press a button to finish. Sage notices when you stop talking. After i
 | "Open the research sol." or "Show settings." | Opens that screen. It can open a sol, Settings, the Inbox, Usage and Home. | No |
 | "Stop." or "Never mind." or "Cancel." | Stops speaking and drops the step it was waiting on. | No |
 | "Say that again." | Repeats its last reply. | No |
+| "Thank you." or "Goodbye." or "Close." or "Thank you, I'll call you later." | Says "You're welcome." or "Bye.", drops the step it was waiting on and closes the stage. | No |
 
 If Sage does not know which sol you mean, it asks and offers the closest names as numbered options. You can say the number or the name, or click one. If you ask for something it cannot do, it says so in one sentence.
 
