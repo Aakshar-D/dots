@@ -2,11 +2,10 @@ import { useEffect, useId, useLayoutEffect, useRef, type JSX } from "react";
 
 import { voiceStore } from "@/lib/use-voice";
 
-import { createBreath, LOGO, type BreathState } from "./breath-model";
+import { createBreath, LOGO, type Bar, type BreathState } from "./breath-model";
 
-/// The three dots of the Dots mark: yellow, blue, green. The fourth body is the extra lobe for a
-/// fourth option, in the app's teal.
-const COLOURS = ["#f2c94c", "#56ccf2", "#6fcf97", "#22c3a6"] as const;
+/// The middle bar's colours, left to right across the whole box: lime, mint, sky.
+const SWEEP = ["#c9f27a", "#5fe0a6", "#4bb8e8"] as const;
 
 const LABELS: Record<BreathState, string> = {
   resting: "Sage is resting",
@@ -18,19 +17,12 @@ const LABELS: Record<BreathState, string> = {
   trouble: "Sage has a problem",
 };
 
-/// The prototype's blurs (9 and 26 in its units), in the 200 box. They are in the box's units,
-/// so they scale with `size` and keep the same proportion to the dots at every size.
-const MELT_BLUR = 9 * 0.7;
-const HALO_BLUR = 26 * 0.7;
-/// Below this many pixels the dots are drawn without melting. The melt blurs the dots and cuts
-/// the blur at a hard edge: at 24 px the small dot is about 2 px across in radius and the blur
-/// under 1 px, so the cut leaves jagged specks with no antialiasing. Plain circles read better.
-const MELT_MIN_SIZE = 40;
-/// The melt's alpha ramp: a soft edge (12) cut at the prototype's point (alpha 5/12, as 24 -10).
-const MELT_ALPHA = "0 0 0 12 -5";
-/// The rail form draws the arrangement this much larger around the middle, so the logo fills
-/// about 80% of its box instead of 56%.
-const FIT = 1.45;
+/// How soft the glow behind the middle bar is. In the box's units, so it scales with `size` and
+/// keeps the same proportion to the bars at every size.
+const GLOW_BLUR = 12;
+/// The rail form draws the arrangement this much larger around the middle, so the logo (100
+/// units wide) fills about 80% of its box instead of half.
+const FIT = 1.6;
 
 export type BreathProps = {
   size: number;
@@ -42,8 +34,23 @@ export type BreathProps = {
   label?: string;
 };
 
-/// The Breath: Open Dot's mark, three soft dots that move with the person's voice and Dot's.
-/// One animation loop writes the circles' attributes directly; nothing renders per frame. The
+/// A bar as the attributes of a `rect`. A bar narrower than it is tall would stop being a pill,
+/// so one that is shrinking away is drawn as a circle that gets smaller.
+function shape(bar: { x: number; y: number; w: number; h: number }) {
+  const w = Math.max(0, bar.w);
+  const h = Math.min(Math.max(0, bar.h), w);
+  return {
+    x: (bar.x - w / 2).toFixed(2),
+    y: (bar.y - h / 2).toFixed(2),
+    width: w.toFixed(2),
+    height: h.toFixed(2),
+    rx: (h / 2).toFixed(2),
+  };
+}
+const SHAPE_ATTRIBUTES = ["x", "y", "width", "height", "rx"] as const;
+
+/// The Breath: Sage's mark, three stacked bars that move with the person's voice and Sage's.
+/// One animation loop writes the bars' attributes directly; nothing renders per frame. The
 /// loop sleeps while nothing can move and wakes on a new state, options or voice change.
 export function Breath({
   size,
@@ -54,14 +61,13 @@ export function Breath({
   label,
 }: BreathProps): JSX.Element {
   const id = useId().replace(/[^A-Za-z0-9_-]/g, "");
-  const meltId = `breath-melt-${id}`;
+  const sweepId = `breath-sweep-${id}`;
   const haloId = `breath-halo-${id}`;
-  const melts = size >= MELT_MIN_SIZE;
 
-  const bodies = useRef<SVGGElement>(null);
+  const group = useRef<SVGGElement>(null);
   const glow = useRef<SVGGElement>(null);
-  const circles = useRef<(SVGCircleElement | null)[]>([]);
-  const halos = useRef<(SVGCircleElement | null)[]>([]);
+  const rects = useRef<(SVGRectElement | null)[]>([]);
+  const halo = useRef<SVGRectElement>(null);
   // What the loop reads each frame; kept current without restarting it.
   const props = useRef({ state, options, quiet });
   // Starts the frame loop again after it went to sleep; set by the loop's effect.
@@ -89,6 +95,12 @@ export function Breath({
       seen[name] = value;
       el.setAttribute(name, value);
     };
+    const place = (el: Element | null | undefined, bar: Bar | undefined) => {
+      // The fourth bar has nothing to say while it is away; it keeps its place at no size.
+      const s = shape(bar ?? { x: 0, y: 0, w: 0, h: 0 });
+      if (!bar) return (["width", "height", "rx"] as const).forEach((name) => put(el, name, s[name]));
+      for (const name of SHAPE_ATTRIBUTES) put(el, name, s[name]);
+    };
 
     let handle: number | null = null;
     const draw = (now: number) => {
@@ -101,18 +113,10 @@ export function Breath({
         { state: shown, mic: live.level.mic, voice: live.level.voice, options, still },
         now,
       );
-      for (let i = 0; i < 4; i++) {
-        const dot = i < 3 ? frame.dots[i as 0 | 1 | 2] : frame.lobes[0];
-        const cx = (dot?.x ?? 0).toFixed(2);
-        const cy = (dot?.y ?? 0).toFixed(2);
-        const r = Math.max(0, dot?.r ?? 0).toFixed(2);
-        for (const el of [circles.current[i], halos.current[i]]) {
-          put(el, "cx", cx);
-          put(el, "cy", cy);
-          put(el, "r", r);
-        }
-      }
-      put(bodies.current, "opacity", frame.dots[0].opacity.toFixed(3));
+      for (let i = 0; i < 3; i++) place(rects.current[i], frame.bars[i as 0 | 1 | 2]);
+      place(rects.current[3], frame.extra[0]);
+      place(halo.current, frame.bars[1]);
+      put(group.current, "opacity", frame.bars[0].opacity.toFixed(3));
       put(glow.current, "opacity", frame.glow.toFixed(3));
       // Nothing can move: every value is at its target (a held state, or any state with reduced
       // motion, once its morph is done), no sound is coming in or fading out, and the
@@ -150,20 +154,18 @@ export function Breath({
 
   // Drawn in the logo arrangement; the loop takes over from the first frame. React never
   // changes these attributes again, as their values here never change.
-  const start = [...LOGO, { x: LOGO[0].x, y: LOGO[0].y, r: 0 }];
-  const body = (
-    <g data-bodies="" ref={bodies} filter={melts ? `url(#${meltId})` : undefined}>
-      {start.map((d, i) => (
-        <circle
+  const start = [...LOGO, { ...LOGO[1], w: 0 }];
+  const bars = (
+    <g data-bars="" ref={group}>
+      {start.map((bar, i) => (
+        <rect
           key={i}
-          {...(i < 3 ? { "data-dot": "" } : { "data-lobe": "" })}
+          {...(i < 3 ? { "data-bar": "" } : { "data-extra": "" })}
           ref={(el) => {
-            circles.current[i] = el;
+            rects.current[i] = el;
           }}
-          cx={d.x.toFixed(2)}
-          cy={d.y.toFixed(2)}
-          r={d.r.toFixed(2)}
-          fill={COLOURS[i]}
+          {...shape(bar)}
+          fill={i === 1 ? `url(#${sweepId})` : "currentColor"}
         />
       ))}
     </g>
@@ -173,53 +175,41 @@ export function Breath({
       width={size}
       height={size}
       viewBox="0 0 200 200"
-      // The glow and a swelling shape may reach past the box; the rail form has no glow.
+      className="text-foreground"
+      // The glow and a widening bar may reach past the box; the rail form has no glow.
       overflow={quiet ? undefined : "visible"}
       {...(onClick
         ? { "aria-hidden": true }
         : { role: "img", "aria-label": label ?? LABELS[state] })}
     >
       <defs>
-        {melts && (
-          <filter
-            id={meltId}
-            x="-30%"
-            y="-30%"
-            width="160%"
-            height="160%"
-            colorInterpolationFilters="sRGB"
-          >
-            <feGaussianBlur in="SourceGraphic" stdDeviation={MELT_BLUR} result="blur" />
-            <feColorMatrix
-              in="blur"
-              mode="matrix"
-              values={`1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  ${MELT_ALPHA}`}
-            />
-          </filter>
-        )}
+        {/* Laid across the box, not the bar, so the colours stay put while the bar changes
+            width and slides. */}
+        <linearGradient id={sweepId} gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="200" y2="0">
+          <stop offset="0" stopColor={SWEEP[0]} />
+          <stop offset="0.5" stopColor={SWEEP[1]} />
+          <stop offset="1" stopColor={SWEEP[2]} />
+        </linearGradient>
         {!quiet && (
-          <filter id={haloId} x="-50%" y="-50%" width="200%" height="200%">
-            <feGaussianBlur stdDeviation={HALO_BLUR} />
+          // Sized in the box's units: a region measured from the bar would be too flat to hold
+          // the blur above and below it.
+          <filter id={haloId} filterUnits="userSpaceOnUse" x="-50" y="-50" width="300" height="300">
+            <feGaussianBlur stdDeviation={GLOW_BLUR} />
           </filter>
         )}
       </defs>
       {!quiet && (
         <g data-glow="" ref={glow} filter={`url(#${haloId})`} opacity="0.28">
-          {start.map((d, i) => (
-            <circle
-              key={i}
-              ref={(el) => {
-                halos.current[i] = el;
-              }}
-              cx={d.x.toFixed(2)}
-              cy={d.y.toFixed(2)}
-              r={d.r.toFixed(2)}
-              fill={COLOURS[i]}
-            />
-          ))}
+          <rect ref={halo} {...shape(LOGO[1])} fill={`url(#${sweepId})`} />
         </g>
       )}
-      {quiet ? <g data-fit="" transform={`translate(100 100) scale(${FIT}) translate(-100 -100)`}>{body}</g> : body}
+      {quiet ? (
+        <g data-fit="" transform={`translate(100 100) scale(${FIT}) translate(-100 -100)`}>
+          {bars}
+        </g>
+      ) : (
+        bars
+      )}
     </svg>
   );
 

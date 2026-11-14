@@ -1,6 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#1f2430"/>
-  <circle cx="176" cy="256" r="56" fill="#f2c94c"/>
-  <circle cx="336" cy="176" r="40" fill="#56ccf2"/>
-  <circle cx="336" cy="336" r="40" fill="#6fcf97"/>
+  <defs>
+    <linearGradient id="light" x1="96" y1="0" x2="416" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c9f27a"/>
+      <stop offset="0.5" stop-color="#5fe0a6"/>
+      <stop offset="1" stop-color="#4bb8e8"/>
+    </linearGradient>
+    <radialGradient id="tile" cx="0.5" cy="0.42" r="0.75">
+      <stop offset="0" stop-color="#14221e"/>
+      <stop offset="1" stop-color="#080d0c"/>
+    </radialGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <rect x="160" y="104" width="256" height="80" rx="40" fill="#e8f1ec"/>
+  <rect x="96" y="216" width="320" height="80" rx="40" fill="url(#light)"/>
+  <rect x="96" y="328" width="256" height="80" rx="40" fill="#e8f1ec"/>
 </svg>

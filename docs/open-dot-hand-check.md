@@ -127,13 +127,13 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
 ## The stage
 
 29. Press the hotkey.
-    - Should: a panel rises from the bottom middle of the window, over whatever screen shows, without covering the rail on the left. In its middle is The Breath, the mark of the logo. A thin line at the bottom holds a **Close** button with an **Esc** key next to it.
+    - Should: a panel rises from the bottom middle of the window, over whatever screen shows, without covering the rail on the left. In its middle is The Breath, the three bars of the logo. A thin line at the bottom holds a **Close** button with an **Esc** key next to it.
 
 30. Say a sentence slowly, for example **"What needs me today?"**
     - Should: your words appear under The Breath as you speak, in grey, and change as you go. When you stop, the finished sentence stays; then Sage's answer replaces it, one or two lines, the newest darker and larger.
 
 31. Watch The Breath through one whole turn.
-    - Should: resting, it breathes slowly (about one breath every four and a half seconds). Listening, its shapes lean apart and swell as you talk, the yellow one most; when you are quiet they go back to a small breath. Thinking, they circle each other and touch now and then. Speaking, they melt into one shape that pulses with Sage's voice. When it asks with options, they part into one body per option. When the turn ends, they settle back to the logo once and the panel goes away about two and a half seconds later. Every change is smooth; nothing jumps.
+    - Should: resting, the outer bars drift out and back slowly (about once every four and a half seconds) and the middle bar breathes in width. Listening, the bars line up one above the other and widen as you talk, the middle one most; when you are quiet they stay narrow. Thinking, they slide from side to side one after another, like pistons. Speaking, they are the logo again and widen with Sage's voice, the middle bar most. When it asks with options, they become one bar per option, evenly spaced. When the turn ends, they settle back to the logo once and the panel goes away about two and a half seconds later. Every change is smooth; nothing jumps.
 
 32. Ask something that ends with options (for example "Run the Deploy watcher now"). Click one option. Then do it again and answer with the key **1**, **2**, **3** or **4** instead.
     - Should: the question is printed above the options, which are numbered pills. A click or a number key picks that option; the picked pill is highlighted, the others fade, and a second click or key does nothing. A number key typed while the search box or another text field has focus does not pick.
@@ -154,7 +154,7 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
     - Should: the panel fits inside the window, the card scrolls, and the options and Close stay visible. The rail's links scroll if they do not fit.
 
 38. Switch between the light and dark themes (Settings) with the stage showing.
-    - Should: the panel, the words, the pills and the card are easy to read in both; the mark keeps its colours, and its soft glow is not cut off at the edges.
+    - Should: the panel, the words, the pills and the card are easy to read in both; the bars keep their colours, and the soft glow behind the middle bar is not cut off at the edges.
 
 39. Turn on reduced motion in Windows (Settings, Accessibility, Visual effects, Animation effects off) and restart Sage. Talk to it.
     - Should: the stage fades in without rising; The Breath holds the logo still and only grows brighter and dimmer with the sound.
@@ -219,8 +219,8 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
 
 56. The Breath at the normal window size:
     - The rail mark: is it large enough to read as the logo, and does it sit in line with the other rail icons?
-    - Speaking: are all three colours visible inside the melted shape, not mostly one?
-    - Asking with two options: the shapes part into two bodies (the blue one joins the green one). Does that read as "two choices"? With four options a fourth, teal body appears.
+    - Speaking: does the middle bar swell with the voice without touching the bars above and below?
+    - Asking with two options: two bars show and the third shrinks away. Does that read as "two choices"? With four options a fourth bar appears below.
     - The edges at full size: smooth, not jagged.
 
 57. Write down anything that felt slow, jumpy or out of place.

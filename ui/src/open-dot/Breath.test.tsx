@@ -51,12 +51,19 @@ function setHidden(hidden: boolean) {
   document.dispatchEvent(new Event("visibilitychange"));
 }
 
-const dots = (c: HTMLElement) => [...c.querySelectorAll<SVGCircleElement>("circle[data-dot]")];
-/// The numbers written on the three dots.
-const written = (c: HTMLElement) =>
-  dots(c).map((el) => ["cx", "cy", "r"].map((a) => el.getAttribute(a)).join(" "));
+const bars = (c: ParentNode) => [...c.querySelectorAll<SVGRectElement>("rect[data-bar]")];
+const SHAPE = ["x", "y", "width", "height", "rx"];
+/// The numbers written on the three bars.
+const written = (c: ParentNode) =>
+  bars(c).map((el) => SHAPE.map((a) => el.getAttribute(a)).join(" "));
+/// The logo as a `rect` holds it: the corner, the size, and ends rounded into a pill.
 const logoWritten = () =>
-  LOGO.map((d) => [d.x, d.y, d.r].map((v) => v.toFixed(2)).join(" "));
+  LOGO.map((b) =>
+    [b.x - b.w / 2, b.y - b.h / 2, b.w, b.h, b.h / 2].map((v) => v.toFixed(2)).join(" "),
+  );
+const number = (el: Element, name: string) => Number(el.getAttribute(name));
+/// Where a bar's centre is, across.
+const centre = (el: Element) => number(el, "x") + number(el, "width") / 2;
 
 beforeEach(() => {
   callbacks.clear();
@@ -80,15 +87,43 @@ afterEach(() => {
 });
 
 describe("Breath", () => {
-  it("renders three circles in the logo colours", () => {
+  it("renders three pill bars stepping like an S, the middle one in the brand colours", () => {
     const { container } = render(<Breath size={132} state="resting" />);
-    expect(dots(container).map((el) => el.getAttribute("fill"))).toEqual([
-      "#f2c94c",
-      "#56ccf2",
-      "#6fcf97",
-    ]);
+    const [top, middle, bottom] = bars(container);
+    expect(bars(container)).toHaveLength(3);
     // In the logo arrangement before the first frame.
     expect(written(container)).toEqual(logoWritten());
+    expect(centre(top!)).toBeGreaterThan(centre(middle!));
+    expect(centre(bottom!)).toBeLessThan(centre(middle!));
+    expect(number(top!, "y")).toBeLessThan(number(middle!, "y"));
+    expect(number(middle!, "y")).toBeLessThan(number(bottom!, "y"));
+    // The outer bars take the text colour, so they follow the theme.
+    expect(container.querySelector("svg")).toHaveClass("text-foreground");
+    expect(top!.getAttribute("fill")).toBe("currentColor");
+    expect(bottom!.getAttribute("fill")).toBe("currentColor");
+    // The middle bar is filled with a gradient laid across the box, so its colours do not
+    // slide as the bar changes width.
+    const id = /^url\(#(.+)\)$/.exec(middle!.getAttribute("fill") ?? "")?.[1];
+    expect(id).toBeTruthy();
+    const sweep = container.querySelector(`linearGradient[id="${id}"]`);
+    expect(sweep?.getAttribute("gradientUnits")).toBe("userSpaceOnUse");
+    expect(["x1", "x2", "y1", "y2"].map((a) => sweep?.getAttribute(a))).toEqual([
+      "0",
+      "200",
+      "0",
+      "0",
+    ]);
+    expect([...sweep!.querySelectorAll("stop")].map((s) => s.getAttribute("stop-color"))).toEqual([
+      "#c9f27a",
+      "#5fe0a6",
+      "#4bb8e8",
+    ]);
+    // The fourth bar is there for a fourth option, and has no width until then.
+    const extra = container.querySelector("rect[data-extra]");
+    expect(extra?.getAttribute("width")).toBe("0.00");
+    expect(extra?.getAttribute("fill")).toBe("currentColor");
+    expect(container.querySelector("[data-bars]")?.querySelectorAll("rect")).toHaveLength(4);
+    expect(container.querySelector("circle")).toBeNull();
   });
 
   it("a frame writes attributes without re-rendering", () => {
@@ -101,13 +136,47 @@ describe("Breath", () => {
     expect(onRender).toHaveBeenCalledTimes(1);
     const before = written(container);
     for (let i = 0; i < 30; i++) {
-      voiceStore.set({ level: { mic: (i % 10) / 10 + 0.1, voice: 0 } });
-      if (i % 3 === 0) frame();
+      voiceStore.set({ level: { mic: 1, voice: 0 } });
+      frame();
     }
     expect(onRender).toHaveBeenCalledTimes(1);
-    // The frames moved the dots: they lean apart and swell with the mic.
+    // The frames moved the bars: they centre up and widen with the mic, the middle one most.
     expect(written(container)).not.toEqual(before);
-    expect(Number(dots(container)[0]!.getAttribute("r"))).toBeGreaterThan(LOGO[0].r);
+    const [top, middle, bottom] = bars(container);
+    expect(centre(top!)).toBeLessThan(LOGO[0].x - 5);
+    expect(number(middle!, "width")).toBeGreaterThan(LOGO[1].w + 20);
+    expect(number(middle!, "width")).toBeGreaterThan(number(top!, "width"));
+    expect(number(middle!, "width")).toBeGreaterThan(number(bottom!, "width"));
+  });
+
+  it("speaking swells the middle bar with the voice and keeps it a pill", () => {
+    const { container } = render(<Breath size={132} state="speaking" />);
+    for (let i = 0; i < 40; i++) {
+      voiceStore.set({ level: { mic: 0, voice: 1 } });
+      frame();
+    }
+    const middle = bars(container)[1]!;
+    expect(number(middle, "height")).toBeGreaterThan(LOGO[1].h * 1.3);
+    expect(number(middle, "rx")).toBeCloseTo(number(middle, "height") / 2, 1);
+    // The glow is a copy of the middle bar, and moves with it.
+    const halo = container.querySelector("[data-glow] rect")!;
+    for (const a of SHAPE) expect(halo.getAttribute(a)).toBe(middle.getAttribute(a));
+    expect(halo.getAttribute("fill")).toBe(middle.getAttribute("fill"));
+  });
+
+  it("asking shows as many bars as options", () => {
+    const { container, rerender } = render(<Breath size={132} state="asking" options={4} />);
+    frames(120);
+    const all = () => [...container.querySelectorAll("[data-bars] rect")];
+    const shown = () => all().filter((el) => number(el, "width") > 1);
+    expect(shown()).toHaveLength(4);
+    expect(number(container.querySelector("rect[data-extra]")!, "width")).toBeGreaterThan(80);
+    rerender(<Breath size={132} state="asking" options={2} />);
+    frames(120);
+    expect(shown()).toHaveLength(2);
+    expect(container.querySelector("rect[data-extra]")!.getAttribute("width")).toBe("0.00");
+    // A bar on its way out is never drawn taller than it is wide.
+    for (const el of all()) expect(number(el, "height")).toBeLessThanOrEqual(number(el, "width"));
   });
 
   it("stops the loop on unmount", () => {
@@ -148,6 +217,7 @@ describe("Breath", () => {
     expect(written(container)).toEqual(logoWritten());
     // The rail form has no glow.
     expect(container.querySelector("[data-glow]")).toBeNull();
+    expect(container.querySelector("filter")).toBeNull();
     // A store change that moves nothing wakes it for a frame, and it sleeps again.
     voiceStore.set({ hearing: "x" });
     frames(3);
@@ -165,7 +235,7 @@ describe("Breath", () => {
       frame();
       seen.add(written(container).join("|"));
     }
-    // It breathes for as long as the microphone is open.
+    // It drifts for as long as the microphone is open.
     expect(seen.size).toBeGreaterThan(10);
     expect(callbacks.size).toBe(1);
     // Closed again: it settles back into the logo and sleeps.
@@ -187,8 +257,22 @@ describe("Breath", () => {
     rerender(<Breath size={132} state="done" />);
     frames(200);
     expect(callbacks.size).toBe(0);
+    expect(written(container)).toEqual(logoWritten());
     rerender(<Breath size={132} state="done" options={4} />);
     expect(callbacks.size).toBe(1);
+  });
+
+  it("it_wakes_when_sound_comes_in_and_sleeps_when_it_has_faded", () => {
+    render(<Breath size={132} state="done" />);
+    frames(5);
+    expect(callbacks.size).toBe(0);
+    voiceStore.set({ level: { mic: 0, voice: 0.8 } });
+    expect(callbacks.size).toBe(1);
+    frames(30);
+    expect(callbacks.size).toBe(1);
+    voiceStore.set({ level: { mic: 0, voice: 0 } });
+    frames(300);
+    expect(callbacks.size).toBe(0);
   });
 
   it("the rail form fills its box and the stage form may glow past it", () => {
@@ -199,13 +283,22 @@ describe("Breath", () => {
       </>,
     );
     const [rail, stage] = [...container.querySelectorAll("svg")];
-    expect(rail!.querySelector("[data-fit]")?.getAttribute("transform")).toMatch(/scale\(1\.45\)/);
+    const scale = Number(
+      /scale\(([\d.]+)\)/.exec(rail!.querySelector("[data-fit]")?.getAttribute("transform") ?? "")?.[1],
+    );
+    // The logo is as wide as its middle bar: scaled, about 80% of the 200 box.
+    expect((LOGO[1].w * scale) / 200).toBeGreaterThan(0.75);
+    expect((LOGO[1].w * scale) / 200).toBeLessThan(0.85);
+    expect(rail!.querySelector("[data-fit]")?.getAttribute("transform")).toMatch(
+      /^translate\(100 100\) scale\([\d.]+\) translate\(-100 -100\)$/,
+    );
+    expect(bars(rail!.querySelector("[data-fit]")!)).toHaveLength(3);
     expect(stage!.querySelector("[data-fit]")).toBeNull();
     expect(stage!.getAttribute("overflow")).toBe("visible");
     expect(rail!.getAttribute("overflow")).toBeNull();
   });
 
-  it("the stage form breathes while resting", () => {
+  it("the stage form drifts while resting", () => {
     const { container } = render(<Breath size={132} state="resting" />);
     const seen = new Set<string>();
     for (let i = 0; i < 120; i++) {
@@ -216,17 +309,31 @@ describe("Breath", () => {
     expect(container.querySelector("[data-glow]")).not.toBeNull();
   });
 
+  it("trouble dims the bars and the glow", () => {
+    const { container } = render(<Breath size={132} state="trouble" />);
+    frames(200);
+    expect(Number(container.querySelector("[data-bars]")!.getAttribute("opacity"))).toBeCloseTo(0.32, 2);
+    expect(Number(container.querySelector("[data-glow]")!.getAttribute("opacity"))).toBeLessThan(0.15);
+    expect(written(container)).toEqual(logoWritten());
+    expect(callbacks.size).toBe(0);
+  });
+
   it("reduced motion honoured", () => {
     const media = reducedMotion(true);
     const { container, rerender } = render(<Breath size={132} state="listening" />);
     voiceStore.set({ level: { mic: 1, voice: 1 } });
+    const glows = new Set<string | null>();
     for (const state of ["listening", "thinking", "speaking", "asking"] as BreathState[]) {
       rerender(<Breath size={132} state={state} options={4} />);
       for (let i = 0; i < 30; i++) {
         frame();
         expect(written(container)).toEqual(logoWritten());
+        expect(container.querySelector("rect[data-extra]")!.getAttribute("width")).toBe("0.00");
+        glows.add(container.querySelector("[data-glow]")!.getAttribute("opacity"));
       }
     }
+    // Brightness carries the sound instead.
+    expect(glows.size).toBeGreaterThan(5);
     // It follows the setting as it changes.
     media.change(false);
     frames(30);
@@ -258,33 +365,33 @@ describe("Breath", () => {
       expect(screen.getByRole("img", { name })).toBeInTheDocument();
       expect(screen.queryByRole("button")).toBeNull();
     }
+    rerender(<Breath size={132} state="resting" label="Sage" />);
+    expect(screen.getByRole("img", { name: "Sage" })).toBeInTheDocument();
   });
 
-  it("each mark has its own filter, and the smallest draws without melting", () => {
+  it("each mark has its own gradient and glow, and nothing melts", () => {
     const { container } = render(
       <>
         <Breath size={132} state="speaking" />
         <Breath size={132} state="speaking" />
         <Breath size={24} state="speaking" quiet />
-        <Breath size={39} state="speaking" />
       </>,
     );
-    const ids = [...container.querySelectorAll("filter")].map((f) => f.id);
+    // Two marks on one page must not share an id, or one would be painted with the other's.
+    const ids = [...container.querySelectorAll("linearGradient, filter")].map((el) => el.id);
+    expect(ids).toHaveLength(5);
     expect(new Set(ids).size).toBe(ids.length);
-    const groups = [...container.querySelectorAll("[data-bodies]")];
-    expect(groups).toHaveLength(4);
-    const used = groups.map((g) => g.getAttribute("filter"));
-    expect(used[0]).not.toEqual(used[1]);
-    for (const u of used.slice(0, 2)) {
-      const id = /^url\(#(.+)\)$/.exec(u ?? "")?.[1];
-      expect(id).toBeTruthy();
-      const filter = container.querySelector(`filter[id="${id}"]`);
-      expect(filter).not.toBeNull();
-      // A soft ramp with the same cut point as 24 -10: alpha 5/12.
-      expect(filter!.querySelector("feColorMatrix")?.getAttribute("values")).toMatch(/0 0 0 12 -5$/);
+    for (const svg of container.querySelectorAll("svg")) {
+      const fill = /^url\(#(.+)\)$/.exec(bars(svg)[1]!.getAttribute("fill") ?? "")?.[1];
+      expect(svg.querySelector(`linearGradient[id="${fill}"]`)).not.toBeNull();
+      const glow = svg.querySelector("[data-glow]");
+      if (glow) {
+        const id = /^url\(#(.+)\)$/.exec(glow.getAttribute("filter") ?? "")?.[1];
+        expect(svg.querySelector(`filter[id="${id}"] feGaussianBlur`)).not.toBeNull();
+      }
+      // The bars are drawn as they are: only the glow is blurred.
+      expect(svg.querySelector("[data-bars]")!.getAttribute("filter")).toBeNull();
+      expect(svg.querySelector("feColorMatrix")).toBeNull();
     }
-    // Below 40 px no melt.
-    expect(used[2]).toBeNull();
-    expect(used[3]).toBeNull();
   });
 });
