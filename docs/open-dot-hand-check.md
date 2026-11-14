@@ -51,7 +51,7 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
 ## Talking to it
 
 10. Press the hotkey: **Ctrl+Shift+Space** (Cmd+Shift+Space on a Mac). Try it once with the Sage window hidden behind another window or minimised.
-    - Should: the Sage window comes to the front, the status line adds "Listening", the tray tooltip gains the line "Dot is listening", and your computer's microphone light comes on.
+    - Should: the Sage window comes to the front, the status line adds "Listening", the tray tooltip gains the line "Sage is listening", and your computer's microphone light comes on.
 
 11. Say **"What needs me?"**
     - Should: it notices by itself when you stop talking (no button). Within about two seconds it starts answering aloud with how many things need you, then the first ones. If it takes longer than about a second and a half, it says "One moment." once first. After it finishes it listens for a few more seconds for a follow-up, then the microphone closes and "Listening" goes away.
@@ -101,7 +101,7 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
     - Should: there is a **Talk to Sage** item right after "Open Sage". It is enabled only while Open Sage is ready. Choosing it brings the window forward and starts listening, like the hotkey.
 
 23. Hover the tray icon while Open Sage is listening, and again after it stops.
-    - Should: while listening the tooltip ends with "Dot is listening"; once the microphone closes that line goes away.
+    - Should: while listening the tooltip ends with "Sage is listening"; once the microphone closes that line goes away.
 
 ## Turning it off and removing it
 
@@ -185,11 +185,11 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
     - Should: the whole sentence is heard from "read" on (watch the live words), and no tone plays.
 
 47. Hide the Sage window (minimise it, or close it to the tray) and say "Hey Sage, what needs me?"
-    - Should: Sage answers aloud and the window stays hidden. The tray tooltip says "Dot is listening" while the microphone is open.
+    - Should: Sage answers aloud and the window stays hidden. The tray tooltip says "Sage is listening" while the microphone is open.
 
 ## Stopping it by voice
 
-48. On speakers: ask something with a long answer and say **"Dot, stop"** while it speaks. Do this ten times.
+48. On speakers: ask something with a long answer and say **"Sage, stop"** while it speaks. Do this ten times.
     - Should: it stops and listens. How many of ten worked on speakers: ____ / 10.
 
 49. On headphones: do the same five times.
@@ -213,14 +213,14 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
     - Should: nothing is said until the turn is over and the stage has closed; then one line.
 
 55. Rename a sol to a long name (for example "Weekly research summary for the whole team") and make it ask for an approval.
-    - Should: "An approval is waiting for you." Long names, names with sentence punctuation, and names that sound like "Hey Sage" or "Dot stop" are not read out.
+    - Should: "An approval is waiting for you." Long names, names with sentence punctuation, and names that sound like "Hey Sage" or "Sage stop" are not read out.
 
 ## What to judge by eye
 
 56. The Breath at the normal window size:
     - The rail mark: is it large enough to read as the logo, and does it sit in line with the other rail icons?
     - Speaking: are all three colours visible inside the melted shape, not mostly one?
-    - Asking with two options: the sols part into two bodies (the blue one joins the green one). Does that read as "two choices"? With four options a fourth, teal body appears.
+    - Asking with two options: the shapes part into two bodies (the blue one joins the green one). Does that read as "two choices"? With four options a fourth, teal body appears.
     - The edges at full size: smooth, not jagged.
 
 57. Write down anything that felt slow, jumpy or out of place.
@@ -230,7 +230,7 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
 58. Connect a Bluetooth speaker (or Bluetooth headphones) and choose it as the speaker. Have an approval waiting (as in step 13). Press the hotkey and say **"Approve it."**
     - Sage asks "… Approve this request?". Stay silent until the question lapses ("No answer, so I did nothing."). Should: nothing is approved, and Sage never heard its own question as a yes. Write down whether Sage's own voice ever showed up as live words under The Breath.
     - Ask again and, once the question has ended, say **"yes"**. Should: "Approved.", and the Inbox shows it decided. Write down how long after Sage's last word the yes was heard (a yes said too soon may be lost while the sound is still leaving the speaker; that is expected).
-    - With a fresh approval, ask again and press the hotkey in the middle of the question, before "Approve this request?" is finished. Then say **"yes"**. Should: nothing is approved (the approval is still waiting in the Inbox) and the options are gone; Sage answers that nothing is waiting on a yes or no. Do the same once more with **"Dot, stop"** said over the question in place of the hotkey.
+    - With a fresh approval, ask again and press the hotkey in the middle of the question, before "Approve this request?" is finished. Then say **"yes"**. Should: nothing is approved (the approval is still waiting in the Inbox) and the options are gone; Sage answers that nothing is waiting on a yes or no. Do the same once more with **"Sage, stop"** said over the question in place of the hotkey.
 
 59. With a microphone that has a noise gate or that you mute in hardware (many headsets send pure silence while nobody talks), in a quiet room:
     - Press the hotkey and say nothing. Should: after about eight seconds Sage says "I can't hear anything from the microphone. Check that Sage may use it." (it heard nothing at all).
