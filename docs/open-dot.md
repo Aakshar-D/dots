@@ -77,7 +77,7 @@ Just before it acts, Sage checks that the approval, sol or question is still the
 
 - Esc closes the stage and stops any speech. Work already started in a sol carries on.
 - The hotkey, or a click on the animated mark in the stage (The Breath), stops speech at once and listens.
-- Say "Dot, stop" or "Hey Sage" while Sage is speaking. On headphones this works well. On speakers it is a best effort, because Sage's own voice can drown yours. The hand check has you count how often it works. The key and the click always work.
+- Say "Sage, stop" or "Hey Sage" while Sage is speaking. Say "Sage, stop" in one go: with a pause after "Sage" it is often missed. On headphones this works well. On speakers it is a best effort, because Sage's own voice can drown yours. The hand check has you count how often it works. The key and the click always work.
 - Setting **Interrupt by just talking** (off by default): any speech stops Sage. It is meant for headphones. On speakers Sage's own voice would stop it.
 
 Sage listens for at most five follow-ups in a row. Then it rests until you use the hotkey, click the mark or say "Hey Sage".

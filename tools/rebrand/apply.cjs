@@ -40,6 +40,8 @@ const KEEP = [
   /Dots 0\.4\.0 and older/,
   /Dots checkpoint:/,
   /Dots release signing key/,
+  /from dots to dots2/, // a folder path in a test's sample
+  /^dots $/, // a label a test gives twice, the other time as "Dots"
 ];
 
 const SEP = '(?:\\s|\\\\\\r?\\n|&nbsp;)+';

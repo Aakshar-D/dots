@@ -28,12 +28,19 @@ use crate::models::ModelPaths;
 ///
 /// "Hey Sage" is boosted less and held to a higher score than "Sage, stop": a wrong
 /// "Sage, stop" only stops Sage speaking; a wrong "Hey Sage" opens the microphone. Measured
-/// over the ten voices, twice: "Hey Sage, what needs me?" woke it 20 times in 20, four near
-/// misses ("Hey, say that again tomorrow.", "Hey, save each page of the message." and two
-/// more) woke it 0 times in 80, and "Sage, stop." was caught 15 times in 20. The counts move
-/// by one from run to run, as the synthetic voices do: at 0.25 and at 0.35 one near miss in
-/// 40 woke it. At 0.6 the phrase itself was missed. The three voices that miss "Sage, stop."
-/// miss it at every boost and threshold tried.
+/// over the ten voices, twice: "Hey Sage, what needs me?" woke it 20 times in 20, "Hey Sage."
+/// 18 or 19, and four near misses ("Hey, say that again tomorrow.", "Hey, save each page of
+/// the message." and two more) woke it 0 times in 80. The counts move by one from run to
+/// run, as the synthetic voices do: at 0.25 and at 0.35 one near miss in 40 woke it. At 0.6
+/// the phrase itself was missed.
+///
+/// The stop phrase is caught when it is said in one go: "Sage stop." 19 or 20 times in 20,
+/// "Sage, stop!" 18 or 19, "Sage, stop please." 20, as "Dot" was. A pause after "Sage" loses
+/// it: the voices put one in "Sage, stop." (13 to 16 in 20; "Dot, stop." 18 or 19) and a long
+/// one in "Sage. Stop." (0 or 1; "Dot. Stop." 5). No boost, threshold or other spelling of the
+/// pieces brought those clips back, and a wider search (`max_active_paths` 8 or 16) only added
+/// wrong stops ("The stage stopped moving." 16 times in 20). "Sage, start the next one." is
+/// taken for it 4 times in 20, as "Dot, start the next one." was.
 const WAKE_KEYWORDS: &str = "▁HE Y ▁S AGE :1.0 #0.3 @HEY_DOT\n▁S AGE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁SA GE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁S A GE ▁ST O P :2.0 #0.1 @DOT_STOP";
 const SPEAK_STEPS: i32 = 5;
 const VOICES: u8 = 10;

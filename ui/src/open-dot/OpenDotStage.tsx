@@ -60,13 +60,13 @@ function micLine(live: {
       return "Thinking…";
     case "speaking":
       return live.shortcut
-        ? "Speaking. Click the sols or press the shortcut to interrupt."
-        : "Speaking. Click the sols to interrupt.";
+        ? "Speaking. Click the mark or press the shortcut to interrupt."
+        : "Speaking. Click the mark to interrupt.";
     default:
       if (!live.showing) return null;
       return live.options
-        ? "Not listening. Click the sols to answer by voice, or pick an option."
-        : "Not listening. Click the sols to answer by voice.";
+        ? "Not listening. Click the mark to answer by voice, or pick an option."
+        : "Not listening. Click the mark to answer by voice.";
   }
 }
 
