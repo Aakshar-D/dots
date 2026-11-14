@@ -122,7 +122,7 @@ async fn the_sweeper_marks_a_message_waiting_30_minutes() {
     assert_eq!(marked[0].id, old.id);
     assert_eq!(
         marked[0].undelivered_reason.as_deref(),
-        Some("Dots is updating")
+        Some("Sage is updating")
     );
     assert_eq!(marked[0].undelivered_at, Some(timestamp(t0())));
     assert_eq!(marked[0].delivery, Some(Delivery::NotDelivered));
@@ -222,7 +222,7 @@ async fn the_sweeper_runs_on_the_clock() {
     })
     .await
     .expect("the sweeper did not mark the run");
-    assert_eq!(run.undelivered_reason.as_deref(), Some("Dots is updating"));
+    assert_eq!(run.undelivered_reason.as_deref(), Some("Sage is updating"));
 
     shutdown.cancel();
     tokio::time::timeout(Duration::from_secs(5), task)

@@ -21,7 +21,7 @@ fn team(name: &str, members: &[&str]) -> TeamSpec {
         org_id: None,
         workspace_id: "default".into(),
         name: name.into(),
-        description: "Runs Dots.".into(),
+        description: "Runs Sage.".into(),
         members: members
             .iter()
             .map(|id| MemberSpec {
@@ -70,20 +70,20 @@ async fn a_team_keeps_its_members_in_order_with_names_and_roles() {
     let dev = dot(&store, "dev").await;
     let teams = Teams::new(store.clone(), new_bus());
     let made = teams
-        .create(&team("Dots management", &[&dev, &helper]))
+        .create(&team("Sage management", &[&dev, &helper]))
         .await
         .unwrap();
-    assert_eq!(made.name, "Dots management");
+    assert_eq!(made.name, "Sage management");
     let names: Vec<_> = made.members.iter().map(|m| m.dot_name.as_str()).collect();
     assert_eq!(names, ["dev", "helper"]);
     assert_eq!(made.members[0].role, "helper");
     assert_eq!(teams.list().await.unwrap(), vec![made.clone()]);
 
     let changed = teams
-        .update(&made.id, &team("Dots crew", &[&helper]))
+        .update(&made.id, &team("Sage crew", &[&helper]))
         .await
         .unwrap();
-    assert_eq!(changed.name, "Dots crew");
+    assert_eq!(changed.name, "Sage crew");
     assert_eq!(changed.members.len(), 1);
 }
 
@@ -111,7 +111,7 @@ async fn team_rules_and_conflicts() {
     ));
     assert!(matches!(
         teams.create(&team("C", &["nobody"])).await,
-        Err(Error::Invalid(m)) if m == "a member is not a dot"
+        Err(Error::Invalid(m)) if m == "a member is not a sol"
     ));
     let names: Vec<_> = teams
         .list()
@@ -372,14 +372,14 @@ async fn team_refuses_dot_of_other_account() {
     let (_dir, store) = temp_store().await;
     let p = dot(&store, "pat").await;
     let a = acme_dot(&store, "amy").await;
-    let msg = "dot 'pat' is in another account than the team";
+    let msg = "sol 'pat' is in another account than the team";
     match store.create_team(&acme_team("crew", &[&p])).await {
         Err(Error::Invalid(m)) => assert_eq!(m, msg),
         other => panic!("{other:?}"),
     }
     // A personal team refuses an Acme dot too.
     match store.create_team(&team("solo", &[&a])).await {
-        Err(Error::Invalid(m)) => assert_eq!(m, "dot 'amy' is in another account than the team"),
+        Err(Error::Invalid(m)) => assert_eq!(m, "sol 'amy' is in another account than the team"),
         other => panic!("{other:?}"),
     }
     let t = store.create_team(&acme_team("crew", &[&a])).await.unwrap();

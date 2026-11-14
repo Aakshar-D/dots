@@ -38,7 +38,7 @@ export function usageUrlError(text: string): string | undefined {
 }
 
 const WHAT_IS_SENT =
-  "Only counts: how many runs started, finished or failed, messages sent and approvals asked each hour, and how many dots you have. Never names, files, messages or anything a dot wrote.";
+  "Only counts: how many runs started, finished or failed, messages sent and approvals asked each hour, and how many sols you have. Never names, files, messages or anything a sol wrote.";
 
 /// Settings › Share usage counts (usage counts spec): off until turned on with a destination.
 /// It saves at once, apart from the rest of Settings.
@@ -76,7 +76,7 @@ export function UsageCountsSection() {
     <fieldset className="flex max-w-3xl flex-col gap-3 rounded-lg border p-4">
       <legend className="px-1 text-sm font-semibold">Share usage counts</legend>
       <p className="text-xs text-muted-foreground">
-        Dots can send a short report once an hour to an address you choose. It is off unless you
+        Sage can send a short report once an hour to an address you choose. It is off unless you
         turn it on. {WHAT_IS_SENT}
       </p>
       <Field

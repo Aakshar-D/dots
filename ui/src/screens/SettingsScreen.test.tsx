@@ -31,7 +31,7 @@ function saving(restartRequired = false) {
 describe("the Settings screen", () => {
   it("shows what is stored and what is in use", async () => {
     const { user } = renderApp("/settings");
-    expect(await screen.findByLabelText("Start Dots when I sign in")).toBeChecked();
+    expect(await screen.findByLabelText("Start Sage when I sign in")).toBeChecked();
     await waitFor(() =>
       expect(screen.getByLabelText("Data folder")).toHaveValue(quietStatus.data_dir),
     );
@@ -58,15 +58,15 @@ describe("the Settings screen", () => {
     await user.clear(port);
     await user.type(port, "40123");
     await openTab(user, "General");
-    await user.click(await screen.findByLabelText("Start Dots when I sign in"));
+    await user.click(await screen.findByLabelText("Start Sage when I sign in"));
     await user.click(screen.getByRole("button", { name: "Save" }));
 
-    expect(await screen.findByText("Saved. Restart Dots to apply.")).toBeVisible();
+    expect(await screen.findByText("Saved. Restart Sage to apply.")).toBeVisible();
     expect(backend.callsTo("update_settings")).toEqual([
       { settings: { ...stored, port: 40123, autostart: false } },
     ]);
     // The frame's banner offers the restart.
-    expect(await screen.findByRole("button", { name: "Restart Dots" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "Restart Sage" })).toBeVisible();
   });
 
   it("saves the global instructions, up to 32 KB", async () => {
@@ -89,7 +89,7 @@ describe("the Settings screen", () => {
     });
   });
 
-  it("saves the default model new dots start with", async () => {
+  it("saves the default model new sols start with", async () => {
     saving();
     const { user } = renderApp("/settings/claude");
     const model = await screen.findByLabelText("Default model");
@@ -106,7 +106,7 @@ describe("the Settings screen", () => {
     const box = screen.getByRole("textbox", { name: "Custom model ID" });
     await user.clear(box);
     await user.click(screen.getByRole("button", { name: "Save" }));
-    expect(screen.getByText("Name the model new dots start with.")).toBeVisible();
+    expect(screen.getByText("Name the model new sols start with.")).toBeVisible();
     expect(backend.callsTo("update_settings")).toHaveLength(1);
     await user.type(box, "claude-opus-4-1");
     await user.click(screen.getByRole("button", { name: "Save" }));
@@ -240,7 +240,7 @@ describe("the Settings screen", () => {
 
     // Another field does not answer what was declined; a new path does.
     await openTab(user, "General");
-    await user.click(await screen.findByLabelText("Start Dots when I sign in"));
+    await user.click(await screen.findByLabelText("Start Sage when I sign in"));
     await openTab(user, "Claude");
     expect(await screen.findByText(/^Not saved:/)).toBeVisible();
     await user.type(screen.getByLabelText("Program path"), "{Backspace}");
@@ -344,7 +344,7 @@ describe("the Settings screen", () => {
     expect(backend.callsTo("status")).toHaveLength(asked + 2);
   });
 
-  it("makes the dots column load again after a pause that came during its first load", async () => {
+  it("makes the sols column load again after a pause that came during its first load", async () => {
     let paused = false;
     backend.on("status", () => ({ ...quietStatus, schedules_paused: paused }));
     backend.on("set_schedules_paused", (args) => {
@@ -393,7 +393,7 @@ describe("the quiet limit setting", () => {
   it("shows the stored seconds as minutes and saves minutes as seconds", async () => {
     saving();
     const { user } = renderApp("/settings/runs");
-    const field = await screen.findByLabelText("Quiet limit for every dot");
+    const field = await screen.findByLabelText("Quiet limit for every sol");
     expect(stored.quiet_limit_secs).toBe(600);
     expect(field).toHaveValue(10);
     await user.clear(field);
@@ -408,7 +408,7 @@ describe("the quiet limit setting", () => {
   it.each(["0", "1441"])("marks %s minutes and does not save", async (minutes) => {
     saving();
     const { user } = renderApp("/settings/runs");
-    const field = await screen.findByLabelText("Quiet limit for every dot");
+    const field = await screen.findByLabelText("Quiet limit for every sol");
     await user.clear(field);
     await user.type(field, minutes);
     expect(screen.getByText(/1 to 1440/)).toBeVisible();
@@ -457,7 +457,7 @@ describe("the Settings tabs", () => {
 
   it("opens General at /settings", async () => {
     const { router } = renderApp("/settings");
-    expect(await screen.findByLabelText("Start Dots when I sign in")).toBeVisible();
+    expect(await screen.findByLabelText("Start Sage when I sign in")).toBeVisible();
     expect(router.state.location.pathname).toBe("/settings/general");
     expect(within(await tabs()).getByRole("link", { name: "General" })).toHaveAttribute(
       "aria-current",
@@ -488,7 +488,7 @@ describe("the Settings tabs", () => {
 
   it("shows only the chosen tab and puts it in the address", async () => {
     const { user, router } = renderApp("/settings");
-    await screen.findByLabelText("Start Dots when I sign in");
+    await screen.findByLabelText("Start Sage when I sign in");
     await openTab(user, "Runs & server");
     expect(await screen.findByLabelText("Port")).toBeVisible();
     expect(router.state.location.pathname).toBe("/settings/runs");
@@ -499,18 +499,18 @@ describe("the Settings tabs", () => {
     expect(within(await tabs()).getByRole("link", { name: "General" })).not.toHaveAttribute(
       "aria-current",
     );
-    expect(screen.queryByLabelText("Start Dots when I sign in")).toBeNull();
+    expect(screen.queryByLabelText("Start Sage when I sign in")).toBeNull();
     expect(screen.queryByLabelText("Global instructions")).toBeNull();
 
     // Back goes to the tab before.
     await act(() => router.navigate(-1));
-    expect(await screen.findByLabelText("Start Dots when I sign in")).toBeVisible();
+    expect(await screen.findByLabelText("Start Sage when I sign in")).toBeVisible();
     expect(screen.queryByLabelText("Port")).toBeNull();
   });
 
   it("sends an unknown tab back to the first", async () => {
     const { router } = renderApp("/settings/nonsense");
-    expect(await screen.findByLabelText("Start Dots when I sign in")).toBeVisible();
+    expect(await screen.findByLabelText("Start Sage when I sign in")).toBeVisible();
     expect(router.state.location.pathname).toBe("/settings/general");
   });
 
@@ -545,7 +545,7 @@ describe("the Settings tabs", () => {
     await user.clear(max);
     await user.type(max, "99");
     await openTab(user, "General");
-    await screen.findByLabelText("Start Dots when I sign in");
+    await screen.findByLabelText("Start Sage when I sign in");
     expect(within(await tabs()).queryByText("has errors")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Save" }));

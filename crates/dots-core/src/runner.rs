@@ -336,17 +336,17 @@ impl Runner {
             {
                 let workspace = crate::accounts::workspace_name(orgs, org_id, &dot.workspace_id);
                 format!(
-                    "{account}: your role in the {workspace} workspace doesn't allow running dots"
+                    "{account}: your role in the {workspace} workspace doesn't allow running sols"
                 )
             }
             crate::accounts::Access::Role(_) => {
-                format!("{account}: your role no longer allows running dots")
+                format!("{account}: your role no longer allows running sols")
             }
             // Waiting, changed Dots ID, removed, or outside the workspace: the refusal says
             // which.
             _ => match crate::accounts::require_dot(orgs, &dot, run_dots).await {
                 Err(Error::NotAllowed(text)) => text,
-                _ => format!("{account}: your role no longer allows running dots"),
+                _ => format!("{account}: your role no longer allows running sols"),
             },
         };
         Ok(Some((account, text)))
@@ -559,7 +559,7 @@ impl Runner {
             let name = file.name.clone().unwrap_or_else(|| file.file_name.clone());
             tracing::warn!(run = %run.id, file = %name, "copying an attached file failed: {e}");
             notices.push(format!(
-                "Dots could not copy {name} into the workspace: {e}"
+                "Sage could not copy {name} into the workspace: {e}"
             ));
         }
         for text in notices {
@@ -733,7 +733,7 @@ impl Runner {
         {
             Ok(runs) => runs,
             Err(e) => {
-                tracing::warn!(run = %run.id, "listing the dot's recent runs failed: {e}");
+                tracing::warn!(run = %run.id, "listing the sol's recent runs failed: {e}");
                 Vec::new()
             }
         }
@@ -1352,7 +1352,7 @@ impl Runner {
         if let Some(step) = step {
             if let Err(e) = self.commit_step(step, prepared, summary).await {
                 tracing::warn!(run = %run.id, "committing the step's work failed: {e}");
-                let text = format!("Dots could not commit the changes: {e}");
+                let text = format!("Sage could not commit the changes: {e}");
                 if let Err(e) = self.record(&run.id, &EngineEvent::Notice { text }).await {
                     tracing::warn!(run = %run.id, "recording the notice failed: {e}");
                 }
@@ -2676,7 +2676,7 @@ impl Runner {
         let answer = run.summary.clone().unwrap_or_default();
         let dot = match self.store.get_dot(&run.dot_id).await {
             Ok(dot) => dot,
-            Err(e) => return (skipped(&format!("The dot could not be read: {e}")), None),
+            Err(e) => return (skipped(&format!("The sol could not be read: {e}")), None),
         };
         let task = crate::result_check::task_text(&dot, run);
         let diff = self.worktree_changes(run).await;

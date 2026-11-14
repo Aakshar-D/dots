@@ -60,13 +60,13 @@ function micLine(live: {
       return "Thinking…";
     case "speaking":
       return live.shortcut
-        ? "Speaking. Click the dots or press the shortcut to interrupt."
-        : "Speaking. Click the dots to interrupt.";
+        ? "Speaking. Click the mark or press the shortcut to interrupt."
+        : "Speaking. Click the mark to interrupt.";
     default:
       if (!live.showing) return null;
       return live.options
-        ? "Not listening. Click the dots to answer by voice, or pick an option."
-        : "Not listening. Click the dots to answer by voice.";
+        ? "Not listening. Click the mark to answer by voice, or pick an option."
+        : "Not listening. Click the mark to answer by voice.";
   }
 }
 
@@ -296,7 +296,7 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
     >
       <section
         role="region"
-        aria-label="Open Dot"
+        aria-label="Open Sage"
         inert={leaving}
         className={cn(
           "flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col items-center gap-3 rounded-xl bg-popover px-6 pt-5 pb-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10",

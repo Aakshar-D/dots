@@ -1429,10 +1429,10 @@ impl Orgs {
             Ok(identity) => identity.public_key,
             Err(e) => {
                 tracing::warn!(
-                    "org {:?}: no Dots ID to look for on its member list: {e}",
+                    "org {:?}: no Sage ID to look for on its member list: {e}",
                     row.id
                 );
-                return unchanged(format!("this PC's Dots ID can't be read: {e}"));
+                return unchanged(format!("this PC's Sage ID can't be read: {e}"));
             }
         };
         let roster = &list.roster;

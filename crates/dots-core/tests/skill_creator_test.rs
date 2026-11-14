@@ -123,7 +123,7 @@ async fn a_name_or_folder_that_exists_is_refused_and_nothing_is_overwritten() {
     let csv = DRAFT.replace("name: pr-tests", "name: csv-tools");
     let err = lib.create_skill(&csv).await.unwrap_err();
     assert!(
-        matches!(&err, Error::Conflict(m) if m.contains("already exists in Dots' skills folder")),
+        matches!(&err, Error::Conflict(m) if m.contains("already exists in Sage's skills folder")),
         "{err}"
     );
     assert_eq!(

@@ -29,7 +29,7 @@ pub const UNCHANGED: &str = "these are your instructions as they are: send them 
 /// What a decision on a decided proposal is told.
 pub const DECIDED_ALREADY: &str = "these instructions have already been decided";
 /// What approving a proposal is told when the person edited the instructions since.
-pub const STALE: &str = "the dot's instructions changed after it proposed these; ask it to \
+pub const STALE: &str = "the sol's instructions changed after it proposed these; ask it to \
     propose them again";
 /// What the dot reads when the person approves or rejects.
 pub const APPROVED: &str = "The person approved your new instructions; your next runs use them.";

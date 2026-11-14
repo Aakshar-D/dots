@@ -33,7 +33,7 @@ describe("search snippets", () => {
 });
 
 describe("where a hit opens", () => {
-  it("opens a chat topic, a run, a dot, a memory or a goal", () => {
+  it("opens a chat topic, a run, a sol, a memory or a goal", () => {
     expect(hitPath(hit({}))).toBe("/home/d1/r1");
     expect(hitPath(hit({ target: { type: "run", run_id: "r 9" } }))).toBe("/runs/r%209");
     expect(hitPath(hit({ target: { type: "dot", dot_id: "d1" } }))).toBe("/home/d1");

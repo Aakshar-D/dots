@@ -27,8 +27,8 @@ impl WaitReason {
         match self {
             WaitReason::Busy => "other runs are busy",
             WaitReason::UsageHold => "held for the usage limit",
-            WaitReason::Updating => "Dots is updating",
-            WaitReason::DotBusy => "this dot is busy with another run",
+            WaitReason::Updating => "Sage is updating",
+            WaitReason::DotBusy => "this sol is busy with another run",
             WaitReason::Queued => "next in line",
             WaitReason::SpendCap => "a spending cap is reached",
         }

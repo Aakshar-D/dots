@@ -140,7 +140,7 @@ function PausedWatcherRow({ item, actions }: { item: PausedWatcher; actions?: Re
         </span>
       </div>
       <Button asChild size="sm" variant="outline">
-        <Link to={`/dots/${item.dot_id}?tab=watchers`}>Open the dot's watchers</Link>
+        <Link to={`/dots/${item.dot_id}?tab=watchers`}>Open the sol's watchers</Link>
       </Button>
       <Button
         size="sm"
@@ -304,7 +304,7 @@ function ToolsChangedRow({ item, actions }: { item: ToolsChanged; actions?: Reac
         <span className="font-medium">{name}</span>
         <span className="truncate text-xs text-muted-foreground">
           {item.dots.length === 0
-            ? "No dot uses it yet."
+            ? "No sol uses it yet."
             : `Used by ${item.dots.map((dot) => dot.name).join(", ")}`}
         </span>
       </div>
@@ -667,8 +667,8 @@ export function InboxScreen() {
         {messages.isError && <ErrorNote error={messages.error} />}
         {nothing && (
           <EmptyState icon={InboxIcon}>
-            Nothing waits for you. Questions and notes from dots, approvals a dot asks for,
-            messages that did not reach a dot, apps sent for review, workflow runs that wait for
+            Nothing waits for you. Questions and notes from sols, approvals a sol asks for,
+            messages that did not reach a sol, apps sent for review, workflow runs that wait for
             you, schedules that need attention, paused watchers and finished runs to review show
             up here.
           </EmptyState>

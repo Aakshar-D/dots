@@ -241,17 +241,17 @@ fn the_report_has_its_sections() {
     };
     let text = render(&facts(), "  The run never ended.  ", &logs, made());
     let expected = "\
-Dots problem report
+Sage problem report
 Made: 2026-11-03 14:05 (+05:30)
 
 == What went wrong ==
 The run never ended.
 
-== This copy of Dots ==
+== This copy of Sage ==
 Version: 0.3.0
 System: windows x86_64
 Engines in use: claude, local
-Dots: 4
+Sols: 4
 Runs in the last 24 hours: 12 (2 failed)
 
 == Recent log lines (2, scrubbed) ==
@@ -366,7 +366,7 @@ async fn the_runtime_builds_the_whole_report() {
     write(
         logs.path(),
         "dots.2026-11-03.log",
-        &[line("INFO", "dots_app", "starting Dots 0.3.0")],
+        &[line("INFO", "dots_app", "starting Sage 0.3.0")],
     );
     let facts = dots_core::report::facts(&store, "9.9.9").await.unwrap();
     assert_eq!(facts.app_version, "9.9.9");
@@ -378,7 +378,7 @@ async fn the_runtime_builds_the_whole_report() {
         .await
         .unwrap();
     assert!(text.contains("Version: 9.9.9\n"));
-    assert!(text.contains("starting Dots 0.3.0"));
+    assert!(text.contains("starting Sage 0.3.0"));
     assert!(text.contains("It broke"));
     // The dot's name and instructions are never read for it.
     assert!(!text.contains("Do the thing."));

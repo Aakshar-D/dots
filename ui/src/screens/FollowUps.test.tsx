@@ -10,7 +10,7 @@ import { renderApp } from "@/test/render";
 const [pending] = sample.followUps;
 
 describe("follow-ups", () => {
-  it("lists a dot's pending follow-ups in its editor and cancels one", async () => {
+  it("lists a sol's pending follow-ups in its editor and cancels one", async () => {
     let list: FollowUp[] = [{ ...pending, dot_id: sample.dot.id }];
     backend.on("get_dot", () => sample.dot);
     backend.on("follow_ups_list", (args) => (args.dotId === sample.dot.id ? list : []));

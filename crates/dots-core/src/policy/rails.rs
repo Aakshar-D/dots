@@ -476,7 +476,7 @@ fn shell(
         && rails.protected_commands.is_empty());
     if walk.blind && anything {
         return Some(RailHit::unclear(
-            "running a script Dots can't read (it is piped into a shell)",
+            "running a script Sage can't read (it is piped into a shell)",
         ));
     }
     if walk.unclear {
@@ -487,7 +487,7 @@ fn shell(
         }
         if let Some(word) = mentions(rails, role, &text) {
             return Some(RailHit::unclear(format!(
-                "running a command Dots can't read (it mentions {word})"
+                "running a command Sage can't read (it mentions {word})"
             )));
         }
     }
@@ -1369,13 +1369,13 @@ fn shell_path(rails: &Guardrails, command: &str, workspace: Option<&Path>) -> Op
                 .any(|seg| literals.iter().any(|lit| glob_matches(seg, lit)));
             if could_be {
                 return Some(RailHit::unclear(format!(
-                    "a file Dots can't name ({text}) that could be protected"
+                    "a file Sage can't name ({text}) that could be protected"
                 )));
             }
         }
         if let Some(part) = path_mention(rails, &lower) {
             return Some(RailHit::unclear(format!(
-                "a file Dots can't name ({text}) that mentions {part}"
+                "a file Sage can't name ({text}) that mentions {part}"
             )));
         }
     }

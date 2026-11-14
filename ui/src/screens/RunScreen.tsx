@@ -176,7 +176,7 @@ function Thread({ runId, runs }: { runId: string; runs: Run[] }) {
       <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-muted-foreground">
         {dot.data && (
           <div className="flex gap-1">
-            <dt>Dot</dt>
+            <dt>Sol</dt>
             <dd>
               <Link to={`/dots/${dot.data.id}`} className="text-foreground hover:underline">
                 {dot.data.name}

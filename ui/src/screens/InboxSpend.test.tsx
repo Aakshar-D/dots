@@ -40,12 +40,12 @@ describe("runs waiting for a spending cap in the Inbox", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/dots/${capped.dot_id}`));
   });
 
-  it("offer a background run only Raise cap, and send the cap of all dots to Settings", async () => {
+  it("offer a background run only Raise cap, and send the cap of all sols to Settings", async () => {
     const all: HeldRun = {
       ...capped,
       run_id: "01J0RUN9",
       trigger: "schedule",
-      reason: { kind: "spend_cap", text: "All dots reached the $10.00 daily cap", scope: "all" },
+      reason: { kind: "spend_cap", text: "All sols reached the $10.00 daily cap", scope: "all" },
     };
     backend.on("inbox", () => only([all]));
     renderApp("/inbox");

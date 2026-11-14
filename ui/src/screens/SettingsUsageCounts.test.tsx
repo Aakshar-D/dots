@@ -62,7 +62,7 @@ describe("Share usage counts", () => {
     const toggle = within(s).getByRole("switch", { name: "Send usage counts every hour" });
     expect(toggle).not.toBeChecked();
     expect(s).toHaveTextContent(
-      "Only counts: how many runs started, finished or failed, messages sent and approvals asked each hour, and how many dots you have. Never names, files, messages or anything a dot wrote.",
+      "Only counts: how many runs started, finished or failed, messages sent and approvals asked each hour, and how many sols you have. Never names, files, messages or anything a sol wrote.",
     );
     expect(within(s).getByText("Not sent yet")).toBeVisible();
   });

@@ -476,17 +476,17 @@ pub fn render(
         facts.engines.join(", ")
     };
     let mut out = format!(
-        "Dots problem report\n\
+        "Sage problem report\n\
          Made: {made}\n\
          \n\
          == What went wrong ==\n\
          {description}\n\
          \n\
-         == This copy of Dots ==\n\
+         == This copy of Sage ==\n\
          Version: {version}\n\
          System: {os} {arch}\n\
          Engines in use: {engines}\n\
-         Dots: {dots}\n\
+         Sols: {dots}\n\
          Runs in the last 24 hours: {runs} ({failed} failed)\n\
          \n",
         made = made.format("%Y-%m-%d %H:%M (%:z)"),

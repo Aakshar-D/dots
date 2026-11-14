@@ -162,7 +162,7 @@ async fn the_local_engine_offers_the_browser_and_its_gate_decides() {
     );
     assert!(names.contains(&"mcp__browser__browser_click".to_string()));
     let clicked = tool_result(&reqs[2], "c2");
-    assert!(clicked.starts_with("Dots: Clicked \"Home\"\n"), "{clicked}");
+    assert!(clicked.starts_with("Sage: Clicked \"Home\"\n"), "{clicked}");
     assert_eq!(called(&e), ["browser_snapshot", "browser_click"]);
     assert!(e.edges.gone_within(&dot.id, Duration::from_secs(10)).await);
 }
@@ -230,7 +230,7 @@ async fn a_late_browser_approval_is_not_performed_by_dots() {
         .remove(0);
     assert!(
         approval.self_apply,
-        "a local dot's late approvals are Dots' to perform"
+        "a local sol's late approvals are Sage's to perform"
     );
     let decided = e.hub.decide(&approval.id, true, None).await.unwrap();
     assert!(matches!(decided, DecideEffect::Parked(_)));

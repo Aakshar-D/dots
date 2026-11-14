@@ -14,7 +14,7 @@ describe("ChatGPT account in Settings", () => {
   it("explains missing registration and does not start an unavailable login", async () => {
     backend.on("chatgpt_account", () => ({
       ...signedOut, configured: false,
-      setup_error: "ChatGPT sign-in needs a registered OpenAI client for Dots.",
+      setup_error: "ChatGPT sign-in needs a registered OpenAI client for Sage.",
     }));
     renderApp("/settings/account");
     expect(await screen.findByRole("button", { name: "Sign in with ChatGPT" })).toBeDisabled();

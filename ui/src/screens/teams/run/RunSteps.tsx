@@ -167,7 +167,7 @@ function StepRunCard({ step, number, view }: { step: Step; number: string; view:
       )}
       {stepRun?.deploy_result && <DeployResult run={run} result={stepRun.deploy_result} />}
       {links && links.step.length > 0 && (
-        <ul aria-label={`Dot runs of ${name}`} className="flex flex-wrap gap-2 text-xs">
+        <ul aria-label={`Sol runs of ${name}`} className="flex flex-wrap gap-2 text-xs">
           {links.step.map((link) => (
             <li key={link.id} className="flex items-center gap-1">
               <Link to={`/runs/${link.id}`} className="underline">

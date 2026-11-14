@@ -22,14 +22,14 @@ const step = (seq: number, tool: string, input: unknown, output: string, isError
 ];
 
 describe("a memory tool step in the conversation", () => {
-  it("says what the dot remembered or that it forgot one, under the chip, with a link", async () => {
+  it("says what the sol remembered or that it forgot one, under the chip, with a link", async () => {
     home(
       [chat("a", "10:00")],
       [
         ...step(1, "Memory", { text: "Prefers invoices as PDF." }, "Remembered 01J0MEM1."),
         ...step(3, "mcp__dots__forget", { id: "01J0MEM2" }, "Forgot 01J0MEM2."),
         ...step(5, "mcp__dots__recall", { query: "pdf" }, "[01J0MEM1] Prefers invoices as PDF."),
-        ...step(7, "Memory", { text: "Again." }, "This dot already remembers that.", true),
+        ...step(7, "Memory", { text: "Again." }, "This sol already remembers that.", true),
       ],
     );
     const { user } = renderApp(`/home/${dot.id}`);
@@ -41,7 +41,7 @@ describe("a memory tool step in the conversation", () => {
     expect(forgot).toBeVisible();
     // Each chip shows as every tool's does; the notes follow the row of chips.
     await user.click(
-      view.getByText("Used Memory › remember 2 times · Used dots › forget · Used dots › recall"),
+      view.getByText("Used Memory › remember 2 times · Used Sage › forget · Used Sage › recall"),
     );
     const chips = view.getByRole("group", { name: "Tool steps" });
     expect(within(chips).getAllByText("done")).toHaveLength(3);

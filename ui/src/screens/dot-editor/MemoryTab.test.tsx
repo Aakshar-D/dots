@@ -29,8 +29,8 @@ async function openTab() {
 
 const items = () => within(screen.getByRole("list", { name: "Memories" })).getAllByRole("listitem");
 
-describe("a dot's Memory tab", () => {
-  it("lists what the dot remembers, pinned first, with who wrote each and the count", async () => {
+describe("a sol's Memory tab", () => {
+  it("lists what the sol remembers, pinned first, with who wrote each and the count", async () => {
     holding([dots, persons]);
     await openTab();
     await screen.findByRole("list", { name: "Memories" });
@@ -40,7 +40,7 @@ describe("a dot's Memory tab", () => {
       "aria-pressed",
       "true",
     );
-    expect(first).toHaveTextContent("by the dot · from run");
+    expect(first).toHaveTextContent("by the sol · from run");
     expect(within(first!).getByRole("link", { name: localDateTime(dots.created_at) })).toHaveAttribute(
       "href",
       `/runs/${dots.run_id}`,
@@ -72,7 +72,7 @@ describe("a dot's Memory tab", () => {
     await openTab();
     expect(
       await screen.findByText(
-        "Nothing remembered yet. The dot saves what it learns here; you can add notes too.",
+        "Nothing remembered yet. The sol saves what it learns here; you can add notes too.",
       ),
     ).toBeVisible();
     expect(screen.getByText("0 of 200")).toBeVisible();
@@ -82,7 +82,7 @@ describe("a dot's Memory tab", () => {
     const held = holding([]);
     let refuse = true;
     backend.on("memory_add", (args) => {
-      if (refuse) throw { kind: "conflict", message: "This dot already remembers that." };
+      if (refuse) throw { kind: "conflict", message: "This sol already remembers that." };
       const saved = { ...persons, id: "01J0NEW", text: String(args.text).trim() };
       held.memories = [saved];
       return saved;
@@ -102,7 +102,7 @@ describe("a dot's Memory tab", () => {
     await user.type(box, " Sends on Fridays. ");
     expect(screen.getByText("17 / 500")).toBeVisible();
     await user.click(save);
-    expect(await screen.findByRole("alert")).toHaveTextContent("This dot already remembers that.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("This sol already remembers that.");
     refuse = false;
     await user.click(save);
     await waitFor(() => expect(screen.queryByRole("textbox", { name: "New memory" })).toBeNull());
@@ -178,7 +178,7 @@ describe("a dot's Memory tab", () => {
     expect(await screen.findByText("memory 01J0MEM1")).toBeVisible();
   });
 
-  it("refreshes when the core says the dot's memories changed", async () => {
+  it("refreshes when the core says the sol's memories changed", async () => {
     const held = holding([persons]);
     const { queryClient } = await openTab();
     await screen.findByRole("listitem", { name: persons.text });
@@ -266,7 +266,7 @@ describe("a dot's Memory tab", () => {
   it("ties the counter and a refusal to the box", async () => {
     holding([persons]);
     backend.on("memory_add", () => {
-      throw { kind: "conflict", message: "This dot already remembers that." };
+      throw { kind: "conflict", message: "This sol already remembers that." };
     });
     const { user } = await openTab();
     await user.click(await screen.findByRole("button", { name: "Add memory" }));
@@ -279,17 +279,17 @@ describe("a dot's Memory tab", () => {
     );
     await screen.findByRole("alert");
     expect(box).toHaveAttribute("aria-invalid", "true");
-    expect(box).toHaveAccessibleDescription("6 / 500 This dot already remembers that.");
+    expect(box).toHaveAccessibleDescription("6 / 500 This sol already remembers that.");
   });
 
-  it("offers no Add memory once the dot remembers 200 things", async () => {
+  it("offers no Add memory once the sol remembers 200 things", async () => {
     holding(Array.from({ length: 200 }, (_, i) => ({ ...persons, id: `01J0M${i}`, text: `Fact ${i}.` })));
     await openTab();
     expect(await screen.findByText("200 of 200")).toBeVisible();
     expect(screen.getByRole("button", { name: "Add memory" })).toBeDisabled();
   });
 
-  it("opens from the dot's menu", async () => {
+  it("opens from the sol's menu", async () => {
     home([]);
     holding([persons]);
     const { user, router } = renderApp(`/home/${dot.id}`);

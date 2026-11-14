@@ -70,7 +70,7 @@ describe("the Releases page", () => {
     );
     expect(
       screen.getByText(
-        "If this key and its password are both lost, no installed Dots can ever take another update.",
+        "If this key and its password are both lost, no installed Sage can ever take another update.",
       ),
     ).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save key file…" }));
@@ -89,7 +89,7 @@ describe("the Releases page", () => {
       }),
     );
     await waitFor(() => expect(backend.callsTo("release_put_secrets")).toHaveLength(1));
-    await user.click(screen.getByRole("button", { name: "Put the public key into Dots" }));
+    await user.click(screen.getByRole("button", { name: "Put the public key into Sage" }));
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", {
         name: "Open the pull request",
@@ -125,7 +125,7 @@ describe("the Releases page", () => {
       url: "https://github.com/Aakshar-D/dots/pull/31",
     }));
     const { user } = releases(keyPending);
-    const pull = await screen.findByRole("button", { name: "Put the public key into Dots" });
+    const pull = await screen.findByRole("button", { name: "Put the public key into Sage" });
     expect(pull).toBeEnabled();
     expect(screen.queryByText(/GitHub already has a signing key/)).toBeNull();
     await user.click(pull);
@@ -163,7 +163,7 @@ describe("the Releases page", () => {
     await user.click(screen.getByRole("button", { name: "Publish trial" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent(
-      "Publish 0.3.0-rc.1 from master as it is now? It goes only to publishers' Dots.",
+      "Publish 0.3.0-rc.1 from master as it is now? It goes only to publishers' Sage.",
     );
     await user.click(within(dialog).getByRole("button", { name: "Publish trial" }));
     await waitFor(() =>
@@ -231,7 +231,7 @@ describe("the Releases page", () => {
     await user.click(screen.getByRole("button", { name: "Promote 0.3.0 to everyone" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent(
-      "Every Dots will be offered 0.3.0 within six hours. It is exactly the code of 0.3.0-rc.1.",
+      "Every Sage will be offered 0.3.0 within six hours. It is exactly the code of 0.3.0-rc.1.",
     );
     await user.click(within(dialog).getByRole("button", { name: "Promote" }));
     await waitFor(() =>
@@ -260,7 +260,7 @@ describe("the Releases page", () => {
     );
     await user.click(screen.getByRole("button", { name: "Withdraw 0.2.0…" }));
     const dialog = await screen.findByRole("alertdialog");
-    expect(dialog).toHaveTextContent("No more Dots will take 0.2.0.");
+    expect(dialog).toHaveTextContent("No more Sage will take 0.2.0.");
     await user.click(within(dialog).getByRole("button", { name: "Withdraw" }));
     await waitFor(() =>
       expect(backend.callsTo("release_withdraw")).toEqual([{ version: "0.2.0" }]),

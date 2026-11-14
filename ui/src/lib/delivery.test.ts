@@ -23,8 +23,8 @@ describe("deliveryLine", () => {
     const texts = {
       busy: "other runs are busy",
       usage_hold: "held for the usage limit",
-      updating: "Dots is updating",
-      dot_busy: "this dot is busy with another run",
+      updating: "Sage is updating",
+      dot_busy: "this sol is busy with another run",
       queued: "next in line",
     } as const;
     for (const [reason, text] of Object.entries(texts)) {

@@ -272,7 +272,7 @@ impl Apps {
     pub async fn install_bundled(&self, name: &str, kept: Option<&str>) -> Result<LibraryItem> {
         if name != PROJECTS {
             return Err(Error::NotFound(format!(
-                "no app named {name} comes with Dots"
+                "no app named {name} comes with Sage"
             )));
         }
         let src = blocking(projects).await??;

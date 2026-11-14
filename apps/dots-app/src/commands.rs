@@ -2767,7 +2767,7 @@ fn creds_of(creds: Option<serde_json::Value>) -> Res<Option<SourceCreds>> {
         .map(|value| {
             serde_json::from_value(value).map_err(|_| {
                 CmdError::from(dots_core::Error::Invalid(
-                    "these sign-in details are not ones Dots reads: give a token, a username \
+                    "these sign-in details are not ones Sage reads: give a token, a username \
                      and password, a machine identity's client id and secret, or an age key"
                         .into(),
                 ))

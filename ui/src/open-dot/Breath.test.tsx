@@ -239,20 +239,20 @@ describe("Breath", () => {
     fireEvent.click(screen.getByRole("button", { name: "Stop and listen" }));
     expect(onClick).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("img")).toBeNull();
-    rerender(<Breath size={132} state="resting" onClick={onClick} label="Talk to Dot" />);
-    expect(screen.getByRole("button", { name: "Talk to Dot" })).toBeInTheDocument();
+    rerender(<Breath size={132} state="resting" onClick={onClick} label="Talk to Sage" />);
+    expect(screen.getByRole("button", { name: "Talk to Sage" })).toBeInTheDocument();
   });
 
   it("is an image named for its state otherwise", () => {
     const { rerender } = render(<Breath size={132} state="resting" />);
     for (const [state, name] of [
-      ["listening", "Dot is listening"],
-      ["thinking", "Dot is thinking"],
-      ["speaking", "Dot is speaking"],
-      ["asking", "Dot is asking"],
-      ["resting", "Dot is resting"],
-      ["done", "Dot is resting"],
-      ["trouble", "Dot has a problem"],
+      ["listening", "Sage is listening"],
+      ["thinking", "Sage is thinking"],
+      ["speaking", "Sage is speaking"],
+      ["asking", "Sage is asking"],
+      ["resting", "Sage is resting"],
+      ["done", "Sage is resting"],
+      ["trouble", "Sage has a problem"],
     ] as const) {
       rerender(<Breath size={132} state={state} />);
       expect(screen.getByRole("img", { name })).toBeInTheDocument();

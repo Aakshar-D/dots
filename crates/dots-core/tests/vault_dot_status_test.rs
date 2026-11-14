@@ -277,7 +277,7 @@ async fn each_reason_a_grant_does_not_resolve_has_its_status_and_text() {
             "shell",
             name,
             GrantState::ShellSecretsForbidden,
-            &format!("{name}: Acme Engineering does not allow secrets in the shell (dot 'triage')"),
+            &format!("{name}: Acme Engineering does not allow secrets in the shell (sol 'triage')"),
         )
     };
     assert_eq!(
@@ -287,13 +287,13 @@ async fn each_reason_a_grant_does_not_resolve_has_its_status_and_text() {
                 "mcp:github",
                 "NOWHERE",
                 GrantState::NotDefined,
-                "NOWHERE: not in Acme Engineering (dot 'triage', mcp:github)"
+                "NOWHERE: not in Acme Engineering (sol 'triage', mcp:github)"
             ),
             not(
                 "mcp:github",
                 "PROD_DB",
                 GrantState::DeniedByPolicy,
-                "PROD_DB: Acme Engineering's policy does not allow it (dot 'triage')"
+                "PROD_DB: Acme Engineering's policy does not allow it (sol 'triage')"
             ),
             // A secret of the org's, and a Personal one `fallback` would give.
             forbidden("GITHUB_TOKEN", ValueSource::Org),
@@ -371,7 +371,7 @@ async fn an_org_that_gives_no_values_is_the_status_of_every_grant() {
         statuses,
         each(
             GrantState::OrgRemoved,
-            "dot 'triage': its org 'acme-eng' was removed"
+            "sol 'triage': its org 'acme-eng' was removed"
         )
     );
     agrees_with_resolve(&t.vault, &dot, &statuses).await;
@@ -427,7 +427,7 @@ async fn a_personal_dot_shows_personal_only() {
                 "shell",
                 "GITHUB_TOKEN",
                 GrantState::NotDefined,
-                "GITHUB_TOKEN: not in Personal (dot 'triage', shell)"
+                "GITHUB_TOKEN: not in Personal (sol 'triage', shell)"
             ),
             ok("shell", "REGION", ValueSource::Personal, false),
         ]
@@ -443,7 +443,7 @@ async fn a_personal_dot_shows_personal_only() {
             "shell",
             "API_KEY",
             GrantState::NotDefined,
-            "API_KEY: not in Personal (dot 'triage', shell)"
+            "API_KEY: not in Personal (sol 'triage', shell)"
         )
     );
     agrees_with_resolve(&t.vault, &dot, &statuses).await;

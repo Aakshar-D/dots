@@ -449,14 +449,14 @@ async fn chat_follow_up_requires_finished_parent_with_session() {
     let res = t.rt.chat(&dot.id, "hi", Some(&queued.id)).await;
     assert_eq!(
         refusal(res),
-        "this chat cannot be continued because its last run ended before the dot started \
+        "this chat cannot be continued because its last run ended before the sol started \
          working; start a new chat"
     );
     assert_eq!(t.rt.run_thread(&queued.id).await.unwrap().len(), 1);
     t.rt.shutdown();
 }
 
-const CHAT_BUSY: &str = "the dot is still working on this chat; wait until it has finished, \
+const CHAT_BUSY: &str = "the sol is still working on this chat; wait until it has finished, \
                          then send your message again";
 
 /// The text of the `Conflict` a refused follow-up answers with, which the UI shows as it is.

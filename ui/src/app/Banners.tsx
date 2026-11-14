@@ -39,18 +39,18 @@ function RestartButton(props: {
   if (active?.length === 0) {
     return (
       <Button size="sm" variant="outline" disabled={props.disabled} onClick={props.onRestart}>
-        Restart Dots
+        Restart Sage
       </Button>
     );
   }
   const found = !active
-    ? "Dots could not check whether a run is active."
+    ? "Sage could not check whether a run is active."
     : active.length === 1
       ? `${active[0]} has a run that has not ended.`
       : `${active.join(", ")} have runs that have not ended.`;
   return (
     <ConfirmButton
-      title="Restart Dots now?"
+      title="Restart Sage now?"
       description={
         <>
           {found} A run that is working is stopped by the restart and ends as failed
@@ -61,7 +61,7 @@ function RestartButton(props: {
       onConfirm={props.onRestart}
       disabled={props.disabled}
     >
-      Restart Dots
+      Restart Sage
     </ConfirmButton>
   );
 }
@@ -88,13 +88,13 @@ function UpdateBanner() {
   if (note.state === "installing") {
     const doing =
       note.purpose === "repair"
-        ? "Repairing Dots."
+        ? "Repairing Sage."
         : note.purpose === "go_back"
-          ? `Going back to Dots ${note.version}.`
-          : `Installing Dots ${note.version}.`;
+          ? `Going back to Sage ${note.version}.`
+          : `Installing Sage ${note.version}.`;
     return (
       <Banner tone="info">
-        <span className="flex-1">{doing} Dots restarts in a moment.</span>
+        <span className="flex-1">{doing} Sage restarts in a moment.</span>
       </Banner>
     );
   }
@@ -104,11 +104,11 @@ function UpdateBanner() {
     const said =
       note.state === "unhealthy"
         ? back
-          ? `Dots ${note.version} did not start properly. Go back to ${back}? Your data from before the update comes back with it; anything done since the update is lost.`
-          : `Dots ${note.version} did not start properly, and there is no backup of the version before it to go back to.`
+          ? `Sage ${note.version} did not start properly. Go back to ${back}? Your data from before the update comes back with it; anything done since the update is lost.`
+          : `Sage ${note.version} did not start properly, and there is no backup of the version before it to go back to.`
         : back
-          ? `The developers withdrew Dots ${note.version}. Go back to ${back}?`
-          : `The developers withdrew Dots ${note.version}. A fixed version will be offered when it is out.`;
+          ? `The developers withdrew Sage ${note.version}. Go back to ${back}?`
+          : `The developers withdrew Sage ${note.version}. A fixed version will be offered when it is out.`;
     return (
       <Banner tone="warning">
         <span className="flex-1">{said}</span>
@@ -132,7 +132,7 @@ function UpdateBanner() {
     return (
       <Banner tone="info">
         <span className="flex-1">
-          Dots updated itself to {note.version} at {localTime(note.at)}.
+          Sage updated itself to {note.version} at {localTime(note.at)}.
         </span>
         <Button size="sm" variant="outline" onClick={() => setNotesOf(note.version)}>
           What's new
@@ -159,7 +159,7 @@ function UpdateBanner() {
     return (
       <Banner tone="warning">
         <span className="flex-1">
-          The update was not installed. Dots offers it again once it is downloaded.
+          The update was not installed. Sage offers it again once it is downloaded.
           <span className="block text-destructive">{note.error}</span>
         </span>
         <Button
@@ -180,10 +180,10 @@ function UpdateBanner() {
       <Banner tone="info">
         <span className="flex-1">
           {note.purpose === "repair"
-            ? `Dots will repair itself ${when}`
+            ? `Sage will repair itself ${when}`
             : note.purpose === "go_back"
-              ? `Dots will go back to ${note.version} ${when}`
-              : `Will restart into Dots ${note.version} ${when} New runs wait until after the update.`}
+              ? `Sage will go back to ${note.version} ${when}`
+              : `Will restart into Sage ${note.version} ${when} New runs wait until after the update.`}
         </span>
         <Button
           size="sm"
@@ -201,7 +201,7 @@ function UpdateBanner() {
   return (
     <Banner tone="info">
       <span className="flex-1">
-        Dots {note.version} is ready.
+        Sage {note.version} is ready.
         {working.length > 0 &&
           ` ${dotNames(working)} ${many ? "are" : "is"} still running.`}{" "}
         <button
@@ -306,7 +306,7 @@ export function Banners() {
         <Banner tone="error">
           <span className="flex-1">
             The local server is not running: {status.server_error}. Webhooks are off and Claude
-            dots cannot run.
+            sols cannot run.
           </span>
           {settings("runs")}
         </Banner>
@@ -314,7 +314,7 @@ export function Banners() {
       {!claude.program && (
         <Banner tone="error">
           <span className="flex-1">
-            The claude CLI was not found. Claude dots cannot run until it is installed or its
+            The claude CLI was not found. Claude sols cannot run until it is installed or its
             path is set.
           </span>
           {settings("claude")}
@@ -323,7 +323,7 @@ export function Banners() {
       {claude.mismatch && !!overview.data?.length && (
         <Banner tone="warning">
           <span className="flex-1">
-            Claude CLI {claude.version} has not been tested with Dots (tested:{" "}
+            Claude CLI {claude.version} has not been tested with Sage (tested:{" "}
             {claude.tested_version}).
           </span>
           <Button
@@ -349,7 +349,7 @@ export function Banners() {
       )}
       {status.schedules_paused && (
         <Banner tone="info">
-          <span className="flex-1">Schedules are paused. No dot runs on its schedule.</span>
+          <span className="flex-1">Schedules are paused. No sol runs on its schedule.</span>
           <Button
             size="sm"
             variant="outline"

@@ -30,7 +30,7 @@ let line = 0;
 const lines = (...texts: string[]) => texts.map((text) => ({ n: ++line, text }));
 
 const show = (change: Partial<VoiceLive>) => act(() => voiceStore.set(change));
-const stage = () => screen.queryByRole("region", { name: "Open Dot" });
+const stage = () => screen.queryByRole("region", { name: "Open Sage" });
 const words = () => stage()!.querySelector<HTMLElement>("[aria-live='polite']")!;
 const question = () => stage()!.querySelector<HTMLElement>("[data-question]");
 /// What The Breath shows: its button names the state only through the image underneath, so
@@ -80,7 +80,7 @@ afterEach(() => {
   voiceStore.reset();
 });
 
-describe("the Open Dot stage", () => {
+describe("the Open Sage stage", () => {
   it("does not render at all while closed", () => {
     show({ state: "idle" });
     const { container } = render(<OpenDotStage />);
@@ -186,7 +186,7 @@ describe("the Open Dot stage", () => {
     const button = screen.getByRole("button", { name: "Approve" });
     const propsKey = Object.keys(button).find((k) => k.startsWith("__reactProps$"))!;
     const staleClick = (button as unknown as Record<string, { onClick: () => void }>)[propsKey]!.onClick;
-    show({ ask: { question: "Which dot?", options: ["Mail", "News"], seq: 8 } });
+    show({ ask: { question: "Which sol?", options: ["Mail", "News"], seq: 8 } });
     act(() => staleClick());
     expect(backend.callsTo("voice_pick")).toEqual([{ index: 0, seq: 7 }]);
   });
@@ -334,13 +334,13 @@ describe("the Open Dot stage", () => {
     expect(within(words()).getByText("Triage wants to push.")).toBeVisible();
     // A question spoken a sentence at a time: none of its sentences is printed twice, and
     // what was said before them stays.
-    const long = "Downloads tidy. Runs every day at 08:00. Create this dot?";
+    const long = "Downloads tidy. Runs every day at 08:00. Create this sol?";
     show({
-      said: lines("Let me set that up.", "Downloads tidy.", "Runs every day at 08:00.", "Create this dot?"),
+      said: lines("Let me set that up.", "Downloads tidy.", "Runs every day at 08:00.", "Create this sol?"),
       ask: { question: long, options: ["Yes", "No"], seq: 2 },
     });
     expect(question()).toHaveTextContent(long);
-    expect(within(words()).queryByText("Create this dot?")).toBeNull();
+    expect(within(words()).queryByText("Create this sol?")).toBeNull();
     expect(within(words()).queryByText("Runs every day at 08:00.")).toBeNull();
     expect(within(words()).getByText("Let me set that up.")).toBeVisible();
   });
@@ -352,14 +352,14 @@ describe("the Open Dot stage", () => {
     expect(within(stage()!).getByText("Say your answer.")).toBeVisible();
     expect(screen.queryByRole("group", { name: "What should it be called?" })).toBeNull();
     const footer = stage()!.querySelector("[data-footer-line]");
-    expect(footer).toHaveTextContent("Not listening. Click the dots to answer by voice.");
+    expect(footer).toHaveTextContent("Not listening. Click the mark to answer by voice.");
     expect(footer).not.toHaveTextContent(/pick an option/);
   });
 
   it("names the shortcut to interrupt only when one is set", () => {
     render(<OpenDotStage />, "");
     show({ state: "speaking", micOpen: false });
-    expect(stage()!.querySelector("[data-footer-line]")).toHaveTextContent(/^Speaking\. Click the dots to interrupt\.$/);
+    expect(stage()!.querySelector("[data-footer-line]")).toHaveTextContent(/^Speaking\. Click the mark to interrupt\.$/);
   });
 
   it("lets the options be tried again when a pick fails", async () => {
@@ -368,12 +368,12 @@ describe("the Open Dot stage", () => {
       voiceOpen: async () => null,
       voiceClose: async () => null,
       voiceStop: async () => null,
-      voicePick: () => Promise.reject(new Error("Dot is not asking anything now.")),
+      voicePick: () => Promise.reject(new Error("Sage is not asking anything now.")),
     };
     render(<OpenDotStage act={act_} />);
     show({ state: "asking", micOpen: true, ask: { question: "Q", options: ["A", "B"], seq: 1 } });
     await act(async () => void fireEvent.click(screen.getByRole("button", { name: "A" })));
-    expect(failed).toHaveBeenCalledWith("Dot is not asking anything now.");
+    expect(failed).toHaveBeenCalledWith("Sage is not asking anything now.");
     expect(screen.getByRole("button", { name: "A" })).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("button", { name: "A" })).not.toHaveAttribute("data-picked");
     failed.mockRestore();
@@ -477,7 +477,7 @@ describe("the Open Dot stage", () => {
     }
   });
 
-  it("shows an approval with no target as its dot and tool only", () => {
+  it("shows an approval with no target as its sol and tool only", () => {
     render(<OpenDotStage />);
     show({
       state: "asking",
@@ -533,10 +533,10 @@ describe("the Open Dot stage", () => {
     show({ state: "thinking", micOpen: false });
     expect(footer()).toHaveTextContent("Thinking…");
     show({ state: "speaking", micOpen: false });
-    expect(footer()).toHaveTextContent("Speaking. Click the dots or press the shortcut to interrupt.");
+    expect(footer()).toHaveTextContent("Speaking. Click the mark or press the shortcut to interrupt.");
     show({ state: "idle", micOpen: false, ask: { question: "Run it?", options: ["Yes", "No"], seq: 1 } });
     expect(footer()).toHaveTextContent(
-      "Not listening. Click the dots to answer by voice, or pick an option.",
+      "Not listening. Click the mark to answer by voice, or pick an option.",
     );
     show({ trouble: "No microphone was found." });
     expect(footer()).toHaveTextContent("No microphone was found.");

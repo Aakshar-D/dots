@@ -51,7 +51,7 @@ describe("the card and the company's Claude Code policy", () => {
     }));
     card();
     const note = await screen.findByRole("note");
-    expect(note).toHaveTextContent("refuses these for every dot");
+    expect(note).toHaveTextContent("refuses these for every sol");
     expect(note).toHaveTextContent(managed.path);
     expect(backend.callsTo("managed_policy_check")[0]).toMatchObject({ engine: "claude" });
   });

@@ -79,12 +79,12 @@ fn the_first_cap_reached_is_named() {
     let h = hit(NONE, spent(10.5, 0), NONE).unwrap();
     assert_eq!(
         (h.text.as_str(), h.scope),
-        ("All dots reached the $10.00 daily cap", CapScope::All)
+        ("All sols reached the $10.00 daily cap", CapScope::All)
     );
     let h = hit(NONE, spent(0.0, 1_000_000), NONE).unwrap();
-    assert_eq!(h.text, "All dots reached the 1,000,000-token daily cap");
+    assert_eq!(h.text, "All sols reached the 1,000,000-token daily cap");
     let h = hit(NONE, NONE, spent(50.0, 0)).unwrap();
-    assert_eq!(h.text, "All dots reached the $50.00 monthly cap");
+    assert_eq!(h.text, "All sols reached the $50.00 monthly cap");
     // The dot's own cap comes first.
     let h = hit(spent(3.0, 0), spent(20.0, 0), spent(80.0, 0)).unwrap();
     assert_eq!(h.scope, CapScope::Dot);
@@ -245,7 +245,7 @@ async fn the_ledger_reads_todays_spend_against_the_caps() {
     let hit = ledger.hit(&store, &other).await.unwrap().unwrap();
     assert_eq!(
         (hit.text.as_str(), hit.scope),
-        ("All dots reached the 20-token daily cap", CapScope::All)
+        ("All sols reached the 20-token daily cap", CapScope::All)
     );
     // A dot that is gone has no cap.
     assert_eq!(ledger.hit_for(&store, "no-such-dot").await.unwrap(), None);

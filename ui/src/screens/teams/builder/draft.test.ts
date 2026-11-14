@@ -99,7 +99,7 @@ describe("the builder's draft", () => {
       kind: "branch",
       on: "project",
       paths: [
-        { label: "Dots", steps: [] },
+        { label: "Sage", steps: [] },
         { label: "Site", steps: [] },
       ],
       otherwise: [],
@@ -235,7 +235,7 @@ describe("the builder's draft", () => {
       kind: "schedule",
       schedule: daily,
       task: "",
-      project: "Dots",
+      project: "Sage",
     });
     expect(withTriggerKind(manual, "webhook", crew, daily)).toEqual({
       kind: "webhook",
@@ -244,7 +244,7 @@ describe("the builder's draft", () => {
     });
     // A schedule's task and project become a webhook's fallbacks, and come back.
     const hook = withTriggerKind(nightly.definition.trigger, "webhook", crew, daily);
-    expect(hook).toEqual({ kind: "webhook", task: "Update the dependencies.", project: "Dots" });
+    expect(hook).toEqual({ kind: "webhook", task: "Update the dependencies.", project: "Sage" });
     expect(withTriggerKind(hook, "schedule", crew, daily)).toEqual(nightly.definition.trigger);
     expect(withTriggerKind(hook, "manual", crew, daily)).toEqual(manual);
     expect(withTriggerKind(hook, "webhook", crew, daily)).toBe(hook);

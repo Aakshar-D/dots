@@ -91,7 +91,7 @@ test("the manifest points the updater at the release's installer and its signatu
   });
   assert.deepEqual(body, {
     version: "0.2.0",
-    notes: "Dots 0.2.0",
+    notes: "Sage 0.2.0",
     pub_date: "2026-10-20T09:17:00.000Z",
     platforms: {
       "windows-x86_64": {
@@ -132,8 +132,8 @@ test("the manifest carries the notes file when one is given", () => {
     date: new Date("2026-10-27T09:00:00Z"),
   };
   assert.equal(manifest({ ...base, notes: "- New things\n" }).notes, "- New things");
-  assert.equal(manifest(base).notes, "Dots 0.3.0");
-  assert.equal(manifest({ ...base, notes: "  \n" }).notes, "Dots 0.3.0");
+  assert.equal(manifest(base).notes, "Sage 0.3.0");
+  assert.equal(manifest({ ...base, notes: "  \n" }).notes, "Sage 0.3.0");
 });
 
 // Final review I6: the notes a promote left on master never describe a later version.

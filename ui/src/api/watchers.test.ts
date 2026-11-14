@@ -46,7 +46,7 @@ describe("the watcher commands", () => {
     ]);
   });
 
-  it("refresh the dot's watchers, the Inbox and the dots' counts when a watcher changes", () => {
+  it("refresh the sol's watchers, the Inbox and the sols' counts when a watcher changes", () => {
     const qc = createQueryClient();
     for (const key of [keys.watchers("dot-a"), keys.watchers("dot-b"), keys.inbox, keys.overview]) {
       qc.setQueryData(key, []);

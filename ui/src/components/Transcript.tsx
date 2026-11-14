@@ -46,7 +46,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   manual: "Manual run",
   chat: "Chat message",
   resume: "Continued after approval",
-  follow_up: "Follow-up the dot scheduled",
+  follow_up: "Follow-up the sol scheduled",
   app: "Started by an app",
   workflow: "Workflow step",
   watcher: "Watcher run",
@@ -407,7 +407,7 @@ function CheckIn({ message }: { message: Message }) {
   return (
     <div
       role="group"
-      aria-label={question ? "Question from the dot" : "Note from the dot"}
+      aria-label={question ? "Question from the sol" : "Note from the sol"}
       className="flex max-w-prose flex-col gap-1 self-start rounded-xl bg-muted px-3.5 py-2.5"
     >
       <span className="text-xs text-muted-foreground">
@@ -513,7 +513,7 @@ export function Transcript(props: {
                 </p>
               ))}
               {resentAfterRestart(run) && (
-                <p className="self-end text-xs text-muted-foreground">Resent after Dots restarted</p>
+                <p className="self-end text-xs text-muted-foreground">Resent after Sage restarted</p>
               )}
               <DeliveryLine run={run} />
               <CapNote run={run} className="self-end" />
@@ -521,13 +521,13 @@ export function Transcript(props: {
               <RunPlan
                 run={run}
                 events={props.events.get(run.id) ?? []}
-                dotName={props.dotName ?? "The dot"}
+                dotName={props.dotName ?? "The sol"}
                 owners={owners}
               />
               {!conversation && (items.length > 0 || checkIns.length > 0) && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span aria-hidden className="size-1.5 rounded-full bg-primary" />
-                  {props.dotName ?? "The dot"} · {localTime(run.queued_at)}
+                  {props.dotName ?? "The sol"} · {localTime(run.queued_at)}
                 </p>
               )}
               {blocks(items).map((block) =>

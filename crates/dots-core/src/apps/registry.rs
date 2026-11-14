@@ -240,7 +240,7 @@ impl Apps {
         if offered_writes == Some(false) && writes_now {
             return Err(format!(
                 "the app {name} changed during this run: {tool} now writes, and this run checked \
-                 the dot's rules for it as a tool that does not; a new run has the new version"
+                 the sol's rules for it as a tool that does not; a new run has the new version"
             ));
         }
         let dots = self
@@ -619,14 +619,14 @@ impl Apps {
         if let Some((id, version)) = expect {
             if item.id != id {
                 return Err(Error::Conflict(format!(
-                    "the app {name} was replaced after this change was proposed; ask the dot to \
+                    "the app {name} was replaced after this change was proposed; ask the sol to \
                      propose it again"
                 )));
             }
             if old.version != version {
                 return Err(Error::Conflict(format!(
                     "the app {name} changed after this was proposed (version {version}, now {}); \
-                     ask the dot to propose again",
+                     ask the sol to propose again",
                     old.version
                 )));
             }
@@ -751,7 +751,7 @@ impl Apps {
         let (_held, item, config) = self.get_locked(name).await?;
         if on && !self.load(&item, &config).await?.manifest.can_start_dots() {
             return Err(Error::Invalid(format!(
-                "the app {name} does not ask to start dots"
+                "the app {name} does not ask to start sols"
             )));
         }
         self.store_config(

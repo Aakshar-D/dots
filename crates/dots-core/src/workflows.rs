@@ -1214,7 +1214,7 @@ impl Workflows {
         match self.store.get_dot(member).await {
             Ok(dot) if dot.spec.enabled => Ok(None),
             Ok(dot) => Ok(Some(format!("{} is disabled", dot.spec.name))),
-            Err(Error::NotFound(_)) => Ok(Some("its member is no longer a dot".to_string())),
+            Err(Error::NotFound(_)) => Ok(Some("its member is no longer a sol".to_string())),
             Err(e) => Err(e),
         }
     }

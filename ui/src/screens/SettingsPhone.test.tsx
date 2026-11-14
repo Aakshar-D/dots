@@ -74,7 +74,7 @@ describe("Settings > Phone", () => {
     expect(toggle).not.toBeChecked();
     expect(screen.queryByRole("button", { name: "Pair a phone" })).toBeNull();
     expect(screen.getByText(/Use it only on a network you trust/)).toBeVisible();
-    expect(screen.getByText(/Windows may ask whether Dots may use the network/)).toBeVisible();
+    expect(screen.getByText(/Windows may ask whether Sage may use the network/)).toBeVisible();
 
     await user.click(toggle);
     expect(screen.getByText("Save to turn it on.")).toBeVisible();

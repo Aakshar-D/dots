@@ -155,7 +155,7 @@ describe("a topic's context", () => {
 });
 
 describe("the run page's context", () => {
-  it("shows the meter, each compaction and fresh start, and the dot's totals", async () => {
+  it("shows the meter, each compaction and fresh start, and the sol's totals", async () => {
     const run: Run = { ...sample.run, context_fill: 36_000, context_window: 200_000 };
     backend.on("run_thread", () => [run]);
     backend.on("get_dot", () => sample.dot);
@@ -187,7 +187,7 @@ describe("the run page's context", () => {
     const section = await screen.findByRole("region", { name: "Context" });
     expect(section).toHaveTextContent("Context 36k / 200k (18%)");
     expect(section).toHaveTextContent(/Compacted 124k → 36k · compaction used 3k tokens · /);
-    expect(section).toHaveTextContent("This dot: 4 compactions, 1 fresh start");
+    expect(section).toHaveTextContent("This sol: 4 compactions, 1 fresh start");
     // The compaction's tokens are inside the run's own, and the line says so.
     expect(screen.getByText(/includes 3k for compactions and hand-off notes/)).toBeVisible();
   });
@@ -273,7 +273,7 @@ describe("the context rules' fields", () => {
   });
 });
 
-describe("a dot's own context rules in its editor", () => {
+describe("a sol's own context rules in its editor", () => {
   it("follow Settings until switched on, then save in bounds", async () => {
     let stored = { ...sample.dot, context_rules: null };
     backend.on("get_dot", () => stored);

@@ -111,7 +111,7 @@ describe("the Intents screen", () => {
     expect(headings()).toEqual([]);
   });
 
-  it("adds a goal with a due date, urgent and a dot", async () => {
+  it("adds a goal with a due date, urgent and a sol", async () => {
     const held = holding([]);
     const { user } = await open();
     const form = await screen.findByRole("form", { name: "Add a goal" });
@@ -120,7 +120,7 @@ describe("the Intents screen", () => {
     await user.type(within(form).getByRole("textbox", { name: "Goal" }), "  Plan the offsite ");
     await user.type(within(form).getByLabelText("Due date"), addDays(today, 3));
     await user.click(within(form).getByRole("switch", { name: "Urgent" }));
-    await user.selectOptions(within(form).getByRole("combobox", { name: "Dot" }), dot.name);
+    await user.selectOptions(within(form).getByRole("combobox", { name: "Sol" }), dot.name);
     await user.click(add);
     await waitFor(() =>
       expect(backend.callsTo("intent_create")).toEqual([
@@ -209,7 +209,7 @@ describe("the Intents screen", () => {
     expect(await screen.findByText(/No goals yet/)).toBeVisible();
   });
 
-  it("starts a new topic with the goal's dot, the goal as an unsent draft", async () => {
+  it("starts a new topic with the goal's sol, the goal as an unsent draft", async () => {
     holding([goal("a", { text: "Draft the newsletter", dot_id: dot.id })]);
     const { user, router } = await open();
     const item = await screen.findByRole("listitem", { name: "Draft the newsletter" });
@@ -224,7 +224,7 @@ describe("the Intents screen", () => {
     await waitFor(() => expect(router.state.location.state).toBeNull());
   });
 
-  it("has no Start for a goal without a dot", async () => {
+  it("has no Start for a goal without a sol", async () => {
     holding([goal("a", { text: "Think it over" })]);
     await open();
     const item = await screen.findByRole("listitem", { name: "Think it over" });

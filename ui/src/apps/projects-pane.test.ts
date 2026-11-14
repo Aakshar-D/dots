@@ -164,7 +164,7 @@ describe("Projects' side pane", () => {
       .toHaveTextContent("The subtask was changed since by You; undo that change first");
   });
 
-  it("opens a dot's run in its conversation, and says so when it cannot", async () => {
+  it("opens a sol's run in its conversation, and says so when it cannot", async () => {
     const { fake, user, pane } = await opened();
     await user.click(within(item(pane, /started/)).getByRole("button", { name: "Open the run" }));
     expect(fake.opened).toEqual(["r1"]);
@@ -202,12 +202,12 @@ describe("Projects' side pane", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
-  it("shows a removed dot as the assignee it was", async () => {
+  it("shows a removed sol as the assignee it was", async () => {
     const removed = { kind: "dot", id: "dx", name: null };
     await opened({ get_task: () => detail({ assignee: removed }) });
     const select = screen.getByRole("combobox", { name: "Assignee" });
     expect(select).toHaveValue("dx");
-    expect(within(select).getByRole("option", { name: "● removed dot" })).toBeVisible();
+    expect(within(select).getByRole("option", { name: "● removed sol" })).toBeVisible();
   });
 
   it("keeps the spec being edited, the comment and the subtask draft across a redraw", async () => {

@@ -84,8 +84,8 @@ function CreateDialog(props: { scope: string; onClose: () => void }) {
           <DialogTitle>{made ? "Your new API key" : "Create an API key"}</DialogTitle>
           <DialogDescription>
             {made
-              ? "Copy it now. Dots won't show it again."
-              : "A key lets an app list and run the dots of one workspace."}
+              ? "Copy it now. Sage won't show it again."
+              : "A key lets an app list and run the sols of one workspace."}
           </DialogDescription>
         </DialogHeader>
         {made ? (
@@ -251,7 +251,7 @@ export function ApiKeys({ scope }: { scope: string }) {
     <div className="flex flex-col gap-2 pt-1">
       <div className="flex items-center gap-2">
         <p className="flex-1 text-xs text-muted-foreground">
-          Keys let an app list and run dots through the local server.
+          Keys let an app list and run sols through the local server.
         </p>
         <Button type="button" size="sm" variant="outline" onClick={() => setCreating(true)}>
           Create key

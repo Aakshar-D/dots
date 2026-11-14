@@ -26,7 +26,7 @@ pub const CONVERSATION: &str = "## Chat with the person\n\n\
 /// What a person's chat is told when its dot may not propose instructions.
 pub const NO_INSTRUCTIONS_TOOL: &str = "- You cannot change your own instructions: when the \
     person asks you to change how you work from now on, tell them to edit your instructions \
-    in the dot's editor.\n";
+    in the sol's editor.\n";
 
 /// The standing rule on summaries of a person's chat: only work ends with one.
 pub const CHAT_SUMMARY_RULE: &str = "- When you ran your instructions or changed files, end with \
@@ -292,9 +292,9 @@ pub fn build_prompt_full(
     let mut out = String::new();
     let global = global.trim();
     if dot.spec.use_global_instructions && !global.is_empty() {
-        out.push_str("## Instructions for every dot\n\n");
+        out.push_str("## Instructions for every sol\n\n");
         out.push_str(global);
-        out.push_str("\n\n## Instructions for this dot\n\n");
+        out.push_str("\n\n## Instructions for this sol\n\n");
     }
     out.push_str(dot.spec.instructions.trim());
     let memory_off = dot.spec.policy.resolve(memory::POLICY_NAME, &Value::Null) == Action::Deny;

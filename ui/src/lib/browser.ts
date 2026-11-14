@@ -71,7 +71,7 @@ const strong = (text: string): Part => ({ text, strong: true });
 
 /// An element by its label in quotes; one Dots could not identify says so.
 const quoted = (label: string | null | undefined) =>
-  label === null || label === undefined ? "an element Dots could not identify" : `"${label}"`;
+  label === null || label === undefined ? "an element Sage could not identify" : `"${label}"`;
 
 /// What the dot wants to do, as the card says it (browser spec section 3.6): "wants to open
 /// **shop.com/cart**", "wants to click **"Pay now"** on **shop.com**".
@@ -175,8 +175,8 @@ export function browserLine(
 ): string {
   const reported: string[] = [];
   for (const line of (result?.output ?? "").split("\n")) {
-    if (!line.startsWith("Dots: ")) break;
-    reported.push(line.slice("Dots: ".length));
+    if (!line.startsWith("Sage: ")) break;
+    reported.push(line.slice("Sage: ".length));
   }
   if (reported.length > 0) return reported.join(" · ");
   const name = tool.startsWith(BROWSER_PREFIX) ? tool.slice(BROWSER_PREFIX.length) : tool;

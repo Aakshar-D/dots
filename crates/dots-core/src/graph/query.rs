@@ -17,7 +17,7 @@ const MAX_PATH: usize = 8;
 const MAX_LIST: usize = 200;
 
 /// What the tool tells the model it does.
-pub const DESCRIPTION: &str = "Ask the code graph Dots keeps of this project instead of \
+pub const DESCRIPTION: &str = "Ask the code graph Sage keeps of this project instead of \
     reading or grepping widely. Actions: map (the project's layout, entry points, clusters, \
     hubs), search (query: a name or path), node (node: one symbol or file with its links), \
     neighbors (node, depth 1 or 2), path (node to `to`), callers and callees (node), file \

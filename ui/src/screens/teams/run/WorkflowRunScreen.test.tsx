@@ -41,7 +41,7 @@ describe("the workflow run page", () => {
       "/teams/01J0TEAM/workflows/01J0WFL",
     );
     expect(screen.getByText("The tray icon is invisible on a light taskbar.")).toBeVisible();
-    expect(screen.getByText("On Dots")).toBeVisible();
+    expect(screen.getByText("On Sage")).toBeVisible();
     expect(screen.getByText("Needs your check")).toBeVisible();
     expect(await screen.findByRole("link", { name: "crew" })).toHaveAttribute(
       "href",
@@ -65,7 +65,7 @@ describe("the workflow run page", () => {
     expect(budget.getByRole("listitem", { name: "Send-backs: 0 of 3" })).toBeVisible();
   });
 
-  it("lays out the steps with their state, the path taken, the members and their dot runs", async () => {
+  it("lays out the steps with their state, the path taken, the members and their sol runs", async () => {
     runPage(waiting, sample.stepDotRuns);
     const build = within(await screen.findByRole("group", { name: "Step 1: Build" }));
     expect(build.getByText("Done")).toBeVisible();
@@ -74,7 +74,7 @@ describe("the workflow run page", () => {
     expect(build.getByText("fixed")).toBeVisible();
     // One link per thread of the step's own runs: the lead's (continued once), and the member's
     // that handed back no branch. The member with a branch is linked from the member.
-    const dotRuns = within(await build.findByRole("list", { name: "Dot runs of Build" }));
+    const dotRuns = within(await build.findByRole("list", { name: "Sol runs of Build" }));
     const links = dotRuns.getAllByRole("link");
     expect(links.map((l) => [l.textContent, l.getAttribute("href")])).toEqual([
       ["Run of nightly-tests", "/runs/01J0RUN5"],
@@ -120,7 +120,7 @@ describe("the workflow run page", () => {
     expect(backend.callsTo("workflow_run_dot_runs")).toContainEqual({ id: "01J0WFR" });
     // The check runs no dot run of its own.
     expect(
-      within(step("Step 2.1: Review")).queryByRole("list", { name: "Dot runs of Review" }),
+      within(step("Step 2.1: Review")).queryByRole("list", { name: "Sol runs of Review" }),
     ).toBeNull();
   });
 
@@ -272,7 +272,7 @@ describe("the workflow run page", () => {
     // The approved check's hand-off names the lead's branch, but the check ran no dot run, so
     // its card links none: the lead's run is linked from Build.
     expect(
-      within(step("Step 2.1: Review")).queryByRole("list", { name: "Dot runs of Review" }),
+      within(step("Step 2.1: Review")).queryByRole("list", { name: "Sol runs of Review" }),
     ).toBeNull();
   });
 
@@ -287,11 +287,11 @@ describe("the workflow run page", () => {
     expect(screen.queryByRole("region", { name: "Your check" })).toBeNull();
   });
 
-  it("follows its steps' dot runs: a step's run that changes shows its new state", async () => {
+  it("follows its steps' sol runs: a step's run that changes shows its new state", async () => {
     const lead = { ...sample.stepDotRuns[0], status: "running" as const };
     const { listening } = runPage(waiting, [lead]);
     const build = within(await screen.findByRole("group", { name: "Step 1: Build" }));
-    const dotRuns = within(await build.findByRole("list", { name: "Dot runs of Build" }));
+    const dotRuns = within(await build.findByRole("list", { name: "Sol runs of Build" }));
     expect(dotRuns.getByText("Running")).toBeVisible();
     await listening();
     backend.on("workflow_run_dot_runs", () => [{ ...lead, status: "succeeded" }]);

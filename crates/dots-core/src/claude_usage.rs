@@ -30,7 +30,7 @@ pub const MIN_GAP: TimeDelta = TimeDelta::seconds(30);
 /// The project table's rows at most.
 pub const MAX_PROJECTS: u32 = 50;
 /// The project row that holds all Dots' messages.
-pub const DOTS_ROW: &str = "Dots (all dots)";
+pub const DOTS_ROW: &str = "Sage (all sols)";
 /// The name of the project row whose messages had no cwd.
 pub const UNKNOWN_FOLDER: &str = "(unknown folder)";
 /// The 5-hour limit window's name, as the CLI reports it.

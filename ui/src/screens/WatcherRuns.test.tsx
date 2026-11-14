@@ -28,7 +28,7 @@ describe("a watcher run", () => {
     ).toBeVisible();
   });
 
-  it("is a Watcher where a word is enough, and its page says what woke the dot", async () => {
+  it("is a Watcher where a word is enough, and its page says what woke the sol", async () => {
     const run: Run = { ...sample.run, trigger: "watcher", payload, branch: null, base_commit: null };
     expect(triggerLabel(run)).toBe("Watcher");
     backend.on("run_thread", () => [run]);

@@ -120,12 +120,12 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
       {approval.parked && <p className="text-xs text-muted-foreground">{parkedNote(approval)}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor={noteId} className="sr-only">
-          Note for the dot
+          Note for the sol
         </label>
         <Input
           id={noteId}
           className="min-w-40 flex-1"
-          placeholder="Note for the dot (optional)"
+          placeholder="Note for the sol (optional)"
           value={note}
           onChange={(e) => setNote(e.target.value)}
         />
@@ -168,10 +168,10 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
       {guard.data?.always_asks && (
         <p className="text-xs text-muted-foreground">
           {guard.data.kind === "unclear"
-            ? "Dots can't tell whether this sends or deletes, so it always asks"
+            ? "Sage can't tell whether this sends or deletes, so it always asks"
             : "This sends or deletes, so it always asks"}{" "}
-          while "Always ask before sending or deleting" is on for {dotName ?? "this dot"}. You can
-          switch that off in the dot's permissions.
+          while "Always ask before sending or deleting" is on for {dotName ?? "this sol"}. You can
+          switch that off in the sol's permissions.
         </p>
       )}
       {rules.isError && (
@@ -183,7 +183,7 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
       {choosing && chosen !== null && (
         <fieldset id={rulesId} className="flex flex-col gap-2 rounded-md border p-2">
           <legend className="px-1 text-xs font-medium">
-            Always allow for {dotName ?? "this dot"}
+            Always allow for {dotName ?? "this sol"}
           </legend>
           {offered.map((rule) => (
             <label key={rule.pattern} className="flex items-baseline gap-2 text-xs">
@@ -226,7 +226,7 @@ function GuardSentence({ guard, dotName }: { guard: ApprovalGuard; dotName?: str
     <p className="flex items-start gap-1.5" aria-label="What this does">
       <Icon aria-hidden className="mt-1 size-3.5 shrink-0 text-needs" />
       <span>
-        <span className="font-semibold">{dotName ?? "The dot"}</span> wants to {guard.summary}
+        <span className="font-semibold">{dotName ?? "The sol"}</span> wants to {guard.summary}
       </span>
     </p>
   );

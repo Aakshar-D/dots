@@ -962,7 +962,7 @@ mod tests {
             end(Then::Ask),
         ]);
         r.mind.script(vec![
-            ask("Which dot?", &["Mail", "News"]),
+            ask("Which sol?", &["Mail", "News"]),
             Step::Pending(true),
             end(Then::Ask),
         ]);
@@ -973,7 +973,7 @@ mod tests {
         ]);
         r.heard("approve it", 1);
         settle().await;
-        r.heard("run a dot", 2);
+        r.heard("run a sol", 2);
         settle().await;
         r.heard("go on", 3);
         settle().await;
@@ -1105,11 +1105,11 @@ mod tests {
         let mut r = rig();
         asked(&mut r).await; // seq 1: "Approve it?" Yes / No
         r.mind.script(vec![
-            ask("Which dot?", &["Mail", "News"]),
+            ask("Which sol?", &["Mail", "News"]),
             Step::Pending(true),
             end(Then::Ask),
         ]);
-        r.heard("run a dot", 2);
+        r.heard("run a sol", 2);
         settle().await;
         assert_eq!(asked_seqs(&mut r), vec![2]);
         // A key pressed for "Approve it?" lands after "Which dot?" replaced it.
@@ -1130,9 +1130,9 @@ mod tests {
             say(" there."),
             end(Then::FollowUp),
         ]);
-        r.heard("hi dot", 1);
+        r.heard("hi sol", 1);
         settle().await;
-        assert_eq!(r.mind.calls(), vec![MindCall::Hear("hi dot".into())]);
+        assert_eq!(r.mind.calls(), vec![MindCall::Hear("hi sol".into())]);
         assert_eq!(
             r.session.calls(),
             vec![
@@ -1142,7 +1142,7 @@ mod tests {
                 Call::End(1, After::FollowUp),
             ]
         );
-        assert_eq!(r.ui(), vec![heard_ev("hi dot")]);
+        assert_eq!(r.ui(), vec![heard_ev("hi sol")]);
     }
 
     #[tokio::test]
@@ -1281,13 +1281,13 @@ mod tests {
         );
         // The question alone is spoken without a leading space.
         r.mind
-            .script(vec![ask("Which dot?", &["Mail", "News"]), end(Then::Ask)]);
+            .script(vec![ask("Which sol?", &["Mail", "News"]), end(Then::Ask)]);
         r.heard("run it", 2);
         settle().await;
         assert!(r
             .session
             .calls()
-            .contains(&Call::Question(2, "Which dot?".into())));
+            .contains(&Call::Question(2, "Which sol?".into())));
     }
 
     #[tokio::test]

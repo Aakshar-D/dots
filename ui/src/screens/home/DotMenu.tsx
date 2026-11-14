@@ -61,7 +61,7 @@ export function DotMenu({ dot }: { dot: Dot }) {
         {/* Named by the dot's name; the tooltip says what it opens. */}
         <Button
           variant="ghost"
-          title="Dot settings"
+          title="Sol settings"
           className="min-w-0 max-w-full text-base font-semibold"
         >
           <span className="truncate">{dot.name}</span>

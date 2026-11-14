@@ -230,12 +230,12 @@ fn prefixed(mut field: KeyField, prefixes: &[&str]) -> KeyField {
 /// The steps of a sign-in connector.
 fn sign_in_steps(app: &str, choose: &str) -> Vec<String> {
     vec![
-        format!("Pick the dots that may use {app} below, then click Sign in with {app}."),
+        format!("Pick the sols that may use {app} below, then click Sign in with {app}."),
         format!("Your browser opens {app}. Sign in if it asks you to."),
         format!("{choose} Then click Allow (or Approve)."),
-        s("Come back to Dots: it finishes on its own and checks the connection."),
+        s("Come back to Sage: it finishes on its own and checks the connection."),
         format!(
-            "To stop, click Disconnect here. You can also remove Dots from {app}'s connected apps."
+            "To stop, click Disconnect here. You can also remove Sage from {app}'s connected apps."
         ),
     ]
 }
@@ -294,14 +294,14 @@ fn coming_soon(id: &str, name: &str, description: &str, category: Category) -> C
         fields: Vec::new(),
         instructions: Instructions {
             steps: lines(&[
-                "Not available yet. Google does not let apps register themselves for sign-in the way the other apps here do: Dots needs its own Google sign-in, reviewed by Google, first.",
+                "Not available yet. Google does not let apps register themselves for sign-in the way the other apps here do: Sage needs its own Google sign-in, reviewed by Google, first.",
                 "Until then, Gmail works with an app password (see the Gmail connector).",
             ]),
             open_url: s("https://developers.google.com/workspace"),
             open_label: s("About Google Workspace APIs"),
         },
         abilities: Vec::new(),
-        note: Some(s("Coming soon: needs Google sign-in for Dots.")),
+        note: Some(s("Coming soon: needs Google sign-in for Sage.")),
     }
 }
 
@@ -355,7 +355,7 @@ pub fn catalog() -> Vec<Connector> {
                 steps: lines(&[
                     "App passwords need 2-Step Verification. If it is off, turn it on first at myaccount.google.com/security.",
                     "Click Open Google App passwords below and sign in.",
-                    "Type a name such as Dots and click Create.",
+                    "Type a name such as Sage and click Create.",
                     "Copy the 16-letter password Google shows. It is shown only once.",
                     "Paste it below with your Gmail address. Spaces don't matter.",
                     "To stop, click Disconnect here and delete the app password on the same Google page.",
@@ -397,8 +397,8 @@ pub fn catalog() -> Vec<Connector> {
             instructions: Instructions {
                 steps: lines(&[
                     "Click Open GitHub below. It opens GitHub's New fine-grained token page; sign in if asked.",
-                    "Name the token Dots and pick when it expires.",
-                    "Under Repository access, choose the repositories your dots may work on.",
+                    "Name the token Sage and pick when it expires.",
+                    "Under Repository access, choose the repositories your sols may work on.",
                     "Under Permissions, give what they need, for example Contents, Issues and Pull requests: Read and write.",
                     "Click Generate token and copy it. GitHub shows it only once.",
                     "Paste it below. To stop, click Disconnect here and delete the token on GitHub.",
@@ -441,7 +441,7 @@ pub fn catalog() -> Vec<Connector> {
             )],
             instructions: Instructions {
                 steps: lines(&[
-                    "Click Open Slack apps below and sign in. Click Create New App, then From scratch, name it Dots and pick your workspace.",
+                    "Click Open Slack apps below and sign in. Click Create New App, then From scratch, name it Sage and pick your workspace.",
                     "Open OAuth & Permissions. Under User Token Scopes add: channels:history, channels:read, groups:history, groups:read, im:history, im:read, mpim:history, mpim:read, users:read and search:read.",
                     "Scroll up and click Install to Workspace, then Allow. Your workspace admin may need to approve it.",
                     "Copy the User OAuth Token (it starts with xoxp-).",
@@ -456,7 +456,7 @@ pub fn catalog() -> Vec<Connector> {
                 "Posting messages is off in this connector",
             ]),
             note: Some(s(
-                "Made by korotovsky, not Slack. Its program runs on this PC and gets your Slack token. Slack's own server needs an app registered by Dots, which is not available yet.",
+                "Made by korotovsky, not Slack. Its program runs on this PC and gets your Slack token. Slack's own server needs an app registered by Sage, which is not available yet.",
             )),
         },
         Connector {
@@ -523,7 +523,7 @@ pub fn catalog() -> Vec<Connector> {
             instructions: Instructions {
                 steps: lines(&[
                     "Click Open Hugging Face below and sign in.",
-                    "Choose the Read token type and name it Dots.",
+                    "Choose the Read token type and name it Sage.",
                     "Click Create token and copy it.",
                     "Paste it below. To stop, click Disconnect here and delete the token on Hugging Face.",
                 ]),
@@ -544,7 +544,7 @@ pub fn catalog() -> Vec<Connector> {
             "Notion",
             "https://mcp.notion.com/mcp",
             "https://developers.notion.com/docs/mcp",
-            "Pick the workspace Dots may use.",
+            "Pick the workspace Sage may use.",
             &[
                 "Search and read your pages and databases",
                 "Create and update pages",
@@ -559,7 +559,7 @@ pub fn catalog() -> Vec<Connector> {
             "Linear",
             "https://mcp.linear.app/mcp",
             "https://linear.app/docs/mcp",
-            "Pick the workspace Dots may use.",
+            "Pick the workspace Sage may use.",
             &[
                 "Find and read issues and projects",
                 "Create and update issues",
@@ -574,7 +574,7 @@ pub fn catalog() -> Vec<Connector> {
             "Atlassian",
             "https://mcp.atlassian.com/v1/mcp",
             "https://support.atlassian.com/rovo/docs/getting-started-with-the-atlassian-remote-mcp-server/",
-            "Pick the Atlassian site Dots may use.",
+            "Pick the Atlassian site Sage may use.",
             &[
                 "Search, read, create and update Jira issues",
                 "Search, read and write Confluence pages",
@@ -588,7 +588,7 @@ pub fn catalog() -> Vec<Connector> {
             "Sentry",
             "https://mcp.sentry.dev/mcp",
             "https://docs.sentry.io/product/sentry-mcp/",
-            "Pick the organization Dots may use.",
+            "Pick the organization Sage may use.",
             &[
                 "Find and read issues and errors",
                 "Look up projects, releases and events",
@@ -602,7 +602,7 @@ pub fn catalog() -> Vec<Connector> {
             "Doist",
             "https://ai.todoist.net/mcp",
             "https://github.com/Doist/todoist-ai",
-            "Check what Dots may do.",
+            "Check what Sage may do.",
             &[
                 "Read your tasks and projects",
                 "Add, change and complete tasks",
@@ -616,7 +616,7 @@ pub fn catalog() -> Vec<Connector> {
             "Airtable",
             "https://mcp.airtable.com/mcp",
             "https://support.airtable.com/docs/using-the-airtable-mcp-server",
-            "Pick the bases Dots may use.",
+            "Pick the bases Sage may use.",
             &[
                 "Read bases, tables and records",
                 "Create and update records",
@@ -630,7 +630,7 @@ pub fn catalog() -> Vec<Connector> {
             "Stripe",
             "https://mcp.stripe.com",
             "https://docs.stripe.com/mcp",
-            "Pick the Stripe account Dots may use.",
+            "Pick the Stripe account Sage may use.",
             &[
                 "Look up customers, payments and invoices",
                 "Create customers, products and payment links",
@@ -645,7 +645,7 @@ pub fn catalog() -> Vec<Connector> {
             "Cloudflare",
             "https://mcp.cloudflare.com/mcp",
             "https://developers.cloudflare.com/agents/model-context-protocol/mcp-servers-for-cloudflare/",
-            "Pick the account Dots may use.",
+            "Pick the account Sage may use.",
             &[
                 "Read your accounts, zones and settings",
                 "Call the Cloudflare API on your behalf",

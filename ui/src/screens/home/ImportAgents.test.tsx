@@ -23,7 +23,7 @@ const agent = (name: string, over: Partial<ScannedAgent> = {}): ScannedAgent => 
 
 const reviewer = agent("reviewer", {
   tools: ["Read", "Bash", "Frob"],
-  warnings: ["Frob is left out: Dots does not know this tool."],
+  warnings: ["Frob is left out: Sage does not know this tool."],
   model: "opus",
 });
 const tester = agent("tester", {
@@ -59,13 +59,13 @@ describe("importing Claude Code agents", () => {
     expect(box).toBeChecked();
     expect(user.getByText("The reviewer agent")).toBeVisible();
     expect(user.getByText("Model opus · Tools Read, Bash, Frob")).toBeVisible();
-    expect(user.getByText("Frob is left out: Dots does not know this tool.")).toBeVisible();
+    expect(user.getByText("Frob is left out: Sage does not know this tool.")).toBeVisible();
     // A file that can't be imported says why and can't be ticked.
     expect(user.queryByRole("checkbox", { name: "empty" })).toBeNull();
     expect(user.getByText("it has no instructions")).toBeVisible();
     // An agent that is a dot already starts unticked and says so.
     expect(project.getByRole("checkbox", { name: "tester" })).not.toBeChecked();
-    expect(project.getByText("Already a dot")).toBeVisible();
+    expect(project.getByText("Already a sol")).toBeVisible();
     expect(plugin.getByRole("checkbox", { name: "pdf" })).toBeChecked();
     expect(plugin.getByText("Model sonnet · All tools")).toBeVisible();
   });
@@ -74,7 +74,7 @@ describe("importing Claude Code agents", () => {
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "platform" }));
     const made: AgentImport = {
       created: [{ ...sample.dot, id: "d-rev", name: "reviewer" }],
-      failed: [{ path: pdf.path, reason: "conflict: a dot named \"pdf\" already exists" }],
+      failed: [{ path: pdf.path, reason: "conflict: a sol named \"pdf\" already exists" }],
     };
     backend.on("import_claude_agents", () => made);
     const { dialog, user } = await open([reviewer, tester, pdf]);
@@ -87,7 +87,7 @@ describe("importing Claude Code agents", () => {
       ]),
     );
     expect(await dialog.findByText("Made reviewer")).toBeVisible();
-    expect(dialog.getByText(`${pdf.path}: conflict: a dot named "pdf" already exists`)).toBeVisible();
+    expect(dialog.getByText(`${pdf.path}: conflict: a sol named "pdf" already exists`)).toBeVisible();
   });
 
   it("keeps imported agents unticked and waits for the new scan before importing again", async () => {

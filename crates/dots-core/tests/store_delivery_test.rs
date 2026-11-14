@@ -77,14 +77,14 @@ async fn delivery_clears_an_earlier_mark() {
     let d = dot(&store, "clears").await;
     let run = queued(&store, &d, TriggerKind::Chat).await;
     let marked = store
-        .mark_undelivered(&run.id, "Dots is updating", at("2026-11-03T10:00:00Z"))
+        .mark_undelivered(&run.id, "Sage is updating", at("2026-11-03T10:00:00Z"))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(marked.delivery, Some(Delivery::NotDelivered));
     assert_eq!(
         marked.undelivered_reason.as_deref(),
-        Some("Dots is updating")
+        Some("Sage is updating")
     );
     // A second mark changes nothing.
     assert!(store

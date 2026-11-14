@@ -266,7 +266,7 @@ describe("Snooze and Done in the Inbox", () => {
     ]);
     renderApp("/inbox");
     expect(await screen.findByText(/Nothing waits for you/)).toHaveTextContent(
-      "messages that did not reach a dot",
+      "messages that did not reach a sol",
     );
     expect(screen.getByRole("button", { name: "Snoozed (1)" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Done (1)" })).toBeVisible();

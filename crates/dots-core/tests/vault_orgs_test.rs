@@ -1745,9 +1745,9 @@ async fn a_scripted_source_error_maps_to_its_status() {
 
     let cases = [
         (
-            SourceError::Invalid("a scripted answer Dots can't use".into()),
+            SourceError::Invalid("a scripted answer Sage can't use".into()),
             OrgStatus::PolicyInvalid {
-                error: "a scripted answer Dots can't use".into(),
+                error: "a scripted answer Sage can't use".into(),
             },
             value(API_KEY, false),
         ),

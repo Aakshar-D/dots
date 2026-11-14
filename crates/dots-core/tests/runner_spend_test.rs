@@ -192,7 +192,7 @@ async fn the_cap_for_every_dot_holds_each_dot() {
     let run = e.store.get_run(&id).await.unwrap();
     assert_eq!(
         e.runner.cap_hold(&run).await.unwrap().unwrap().text,
-        "All dots reached the $3.00 daily cap"
+        "All sols reached the $3.00 daily cap"
     );
 
     // Cleared: it starts.

@@ -151,7 +151,7 @@ pub fn verify_signed(
         None => claimed_org(signed).unwrap_or_default(),
     };
     verify_policy(signed, &public_key, &org)
-        .map_err(|e| failed(format!("a Dots client would refuse it: {e}")))
+        .map_err(|e| failed(format!("a Sage client would refuse it: {e}")))
 }
 
 /// `policy new --org-id <id> [--roster [--admin <dots-id> ...]] [--out <file>]`. The file is
@@ -234,7 +234,7 @@ pub(crate) fn verify_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     say(
         io.out,
         &format!(
-            "ok: a Dots client in org '{}' accepts this policy, signed by key {fingerprint}",
+            "ok: a Sage client in org '{}' accepts this policy, signed by key {fingerprint}",
             policy.org_id
         ),
     )?;
@@ -243,7 +243,7 @@ pub(crate) fn verify_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     }
     say(
         io.out,
-        "Dots refuses it all the same if it has accepted a policy issued later.",
+        "Sage refuses it all the same if it has accepted a policy issued later.",
     )
 }
 
@@ -259,7 +259,7 @@ pub(crate) fn admins_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
         other => return Err(usage(format!("unknown policy admins command '{other}'"))),
     };
     let args = Args::parse(rest, &[], &[])?;
-    let [path, admin] = args.words(["the policy file", "the admin's Dots ID"])?;
+    let [path, admin] = args.words(["the policy file", "the admin's Sage ID"])?;
     check_dots_id(admin)?;
     let text = read_file(path, "the policy")?;
     let mut admins = parse_policy(&text).map_err(refused)?.admins;
@@ -295,7 +295,7 @@ pub(crate) fn admins_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
 pub(crate) fn check_dots_id(key: &str) -> Result<()> {
     PublicKey::from_base64(key)
         .map(|_| ())
-        .map_err(|_| failed(format!("'{key}' is not a Dots ID")))
+        .map_err(|_| failed(format!("'{key}' is not a Sage ID")))
 }
 
 /// The text of an `admins` list as a policy's second-level value: one key per line.

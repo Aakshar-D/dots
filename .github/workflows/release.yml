@@ -272,5 +272,5 @@ jobs:
           else
             flags+=(--generate-notes)
           fi
-          gh release create "$GITHUB_REF_NAME" --title "Dots $version" \
+          gh release create "$GITHUB_REF_NAME" --title "Sage $version" \
             "${flags[@]}" "$installer" "$installer.sig" latest.json "${mac_files[@]}"

@@ -128,7 +128,7 @@ pub fn os_secrets(install_id: &str) -> std::sync::Arc<dyn SecretStore> {
     }
     #[cfg(not(any(windows, target_os = "macos")))]
     {
-        tracing::warn!("no keychain on this system: secrets of {install_id} last until Dots ends");
+        tracing::warn!("no keychain on this system: secrets of {install_id} last until Sage ends");
         std::sync::Arc::new(MemorySecrets::new())
     }
 }

@@ -224,12 +224,12 @@ fn a_first_prompt_starts_with_the_global_instructions() {
         &[],
     );
     assert!(p.starts_with(
-        "## Instructions for every dot\n\nUse British spelling.\n\n\
-         ## Instructions for this dot\n\nDo the thing."
+        "## Instructions for every sol\n\nUse British spelling.\n\n\
+         ## Instructions for this sol\n\nDo the thing."
     ));
     let chat = fake_run(TriggerKind::Chat, Some(json!({"message": "hi"})), None);
     let p = build_prompt(&dot, &chat, Path::new("C:/ws"), at(), "Be brief.", &[]);
-    assert!(p.starts_with("## Instructions for every dot\n\nBe brief.\n\n"));
+    assert!(p.starts_with("## Instructions for every sol\n\nBe brief.\n\n"));
 }
 
 #[test]

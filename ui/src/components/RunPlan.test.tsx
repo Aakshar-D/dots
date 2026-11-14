@@ -39,7 +39,7 @@ const show = (run: Run, events: RunEventRecord[]) => (
 const card = () => screen.getByRole("region", { name: /of Scout$/ });
 
 describe("the plan card", () => {
-  it("shows the dot's steps, the one it works on, and how far it is", () => {
+  it("shows the sol's steps, the one it works on, and how far it is", () => {
     render(
       show(running, [
         plan("p1", [
@@ -102,7 +102,7 @@ describe("the plan card", () => {
     expect(steps[1]).toHaveTextContent("Fix: Stopped");
   });
 
-  it("nests a helper's plan under the dot's, named by what it was asked", () => {
+  it("nests a helper's plan under the sol's, named by what it was asked", () => {
     render(
       show(running, [
         plan("p1", [["Plan the work", "in_progress"]]),

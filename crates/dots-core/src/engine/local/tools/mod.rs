@@ -377,7 +377,7 @@ fn root_refusal(root: &Path, base: &Path, raw: &str, filter: &PathFilter) -> Opt
         raw
     };
     Some(ToolOutput::err(format!(
-        "{shown} is denied by this dot's policy"
+        "{shown} is denied by this sol's policy"
     )))
 }
 

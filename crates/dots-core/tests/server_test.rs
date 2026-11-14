@@ -389,13 +389,13 @@ fn the_run_error_says_in_use_only_for_a_port_in_use() {
     assert_eq!(
         no_server_text(47321, &std::io::Error::from(ErrorKind::AddrInUse)),
         "local server is not running: port 47321 is in use. Change the port in Settings and \
-         restart Dots."
+         restart Sage."
     );
     // Windows answers "access denied" for a port in a range it has reserved.
     let denied = std::io::Error::new(ErrorKind::PermissionDenied, "access denied");
     assert_eq!(
         no_server_text(50000, &denied),
         "local server is not running: could not listen on port 50000: access denied. Try \
-         another port in Settings and restart Dots."
+         another port in Settings and restart Sage."
     );
 }

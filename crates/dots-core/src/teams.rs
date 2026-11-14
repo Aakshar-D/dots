@@ -139,7 +139,7 @@ impl Teams {
     pub(crate) async fn dot_renamed(&self, dot_id: &str) {
         match self.store.teams_of_dot(dot_id).await {
             Ok(team_ids) => team_ids.iter().for_each(|id| self.team_updated(id)),
-            Err(e) => tracing::warn!(dot = %dot_id, "announcing the dot's teams failed: {e}"),
+            Err(e) => tracing::warn!(dot = %dot_id, "announcing the sol's teams failed: {e}"),
         }
     }
 

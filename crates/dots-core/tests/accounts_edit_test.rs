@@ -98,7 +98,7 @@ fn key_already_listed_is_refused() {
     let before = roster(&owner, &asha);
     match apply(&before, &add("other@acme.com", &asha, Role::Member), now()) {
         Err(Error::Conflict(text)) => {
-            assert_eq!(text, "This Dots ID is already on the member list.")
+            assert_eq!(text, "This Sage ID is already on the member list.")
         }
         other => panic!("expected Conflict, got {other:?}"),
     }

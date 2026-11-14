@@ -674,7 +674,7 @@ impl Runtime {
             let dot = self.store().get_dot(id).await?;
             if DotScope::of(&dot) != DotScope::Personal {
                 return Err(Error::Invalid(format!(
-                    "{} is an organisation's dot; connectors are for Personal dots",
+                    "{} is an organisation's sol; connectors are for Personal sols",
                     dot.spec.name
                 )));
             }

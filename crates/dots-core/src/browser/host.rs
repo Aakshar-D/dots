@@ -52,12 +52,12 @@ pub enum HostError {
     #[error("Microsoft Edge was not found; browser use needs it (Settings → Edge path).")]
     NotFound,
     #[error(
-        "This dot's browser profile is in use by another Edge window; close it and try again."
+        "This sol's browser profile is in use by another Edge window; close it and try again."
     )]
     ProfileInUse,
     #[error("Browser use needs Node.js (npx).")]
     NoNode,
-    #[error("This dot's browser is in use by another run; try again when it ends.")]
+    #[error("This sol's browser is in use by another run; try again when it ends.")]
     InUse,
     #[error("Microsoft Edge could not start: {0}")]
     Start(String),

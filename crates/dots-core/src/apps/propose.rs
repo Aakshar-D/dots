@@ -47,7 +47,7 @@ pub const DESCRIPTION: &str = "Send an app you wrote in your workspace to the pe
     an optional sample.sql, and tests/<name>.test.js using test(name, fn), assert.equal, \
     assert.deepEqual, assert.throws and call(tool, input, { actor, now }). To change an app, \
     send its whole folder, keeping the migrations that ran and adding new ones after them; copy \
-    an installed app into your workspace with copy_app first. Dots checks the folder and runs \
+    an installed app into your workspace with copy_app first. Sage checks the folder and runs \
     the tests; a problem comes back as an error for you to fix.";
 
 /// The tool that copies an installed app into the run's workspace, under `ProposeApp` (spec
@@ -55,7 +55,7 @@ pub const DESCRIPTION: &str = "Send an app you wrote in your workspace to the pe
 /// dot that wrote an app still has its folder.
 pub const COPY_TOOL: &str = "copy_app";
 
-pub const COPY_DESCRIPTION: &str = "Copy an installed app's active version, as Dots keeps it, \
+pub const COPY_DESCRIPTION: &str = "Copy an installed app's active version, as Sage keeps it, \
     into a new folder of your workspace, to change it there and send it back with propose_app. \
     Keep its migrations exactly as they are and add new ones after them.";
 
@@ -408,7 +408,7 @@ impl Apps {
             .await
         {
             Err(Error::NotFound(_)) => Err(Error::Conflict(format!(
-                "the app {} was removed after this change was proposed; ask the dot to propose \
+                "the app {} was removed after this change was proposed; ask the sol to propose \
                  it again",
                 p.app_name
             ))),

@@ -79,14 +79,14 @@ describe("the Apps screen", () => {
       "/apps/expenses",
     );
     // Expenses does not ask to start dots: no switch for it.
-    expect(within(row).queryByRole("switch", { name: "Can start dots" })).toBeNull();
-    await user.click(within(row).getByRole("switch", { name: "Every dot" }));
+    expect(within(row).queryByRole("switch", { name: "Can start sols" })).toBeNull();
+    await user.click(within(row).getByRole("switch", { name: "Every sol" }));
     await waitFor(() =>
       expect(backend.callsTo("app_set_every_dot")).toEqual([{ name: "expenses", on: true }]),
     );
     // Projects asks to start dots, and the sample has it switched on: the click switches it off.
     const asking = screen.getAllByRole("listitem")[0]!;
-    await user.click(within(asking).getByRole("switch", { name: "Can start dots" }));
+    await user.click(within(asking).getByRole("switch", { name: "Can start sols" }));
     await waitFor(() =>
       expect(backend.callsTo("app_set_can_start_dots")).toEqual([
         { name: projects.item.name, on: false },
@@ -151,18 +151,18 @@ describe("the Apps screen", () => {
     });
   });
 
-  it("removes an app no dot uses, which the core confirms only when told", async () => {
+  it("removes an app no sol uses, which the core confirms only when told", async () => {
     backend.on("apps_list", () => [expenses({ dots: [] })]);
     backend.on("apps_kept_list", () => []);
     backend.on("app_remove", (args) => {
-      if (args.confirm !== true) throw { kind: "conflict", message: "dots use this app" };
+      if (args.confirm !== true) throw { kind: "conflict", message: "sols use this app" };
       return null;
     });
     const { user } = renderApp("/apps");
     const row = await screen.findByRole("listitem", { name: "Expenses" });
     await user.click(within(row).getByRole("button", { name: "Remove Expenses" }));
     const first = await screen.findByRole("alertdialog", { name: "Remove Expenses?" });
-    expect(first).toHaveTextContent("No dot uses it.");
+    expect(first).toHaveTextContent("No sol uses it.");
     await user.click(within(first).getByRole("button", { name: "Remove app" }));
     const second = await screen.findByRole("alertdialog", { name: "Delete Expenses's data too?" });
     await user.click(within(second).getByRole("button", { name: "Keep the data" }));
@@ -189,14 +189,14 @@ describe("the Apps screen", () => {
   });
 });
 
-describe("Projects, which comes with Dots", () => {
+describe("Projects, which comes with Sage", () => {
   it("offers Install Projects on the kept data, which the person may untick", async () => {
     backend.on("apps_list", () => []);
     backend.on("apps_kept_list", () => [kept]);
     backend.on("apps_bundled_offers", () => [onKept]);
     backend.on("app_install_bundled", () => projects.item);
     const { user } = renderApp("/apps");
-    const section = await screen.findByRole("region", { name: "Comes with Dots" });
+    const section = await screen.findByRole("region", { name: "Comes with Sage" });
     await user.click(within(section).getByRole("button", { name: "Install Projects" }));
     const dialog = await screen.findByRole("alertdialog");
     const box = within(dialog).getByRole("checkbox", { name: /Start on the data kept/ });
@@ -235,7 +235,7 @@ describe("Projects, which comes with Dots", () => {
     );
   });
 
-  it("asks once above its screen to let it start dots", async () => {
+  it("asks once above its screen to let it start sols", async () => {
     let row = bundled();
     backend.on("apps_list", () => [row]);
     backend.on("app_answer_start_prompt", () => {
@@ -243,33 +243,33 @@ describe("Projects, which comes with Dots", () => {
       return row.item;
     });
     const { user } = renderApp("/apps/projects");
-    const prompt = await screen.findByRole("region", { name: "Let Projects start dots?" });
+    const prompt = await screen.findByRole("region", { name: "Let Projects start sols?" });
     await user.click(within(prompt).getByRole("button", { name: "Not now" }));
     await waitFor(() =>
       expect(backend.callsTo("app_answer_start_prompt")).toEqual([{ name: "projects", on: false }]),
     );
     await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "Let Projects start dots?" })).toBeNull(),
+      expect(screen.queryByRole("region", { name: "Let Projects start sols?" })).toBeNull(),
     );
   });
 
-  it("switches starting dots on from the prompt", async () => {
+  it("switches starting sols on from the prompt", async () => {
     backend.on("apps_list", () => [bundled()]);
     backend.on("app_answer_start_prompt", () => projects.item);
     const { user } = renderApp("/apps/projects");
-    const prompt = await screen.findByRole("region", { name: "Let Projects start dots?" });
+    const prompt = await screen.findByRole("region", { name: "Let Projects start sols?" });
     await user.click(within(prompt).getByRole("button", { name: "Switch on" }));
     await waitFor(() =>
       expect(backend.callsTo("app_answer_start_prompt")).toEqual([{ name: "projects", on: true }]),
     );
   });
 
-  it("opens a run the page asks for in the dot's conversation", async () => {
+  it("opens a run the page asks for in the sol's conversation", async () => {
     backend.on("apps_list", () => [bundled(true)]);
     backend.on("app_run_link", () => ({ dot_id: "d1", root_run_id: "r1" }));
     const { router } = renderApp("/apps/projects");
     const frame = await screen.findByTitle<HTMLIFrameElement>("Projects");
-    expect(screen.queryByRole("region", { name: "Let Projects start dots?" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Let Projects start sols?" })).toBeNull();
     const post = vi.spyOn(frame.contentWindow!, "postMessage");
     fireEvent.load(frame);
     const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0]!;

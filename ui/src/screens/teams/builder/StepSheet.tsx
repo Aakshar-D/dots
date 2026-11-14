@@ -130,7 +130,7 @@ function AgentFields({ step, steps, team, nameOf, onChange }: KindProps<AgentSte
       <MemberSelect
         id="step-member"
         label="Member"
-        hint="The dot of the team that does this step."
+        hint="The sol of the team that does this step."
         members={team.members}
         value={step.member}
         nameOf={nameOf}
@@ -344,7 +344,7 @@ function DeployFields({ step, team, nameOf, onChange }: KindProps<DeployStep>) {
           <MemberSelect
             id="step-member"
             label="Member"
-            hint="The dot of the team that deploys what the check approved."
+            hint="The sol of the team that deploys what the check approved."
             members={team.members}
             value={step.member}
             nameOf={nameOf}

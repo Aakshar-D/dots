@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 /// time under the run so the person can see it is still going. Kept in one list so it is easy to
 /// add to.
 export const WORKING_PHRASES: readonly string[] = [
-  "Connecting the dots",
+  "Connecting the sols",
   "Dotting the i's",
   "Drawing the lines",
   "Building bridges",
@@ -93,7 +93,7 @@ export function WorkingLine(props: { seed: string; since: string | null; dotName
   const seconds = Number.isNaN(start) ? null : (now - start) / 1000;
   return (
     <p role="status" data-slot="working" className="flex items-center gap-2 text-sm">
-      <span className="sr-only">{props.dotName ?? "The dot"} is working</span>
+      <span className="sr-only">{props.dotName ?? "The sol"} is working</span>
       <span aria-hidden className="w-3 text-center text-primary">
         {DOT_FRAMES[frame % DOT_FRAMES.length]}
       </span>

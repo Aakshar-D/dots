@@ -439,7 +439,7 @@ struct Head {
 
 fn check_version(v: u32) -> std::result::Result<(), String> {
     if v != FORMAT {
-        return Err(format!("it has format v{v}, and this Dots reads v{FORMAT}"));
+        return Err(format!("it has format v{v}, and this Sage reads v{FORMAT}"));
     }
     Ok(())
 }

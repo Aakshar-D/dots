@@ -17,7 +17,7 @@ describe("Projects' screen", () => {
       "aria-current",
       "page",
     );
-    expect(within(nav).getByRole("button", { name: "Assigned to dots" })).toBeVisible();
+    expect(within(nav).getByRole("button", { name: "Assigned to sols" })).toBeVisible();
     expect(within(nav).getByRole("button", { name: "● Website relaunch" })).toBeVisible();
     expect(within(nav).getByRole("textbox", { name: "New project" })).toBeVisible();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("My tasks");
@@ -47,13 +47,13 @@ describe("Projects' screen", () => {
       .toHaveTextContent("✓");
   });
 
-  it("shows the tasks assigned to dots, and a removed dot as such", async () => {
+  it("shows the tasks assigned to sols, and a removed sol as such", async () => {
     const gone = task({ id: "t5", title: "Old", assignee: { kind: "dot", id: "dx", name: null } });
     const fake = sample({ list_tasks: () => ({ tasks: [signup, gone], more: false }) });
     const user = await show(fake);
-    await user.click(screen.getByRole("button", { name: "Assigned to dots" }));
+    await user.click(screen.getByRole("button", { name: "Assigned to sols" }));
     expect(fake.callsTo("list_tasks").at(-1)).toEqual({ view: "assigned_to_dots", limit: 1000 });
-    expect(row("Old")).toHaveTextContent("● removed dot");
+    expect(row("Old")).toHaveTextContent("● removed sol");
   });
 
   it("adds a task inline to its section and keeps the cursor there", async () => {
@@ -153,7 +153,7 @@ describe("Projects' screen", () => {
     expect(await screen.findByRole("row", { name: "Pack boxes" })).toBeVisible();
   });
 
-  it("a change from a dot keeps what the person is typing and where they are", async () => {
+  it("a change from a sol keeps what the person is typing and where they are", async () => {
     const tasks = [landlord];
     const fake = sample({ list_tasks: () => ({ tasks, more: false }) });
     const user = await show(fake);

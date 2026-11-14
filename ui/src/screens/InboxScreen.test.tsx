@@ -60,7 +60,7 @@ function inbox(initial: InboxSpec) {
 }
 
 describe("the Inbox", () => {
-  it("lists what waits: approvals with their dot, and runs to review", async () => {
+  it("lists what waits: approvals with their sol, and runs to review", async () => {
     inbox({
       approvals: [approval],
       review_runs: [worktreeRun, failedRun],
@@ -405,7 +405,7 @@ describe("the Inbox", () => {
     );
   });
 
-  it("shows a new approval as soon as the dot asks", async () => {
+  it("shows a new approval as soon as the sol asks", async () => {
     const box = inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [] });
     renderApp("/inbox");
     expect(await screen.findByText(/Nothing waits for you/)).toBeVisible();
@@ -465,7 +465,7 @@ describe("saving a rule with an approval", () => {
   it("saves the narrowest rule when no other is picked, with the note", async () => {
     waiting();
     const { user } = renderApp("/inbox");
-    await user.type(within(await card()).getByLabelText("Note for the dot"), "fine by me");
+    await user.type(within(await card()).getByLabelText("Note for the sol"), "fine by me");
     await user.click(await screen.findByRole("button", opener));
     await user.click(screen.getByRole("button", { name: "Approve and save rule" }));
     await waitFor(() =>
@@ -480,7 +480,7 @@ describe("saving a rule with an approval", () => {
     );
   });
 
-  it("saves no rule with a plain approval or a denial, and leaves the dot alone", async () => {
+  it("saves no rule with a plain approval or a denial, and leaves the sol alone", async () => {
     for (const button of ["Approve", "Deny"]) {
       backend.reset();
       installDefaults();
@@ -585,17 +585,17 @@ describe("saving a rule with an approval", () => {
     await within(shown).findByRole("button", opener);
   });
 
-  it("says when Dots cannot read a command", async () => {
+  it("says when Sage cannot read a command", async () => {
     waiting([]);
     backend.on("approval_guard", () => ({
       kind: "unclear",
-      summary: "run an encoded PowerShell command that Dots cannot read",
+      summary: "run an encoded PowerShell command that Sage cannot read",
       always_asks: true,
     }));
     renderApp("/inbox");
     const shown = await card();
     expect(
-      await within(shown).findByText(/Dots can't tell whether this sends or deletes/),
+      await within(shown).findByText(/Sage can't tell whether this sends or deletes/),
     ).toBeVisible();
   });
 
@@ -667,7 +667,7 @@ describe("the approvals of one run", () => {
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
 
-  it("stand together under their dot, and a single one has no batch buttons", async () => {
+  it("stand together under their sol, and a single one has no batch buttons", async () => {
     // The core lists approvals in the order asked; a call of another run came in between.
     inbox({
       approvals: [approval, elsewhere, second],
@@ -814,7 +814,7 @@ describe("a parked approval", () => {
     const own = await screen.findByRole("article", { name: "Approval for Bash" });
     expect(
       within(own).getByText(
-        "The run stopped waiting and is parked. If you approve, Dots performs exactly this call and then continues the run.",
+        "The run stopped waiting and is parked. If you approve, Sage performs exactly this call and then continues the run.",
       ),
     ).toBeVisible();
     const model = screen.getByRole("article", { name: "Approval for Write" });
@@ -848,7 +848,7 @@ describe("a schedule that needs attention", () => {
   /// Lets what a command's answer set off reach the screen.
   const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
 
-  it("names the dot, the run that failed and why, and offers Run now and Dismiss", async () => {
+  it("names the sol, the run that failed and why, and offers Run now and Dismiss", async () => {
     inbox({
       approvals: [approval],
       review_runs: [failedRun],
@@ -882,7 +882,7 @@ describe("a schedule that needs attention", () => {
     expect(screen.queryByText(/Nothing waits for you/)).toBeNull();
   });
 
-  it("dismisses the flag, and reloads the Inbox and the Dots list", async () => {
+  it("dismisses the flag, and reloads the Inbox and the Sage list", async () => {
     const box = inbox(only([flagged]));
     backend.on("dismiss_schedule_attention", () => {
       box.set(empty);
@@ -917,15 +917,15 @@ describe("a schedule that needs attention", () => {
   it("keeps the flag and says why when the core refuses the dismissal", async () => {
     inbox(only([flagged]));
     backend.on("dismiss_schedule_attention", () => {
-      throw { kind: "not_found", message: `schedule of dot ${flagged.dot_id}` };
+      throw { kind: "not_found", message: `schedule of sol ${flagged.dot_id}` };
     });
     const { user } = renderApp("/inbox");
     await user.click(within(await item()).getByRole("button", { name: "Dismiss" }));
-    expect(await screen.findByText(`schedule of dot ${flagged.dot_id}`)).toBeVisible();
+    expect(await screen.findByText(`schedule of sol ${flagged.dot_id}`)).toBeVisible();
     expect(await item()).toBeVisible();
   });
 
-  it("starts a run of the dot, opens it and reloads the Inbox", async () => {
+  it("starts a run of the sol, opens it and reloads the Inbox", async () => {
     inbox(only([flagged]));
     backend.on("run_now", () => ({ ...sample.run, id: "run-new", status: "queued" }));
     backend.on("run_thread", () => [{ ...sample.run, id: "run-new", status: "queued" }]);
@@ -945,11 +945,11 @@ describe("a schedule that needs attention", () => {
   it("shows why a run could not start, and keeps the flag", async () => {
     inbox(only([flagged]));
     backend.on("run_now", () => {
-      throw { kind: "conflict", message: "the dot is disabled" };
+      throw { kind: "conflict", message: "the sol is disabled" };
     });
     const { user } = renderApp("/inbox");
     await user.click(within(await item()).getByRole("button", { name: "Run now" }));
-    expect(await screen.findByText("the dot is disabled")).toBeVisible();
+    expect(await screen.findByText("the sol is disabled")).toBeVisible();
     expect(await item()).toBeVisible();
   });
 });
@@ -957,7 +957,7 @@ describe("a schedule that needs attention", () => {
 describe("the Inbox, tools changed", () => {
   const [changed] = sample.inbox.tools_changed;
 
-  it("lists a server whose tools changed with the dots that use it and a link to its review", async () => {
+  it("lists a server whose tools changed with the sols that use it and a link to its review", async () => {
     inbox({ approvals: [], review_runs: [], attention: [], tools_changed: [changed!] });
     renderApp("/inbox");
     const group = await screen.findByRole("region", { name: "Tools changed" });
@@ -970,7 +970,7 @@ describe("the Inbox, tools changed", () => {
     expect(screen.queryByText(/Nothing waits for you/)).toBeNull();
   });
 
-  it("says when no dot uses the server", async () => {
+  it("says when no sol uses the server", async () => {
     inbox({
       approvals: [],
       review_runs: [],
@@ -978,7 +978,7 @@ describe("the Inbox, tools changed", () => {
       tools_changed: [{ ...changed!, dots: [] }],
     });
     renderApp("/inbox");
-    expect(await screen.findByText("No dot uses it yet.")).toBeVisible();
+    expect(await screen.findByText("No sol uses it yet.")).toBeVisible();
   });
 
   it("opens the review in the Library", async () => {

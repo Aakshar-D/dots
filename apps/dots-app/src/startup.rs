@@ -39,13 +39,13 @@ pub fn data_dir<E: Display>(
     match data_dir_override(env_override) {
         Some(dir) => std::path::absolute(&dir).map_err(|e| {
             format!(
-                "Dots could not use the folder {} from {DATA_DIR_ENV}: {e}",
+                "Sage could not use the folder {} from {DATA_DIR_ENV}: {e}",
                 Path::new(&dir).display()
             )
         }),
         None => local_data
             .map(|local| local.join("dots"))
-            .map_err(|e| format!("Dots could not find the local application data folder: {e}")),
+            .map_err(|e| format!("Sage could not find the local application data folder: {e}")),
     }
 }
 
@@ -174,7 +174,7 @@ pub const LOCK_WAIT: Duration = Duration::from_secs(3);
 /// waited for, up to `wait`; any other error returns at once.
 pub fn lock_data_dir(data_dir: &Path, wait: Duration) -> Result<std::fs::File, String> {
     let fail = |what: &str, e: std::io::Error| {
-        format!("Dots could not {what} in {}: {e}", data_dir.display())
+        format!("Sage could not {what} in {}: {e}", data_dir.display())
     };
     std::fs::create_dir_all(data_dir).map_err(|e| fail("create its data folder", e))?;
     let file = std::fs::OpenOptions::new()
@@ -190,7 +190,7 @@ pub fn lock_data_dir(data_dir: &Path, wait: Duration) -> Result<std::fs::File, S
             Err(std::fs::TryLockError::WouldBlock) => {
                 if started.elapsed() >= wait {
                     return Err(format!(
-                        "another Dots is already using the data folder {}. Close it (it may be in the tray), then start Dots again.",
+                        "another Sage is already using the data folder {}. Close it (it may be in the tray), then start Sage again.",
                         data_dir.display()
                     ));
                 }
@@ -394,7 +394,7 @@ pub fn log_panics(log_dir: PathBuf) {
 pub async fn start_runtime(data_dir: &Path) -> Result<(Arc<Runtime>, Settings), String> {
     let settings = settings::load(data_dir).await.map_err(|e| {
         format!(
-            "Dots could not read its settings in {}: {e}",
+            "Sage could not read its settings in {}: {e}",
             data_dir.display()
         )
     })?;
@@ -402,7 +402,7 @@ pub async fn start_runtime(data_dir: &Path) -> Result<(Arc<Runtime>, Settings), 
     cfg.app_version = env!("CARGO_PKG_VERSION").to_string();
     let runtime = Runtime::start(cfg)
         .await
-        .map_err(|e| format!("Dots could not start: {e}"))?;
+        .map_err(|e| format!("Sage could not start: {e}"))?;
     Ok((Arc::new(runtime), settings))
 }
 
@@ -485,11 +485,11 @@ mod tests {
         let missing = || Err::<PathBuf, _>("unknown path");
         assert_eq!(
             data_dir(missing(), None),
-            Err("Dots could not find the local application data folder: unknown path".into())
+            Err("Sage could not find the local application data folder: unknown path".into())
         );
         assert_eq!(
             data_dir(missing(), Some("".into())),
-            Err("Dots could not find the local application data folder: unknown path".into())
+            Err("Sage could not find the local application data folder: unknown path".into())
         );
         let cwd = std::env::current_dir().unwrap();
         assert_eq!(
@@ -759,7 +759,7 @@ mod tests {
         assert_eq!(
             err,
             format!(
-                "another Dots is already using the data folder {}. Close it (it may be in the tray), then start Dots again.",
+                "another Sage is already using the data folder {}. Close it (it may be in the tray), then start Sage again.",
                 dir.path().display()
             )
         );
@@ -787,7 +787,7 @@ mod tests {
         let started = std::time::Instant::now();
         let err = lock_data_dir(&file.join("dots"), Duration::from_secs(5)).unwrap_err();
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(!err.starts_with("another Dots"), "{err}");
+        assert!(!err.starts_with("another Sage"), "{err}");
     }
 
     #[tokio::test]
@@ -839,7 +839,7 @@ mod tests {
         let file = dir.path().join("not-a-dir");
         std::fs::write(&file, "x").unwrap();
         let err = start_runtime(&file.join("dots")).await.err().unwrap();
-        assert!(err.starts_with("Dots could not read its settings"), "{err}");
+        assert!(err.starts_with("Sage could not read its settings"), "{err}");
     }
 
     #[test]

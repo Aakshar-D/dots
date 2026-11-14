@@ -261,15 +261,15 @@ describe("a step's settings sheet", () => {
     expect(sheet.getByRole("textbox", { name: "Label of path 1" })).toHaveValue("later");
 
     await user.selectOptions(sheet.getByRole("combobox", { name: "Goes by" }), "The project");
-    expect(sheet.getByText("A path's label is a project's name: Dots, Site.")).toBeVisible();
+    expect(sheet.getByText("A path's label is a project's name: Sage, Site.")).toBeVisible();
     await user.click(sheet.getByRole("button", { name: "Remove the path later" }));
     expect(sheet.queryByRole("textbox", { name: "Label of path 1" })).not.toBeInTheDocument();
     await user.click(sheet.getByRole("button", { name: "Add path" }));
-    expect(sheet.getByRole("textbox", { name: "Label of path 1" })).toHaveValue("Dots");
+    expect(sheet.getByRole("textbox", { name: "Label of path 1" })).toHaveValue("Sage");
 
     expect(await saved(user, "route")).toMatchObject({
       on: "project",
-      paths: [{ label: "Dots", steps: [] }],
+      paths: [{ label: "Sage", steps: [] }],
       otherwise: [findStep(fix.definition.steps, "design")],
     });
   });
@@ -282,7 +282,7 @@ describe("a step's settings sheet", () => {
         "Otherwise is empty: when no path's label matches, the workflow goes on after the branch.",
       ),
     ).toBeVisible();
-    expect(sheet.getByText("A path's label is a project's name: Dots, Site.")).toBeVisible();
+    expect(sheet.getByText("A path's label is a project's name: Sage, Site.")).toBeVisible();
     await user.selectOptions(
       sheet.getByRole("combobox", { name: "Goes by" }),
       "The outcome reported before it",

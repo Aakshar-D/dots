@@ -63,8 +63,8 @@ pub const DRAFTS_DIR: &str = "drafts";
 
 /// Retry's and Discard's refusal for a message the dispatcher has just claimed.
 /// Why a result check Dots stopped in the middle of has no verdict.
-const CHECK_INTERRUPTED: &str = "Dots stopped before the check ended.";
-const JUST_REACHED: &str = "this message has just reached the dot";
+const CHECK_INTERRUPTED: &str = "Sage stopped before the check ended.";
+const JUST_REACHED: &str = "this message has just reached the sol";
 
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -245,7 +245,7 @@ pub const CHAT_AWAITS_APPROVAL: &str =
     "this chat is waiting for an approval; answer it, then send your message again";
 /// `chat`'s refusal of a follow-up while a run of the thread is still working.
 pub const CHAT_STILL_WORKING: &str =
-    "the dot is still working on this chat; wait until it has finished, then send your message \
+    "the sol is still working on this chat; wait until it has finished, then send your message \
      again";
 
 pub struct Runtime {
@@ -332,7 +332,7 @@ impl Runtime {
         // load: their member lists are read against it (members spec §6.4). A failure is logged
         // and the app starts anyway; the next start tries again.
         if let Err(e) = crate::accounts::ensure_identity(&store, secrets.as_ref()).await {
-            tracing::warn!("making the Dots ID failed: {e}");
+            tracing::warn!("making the Sage ID failed: {e}");
         }
         // The orgs joined on this PC, each with its offline copy if it has one, and every org
         // secret in the redactor (env vault spec §6.4). They are fetched in the background
@@ -390,7 +390,7 @@ impl Runtime {
             .as_ref()
             .map(|e| format!("could not listen on 127.0.0.1:{}: {e}", cfg.port));
         if let Some(msg) = &server_error {
-            tracing::error!("{msg}; webhooks are off and Claude dots cannot run");
+            tracing::error!("{msg}; webhooks are off and Claude sols cannot run");
         }
         let port = match &listener {
             Some(l) => l.local_addr()?.port(),
@@ -444,7 +444,7 @@ impl Runtime {
         if cfg.bundled_apps {
             if let Err(e) = apps.sync_bundled().await {
                 tracing::error!(
-                    "the apps that come with Dots could not be brought up to date: {e}"
+                    "the apps that come with Sage could not be brought up to date: {e}"
                 );
             }
         }
@@ -459,7 +459,7 @@ impl Runtime {
             (_, Some(e)) => Arc::new(UnavailableEngine(server::no_server_text(port, e))),
             (None, None) => {
                 tracing::warn!(
-                    "claude CLI not found; Claude dots will fail until it is configured"
+                    "claude CLI not found; Claude sols will fail until it is configured"
                 );
                 Arc::new(UnavailableEngine(
                     "claude CLI not found: install Claude Code or set its path in Settings".into(),
@@ -1365,7 +1365,7 @@ impl Runtime {
     /// the flag is not set.
     pub async fn dismiss_schedule_attention(&self, dot_id: &str) -> Result<()> {
         let Some(state) = self.store.get_schedule_state(dot_id).await? else {
-            return Err(Error::NotFound(format!("schedule of dot {dot_id}")));
+            return Err(Error::NotFound(format!("schedule of sol {dot_id}")));
         };
         if state.attention_run_id.is_none() {
             return Ok(());
@@ -2838,7 +2838,7 @@ impl Runtime {
             let named = self.store.get_run(pid).await?;
             if named.dot_id != dot_id {
                 return Err(Error::Invalid(format!(
-                    "run {pid} belongs to a different dot"
+                    "run {pid} belongs to a different sol"
                 )));
             }
             // A thread is one line of runs: a follow-up continues from its end, and only once
@@ -2877,7 +2877,7 @@ impl Runtime {
             }
             if parent.session_id.is_none() {
                 return Err(Error::Conflict(
-                    "this chat cannot be continued because its last run ended before the dot \
+                    "this chat cannot be continued because its last run ended before the sol \
                      started working; start a new chat"
                         .into(),
                 ));
@@ -2953,7 +2953,7 @@ impl Runtime {
         // section 3.9), which also clears it from Needs you.
         if run.delivered_at.is_none() && run.undelivered_at.is_some() {
             return Err(Error::Conflict(
-                "this message did not reach the dot; use Retry on it".into(),
+                "this message did not reach the sol; use Retry on it".into(),
             ));
         }
         let dot = self.store.get_dot(&run.dot_id).await?;
@@ -4018,7 +4018,7 @@ fn watch_viewing(store: Store, bus: Bus, viewing: Viewing, shutdown: Cancellatio
             let viewed = lock(&viewing).as_deref() == Some(dot_id.as_str());
             if viewed {
                 if let Err(e) = mark_seen(&store, &bus, &dot_id).await {
-                    tracing::warn!(dot = %dot_id, "marking the viewed dot seen failed: {e}");
+                    tracing::warn!(dot = %dot_id, "marking the viewed sol seen failed: {e}");
                 }
             }
         }
@@ -4318,7 +4318,7 @@ impl Runtime {
             }
             if let Some((account, _)) = self.runner.role_hold(&run).await? {
                 return Err(Error::NotAllowed(format!(
-                    "this run waits for {account} to let you run dots again"
+                    "this run waits for {account} to let you run sols again"
                 )));
             }
         }
@@ -4406,7 +4406,7 @@ impl Runtime {
         self.require_dot(&dot, Permission::RunDots).await?;
         if dot.spec.engine != crate::model::EngineKind::Claude {
             return Err(Error::Invalid(
-                "Only a Claude dot's conversation can be compacted or started fresh.".into(),
+                "Only a Claude sol's conversation can be compacted or started fresh.".into(),
             ));
         }
         let root_id = &root.root_run_id;
@@ -4582,7 +4582,7 @@ impl Runtime {
                 let run = self.store.get_run(id).await?;
                 if run.dot_id != dot_id {
                     return Err(Error::Invalid(format!(
-                        "run {id} belongs to a different dot"
+                        "run {id} belongs to a different sol"
                     )));
                 }
                 Some(run.root_run_id)

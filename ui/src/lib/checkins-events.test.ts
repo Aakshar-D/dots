@@ -21,7 +21,7 @@ describe("check-in events and the query cache", () => {
     }
   });
 
-  it("marks every list of follow-ups stale when a dot's follow-ups change", () => {
+  it("marks every list of follow-ups stale when a sol's follow-ups change", () => {
     const qc = createQueryClient();
     qc.setQueryData(keys.followUps(null), []);
     qc.setQueryData(keys.followUps(sample.dot.id), []);

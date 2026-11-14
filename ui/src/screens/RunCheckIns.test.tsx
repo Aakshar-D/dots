@@ -82,7 +82,7 @@ describe("check-ins in the run view", () => {
     expect(screen.queryByText("FollowUp")).toBeNull();
   });
 
-  it("says that a follow-up run is one the dot scheduled, with its note", async () => {
+  it("says that a follow-up run is one the sol scheduled, with its note", async () => {
     const followUp: Run = {
       ...run,
       trigger: "follow_up",
@@ -93,7 +93,7 @@ describe("check-ins in the run view", () => {
     };
     thread([followUp]);
     renderApp(`/runs/${followUp.id}`);
-    expect(await screen.findByText("Follow-up the dot scheduled")).toBeVisible();
+    expect(await screen.findByText("Follow-up the sol scheduled")).toBeVisible();
     expect(
       screen.getByText("Follow-up you scheduled on Mon 20 Oct 09:00: Check the build."),
     ).toBeVisible();

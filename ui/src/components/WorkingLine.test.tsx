@@ -21,7 +21,7 @@ describe("the working line", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it("tells a screen reader once that the dot is working, and starts on the run's phrase", () => {
+  it("tells a screen reader once that the sol is working, and starts on the run's phrase", () => {
     render(<WorkingLine seed="run-1" since="2026-11-05T10:00:00Z" dotName="Scout" />);
     expect(screen.getByText("Scout is working")).toHaveClass("sr-only");
     expect(phraseNow()).toBe(WORKING_PHRASES[firstPhrase("run-1")]);
@@ -48,7 +48,7 @@ describe("the working line", () => {
     expect(shown().textContent).not.toMatch(/\d+s/);
   });
 
-  it("pulses its dot, and holds it still with reduced motion", () => {
+  it("pulses its sol, and holds it still with reduced motion", () => {
     const { unmount } = render(<WorkingLine seed="run-1" since={null} />);
     act(() => vi.advanceTimersByTime(140));
     expect(shown()).toHaveTextContent(DOT_FRAMES[1]);

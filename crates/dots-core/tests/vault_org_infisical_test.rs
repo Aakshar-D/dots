@@ -569,7 +569,7 @@ async fn a_login_rate_limited_or_failing_is_unreachable() {
     let why = unreachable(source.fetch(&creds()).await.unwrap_err());
     assert_eq!(
         why,
-        format!("{} is rate limiting Dots (HTTP 429)", fake.address())
+        format!("{} is rate limiting Sage (HTTP 429)", fake.address())
     );
     for code in [500, 502, 503] {
         fake.fail_next_login(Failure::Status(code), 1);
@@ -647,7 +647,7 @@ async fn a_read_rate_limited_is_unreachable() {
         .unwrap_err();
     assert_eq!(
         unreachable(e),
-        format!("{} is rate limiting Dots (HTTP 429)", fake.address())
+        format!("{} is rate limiting Sage (HTTP 429)", fake.address())
     );
 }
 

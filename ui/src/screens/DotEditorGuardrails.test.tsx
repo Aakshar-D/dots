@@ -8,9 +8,9 @@ import { noCeiling, sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
 
 const refusal =
-  "Acme Engineering: a Member's dot in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner.";
+  "Acme Engineering: a Member's sol in the Platform workspace may use up to Sandboxed, and this policy is Trusted. Ask an Admin or Owner.";
 const heldText =
-  "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (it is Trusted). Change the policy, or ask an Admin.";
+  "Acme Engineering: this sol's tool policy is past what a Member may use in the Platform workspace (it is Trusted). Change the policy, or ask an Admin.";
 const protectedHere = {
   protected_paths: ["**/migrations/**", ".github/**"],
   protected_git: ["push_main" as const, "force_push" as const],
@@ -51,13 +51,13 @@ function stored(dot: Dot) {
 
 const inPlatform: Dot = { ...sample.dot, org_id: sample.orgs[0]!.id, workspace_id: "platform" };
 
-describe("the dot editor under a workspace's guardrails", () => {
-  it("says how far a Member's dot may go, turns Trusted off with the reason, and lists what is protected", async () => {
+describe("the sol editor under a workspace's guardrails", () => {
+  it("says how far a Member's sol may go, turns Trusted off with the reason, and lists what is protected", async () => {
     stored(inPlatform);
     backend.on("dot_ceiling", () => memberCeiling(inPlatform.policy));
     const { user } = renderApp(`/dots/${inPlatform.id}`);
     expect(
-      await screen.findByText(/Members' dots in Platform can go up to Sandboxed/),
+      await screen.findByText(/Members' sols in Platform can go up to Sandboxed/),
     ).toBeVisible();
     // Asked for the dot's own account, workspace and policy.
     expect(backend.callsTo("policy_ceiling")[0]).toEqual({
@@ -110,7 +110,7 @@ describe("the dot editor under a workspace's guardrails", () => {
     });
   });
 
-  it("still saves a held dot whose policy stays as it is, so it can be renamed or switched off", async () => {
+  it("still saves a held sol whose policy stays as it is, so it can be renamed or switched off", async () => {
     const over: Dot = { ...inPlatform, policy: trusted };
     stored(over);
     backend.on("dot_ceiling", () => ({ ...memberCeiling(trusted), held: heldText }));
@@ -142,14 +142,14 @@ describe("the dot editor under a workspace's guardrails", () => {
     }));
     renderApp(`/dots/${inPlatform.id}`);
     expect(
-      await screen.findByText("Platform has guardrails: your dots always ask before a protected call."),
+      await screen.findByText("Platform has guardrails: your sols always ask before a protected call."),
     ).toBeVisible();
     const preset = screen.getByLabelText("Preset");
     expect(within(preset).getByRole("option", { name: /^Trusted/ })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
-  it("shows nothing of guardrails where none apply, and asks for a new dot's account", async () => {
+  it("shows nothing of guardrails where none apply, and asks for a new sol's account", async () => {
     renderApp("/dots/new");
     await screen.findByLabelText("Preset");
     await waitFor(() => expect(backend.callsTo("policy_ceiling").length).toBeGreaterThan(0));

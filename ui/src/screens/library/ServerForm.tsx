@@ -222,7 +222,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               "This server comes with a plugin: its settings change with the plugin."
             ) : (
               <>
-                A server gives dots tools named <code>mcp__name__tool</code>. Dots starts it for
+                A server gives sols tools named <code>mcp__name__tool</code>. Sage starts it for
                 each run that uses it.
               </>
             )}
@@ -244,14 +244,14 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
               value={draft.transport}
               onChange={(e) => set({ transport: e.target.value as Draft["transport"] })}
             >
-              <option value="stdio">stdio (a program Dots starts)</option>
-              <option value="http">http (a server Dots connects to)</option>
+              <option value="stdio">stdio (a program Sage starts)</option>
+              <option value="http">http (a server Sage connects to)</option>
             </NativeSelect>
           </Field>
           <p className="text-xs text-muted-foreground">
             Write <code>{"${VAR}"}</code> where a value should come from a variable: {stdio
-              ? "Dots reads the variable from Personal (the Env tab) when the server starts, for the dots granted it."
-              : "Dots reads the variable from Personal (the Env tab) and sends its value to the server, for the dots granted it. It asks first when the host is new."}
+              ? "Sage reads the variable from Personal (the Env tab) when the server starts, for the sols granted it."
+              : "Sage reads the variable from Personal (the Env tab) and sends its value to the server, for the sols granted it. It asks first when the host is new."}
           </p>
           {stdio ? (
             <>
@@ -350,7 +350,7 @@ export function ServerForm(props: { entry: ServerEntry | null; onClose: () => vo
           )}
           {!readOnly && secretKeys(draft).map((key) => (
             <p key={key} className="text-xs text-needs">
-              {key} looks like a secret. When you save, Dots moves its value to Personal as a
+              {key} looks like a secret. When you save, Sage moves its value to Personal as a
               secret and the server reads it from there.
             </p>
           ))}

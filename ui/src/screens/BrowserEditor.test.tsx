@@ -21,7 +21,7 @@ const dot: Dot = {
   },
 };
 
-describe("the dot editor's browser", () => {
+describe("the sol editor's browser", () => {
   it("lists the approved sites, removes one, and opens the browser", async () => {
     // Assigned in the handler: declared so, TypeScript does not narrow it to null.
     let saved = null as DotSpec | null;
@@ -34,7 +34,7 @@ describe("the dot editor's browser", () => {
     const { user } = renderApp(`/dots/${dot.id}`);
     expect(await screen.findByRole("switch", { name: "Browser" })).toBeChecked();
     expect(
-      screen.getByText("Opens a visible Microsoft Edge window with this dot's own profile."),
+      screen.getByText("Opens a visible Microsoft Edge window with this sol's own profile."),
     ).toBeVisible();
     const sites = screen.getByRole("list", { name: "Sites" });
     const shop = within(sites).getByRole("listitem", { name: "shop.com" });
@@ -61,7 +61,7 @@ describe("the dot editor's browser", () => {
     expect(saved!.policy.preset).toBe("custom");
   });
 
-  it("turns the browser on for a new dot, whose browser opens once it is saved", async () => {
+  it("turns the browser on for a new sol, whose browser opens once it is saved", async () => {
     const { user } = renderApp("/dots/new");
     const toggle = await screen.findByRole("switch", { name: "Browser" });
     expect(toggle).not.toBeChecked();
@@ -70,7 +70,7 @@ describe("the dot editor's browser", () => {
     expect(toggle).toBeChecked();
     expect(screen.getByRole("heading", { name: "Sites" })).toBeVisible();
     expect(screen.getByText(/^No site is approved yet/)).toBeVisible();
-    expect(screen.getByText("Save the dot to open its browser.")).toBeVisible();
+    expect(screen.getByText("Save the sol to open its browser.")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Open the browser" })).toBeNull();
   });
 });

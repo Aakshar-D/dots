@@ -1,6 +1,6 @@
-# Setting up Dots for an organisation
+# Setting up Sage for an organisation
 
-This guide is for an organisation's admin who hands Dots to their people. It covers the org's
+This guide is for an organisation's admin who hands Sage to their people. It covers the org's
 policy key, the policy, each kind of source, join codes, and the day-to-day work of rotating
 values and cutting people off.
 
@@ -16,14 +16,14 @@ and `bao` examples.
 ## 1. What an org is
 
 An org is a set of variables that you manage in one place, the **source**, plus a **policy** that
-you sign. Dots reads both and enforces the policy on each person's PC.
+you sign. Sage reads both and enforces the policy on each person's PC.
 
 - A source is one of: OpenBao or HashiCorp Vault, Infisical, or a SOPS file encrypted with age.
 - Each person joins with a **join code** that you give them. It says where the source is and which
   key signs the policy. It holds no secret, with one exception: a SOPS `location` URL whose
   query carries a token (a signed URL) does. Send such a code like a secret.
 - Each person signs in to the source with their own credential: a token, a username and password,
-  a machine identity, or their PC's age key. Dots never shows it again after Join.
+  a machine identity, or their PC's age key. Sols never shows it again after Join.
 
 What the person sees:
 
@@ -34,17 +34,17 @@ What the person sees:
   line. Org rows are read-only. They say "Managed by Acme Engineering", show the value only for
   plain entries, and carry a "Locked" badge when a Personal variable of the same name can't take
   its place.
-- **The dot editor.** When a person makes a new dot, an **Org** picker offers Personal and each
-  joined org. The picker shows only when an org is joined. Once the dot is made, its org is
+- **The sol editor.** When a person makes a new sol, an **Org** picker offers Personal and each
+  joined org. The picker shows only when an org is joined. Once the sol is made, its org is
   fixed and shows as text.
 
-Every dot belongs to exactly one org, or to Personal. An org's values never reach a dot of
+Every sol belongs to exactly one org, or to Personal. An org's values never reach a sol of
 another org, even when the names are the same. A person can join several orgs at once, and they
 never mix.
 
 ## 2. The policy key
 
-The policy key is a minisign key pair. Your secret key signs the policy; every Dots checks the
+The policy key is a minisign key pair. Your secret key signs the policy; every Sage checks the
 signature with the public key from the join code. A policy that someone edits on their PC, or
 that does not match your key, is refused.
 
@@ -76,7 +76,7 @@ Keep policy.key offline. Join codes carry policy.pub; Dots shows the fingerprint
   nothing.
 
 When the key changes, a person who uses **Update** with the new join code sees the line "the
-policy key changes from ... to ..." highlighted in the list of changes. Dots then asks in a
+policy key changes from ... to ..." highlighted in the list of changes. Sage then asks in a
 window of its own, "Accept the new policy key?", before it updates. See
 [A leaked key](#a-leaked-key) for how to change keys without a gap.
 
@@ -85,7 +85,7 @@ window of its own, "Accept the new policy key?", before it updates. See
 ### The fields
 
 A policy is a JSON object. Unknown fields, a field given twice, or a value out of range make the
-whole policy invalid: Dots fails closed.
+whole policy invalid: Sage fails closed.
 
 ```json
 {
@@ -108,10 +108,10 @@ whole policy invalid: Dots fails closed.
 | `org_id` | required | The org this policy is for. It must match the join code's org id. |
 | `issued_at` | required | An RFC 3339 time. `dots-admin policy sign` sets it to now. |
 | `plain` | `[]` | Entries shown with their values. Every other entry is a secret. |
-| `use` | `{"allow": ["*"], "deny": []}` | Which names dots may be granted. |
+| `use` | `{"allow": ["*"], "deny": []}` | Which names sols may be granted. |
 | `personal` | `"deny"` | Whether a person's Personal variables mix in. |
-| `shell_secrets` | `false` | Whether a secret may be granted to a dot's shell. |
-| `refresh_minutes` | `15` | How often Dots fetches the org. At least 1. |
+| `shell_secrets` | `false` | Whether a secret may be granted to a sol's shell. |
+| `refresh_minutes` | `15` | How often Sage fetches the org. At least 1. |
 | `offline_hours` | `24` | How long the saved copy lasts after the last good fetch. |
 | `audit` | `null` | Where each PC sends its audit records (section 11). |
 
@@ -119,7 +119,7 @@ whole policy invalid: Dots fails closed.
 id `personal` is reserved.
 
 **`plain`** lists variable names. A plain entry's value shows in the Env tab, and it may go to a
-dot's shell even while `shell_secrets` is false. Use it for settings such as `LOG_LEVEL`, never
+sol's shell even while `shell_secrets` is false. Use it for settings such as `LOG_LEVEL`, never
 for credentials.
 
 **`use`** has two lists of globs. A glob is a variable name in which `*` stands for any run of
@@ -132,9 +132,9 @@ matches an `allow` glob and no `deny` glob: **deny wins**. An empty `allow` allo
 
 With this rule, `prod_db_url` is denied (case doesn't matter), and so is `GITHUB_ADMIN_TOKEN`.
 `use` applies to the name, whichever side its value would come from. A Personal `PROD_TOKEN` is
-denied too, in a dot of this org.
+denied too, in a sol of this org.
 
-**`personal`** says how a person's Personal variables mix with the org's, in a dot of the org.
+**`personal`** says how a person's Personal variables mix with the org's, in a sol of the org.
 Say the org has `GITHUB_TOKEN`, and the person has Personal `GITHUB_TOKEN` and `NPM_TOKEN`:
 
 | `personal` | `GITHUB_TOKEN` | `NPM_TOKEN` |
@@ -152,17 +152,17 @@ Say the org has `GITHUB_TOKEN`, and the person has Personal `GITHUB_TOKEN` and `
 The Env tab marks an org row "Locked" under `deny` and `fallback`, where a Personal variable
 can't take its place.
 
-**`shell_secrets`** decides whether a secret may be granted to a dot's shell, where the agent can
-read it and could send it anywhere its tools reach. While it is `false`, the dot editor does not
+**`shell_secrets`** decides whether a secret may be granted to a sol's shell, where the agent can
+read it and could send it anywhere its tools reach. While it is `false`, the sol editor does not
 offer secrets for the shell, and a run leaves them out. This covers an org secret, and a Personal
-secret in a dot of the org. MCP servers still get the secrets granted to them.
+secret in a sol of the org. MCP servers still get the secrets granted to them.
 
-**`refresh_minutes`** is how often each person's Dots fetches the org. Dots also fetches at start,
+**`refresh_minutes`** is how often each person's Sage fetches the org. Sage also fetches at start,
 when the person presses **Refresh**, and before a run whose copy is older than this.
 
-**`offline_hours`** is how long Dots may use the saved copy after the last good fetch, while the
+**`offline_hours`** is how long Sage may use the saved copy after the last good fetch, while the
 source can't be reached. Once it runs out, the copy is deleted and runs that need the org fail
-until the PC reconnects. With `0`, Dots writes no copy at all: the org's values are held in
+until the PC reconnects. With `0`, Sage writes no copy at all: the org's values are held in
 memory only while the source answers, and an offline PC has none.
 
 **`audit`** is either `null` or `{"endpoint": "https://...", "token_entry": "NAME"}`. The
@@ -181,7 +181,7 @@ dots-admin policy new --org-id acme-eng --out policy.json
 This writes a policy with every field at its default and `issued_at` set to now. Without `--out`,
 it prints the policy. It never replaces an existing file, since that may hold your edits.
 
-Edit `policy.json`, then check it as Dots will:
+Edit `policy.json`, then check it as Sage will:
 
 ```bash
 dots-admin policy check policy.json
@@ -202,7 +202,7 @@ ok
   audit: off
 ```
 
-A policy Dots would refuse prints `policy invalid: <why>` (for example `policy invalid: unknown
+A policy Sage would refuse prints `policy invalid: <why>` (for example `policy invalid: unknown
 field 'foo'`) and exits with code 1.
 
 Sign it:
@@ -212,7 +212,7 @@ dots-admin policy sign policy.json --key keys/policy.key --out policy.signed.jso
 ```
 
 This checks the policy, sets `issued_at` to now, and signs the exact text. Only the `issued_at`
-value changes, so your layout stays. It then checks the result as a Dots client would, and writes
+value changes, so your layout stays. It then checks the result as a Sage client would, and writes
 it. The input file is not changed. The output says:
 
 ```text
@@ -228,7 +228,7 @@ signed text is one line of JSON. Store it in the source as section 4 says.
 a file the command reads (the policy, the key) or any minisign key file: `dots-admin` says so and
 writes nothing. A key file that is only half written is deleted, not left behind.
 
-To see what a Dots client would accept:
+To see what a Sage client would accept:
 
 ```bash
 dots-admin policy verify policy.signed.json --pub keys/policy.pub
@@ -236,7 +236,7 @@ dots-admin policy verify policy.signed.json --pub keys/policy.pub --org-id acme-
 ```
 
 It prints `ok: a Dots client in org 'acme-eng' accepts this policy, signed by key ...`, the
-summary, and a reminder that Dots still refuses it if it has accepted a policy issued later. A
+summary, and a reminder that Sage still refuses it if it has accepted a policy issued later. A
 refusal prints `a Dots client would refuse it: <why>`, such as `signature does not match` or
 `for org 'acme-eng', not 'beta'`.
 
@@ -245,11 +245,11 @@ for a wrong command line. `dots-admin help` lists every command.
 
 ### No going back
 
-Each Dots remembers the `issued_at` of the last policy it accepted. It refuses a policy issued
+Each Sage remembers the `issued_at` of the last policy it accepted. It refuses a policy issued
 before that, with the status `policy invalid: issued before the last accepted policy (...)`, and
 keeps using its saved copy until the copy runs out.
 
-There is no recovery from inside Dots. A policy signed with a far-future `issued_at` (a fast
+There is no recovery from inside Sage. A policy signed with a far-future `issued_at` (a fast
 clock, or a leaked key) makes every later policy count as older, even one that comes through
 **Update** with a new key. The person must **Remove** the org and **Join** again.
 
@@ -262,8 +262,8 @@ So:
 ### Changing a policy or a value
 
 - **A new policy**: edit, `policy check`, `policy sign`, and store the new text in place of the
-  old one. Each Dots takes it at its next fetch.
-- **A new value**: change it in the source. Each Dots takes it at its next fetch, which is at most
+  old one. Each Sage takes it at its next fetch.
+- **A new value**: change it in the source. Each Sage takes it at its next fetch, which is at most
   `refresh_minutes` away while the PC is online. A run that has already started keeps the value it
   started with. A person can press **Refresh** to fetch at once.
 
@@ -277,7 +277,7 @@ Every address must start with `https://`. `http://` is accepted only for `localh
 
 ### OpenBao and HashiCorp Vault
 
-Dots reads a KV version 2 secrets engine. OpenBao and Vault use the same API, so this section
+Sage reads a KV version 2 secrets engine. OpenBao and Vault use the same API, so this section
 covers both.
 
 **Join code fields:**
@@ -301,12 +301,12 @@ bao kv put -mount=secret dots/policy DOTS_POLICY=@policy.signed.json
 ```
 
 Every value must be text. A key that is not a variable name is skipped. Two names that differ only
-in case make the fetch invalid, since Dots compares names without regard to case. `DOTS_POLICY`
+in case make the fetch invalid, since Sage compares names without regard to case. `DOTS_POLICY`
 is never an entry.
 
 **A read-only ACL policy.** Each person needs `read` on these paths, and nothing else. In KV v2
 the API path has `data/` after the mount. The token must also keep the `default` policy, since
-Dots calls `auth/token/lookup-self` and `auth/token/renew-self`; or add those two paths to this
+Sage calls `auth/token/lookup-self` and `auth/token/renew-self`; or add those two paths to this
 policy. A token made with `-no-default-policy` stops renewing and is then refused, which wipes the
 copy:
 
@@ -319,16 +319,16 @@ EOF
 ```
 
 The `roster` path holds the member list (section 10). A token without it still works for an org
-without a member list: Dots treats a refused read of `roster` as "no member list". Under a policy
+without a member list: Sage treats a refused read of `roster` as "no member list". Under a policy
 that requires one, the account then waits, and shows "can't read DOTS_ROSTER at
 secret/dots/roster (HTTP 403)" until you add the path.
 
 **Signing in.** Give each person their own credential, so that you can cut one person off:
 
 - **Token** (`auth: token`). Make a token with the `dots-acme` policy and hand it over in a safe
-  channel. The person pastes it as **Token** at Join. Dots renews a renewable token at most once
+  channel. The person pastes it as **Token** at Join. Sage renews a renewable token at most once
   an hour, and only during a fetch. So a periodic token's period must be longer than both one
-  hour and the policy's `refresh_minutes`. The token lapses if Dots stays closed longer than the
+  hour and the policy's `refresh_minutes`. The token lapses if Sage stays closed longer than the
   period.
 - **userpass** (`auth: userpass`). Make a user with the policy:
 
@@ -337,7 +337,7 @@ secret/dots/roster (HTTP 403)" until you add the path.
   bao write auth/userpass/users/jdoe password=- token_policies=dots-acme
   ```
 
-  The person types their **Username** and **Password** at Join. Dots logs in at
+  The person types their **Username** and **Password** at Join. Sage logs in at
   `auth/<auth_mount>/login/<username>` and logs in again when the token runs out.
 - **ldap** (`auth: ldap`). Map the person's LDAP user or group to the `dots-acme` policy in your
   ldap auth mount. The person types their directory **Username** and **Password**.
@@ -346,17 +346,17 @@ A login that fails because the directory can't be reached shows as **offline**, 
 copy is kept; only a refused password counts as access revoked.
 
 **Namespaces.** For Vault Enterprise or HCP Vault, and for OpenBao namespaces, give the namespace
-in the join code. Dots sends it as `X-Vault-Namespace` on every request, and the paths above are
+in the join code. Sage sends it as `X-Vault-Namespace` on every request, and the paths above are
 inside it.
 
-**Statuses.** A `403` from Vault means the token is bad or its policy lacks `read`. Dots treats
-it as **access revoked** and wipes the person's copy. A missing path answers `404`, which Dots
+**Statuses.** A `403` from Vault means the token is bad or its policy lacks `read`. Sage treats
+it as **access revoked** and wipes the person's copy. A missing path answers `404`, which Sage
 shows as `policy invalid: no secrets at secret/dots/env`. A sealed server answers `503`, which is
 **offline**.
 
 ### Infisical
 
-Dots signs in with a machine identity that uses Universal Auth, and reads one folder of one
+Sage signs in with a machine identity that uses Universal Auth, and reads one folder of one
 environment of one project. It works with Infisical Cloud and with a self-hosted Infisical.
 
 **Join code fields:**
@@ -372,11 +372,11 @@ environment of one project. It works with Infisical Cloud and with a self-hosted
 policy as the secret `DOTS_POLICY` in its sub-folder `policy`: `/dots/policy` for `/dots`, or
 `/policy` for the root.
 
-Dots reads only that folder. It reads no sub-folder and no secret imports, and it skips personal
+Sage reads only that folder. It reads no sub-folder and no secret imports, and it skips personal
 overrides. A secret whose value Infisical hides from the identity makes the fetch invalid:
 `the value of NAME is hidden from this machine identity`.
 
-Infisical expands secret references (`${...}`) in values before Dots sees them. So a value can
+Infisical expands secret references (`${...}`) in values before Sage sees them. So a value can
 pull in a secret from any folder the identity can read. Keep the identity's access to the org's
 folders.
 
@@ -426,7 +426,7 @@ Only the JSON format is read. Other top-level fields are ignored. The file must 
 (the usual case) and no `shamir_threshold` above 1.
 
 Every value under `env`, and the policy, must be encrypted. Don't give an `env` key the
-`_unencrypted` suffix or match it with an `unencrypted_regex`: Dots refuses the whole file
+`_unencrypted` suffix or match it with an `unencrypted_regex`: Sage refuses the whole file
 ("the file's value at env:NAME is not encrypted"). An empty value is skipped.
 
 A small script builds the file from `env.json` (the variables) and the signed policy:
@@ -440,11 +440,11 @@ open("acme-eng.plain.json", "w").write(json.dumps({"env": env, "policy": policy}
 EOF
 ```
 
-**This PC's key.** Dots makes an age key for each SOPS org on each PC. At Join, after the preview,
+**This PC's key.** Sage makes an age key for each SOPS org on each PC. At Join, after the preview,
 the person sees **This PC's key** (an `age1...` public key) with a **Copy** button and the hint
 "Send this key to your admin, then press Join". If they press **Join** before you add the key,
-Dots shows "Waiting for your admin to add this PC's key" and the button reads **Try again**. Their
-key stays the same if they close the dialog or restart Dots and join again.
+Sage shows "Waiting for your admin to add this PC's key" and the button reads **Try again**. Their
+key stays the same if they close the dialog or restart Sage and join again.
 
 **Recipients.** List every person's key, and your own, in a `.sops.yaml` next to the file:
 
@@ -486,11 +486,11 @@ sops set --value-file acme-eng.enc.json '["policy"]' policy.value
 
 Then copy the file to its location.
 
-**Statuses.** A file Dots can't read at a local path counts as **offline**. A file that does not
+**Statuses.** A file Sage can't read at a local path counts as **offline**. A file that does not
 include this PC's key, or that was changed by hand so that its MAC fails, counts as **access
 revoked**. For a URL, `401` and `403` count as access revoked and `404` makes the fetch invalid.
-So a URL that starts refusing Dots, such as a signed URL past its expiry, wipes each person's copy
-at their next fetch. Dots never shows the URL's query in a message.
+So a URL that starts refusing Sage, such as a signed URL past its expiry, wipes each person's copy
+at their next fetch. Sols never shows the URL's query in a message.
 
 ## 5. Join codes
 
@@ -532,7 +532,7 @@ dots-admin join-code --org-id acme-eng --name "Acme Engineering" --source sops \
   --location https://files.example.invalid/dots/acme-eng.enc.json --pub keys/policy.pub
 ```
 
-`dots-admin` builds the code, reads it back as Dots will, and refuses one Dots would refuse: an
+`dots-admin` builds the code, reads it back as Sage will, and refuses one Sage would refuse: an
 `http://` address, a relative SOPS path, an option for another source, a missing required option,
 or `--auth-mount` without `--auth userpass` or `--auth ldap`. `--pub` takes `policy.pub` from
 `keygen`.
@@ -544,20 +544,20 @@ The exception is a SOPS `location` URL whose query carries a token (a signed URL
 holds a secret, so send it like one.
 
 **What the person does.** In **Settings → Organisations → Join an organisation**, they paste the
-code and press **Preview**. Dots shows the org, the source and the key fingerprint, and fetches
+code and press **Preview**. Sage shows the org, the source and the key fingerprint, and fetches
 nothing yet. They check the fingerprint with you and press **Continue**, give their sign-in
 details, and press **Join**.
-Dots fetches once and joins only when the fetch works and the policy's signature checks out.
+Sage fetches once and joins only when the fetch works and the policy's signature checks out.
 
 **Changing the org's settings.** For a new address, path or key, make a new join code for the same
-org id. People use **Update** on the org, not Join. Dots shows what changes and fetches with the
+org id. People use **Update** on the org, not Join. Sage shows what changes and fetches with the
 new settings, and replaces the old ones only when that fetch and the signature check work. Their
-dots and grants stay. While the source stays the same, a person who leaves the sign-in fields
+sols and grants stay. While the source stays the same, a person who leaves the sign-in fields
 empty keeps their saved details.
 
 **Update never sends the saved details to a changed source.** When the new code changes anything
 about an OpenBao or Infisical source (the address or site, the auth method or its mount, the
-namespace, mount, path, project, environment or secret path) or the kind of source, Dots asks
+namespace, mount, path, project, environment or secret path) or the kind of source, Sage asks
 for the sign-in details again, as at Join, and sends nothing until they are given. A SOPS file's
 new location keeps the PC's age key, which is never sent anywhere. The details a person types go
 to the new source before the new policy's signature is checked, so tell people to use Update
@@ -567,20 +567,20 @@ only with a code that came from you.
 
 ### Rotation
 
-Change the value in the source. Each Dots uses the new value from its next fetch, which is at
+Change the value in the source. Each Sage uses the new value from its next fetch, which is at
 most `refresh_minutes` away while the PC is online. A run that has already started keeps the
 value it started with. An offline PC keeps the old value in its copy until it reconnects or the
 copy runs out. When the old value must stop working, revoke it where it was issued.
 
 For a SOPS file, check now and then that only you can write its location: any recipient who can
-write it can change the values every other person's Dots reads (see [SOPS and age](#sops-and-age)).
+write it can change the values every other person's Sage reads (see [SOPS and age](#sops-and-age)).
 
 ### Cutting someone off
 
 Take away their access at the source:
 
 - **OpenBao or Vault**: revoke their token. For userpass or ldap, delete the user or remove
-  their mapping to the policy, and also revoke the tokens they were given: Dots keeps using a
+  their mapping to the policy, and also revoke the tokens they were given: Sage keeps using a
   login token until it runs out. For example:
 
   ```bash
@@ -599,8 +599,8 @@ Take away their access at the source:
   Or run `sops updatekeys -y acme-eng.enc.json` and then `sops rotate -i acme-eng.enc.json`.
   Also remove their access to the file's location: the repository, the share or the URL.
 
-At their Dots' next fetch the source refuses it. Dots marks the org **access revoked** and wipes
-their saved copy and the values it holds. Their dots stay, but can't run with the org's values.
+At their Sage's next fetch the source refuses it. Sage marks the org **access revoked** and wipes
+their saved copy and the values it holds. Their sols stay, but can't run with the org's values.
 
 A PC that stays offline does not fetch, and keeps its copy until `offline_hours` run out. After the
 step above, rotate the values the person could read, as you would for any leaver. For SOPS,
@@ -608,24 +608,24 @@ rotate the data key first: values changed with `sops set` before that stay under
 
 ### Offline
 
-Each Dots keeps a saved copy of the org's values and policy at
+Each Sage keeps a saved copy of the org's values and policy at
 `%LOCALAPPDATA%\dots\vault\acme-eng.bin`, encrypted with Windows DPAPI for that Windows user. It
 can't be read by another Windows account or on another machine. It lasts `offline_hours` after the
 last good fetch.
 
-- While the source can't be reached, Dots runs on the copy and shows **offline**.
-- When the copy runs out, Dots deletes it and shows **expired**.
+- While the source can't be reached, Sage runs on the copy and shows **offline**.
+- When the copy runs out, Sage deletes it and shows **expired**.
 - After a failed fetch, a run start does not try again for 5 minutes, so a dead source slows a run
   start at most once in that time. The timer and **Refresh** still try on their own schedule.
 - With `offline_hours: 0` there is no copy.
 
-Each status, as Dots words it. Settings and the Env tab show it with a capital first letter:
+Each status, as Sage words it. Settings and the Env tab show it with a capital first letter:
 
 - `connected`: the last fetch worked.
 - `offline (<why>); using the saved copy`: the source can't be reached. Runs use the copy.
   "Saved copy until", beside it, says until when, in the PC's local time.
 - `offline (<why>), with no saved copy`: the source can't be reached, and there is no copy. Runs
-  that need the org fail. Right after Dots starts, the status is offline until the first fetch.
+  that need the org fail. Right after Sage starts, the status is offline until the first fetch.
 - `access revoked (<why>)`: the source refused the person. Their copy is gone.
 - `policy invalid: <error>; using the saved copy`: the fetch, or its policy, was refused.
   Runs use the last good copy.
@@ -651,10 +651,10 @@ dot 'triage': its org 'acme-eng' was removed
 ### A leaked key
 
 - **A leaked value**: change it at the source, and revoke the old one where it was issued. Each
-  Dots takes the new value at its next fetch.
+  Sage takes the new value at its next fetch.
 - **A leaked policy key**: make a new key with `dots-admin keygen --out keys-2`, sign the policy
   with it, and send everyone a new join code with the new `policy.pub`. They use **Update**, and
-  Dots asks them to accept the new key.
+  Sage asks them to accept the new key.
 
 To change the key without a gap, put the new copy next to the old one:
 
@@ -663,15 +663,15 @@ To change the key without a gap, put the new copy next to the old one:
 2. Make the new join code for that place and send it.
 3. Once everyone has updated, delete the old place.
 
-If you instead replace the policy in place, Dots that have not updated yet show `policy invalid:
+If you instead replace the policy in place, Sols that have not updated yet show `policy invalid:
 signature does not match` and run on their copy until they update or the copy runs out.
 
 ## 7. Network
 
-- **TLS.** Dots trusts the public certificate roots and the Windows certificate store. A source
+- **TLS.** Sage trusts the public certificate roots and the Windows certificate store. A source
   behind your company's own CA works when that CA is in the Windows store, as IT usually puts it.
 - **Errors.** `401` and `403` mean **access revoked**, and the person's copy is wiped. Every `5xx`
-  and `429` counts as **offline**: the copy stays. Any other status, or an answer Dots can't read,
+  and `429` counts as **offline**: the copy stays. Any other status, or an answer Sage can't read,
   is **policy invalid**, and the last good copy stays.
 - **Timeout.** Each request has 20 seconds.
 - **Redirects** are not followed: a `3xx` is policy invalid. Give the address that answers
@@ -680,18 +680,18 @@ signature does not match` and run on their copy until they update or the copy ru
 
 ## 8. MCP servers and origins
 
-An org's values can fill `${VAR}` in a Library MCP server's settings, for a dot of that org, as
+An org's values can fill `${VAR}` in a Library MCP server's settings, for a sol of that org, as
 Personal values do. Two rules keep them from going where the person did not mean:
 
 - **Confirmed origins.** An HTTP server whose URL reads a variable, such as
   `https://${MCP_HOST}/mcp`, starts only for an origin the person confirmed in that scope. A
   value in your org can point the URL at another host than the person's Personal value does, so
-  Dots asks per org. Until then, a run leaves the server out with the notice "github:
+  Sage asks per org. Until then, a run leaves the server out with the notice "github:
   https://mcp.example.invalid is not a confirmed origin; open the server in the Library to
   confirm it". A server whose URL is fixed needs no confirmation.
 - **Check as.** In the Library, the server's form has **Check as**, with Personal and each joined
   org. It lists the server's tools with that scope's values. When the origin is not confirmed in
-  that scope, Dots first asks in its own window, naming the variables, the org and the origin. A
+  that scope, Sage first asks in its own window, naming the variables, the org and the origin. A
   no sends nothing.
 
 Each scope keeps its own list of the server's tools. The person reviews a changed list per org in
@@ -706,14 +706,14 @@ If you change a value that forms a server's host, each person confirms the new o
   and have no such limit beyond the 1 MiB answer.
 - **Names compare without regard to case**, as Windows environment names do. `github_token` and
   `GITHUB_TOKEN` are one variable.
-- **Bedrock and Vertex.** Dots does not pass its own `AWS_*` and `GOOGLE_*` variables to the
+- **Bedrock and Vertex.** Sage does not pass its own `AWS_*` and `GOOGLE_*` variables to the
   `claude` CLI, so a CLI set up for Amazon Bedrock or Google Vertex AI that way does not work in
-  Dots.
+  Sage.
 - **Audit records are chained, not signed.** A gap or an edit after sending shows (section 11);
   which PC wrote a record is not proven, since that needs a key per device. Your source's own
   audit log stays the record of who fetched what.
-- **Windows only.** Dots keeps secrets in Windows Credential Manager and DPAPI.
-- **What Dots can't stop.** Dots stops mistakes and honest use. It can't stop malware running as
+- **Windows only.** Sage keeps secrets in Windows Credential Manager and DPAPI.
+- **What Sage can't stop.** Sage stops mistakes and honest use. It can't stop malware running as
   the same Windows user, a person who extracts a value they were granted, or a granted MCP server
   or shell that sends a value elsewhere. Revoking access at the source, rotating values, and the
   source's own audit log are your controls there.
@@ -722,18 +722,18 @@ If you change a value that forms a server's host, each person confirms the new o
 
 A plain org (policy v1) lets anyone who can read the source join, and every member counts as a
 Member. An account with a **member list** (the roster) adds names, roles and a way to remove
-someone. You can edit the list with `dots-admin`, or from the **Members** tab in Dots (see
-"Inviting and approving in Dots" below). Owners can only be changed with `dots-admin` and the root
+someone. You can edit the list with `dots-admin`, or from the **Members** tab in Sage (see
+"Inviting and approving in Sage" below). Owners can only be changed with `dots-admin` and the root
 key.
 
 ### The root key and admin keys
 
 - The **root key** is the policy key from section 2 (`policy.key`). It is the Owner's key. Only it
   can change the policy, and it can always sign the member list.
-- An **admin key** is the Dots ID of a person you trust to sign the member list. It is listed in
+- An **admin key** is the Sage ID of a person you trust to sign the member list. It is listed in
   the policy's `admins`. An admin can sign new lists, but can't change the policy, the root key or
   `admins`, and can't add, change or remove an Owner: a list signed by an admin must keep the
-  Owner entries of the list each Dots accepted last, word for word, or it is refused ("this
+  Owner entries of the list each Sage accepted last, word for word, or it is refused ("this
   member list changes the Owners, which only the owner's key may sign; an Admin signed it").
   Sign a list that changes Owners with the root key. Keep the root key off everyone else's PC.
 
@@ -744,7 +744,7 @@ dots-admin policy admins add policy.json <dots-id>
 dots-admin policy admins remove policy.json <dots-id>
 ```
 
-Dropping an admin does not undo lists they already signed: each Dots accepted those when it
+Dropping an admin does not undo lists they already signed: each Sage accepted those when it
 fetched them, and keeps them. It refuses new lists signed by that admin.
 
 ### Making and signing the list
@@ -762,13 +762,13 @@ dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.jso
 ```
 
 - Roles are `owner`, `admin`, `member` and `viewer`. The list needs at least one owner.
-- The Dots ID is what the person copies with **Settings › Profile › Copy my Dots ID**.
+- The Sage ID is what the person copies with **Settings › Profile › Copy my Sage ID**.
 - `roster add` with an email that is already listed adds the key as that person's **second PC**.
 - `roster sign` signs with the root key, raises `seq` by one, sets `issued_at`, writes both back
   into `roster.json` and prints the signed text. Keep `roster.json`: it is the file you edit next
-  time. Each Dots refuses a list whose `seq` is not higher than the last it accepted.
+  time. Each Sage refuses a list whose `seq` is not higher than the last it accepted.
 - `roster verify roster.signed.json --pub keys/policy.pub --org-id acme-eng` (add `--admin
-  <dots-id>` for an admin-signed list) shows what a Dots client would accept.
+  <dots-id>` for an admin-signed list) shows what a Sage client would accept.
 
 ### Where to store DOTS_ROSTER
 
@@ -778,17 +778,17 @@ Store the signed text next to `DOTS_POLICY`:
   the policy's.
 - **Infisical**: secret `DOTS_ROSTER` in `<secret path>/policy`, the folder that holds
   `DOTS_POLICY`. It is not shown as an entry.
-- **SOPS**: a top-level field `roster` in the file. Encrypt it like `policy`: Dots refuses a file
+- **SOPS**: a top-level field `roster` in the file. Encrypt it like `policy`: Sage refuses a file
   whose `roster` is in clear text.
 
 Give people read access to it as you did for the policy. Keep write access to the Owner and admins (see "Write rights and drafts").
 
-### Inviting and approving in Dots
+### Inviting and approving in Sage
 
 An Owner or Admin can add people from **Settings › Accounts**. Open the account and choose its
 **Members** tab.
 
-**Signing needs your Dots ID in `admins`.** Dots signs the new list with this PC's Dots ID, so that
+**Signing needs your Sage ID in `admins`.** Sage signs the new list with this PC's Sage ID, so that
 ID must be in the policy's `admins`. This holds for the Owner's PC too. The owner adds it with the
 root key, signs the policy and stores it (section 3):
 
@@ -797,23 +797,23 @@ dots-admin policy admins add policy.json <dots-id>
 ```
 
 Until then the buttons on the tab are off. The tab says "Can sign the list once the owner adds
-their Dots ID to the policy's admins."
+their Sage ID to the policy's admins."
 
 **Invite.** Choose **Invite**, give the person's email and a role, and choose **Create invite**.
-Dots shows an invite code. Choose **Copy**, or **Save as .dotsorg** to send a file. Send it to the
+Sage shows an invite code. Choose **Copy**, or **Save as .dotsorg** to send a file. Send it to the
 person.
 
 - An invite lives only on the PC that made it. Another PC of yours does not see it.
 - It expires after 7 days. **Open invites** lists what is waiting, with **Revoke**.
-- The person joins with the code (see [Accounts](accounts.md)). Dots then shows them a request
+- The person joins with the code (see [Accounts](accounts.md)). Sage then shows them a request
   code, which they send back to you.
 - **SOPS:** the person first sends you their PC's age key, shown in their Join dialog as **This
   PC's key**. Add it to the file's recipients (section 4) and store the file. Until then their join
   waits ("Waiting for your admin to add this PC's key") and there is no request code. Once the key
-  is in, they choose **Try again**, the join completes, and Dots shows them the request code.
+  is in, they choose **Try again**, the join completes, and Sage shows them the request code.
 
-**Approve.** Choose **Approve request**, paste the request code and choose **Check**. Dots shows
-the name, email and Dots ID fingerprint, and any problem. Choose **Approve**. Dots signs a new
+**Approve.** Choose **Approve request**, paste the request code and choose **Check**. Sage shows
+the name, email and Sage ID fingerprint, and any problem. Choose **Approve**. Sage signs a new
 list and publishes it.
 
 - A request that matches one of your invites gets the invite's role.
@@ -824,17 +824,17 @@ list and publishes it.
 - Approving uses up the invite, even when the result is only a draft (see below). If that draft
   is discarded, or dropped because another list took its place, the invite is open again and the
   same request code can be approved later.
-- A request for another account, a revoked, used or expired invite, or a Dots ID already on the
+- A request for another account, a revoked, used or expired invite, or a Sage ID already on the
   list is refused with the reason. So is a request with an Owner's email: "Owners can only be
   changed with the account owner's key, using dots-admin."
 
 **Change a role, remove a PC, remove a person.** Each member has a role menu, **Remove this PC**
-for each of their PCs, and **Remove**. Each change signs a new list. Dots does not touch an Owner:
+for each of their PCs, and **Remove**. Each change signs a new list. Sage does not touch an Owner:
 it says "Owners can only be changed with the account owner's key, using dots-admin." Do that with
 `dots-admin` and the root key, as above.
 
 **Removing someone also needs their credential revoked at the source.** The confirmation says so.
-The list stops Dots honouring them. Only the source cuts them off (section 6).
+The list stops Sage honouring them. Only the source cuts them off (section 6).
 
 Take care when you remove the key of the PC you are on. Once the new list is published this PC is
 not on it, and can't sign any more. **Remove this PC** always asks first, and says "This is this
@@ -859,19 +859,19 @@ EOF
 ```
 
 - **Infisical**: the machine identity needs write on the policy folder's `DOTS_ROSTER` secret.
-- **SOPS**: Dots can't write the file. See below.
+- **SOPS**: Sage can't write the file. See below.
 
-If the source refuses the write, or can't be reached, Dots keeps the signed list as a **draft**. The
+If the source refuses the write, or can't be reached, Sage keeps the signed list as a **draft**. The
 Members tab shows "Not published yet:" with what it changes, the error, and **Retry** and
 **Discard**. Fix the rights, then choose **Retry**. A draft is not live: nobody else sees the
-change until it is published. If the source took the list but Dots can't read it back yet, the
-error says "The source took the list but Dots couldn't read it back yet. Retry in a moment."
+change until it is published. If the source took the list but Sage can't read it back yet, the
+error says "The source took the list but Sage couldn't read it back yet. Retry in a moment."
 
 One change at a time: while a draft waits, **Approve request**, the role menus and the remove
 buttons are off with "<account>: a change is waiting to be published. Retry or discard it first."
 **Invite** and **Revoke** still work.
 
-If another admin publishes first, Dots refuses and says "the member list changed (now #N) while you
+If another admin publishes first, Sage refuses and says "the member list changed (now #N) while you
 were editing. Check it and make the change again." Look at the new list and redo your change. A
 draft that another list took the place of is never counted as published, even when that list's
 number is higher: the draft stays with that message until you choose **Retry** (which drops it and
@@ -885,13 +885,13 @@ admin guide)." Choose **Copy signed list**, then put the text in the file's `ros
 sops set acme-eng.enc.json '["roster"]' '"<the signed list, as a JSON string>"'
 ```
 
-Store the file as before. On **Refresh**, Dots reads the new list and drops the draft. The
+Store the file as before. On **Refresh**, Sage reads the new list and drops the draft. The
 approved person's age key is a recipient already: their join waited for it, before they had a
 request code (see **Invite** above).
 
 ### Requests with dots-admin
 
-You can read and add a request code without Dots:
+You can read and add a request code without Sage:
 
 ```bash
 dots-admin request inspect <code>
@@ -911,8 +911,8 @@ prints "This adds a PC to <name> (<Role>)." Sign and store the list as above.
 A workspace is a part of an account, such as a team or a project. Every account has a **Default**
 workspace. The list of workspaces and each member's role in them are in the signed member list. So
 creating, renaming or deleting a workspace, and setting a member's workspace roles, are signed
-edits like any other. An Owner can make them with `dots-admin`. An Admin whose Dots ID is in
-`admins` can make them in Dots, on the account's **Workspaces** tab and with **Workspaces** next to
+edits like any other. An Owner can make them with `dots-admin`. An Admin whose Sage ID is in
+`admins` can make them in Sage, on the account's **Workspaces** tab and with **Workspaces** next to
 a member on the **Members** tab. Personal workspaces are different: they are only on the PC that
 made them, and nobody signs them.
 
@@ -937,7 +937,7 @@ dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.jso
   roles, so it must list `default`.
 - `roster add` puts a new member in `default` with their account role (an Owner or Admin as admin),
   plus any `--workspace <id>=<role>` you give.
-- Deleting a workspace takes it off every member's entry. Its dots and teams move to Default on
+- Deleting a workspace takes it off every member's entry. Its sols and teams move to Default on
   every PC at the next refresh.
 
 **What a person can do.** Their account role and their workspace entry together decide it:
@@ -948,7 +948,7 @@ dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.jso
 | Member | Entry `admin` or `member`: Member rights. Entry `viewer`: Viewer rights. No entry: no access. |
 | Viewer | Viewer rights where they have an entry. No access elsewhere. |
 
-With no access, the workspace is hidden from them, and its dots refuse everything except delete
+With no access, the workspace is hidden from them, and its sols refuse everything except delete
 and turning them off: "<account>: you aren't in the <workspace> workspace. Ask an Admin or Owner
 to add you." A workspace Viewer can look but not change or run, the same as an account Viewer
 (see [Accounts](accounts.md)). A legacy account (no member list) and Personal are not narrowed
@@ -956,7 +956,7 @@ by workspaces.
 
 **Narrowing `use`.** A workspace can have `use` rules of its own. They narrow the policy's `use`
 (section 3): deny rules from both apply, and a name must pass both allow lists. Set them only with
-`dots-admin`. Dots shows them read-only on the **Workspaces** tab.
+`dots-admin`. Sage shows them read-only on the **Workspaces** tab.
 
 ```bash
 dots-admin roster workspace use roster.json payments --allow "PAY_*" --deny "PAY_ADMIN_*"
@@ -964,27 +964,27 @@ dots-admin roster workspace use roster.json payments
 ```
 
 The second line, with no `--allow` or `--deny`, clears the rules. Sign and store the list, as above.
-A dot in a workspace refuses a name its rules don't allow: "the <workspace> workspace doesn't allow
-<name>". A dot in a workspace this PC doesn't know yet can't read any account entry until the next
+A sol in a workspace refuses a name its rules don't allow: "the <workspace> workspace doesn't allow
+<name>". A sol in a workspace this PC doesn't know yet can't read any account entry until the next
 refresh. The Default workspace is exempt.
 
-**Moving dots and teams.** A dot moves between workspaces of the same account only, from the
-**Workspace** field of its editor. The person needs Member rights in both workspaces, and the dot
-must not be in a team ("<dot> is in the team <team>. Take it out of the team first."). A team's dots
-must all be in its account and workspace. A team with a stray dot shows it under **Needs attention**
-in the Inbox ("<dot> is in another workspace than the <team> team.").
+**Moving sols and teams.** A sol moves between workspaces of the same account only, from the
+**Workspace** field of its editor. The person needs Member rights in both workspaces, and the sol
+must not be in a team ("<sol> is in the team <team>. Take it out of the team first."). A team's sols
+must all be in its account and workspace. A team with a stray sol shows it under **Needs attention**
+in the Inbox ("<sol> is in another workspace than the <team> team.").
 
 ### Guardrails
 
-Guardrails mark what is critical in a workspace, so that a Member's dot can't touch it and an
-Admin's dot always asks first. They are part of the workspace's entry in the signed member list,
+Guardrails mark what is critical in a workspace, so that a Member's sol can't touch it and an
+Admin's sol always asks first. They are part of the workspace's entry in the signed member list,
 so setting them is a signed edit like any other. A workspace without `guardrails` has none: every
 list signed before guardrails keeps working as before.
 
-**Update every Dots first.** Dots 0.4.0 and older refuse a member list with `guardrails` in it, as
+**Update every Sage first.** Dots 0.4.0 and older refuse a member list with `guardrails` in it, as
 they refuse any field they don't know. Such a PC keeps the last list it accepted, or shows the
 account as **Waiting** if it has none. `dots-admin` warns when it writes or signs a list with
-guardrails, and Dots shows the same note on the **Guardrails** tab before it signs.
+guardrails, and Sage shows the same note on the **Guardrails** tab before it signs.
 
 With `dots-admin`:
 
@@ -1004,29 +1004,29 @@ dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.jso
   `--member-max` sets the ceiling. Without `--defaults` they start from the workspace's guardrails,
   or from the defaults when it has none.
 - `--off` removes them.
-- An Admin whose Dots ID is in `admins` can do the same in Dots, on the account's **Guardrails**
+- An Admin whose Sage ID is in `admins` can do the same in Sage, on the account's **Guardrails**
   tab.
 
 The fields, and the defaults:
 
 | Field | Default | Means |
 | --- | --- | --- |
-| `protected_paths` | `.github/**`, `**/migrations/**`, `infra/**`, `**/*.env*`, `**/Cargo.lock`, `**/package-lock.json`, `**/bun.lock`, `**/yarn.lock`, `**/pnpm-lock.yaml` | Files a dot may not write. Globs relative to the dot's folder: `*` within a folder, `**` across folders. Case is ignored. |
-| `protected_git` | all of `push_main`, `force_push`, `delete_branch`, `tags`, `merge_pr`, `release` | Pushing to `main` or `master` (a `git push` that doesn't name its branch counts when the dot's folder has `main` or `master` checked out, or a detached or unknown branch), force pushing, deleting a branch, making or pushing tags, `gh pr merge`, and publishing a GitHub release. |
+| `protected_paths` | `.github/**`, `**/migrations/**`, `infra/**`, `**/*.env*`, `**/Cargo.lock`, `**/package-lock.json`, `**/bun.lock`, `**/yarn.lock`, `**/pnpm-lock.yaml` | Files a sol may not write. Globs relative to the sol's folder: `*` within a folder, `**` across folders. Case is ignored. |
+| `protected_git` | all of `push_main`, `force_push`, `delete_branch`, `tags`, `merge_pr`, `release` | Pushing to `main` or `master` (a `git push` that doesn't name its branch counts when the sol's folder has `main` or `master` checked out, or a detached or unknown branch), force pushing, deleting a branch, making or pushing tags, `gh pr merge`, and publishing a GitHub release. |
 | `protected_commands` | `rm -rf`, `terraform apply`, `terraform destroy`, `kubectl apply`, `kubectl delete`, `helm install`, `helm upgrade`, `helm uninstall`, `docker push`, `npm publish`, `cargo publish`, `vercel --prod`, `netlify deploy`, `fly deploy`, `wrangler deploy`, `firebase deploy` | A command and the words it must have, in any order: `kubectl apply` also matches `kubectl -n prod apply -f x.yaml`. `rm -rf` covers `rm -fr`, `rm -r -f` and PowerShell's `Remove-Item -Recurse -Force`. |
-| `member_max_preset` | `sandboxed` | The highest tool policy a Member's dot may use: `read-only`, `sandboxed` or `trusted`. |
+| `member_max_preset` | `sandboxed` | The highest tool policy a Member's sol may use: `read-only`, `sandboxed` or `trusted`. |
 
 Every field is required when `guardrails` is there. A path must be relative, without `..`; a
 command may only hold letters, digits, spaces and `-_./=:@+`. Each list holds at most 100 entries.
 A list that breaks a rule is refused whole.
 
-**What they do.** The role that counts is the PC's role in the dot's workspace:
+**What they do.** The role that counts is the PC's role in the sol's workspace:
 
 | Role there | A protected call | Tool policy |
 | --- | --- | --- |
 | Owner, Admin | Always asks, even where the policy allows it. No rule can be saved for it. | Any. |
-| Member (also with a workspace entry `admin`) | Refused: "This needs an Admin: <what> is protected in the <workspace> workspace." It can't be approved. | Up to `member_max_preset`. A dot above it can't be saved or run by hand, and its other runs wait in the Inbox until it is lowered. |
-| Viewer | Its dots don't run. | |
+| Member (also with a workspace entry `admin`) | Refused: "This needs an Admin: <what> is protected in the <workspace> workspace." It can't be approved. | Up to `member_max_preset`. A sol above it can't be saved or run by hand, and its other runs wait in the Inbox until it is lowered. |
+| Viewer | Its sols don't run. | |
 
 Above Sandboxed means: Trusted, a default that allows more than Sandboxed's, "Always ask before
 sending or deleting" off, a missing `.git` or `.claude` deny rule, or an allow rule for a whole
@@ -1034,33 +1034,33 @@ tool (`Bash`, `Write`, `*`, `mcp__*`), an absolute path, a command that runs oth
 (`sudo`, `bash`) or code (`python`, `node`, `npx`, `pwsh`). Using your own Claude Code settings
 counts as above every ceiling. `make`, `npm run` and `npm test` stay within Sandboxed.
 
-A dot in a workspace with guardrails never reads your own Claude Code settings, and every shell
-command and file write it makes is checked by Dots. If Dots can't read the guardrails of a dot's
-workspace (the account's member list is missing, or the workspace isn't on it), the dot doesn't
-run until the account is refreshed. An allow rule for one command (`Bash(npm test:*)`), a path in the dot's folder or
+A sol in a workspace with guardrails never reads your own Claude Code settings, and every shell
+command and file write it makes is checked by Sage. If Sage can't read the guardrails of a sol's
+workspace (the account's member list is missing, or the workspace isn't on it), the sol doesn't
+run until the account is refreshed. An allow rule for one command (`Bash(npm test:*)`), a path in the sol's folder or
 one MCP tool stays within Sandboxed.
 
-**What it can't see.** Guardrails read each call as written. A script the dot writes and then runs,
+**What it can't see.** Guardrails read each call as written. A script the sol writes and then runs,
 or a program that pushes on its own (`npm run release`), is not read. Like roles, guardrails stop
-mistakes and honest use, not a person who changes their own Dots (see below).
+mistakes and honest use, not a person who changes their own Sage (see below).
 
 ### Moving a legacy org to a member list
 
 Do it in this order so nobody is locked out by surprise:
 
-1. Make sure every person has updated Dots first. An older Dots can't read a v2 policy.
-2. Make `roster.json` with every current member (ask each for their Dots ID) and sign it. Store
+1. Make sure every person has updated Sage first. An older Sage can't read a v2 policy.
+2. Make `roster.json` with every current member (ask each for their Sage ID) and sign it. Store
    it as `DOTS_ROSTER`. Policy v1 ignores it, so nothing changes yet. On OpenBao or Vault, add the
    `roster` path to each person's ACL policy (section 4).
 3. Only then make a v2 policy with `"roster": "required"` (`policy new --roster`, or copy your v1
    fields into a v2 file), sign it and store it as `DOTS_POLICY`. A v1 policy that has `roster`
    or `admins` is refused.
 
-A PC that is not on the list when v2 starts shows **Waiting** with **Copy my Dots ID**. Nothing is
+A PC that is not on the list when v2 starts shows **Waiting** with **Copy my Sage ID**. Nothing is
 wiped. Ask the person for their ID, run `roster add`, `roster sign`, store the new list, and press
 **Refresh**.
 
-If someone's saved key was lost, their Dots ID changed. Their PC waits with "this PC's Dots ID
+If someone's saved key was lost, their Sage ID changed. Their PC waits with "this PC's Sage ID
 changed. Send the new one to an Admin." Run `roster add` with the same email and the new key (the
 old key can go with `roster remove --key`), then sign and store.
 
@@ -1074,11 +1074,11 @@ dots-admin roster remove roster.json ben@acme.com
 dots-admin roster sign roster.json --key keys/policy.key --out roster.signed.json
 ```
 
-You can also use **Remove** on the **Members** tab. Store the new list. At the person's next fetch their account shows **Removed** and Dots wipes that
+You can also use **Remove** on the **Members** tab. Store the new list. At the person's next fetch their account shows **Removed** and Sage wipes that
 account's secrets on that PC. If they come back, they join again and wait for you to add them.
 
-The list only stops Dots honouring them. **Also revoke their credential at the source**, as in
-section 6 (Cutting someone off). Without that, someone running a changed Dots can still read the
+The list only stops Sage honouring them. **Also revoke their credential at the source**, as in
+section 6 (Cutting someone off). Without that, someone running a changed Sage can still read the
 source.
 
 ### What this does and does not protect
@@ -1086,13 +1086,13 @@ source.
 Protected against:
 
 - A member editing the member list or the policy on their own PC: both are signed.
-- An old list being replayed: each Dots refuses a lower `seq`.
+- An old list being replayed: each Sage refuses a lower `seq`.
 - A removed member using the account's secrets after their next refresh: the saved copy is wiped.
 - A stolen admin PC promoting others to admin: only the root key changes `admins`.
 
-Dots's local server (the webhook, MCP and `/v1` port on this PC) only answers requests addressed
+Sage's local server (the webhook, MCP and `/v1` port on this PC) only answers requests addressed
 to `127.0.0.1:PORT` or `localhost:PORT` (a tunnel for webhooks must rewrite `Host` to
-`127.0.0.1:PORT`; see [Accounts](accounts.md#the-host-check)). **API keys** for a workspace are made in Dots on each PC,
+`127.0.0.1:PORT`; see [Accounts](accounts.md#the-host-check)). **API keys** for a workspace are made in Sage on each PC,
 under the account's **API keys** tab. They are per PC and per workspace, are never in the member
 list, and nobody signs them. A key checks the person's role in its workspace on every request, so a
 role change in the list applies at once. Removing someone from the list stops their keys the same
@@ -1100,24 +1100,24 @@ way. Deleting a workspace revokes its keys. See [Accounts](accounts.md#api-keys)
 
 Not protected against:
 
-- A person patching their own Dots to ignore their role. Roles stop mistakes and honest use. The
+- A person patching their own Sage to ignore their role. Roles stop mistakes and honest use. The
   real cut-off is revoking the source credential, the same trade-off as for the vault.
 - A removed person's PC that stays offline. It keeps its saved copy until `offline_hours` run out.
 - A stolen PC while its Windows login is unlocked.
 
 ## 11. Audit records
 
-With `audit` in the policy, every PC in the account keeps a record of each variable a dot of the
+With `audit` in the policy, every PC in the account keeps a record of each variable a sol of the
 account asks for, and of each fetch of the source, and sends them to the endpoint. A record never
 holds a value. The format, the request and every field are in
 [`vault-audit-format.md`](vault-audit-format.md); that is what your receiver implements.
 
 - **What is recorded.** For each name a run asks for, at its start, for each MCP server and for
   the shell: `resolved`, or `denied` with the reason. A Library **Check** in the account records
-  too, without a dot. Each fetch records `fetched`, `offline`, `revoked`, `expired` or
-  `policy_invalid`. Personal dots record nothing.
+  too, without a sol. Each fetch records `fetched`, `offline`, `revoked`, `expired` or
+  `policy_invalid`. Personal sols record nothing.
 - **The token.** `token_entry` names an ordinary entry of the account, for example
-  `DOTS_AUDIT_TOKEN`. Every member's Dots reads it to send; grant it to no dot. A PC that gives
+  `DOTS_AUDIT_TOKEN`. Every member's Sage reads it to send; grant it to no sol. A PC that gives
   no values (access revoked, offline with no copy, not on the member list) keeps its records
   until it has the token again. It remembers the last policy's endpoint and token entry name
   (never the token), so after a restart with no saved copy its records still queue.

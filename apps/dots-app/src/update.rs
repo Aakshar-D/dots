@@ -180,12 +180,12 @@ impl UpdateState {
     ) -> dots_core::Result<Next> {
         if self.installing {
             return Err(dots_core::Error::Conflict(
-                "An install has begun; Dots is about to restart.".into(),
+                "An install has begun; Sage is about to restart.".into(),
             ));
         }
         if self.waiting {
             return Err(dots_core::Error::Conflict(format!(
-                "Dots is already waiting to install {}. Cancel that first.",
+                "Sage is already waiting to install {}. Cancel that first.",
                 self.ready.as_deref().unwrap_or("an update")
             )));
         }
@@ -614,7 +614,7 @@ pub trait InstallSteps {
 /// restores the backup instead of making one; any failure after that puts the database back.
 pub async fn install(steps: &impl InstallSteps, purpose: Purpose, backup: Option<&Path>) {
     if !steps.close_runtime().await {
-        steps.restart_current("Dots could not close its database in time, so no backup was made.");
+        steps.restart_current("Sage could not close its database in time, so no backup was made.");
         return;
     }
     if purpose == Purpose::GoBack {
@@ -764,13 +764,13 @@ mod tests {
         let mut s = UpdateState::new(None, vec![]);
         s.offer("0.2.0");
         assert_eq!(s.restart(&[]).unwrap(), Next::Install);
-        s.abandon("The downloaded update was lost; Dots downloads it again.");
+        s.abandon("The downloaded update was lost; Sage downloads it again.");
         assert!(!s.holds_runs());
         assert_eq!(s.ready_version(), None);
         assert_eq!(
             s.note(&[]),
             UpdateNote::Failed {
-                error: "The downloaded update was lost; Dots downloads it again.".into()
+                error: "The downloaded update was lost; Sage downloads it again.".into()
             }
         );
         assert!(s.wants("0.2.0"), "the next check downloads it again");
@@ -779,7 +779,7 @@ mod tests {
             s.note(&[]),
             ready(
                 &[],
-                Some("The downloaded update was lost; Dots downloads it again.")
+                Some("The downloaded update was lost; Sage downloads it again.")
             )
         );
     }
@@ -1172,7 +1172,7 @@ mod tests {
             steps.done(),
             [
                 "close",
-                "restart: Dots could not close its database in time, so no backup was made."
+                "restart: Sage could not close its database in time, so no backup was made."
             ]
         );
         let steps = Steps::new("back up");

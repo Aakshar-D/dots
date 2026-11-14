@@ -1167,7 +1167,7 @@ fn powershell_hits(words: &[String], depth: usize, hits: &mut Vec<Hit>) {
             match decoded {
                 Some(script) => line_hits(&script, depth + 1, hits),
                 None => hits.push(Hit::unclear(
-                    "run an encoded PowerShell command that Dots cannot read",
+                    "run an encoded PowerShell command that Sage cannot read",
                 )),
             }
             return;

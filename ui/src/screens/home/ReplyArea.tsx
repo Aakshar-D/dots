@@ -207,7 +207,7 @@ export function ReplyArea(props: {
       {closed && (
         <p className="flex items-center gap-2 px-1 text-muted-foreground">
           <span className="flex-1">
-            This topic cannot be continued: its last run ended before the dot had a session to
+            This topic cannot be continued: its last run ended before the sol had a session to
             resume.
           </span>
           <Button size="sm" variant="outline" onClick={() => onPick({ kind: "new" })}>

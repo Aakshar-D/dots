@@ -97,12 +97,12 @@ describe("the workflow builder", () => {
   it("shows a schedule's task and project, and a branch on project", async () => {
     open(nightly);
     expect(await screen.findByRole("group", { name: "Trigger" })).toHaveTextContent(
-      "Update the dependencies. · on Dots",
+      "Update the dependencies. · on Sage",
     );
     const branch = card("Step 3: Which project");
     expect(branch).toHaveTextContent("Goes on by the project");
     expect(
-      within(within(branch).getByRole("region", { name: "Path Dots" })).getByRole("group", {
+      within(within(branch).getByRole("region", { name: "Path Sage" })).getByRole("group", {
         name: "Step 3.1: Ship",
       }),
     ).toHaveTextContent("Pushes the branches and opens a pull request");
@@ -135,7 +135,7 @@ describe("the workflow builder", () => {
     await user.click(screen.getByRole("button", { name: "Add step before Work" }));
     await user.click(screen.getByRole("menuitem", { name: "Branch" }));
     const branch = card("Step 1: Branch");
-    expect(within(branch).getByRole("region", { name: "Path Dots" })).toBeInTheDocument();
+    expect(within(branch).getByRole("region", { name: "Path Sage" })).toBeInTheDocument();
     expect(within(branch).getByRole("region", { name: "Path Site" })).toBeInTheDocument();
 
     const site = within(within(branch).getByRole("region", { name: "Path Site" }));
@@ -219,7 +219,7 @@ describe("the workflow builder", () => {
       return allSteps(spec.definition.steps).some((s) => s.kind === "check") ? null : noCheck;
     });
     await user.click(await screen.findByRole("button", { name: "Delete Review" }));
-    const ship = within(screen.getByRole("region", { name: "Path Dots" })).getByRole("group", {
+    const ship = within(screen.getByRole("region", { name: "Path Sage" })).getByRole("group", {
       name: "Step 2.1: Ship",
     });
     await waitFor(() => expect(ship).toHaveAccessibleDescription(noCheck.message));

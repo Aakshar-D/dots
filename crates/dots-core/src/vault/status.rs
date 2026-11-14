@@ -76,7 +76,7 @@ impl Vault {
         for (key, names) in &dot.spec.variables.0 {
             // A stored dot's grants were validated when it was saved.
             let Ok(consumer) = Consumer::parse(key) else {
-                tracing::warn!("dot {:?} grants to {key:?}, which is no consumer", dot.id);
+                tracing::warn!("sol {:?} grants to {key:?}, which is no consumer", dot.id);
                 continue;
             };
             granted.extend(names.iter().map(|name| (consumer.clone(), name.clone())));

@@ -167,7 +167,7 @@ fn refused<T: std::fmt::Debug>(result: Result<T, Error>) -> String {
 }
 
 const VIEWER_PAYMENTS: &str =
-    "Acme Engineering: a Viewer in the Payments workspace can't create or change dots. Ask an Admin or Owner.";
+    "Acme Engineering: a Viewer in the Payments workspace can't create or change sols. Ask an Admin or Owner.";
 
 #[tokio::test]
 async fn create_dot_in_workspace() {
@@ -302,7 +302,7 @@ async fn move_needs_member_rights_in_both() {
     .await;
     assert_eq!(
         refused(t.rt.move_dot(&dot, "payments").await),
-        "Acme Engineering: a Viewer in the Default workspace can't create or change dots. Ask an Admin or Owner."
+        "Acme Engineering: a Viewer in the Default workspace can't create or change sols. Ask an Admin or Owner."
     );
     // Member in both.
     t.become_(
@@ -326,7 +326,7 @@ async fn team_members_share_workspace() {
     let b = t.personal_dot("beta", None).await;
     assert_eq!(
         invalid(t.rt.teams().create(&team("crew", "ops", &[&a, &b])).await),
-        "dot 'beta' is in another workspace than the team"
+        "sol 'beta' is in another workspace than the team"
     );
     let made =
         t.rt.teams()
@@ -340,7 +340,7 @@ async fn team_members_share_workspace() {
                 .update(&made.id, &team("crew", "ops", &[&a, &b]))
                 .await
         ),
-        "dot 'beta' is in another workspace than the team"
+        "sol 'beta' is in another workspace than the team"
     );
     // The workspace is fixed once the team is made, like its account.
     let kept =

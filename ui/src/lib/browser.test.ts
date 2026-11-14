@@ -20,7 +20,7 @@ const policy = (rules: [string, Action][]): Policy => ({
   rules: rules.map(([tool, action]) => ({ tool, action })),
 });
 
-describe("the sites a dot's rules approve", () => {
+describe("the sites a sol's rules approve", () => {
   it("lists the allowed sites with their risky actions, and removes one", () => {
     const p = policy([
       ["Read", "allow"],
@@ -69,7 +69,7 @@ describe("a browser approval's card", () => {
       'wants to type into "Search" on shop.com',
     );
     expect(askText(ask({ labels: [null] }))).toBe(
-      "wants to click an element Dots could not identify on shop.com",
+      "wants to click an element Sage could not identify on shop.com",
     );
     expect(askText(ask({ site: null, page: "about:blank" }))).toBe(
       'wants to click "Pay now" on a page with no site',
@@ -111,24 +111,24 @@ describe("a browser approval's card", () => {
 describe("a browser call in the run view", () => {
   const done = (output: string) => ({ output, isError: false });
 
-  it("is the lines Dots put in front of its result", () => {
+  it("is the lines Sage put in front of its result", () => {
     expect(
       browserLine(
         "mcp__browser__browser_navigate",
         { url: "https://shop.com/cart" },
-        done("Dots: Opened shop.com/cart\n### Ran Playwright code"),
+        done("Sage: Opened shop.com/cart\n### Ran Playwright code"),
       ),
     ).toBe("Opened shop.com/cart");
     expect(
       browserLine(
         "mcp__browser__browser_click",
         { target: "e5" },
-        done('Dots: Clicked "Add to cart"\nDots: Downloaded statement.pdf\n### Page'),
+        done('Sage: Clicked "Add to cart"\nSage: Downloaded statement.pdf\n### Page'),
       ),
     ).toBe('Clicked "Add to cart" · Downloaded statement.pdf');
     // A line further down is the page's, not Dots'.
     expect(
-      browserLine("mcp__browser__browser_click", { target: "e5" }, done("### Page\nDots: Paid")),
+      browserLine("mcp__browser__browser_click", { target: "e5" }, done("### Page\nSage: Paid")),
     ).toBe("Click");
     expect(
       browserLine("mcp__browser__browser_navigate", { url: "https://shop.com/cart" }, null),

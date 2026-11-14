@@ -508,7 +508,7 @@ impl WorkspaceManager {
         };
         let Some(folder) = folder else {
             return Err(Error::Invalid(format!(
-                "refusing to use {}: not a dots worktree",
+                "refusing to use {}: not a sols worktree",
                 prepared.path.display()
             )));
         };
@@ -521,7 +521,7 @@ impl WorkspaceManager {
             .is_some_and(|(dot, run)| !dot.is_empty() && run == folder);
         if !ours {
             return Err(Error::Invalid(format!(
-                "refusing to use branch {branch}: not the dots branch of worktree {folder}"
+                "refusing to use branch {branch}: not the sols branch of worktree {folder}"
             )));
         }
         // The base commit goes to git as an argument: only a full commit id is one.

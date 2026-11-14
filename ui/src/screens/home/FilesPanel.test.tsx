@@ -84,8 +84,8 @@ describe("the Files panel", () => {
     expect(view.queryByRole("button", { name: "Show out.md in folder" })).toBeNull();
   });
 
-  it("a file Dots doesn't open is not a button, says why, and can be shown in its folder", async () => {
-    const why = "Dots only opens documents, images and media. Use Show in folder.";
+  it("a file Sage doesn't open is not a button, says why, and can be shown in its folder", async () => {
+    const why = "Sage only opens documents, images and media. Use Show in folder.";
     withFiles([file({ path: "C:\\work\\run.ps1", name: "run.ps1", can_open: false })]);
     renderApp(`/home/${dot.id}`);
     const view = within(await panel());

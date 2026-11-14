@@ -153,7 +153,7 @@ export function settingsErrors(
     errors.archive = `Days must be a whole number, 0 to ${MAX_AUTO_ARCHIVE_DAYS} (0 never archives).`;
   }
   if (draft.default_model !== undefined && draft.default_model.trim() === "") {
-    errors.model = "Name the model new dots start with.";
+    errors.model = "Name the model new sols start with.";
   }
   const phonePort = draft.phone_port;
   if (phonePort !== undefined) {
@@ -197,7 +197,7 @@ function HelpSection() {
   return (
     <Section title="Help">
       <p className="text-xs text-muted-foreground">
-        Something not working? Make a report to send to whoever helps you with Dots. You see all
+        Something not working? Make a report to send to whoever helps you with Sage. You see all
         of it before you copy or save it.
       </p>
       <div>
@@ -300,7 +300,7 @@ function Form({
         .finally(() => invalidate(qc, keys.updateStatus));
       // The restart banner comes from the status.
       invalidate(qc, keys.status);
-      toast.success(saved.restart_required ? "Saved. Restart Dots to apply." : "Saved");
+      toast.success(saved.restart_required ? "Saved. Restart Sage to apply." : "Saved");
     },
   });
   // Declining a native confirmation is the user's own answer, not a failure. The answer names
@@ -386,7 +386,7 @@ function Form({
               checked={draft.autostart}
               onCheckedChange={(autostart) => set({ autostart })}
             />
-            <Label htmlFor="settings-autostart">Start Dots when I sign in</Label>
+            <Label htmlFor="settings-autostart">Start Sage when I sign in</Label>
           </div>
           <div className="flex items-center gap-2">
             <Switch
@@ -394,9 +394,9 @@ function Form({
               checked={draft.notify_on_notes}
               onCheckedChange={(notify_on_notes) => set({ notify_on_notes })}
             />
-            <Label htmlFor="settings-notify-notes">Notify on dot notes</Label>
+            <Label htmlFor="settings-notify-notes">Notify on sol notes</Label>
           </div>
-          <p className="text-xs text-muted-foreground">Questions from dots always notify.</p>
+          <p className="text-xs text-muted-foreground">Questions from sols always notify.</p>
           <div className="flex items-center gap-2">
             <Switch
               id="settings-paused"
@@ -422,7 +422,7 @@ function Form({
 
         <Section title="Connectors">
           <p className="text-xs text-muted-foreground">
-            Connect Gmail, GitHub, Notion and other apps so your dots can use them, with a key or a
+            Connect Gmail, GitHub, Notion and other apps so your sols can use them, with a key or a
             sign-in.
           </p>
           <div>
@@ -449,7 +449,7 @@ function Form({
             label="Global instructions"
             htmlFor="settings-global"
             error={tried ? errors.global : undefined}
-            hint={`Every dot's first prompt starts with these. A dot can switch them off in its editor. ${utf8Bytes(draft.global_instructions)} of ${LIMITS.max_global_instructions} bytes.`}
+            hint={`Every sol's first prompt starts with these. A sol can switch them off in its editor. ${utf8Bytes(draft.global_instructions)} of ${LIMITS.max_global_instructions} bytes.`}
           >
             <Textarea
               id="settings-global"
@@ -476,7 +476,7 @@ function Form({
               options={claudeModels.options}
             />
             <p className="text-xs text-muted-foreground">
-              New dots start with this model. Existing dots keep theirs; change a dot's model in
+              New sols start with this model. Existing sols keep theirs; change a sol's model in
               its editor or above its conversation.
             </p>
           </Field>
@@ -504,7 +504,7 @@ function Form({
           {claude?.mismatch && (
             <div className="flex items-center gap-3">
               <p className="flex-1 text-xs text-needs">
-                This version has not been tested with Dots. If your dots run as expected, mark it
+                This version has not been tested with Sage. If your sols run as expected, mark it
                 as tested.
               </p>
               <Button
@@ -547,10 +547,10 @@ function Form({
             <Label htmlFor="settings-check-results">Check every result</Label>
           </div>
           <p className="text-xs text-muted-foreground">
-            Before a Claude dot's answer reaches you, a quick second look checks it did what was
+            Before a Claude sol's answer reaches you, a quick second look checks it did what was
             asked and flags concerns. It has no tools, takes a few seconds, and its usage counts
-            toward the run. Short replies, local-model dots and team workflow steps are not
-            checked. A dot can turn it off in its editor.
+            toward the run. Short replies, local-model sols and team workflow steps are not
+            checked. A sol can turn it off in its editor.
           </p>
           <Field
             label="Checker model"
@@ -570,7 +570,7 @@ function Form({
         </Section>
         <Section title="Auto model">
           <p className="text-xs text-muted-foreground">
-            A dot set to Auto picks a size of model for each task: small for quick checks and
+            A sol set to Auto picks a size of model for each task: small for quick checks and
             light requests, large for hard work such as building, refactoring or debugging code,
             standard for the rest. Choose the model of each size.
           </p>
@@ -598,7 +598,7 @@ function Form({
               checked={draft.hold_enabled}
               onCheckedChange={(hold_enabled) => set({ hold_enabled })}
             />
-            <Label htmlFor="settings-hold">Hold background dots when Claude usage is high</Label>
+            <Label htmlFor="settings-hold">Hold background sols when Claude usage is high</Label>
           </div>
           <p className="text-xs text-muted-foreground">
             Scheduled, watcher, follow-up, webhook and API runs wait while your Claude usage is at
@@ -649,7 +649,7 @@ function Form({
             label="Port"
             htmlFor="settings-port"
             error={tried ? errors.port : undefined}
-            hint="Webhooks and the Claude CLI's permission prompts reach Dots on 127.0.0.1 at this port. Takes effect after a restart."
+            hint="Webhooks and the Claude CLI's permission prompts reach Sage on 127.0.0.1 at this port. Takes effect after a restart."
           >
             <Input
               id="settings-port"
@@ -674,10 +674,10 @@ function Form({
             />
           </Field>
           <Field
-            label="Quiet limit for every dot"
+            label="Quiet limit for every sol"
             htmlFor="settings-quiet"
             error={errors.quiet}
-            hint="If a run shows no output for this many minutes, Dots asks you; at twice this long it stops the run. A dot can set its own."
+            hint="If a run shows no output for this many minutes, Sage asks you; at twice this long it stops the run. A sol can set its own."
           >
             <Input
               id="settings-quiet"
@@ -691,7 +691,7 @@ function Form({
             label="Archive topics idle for (days)"
             htmlFor="settings-archive"
             error={errors.archive}
-            hint="A topic with no messages or runs for this many days moves to History's Archived list. A dot's current topic is never archived. 0 never archives."
+            hint="A topic with no messages or runs for this many days moves to History's Archived list. A sol's current topic is never archived. 0 never archives."
           >
             <Input
               id="settings-archive"
@@ -708,9 +708,9 @@ function Form({
         <Section title="Context">
           <p className="text-xs text-muted-foreground">
             A conversation that goes on sends everything said so far with each message, which
-            uses up your Claude plan. Dots compacts a Claude conversation (a summary takes the
+            uses up your Claude plan. Sage compacts a Claude conversation (a summary takes the
             place of old messages) when it is fairly full, and starts a fresh session with a
-            summary when it is very full. A dot can have its own rules.
+            summary when it is very full. A sol can have its own rules.
           </p>
           <ContextRulesFields
             id="settings-context"
@@ -733,13 +733,13 @@ function Form({
             <Label htmlFor="settings-phone">Answer from my phone</Label>
           </div>
           <p className="text-xs text-muted-foreground">
-            Dots serves a small page to phones you pair, showing what waits for you in the Inbox:
-            approvals, questions from dots and runs waiting for usage. It listens only on this PC's
+            Sage serves a small page to phones you pair, showing what waits for you in the Inbox:
+            approvals, questions from sols and runs waiting for usage. It listens only on this PC's
             address on your home network, never the internet, and only while this is on. Use it only
             on a network you trust, such as your home Wi-Fi.
           </p>
           <p className="text-xs text-muted-foreground">
-            The first time it turns on, Windows may ask whether Dots may use the network. Allow it for
+            The first time it turns on, Windows may ask whether Sage may use the network. Allow it for
             private networks only. Turning this off closes it at once.
           </p>
           {draft.phone_enabled !== stored.phone_enabled && (
@@ -771,9 +771,9 @@ function Form({
       <>
         <Section title="Local endpoints">
           <p className="text-xs text-muted-foreground">
-            OpenAI-compatible servers that local dots can use, such as LM Studio or Ollama. Any
+            OpenAI-compatible servers that local sols can use, such as LM Studio or Ollama. Any
             http:// host is accepted, so a model server on your network works too. Requests carry
-            your dots' instructions and file contents: list only servers you trust.
+            your sols' instructions and file contents: list only servers you trust.
           </p>
           {draft.local_endpoints.length > 0 && (
             <ul className="flex flex-col gap-2">
@@ -910,10 +910,10 @@ function SpendingSection(props: {
   return (
     <Section title="Spending caps">
       <p className="text-xs text-muted-foreground">
-        When every dot together reaches a cap, new runs wait until the day (or month) ends or you
+        When every sol together reaches a cap, new runs wait until the day (or month) ends or you
         raise the cap; a run that goes over is stopped. Your own chats can run once anyway. Days
         start at local midnight. Costs are estimates: a Claude subscription does not bill per run,
-        so this is what the runs would cost on the API. Leave a field empty for no cap. A dot can
+        so this is what the runs would cost on the API. Leave a field empty for no cap. A sol can
         have its own daily caps.
       </p>
       {spend && (

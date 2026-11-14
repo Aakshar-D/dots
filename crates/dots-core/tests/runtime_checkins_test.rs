@@ -171,7 +171,7 @@ async fn a_reply_to_a_busy_thread_is_refused_with_the_words_of_chat() {
     let refused = t.rt.reply(&question.id, "yes").await;
     assert!(
         matches!(&refused, Err(Error::Conflict(m))
-            if m.starts_with("the dot is still working on this chat")),
+            if m.starts_with("the sol is still working on this chat")),
         "{refused:?}"
     );
     t.store()

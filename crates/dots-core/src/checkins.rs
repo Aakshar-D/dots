@@ -52,7 +52,7 @@ const ASK_DESCRIPTION: &str = "Ask the person a question, then finish your turn:
 const FOLLOW_UP_DESCRIPTION: &str = "Schedule a run of your own that continues this \
     conversation later, for work that has to wait: a build, a reply, a date. Give `note`, what \
     to do then, and either `at` (RFC 3339 with an offset) or `in` (a whole number and m, h or \
-    d, such as 90m, 2h or 1d). It must be 5 minutes to 30 days away, and a dot has at most 3 \
+    d, such as 90m, 2h or 1d). It must be 5 minutes to 30 days away, and a sol has at most 3 \
     waiting.";
 
 /// One of the three check-in tools.
@@ -461,11 +461,11 @@ pub(crate) fn continuation(
 
 /// What a reply or a chat message is told while an app the person accepted in the thread is
 /// being added (`Runtime::decide_app_proposal`).
-pub const DECIDING: &str = "Dots is still adding the app you accepted in this chat; send your \
+pub const DECIDING: &str = "Sage is still adding the app you accepted in this chat; send your \
                             message again in a moment";
 
 /// What the Add button is told when the thread is already adding an app.
-pub const ADDING: &str = "Dots is still adding this app; wait until it has finished";
+pub const ADDING: &str = "Sage is still adding this app; wait until it has finished";
 
 /// The refusal of a reply to a thread that has not ended, in the words `Runtime::chat` gives.
 pub fn thread_busy(status: RunStatus) -> Error {
@@ -475,7 +475,7 @@ pub fn thread_busy(status: RunStatus) -> Error {
                 "this chat is waiting for an approval; answer it, then send your message again"
             }
             _ => {
-                "the dot is still working on this chat; wait until it has finished, then send \
+                "the sol is still working on this chat; wait until it has finished, then send \
                  your message again"
             }
         }

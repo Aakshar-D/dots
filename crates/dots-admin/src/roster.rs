@@ -520,7 +520,7 @@ fn guardrail_lines(g: &Guardrails) -> Vec<String> {
         ),
         format!("protected commands: {}", none(g.protected_commands.clone())),
         format!(
-            "highest policy of a Member's dot: {}",
+            "highest policy of a Member's sol: {}",
             preset_label(g.member_max_preset)
         ),
     ]
@@ -758,17 +758,17 @@ fn verify_command(args: &[String], io: &mut Io<'_>) -> Result<()> {
     }
     let signed = read_file(path, "the signed member list")?;
     let accepted = verify_roster(signed.trim(), &public_key, args.all("admin"), org)
-        .map_err(|e| failed(format!("a Dots client would refuse it: {e}")))?;
+        .map_err(|e| failed(format!("a Sage client would refuse it: {e}")))?;
     say(
         io.out,
         &format!(
-            "ok: a Dots client in org '{org}' accepts this member list, signed by key {}",
+            "ok: a Sage client in org '{org}' accepts this member list, signed by key {}",
             key_fingerprint(&accepted.signer).map_err(core_failed)?
         ),
     )?;
     summarize(&accepted.roster, io)?;
     say(
         io.out,
-        "Dots refuses it all the same if it has accepted a member list with a higher number.",
+        "Sage refuses it all the same if it has accepted a member list with a higher number.",
     )
 }

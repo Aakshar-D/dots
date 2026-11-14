@@ -26,7 +26,7 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
-const BAD_KEY: &str = "That API key isn't valid. Make a new one in Dots.";
+const BAD_KEY: &str = "That API key isn't valid. Make a new one in Sage.";
 const OUTSIDE: &str =
     "Acme Engineering: you aren't in the Payments workspace. Ask an Admin or Owner to add you.";
 const NOT_FOUND: &str = "Not found.";
@@ -491,7 +491,7 @@ async fn role_change_refuses_existing_key() {
     assert_eq!(
         body,
         error(
-            "Acme Engineering: a Viewer in the Payments workspace can't run dots. Ask an Admin or Owner."
+            "Acme Engineering: a Viewer in the Payments workspace can't run sols. Ask an Admin or Owner."
         )
     );
     assert_eq!(t.runs_of(&dot).await, before, "nothing queued");
@@ -519,7 +519,7 @@ async fn disabled_dot_is_409() {
     let (status, body) = t.trigger(&dot, &key, "").await;
     assert_eq!(
         (status, body),
-        (StatusCode::CONFLICT, error("dot is disabled"))
+        (StatusCode::CONFLICT, error("sol is disabled"))
     );
     assert_eq!(t.runs_of(&dot).await, 0);
     t.rt.shutdown();

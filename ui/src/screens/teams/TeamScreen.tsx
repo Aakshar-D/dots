@@ -122,7 +122,7 @@ function DeleteTeam({ team, inFlight }: { team: Team; inFlight: number }) {
       title={`Delete ${team.name}?`}
       description={
         `Its projects, workflows and workflow runs are deleted with it. Runs in flight are ` +
-        `stopped first${inFlight > 0 ? `: ${plural(inFlight, "run")} now` : ""}. The dots and ` +
+        `stopped first${inFlight > 0 ? `: ${plural(inFlight, "run")} now` : ""}. The sols and ` +
         `the project folders stay.`
       }
       confirmLabel="Delete team"

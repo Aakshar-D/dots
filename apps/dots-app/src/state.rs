@@ -62,7 +62,7 @@ impl AppState {
     pub fn rt(&self) -> Result<Arc<Runtime>, CmdError> {
         self.runtime
             .clone()
-            .map_err(|_| CmdError::internal("Dots did not start; see the startup error"))
+            .map_err(|_| CmdError::internal("Sage did not start; see the startup error"))
     }
 
     /// True only when the runtime started: then the tray exists and closing the window hides it.

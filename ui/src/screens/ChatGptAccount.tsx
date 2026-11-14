@@ -72,7 +72,7 @@ export function ChatGptAccount() {
       ) : (
         <>
           <p className="text-muted-foreground">
-            Sign into Dots with your ChatGPT account.
+            Sign into Sage with your ChatGPT account.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Button type="button" disabled={!account.data?.configured || signingIn || signingOut}
@@ -92,7 +92,7 @@ export function ChatGptAccount() {
         </>
       )}
       <p className="text-xs text-muted-foreground">
-        Sign-in lasts until you quit Dots or for eight hours. Account changes apply immediately.
+        Sign-in lasts until you quit Sage or for eight hours. Account changes apply immediately.
       </p>
     </fieldset>
   );

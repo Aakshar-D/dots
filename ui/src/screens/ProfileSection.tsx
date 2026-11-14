@@ -36,12 +36,12 @@ export function ProfileSection() {
     <fieldset aria-label="Profile" className="flex max-w-3xl flex-col gap-3 rounded-lg border p-4">
       <legend className="px-1 text-sm font-semibold">Profile</legend>
       <p className="text-xs text-muted-foreground">
-        Your Dots ID identifies this install. Share it with an account's admin to be added.
+        Your Sage ID identifies this install. Share it with an account's admin to be added.
       </p>
       {identity.isError && <ErrorNote error={identity.error} />}
       {saved && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm text-muted-foreground">Dots ID</span>
+          <span className="text-sm text-muted-foreground">Sage ID</span>
           <code className="font-mono text-sm">{saved.fingerprint}</code>
           <CopyDotsIdButton />
         </div>

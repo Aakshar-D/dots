@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Dots listens when you talk to Open Dot. Audio stays on this Mac.</string>
+	<string>Sage listens when you talk to Open Sage. Audio stays on this Mac.</string>
 </dict>
 </plist>

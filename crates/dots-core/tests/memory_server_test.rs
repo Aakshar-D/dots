@@ -166,7 +166,7 @@ async fn dots_own_server_serves_the_memory_tools_for_the_runs_dot() {
     let other = claude_dot(&e, "other", |_| {}).await;
     let theirs = e
         .memories
-        .add(&other.id, "Another dot's fact.")
+        .add(&other.id, "Another sol's fact.")
         .await
         .unwrap();
     let persons = e.memories.add(&dot.id, "Sends on Fridays.").await.unwrap();
@@ -261,7 +261,7 @@ async fn dots_own_server_checks_each_memory_call_against_the_dots_policy() {
     let (_, secret) = registered(&e, &denying).await;
     let denied = call(&e, &secret, "recall", json!({})).await;
     assert!(
-        refused(&denied).contains("Denied by the policy of dot 'denying'"),
+        refused(&denied).contains("Denied by the policy of sol 'denying'"),
         "{denied}"
     );
     // An ask rule wins over the preset's allow: with no wait, the call parks on an approval

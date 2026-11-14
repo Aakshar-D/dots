@@ -100,10 +100,10 @@ pub enum AskFor {
 const GONE: &str = "I can't find that one. It may already be handled.";
 /// Said when the runtime finds the record decided or gone.
 pub const HANDLED: &str = "That one is already handled.";
-const WHICH_DOT: &str = "Which dot did you mean?";
-const NO_DOT: &str = "I can't find that dot.";
+const WHICH_DOT: &str = "Which sol did you mean?";
+const NO_DOT: &str = "I can't find that sol.";
 /// Said when the runtime no longer finds a dot that was in the picture.
-pub const DOT_GONE: &str = "I can't find that dot anymore.";
+pub const DOT_GONE: &str = "I can't find that sol anymore.";
 const CANT_OPEN: &str = "I can't open that.";
 const DIDNT_CATCH: &str = "I didn't catch what to do with that. Say it another way?";
 /// Longest question of the model or the setup agent that is said, in bytes.
@@ -291,7 +291,7 @@ pub(crate) const APPROVE_THIS: &str = "Approve this request?";
 pub(crate) const DENY_THIS: &str = "Deny this request?";
 pub(crate) const SEND_MESSAGE: &str = "Send this message?";
 pub(crate) const SEND_ANSWER: &str = "Send this answer?";
-pub(crate) const CREATE_THIS: &str = "Create this dot?";
+pub(crate) const CREATE_THIS: &str = "Create this sol?";
 
 /// Whether an approval has no target to say: only its tool would be heard.
 fn no_target(line: &ApprovalLine) -> bool {
@@ -580,7 +580,7 @@ fn said_for(e: Error, dot_name: &str) -> String {
         Error::Conflict(_) => format!(
             "{} is still working on that. Try again when it finishes.",
             if dot_name.is_empty() {
-                "The dot".to_string()
+                "The sol".to_string()
             } else {
                 name(dot_name)
             }
@@ -1124,7 +1124,7 @@ mod tests {
         assert_eq!(
             plan(&wish, &p, &v),
             Step::Ask {
-                question: "Which dot did you mean?".into(),
+                question: "Which sol did you mean?".into(),
                 options: vec!["Deploy watcher".into()],
                 then: AskFor::Dot {
                     wish: wish.clone(),
@@ -1139,7 +1139,7 @@ mod tests {
             here: false,
         };
         let Step::Ask { options, then, .. } = plan(&wish, &p, &v) else {
-            panic!("an unknown dot asks");
+            panic!("an unknown sol asks");
         };
         assert_eq!(
             options,
@@ -1160,7 +1160,7 @@ mod tests {
         // no dots at all
         assert_eq!(
             plan(&Wish::Run { d: "d1".into() }, &Picture::default(), &v),
-            Step::Say("I can't find that dot.".into())
+            Step::Say("I can't find that sol.".into())
         );
     }
 
@@ -1512,7 +1512,7 @@ mod tests {
         );
         assert_eq!(
             send_refused(conflict(crate::checkins::DECIDING), "Research"),
-            "Dots is still adding the app you accepted in this chat; send your message again \
+            "Sage is still adding the app you accepted in this chat; send your message again \
              in a moment."
         );
         assert_eq!(
@@ -1525,12 +1525,12 @@ mod tests {
         let long = send_refused(conflict(&"ü".repeat(200)), "Research");
         assert!(long.len() <= 161, "{}", long.len());
         assert_eq!(
-            send_refused(Error::NotFound("dot x".into()), "Research"),
-            "I can't find that dot anymore."
+            send_refused(Error::NotFound("sol x".into()), "Research"),
+            "I can't find that sol anymore."
         );
         assert_eq!(
-            run_refused(Error::NotFound("dot x".into()), "Research"),
-            "I can't find that dot anymore."
+            run_refused(Error::NotFound("sol x".into()), "Research"),
+            "I can't find that sol anymore."
         );
         assert_eq!(
             run_refused(Error::Conflict("busy".into()), "Research"),
@@ -1541,8 +1541,8 @@ mod tests {
     #[test]
     fn plain_errors_drop_ids() {
         assert_eq!(
-            plain_error("run 01KA2B3C4D5E6F7G8H9J0K1M2N belongs to a different dot"),
-            "run belongs to a different dot"
+            plain_error("run 01KA2B3C4D5E6F7G8H9J0K1M2N belongs to a different sol"),
+            "run belongs to a different sol"
         );
         assert_eq!(plain_error("line\nbreak"), "line break");
         assert_eq!(

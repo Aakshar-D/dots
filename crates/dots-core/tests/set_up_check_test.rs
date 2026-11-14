@@ -353,7 +353,7 @@ fn proposal_name_repair() {
 
     let mut p = proposal();
     p.name = "!!!".into();
-    assert_eq!(check_proposal(p, &ctx(), true).unwrap().name, "New dot");
+    assert_eq!(check_proposal(p, &ctx(), true).unwrap().name, "New sol");
 
     let mut p = proposal();
     p.name = format!("{} b", "a".repeat(63));
@@ -421,7 +421,7 @@ fn instructions_name_the_rules() {
 fn prompt_says_what_each_preset_lets_the_dot_do() {
     for part in [
         // A read-only dot's tools, and what it cannot do with them.
-        "A \"read-only\" dot can only use Read, Glob and Grep",
+        "A \"read-only\" sol can only use Read, Glob and Grep",
         "It cannot run commands, so it cannot see file dates or sizes",
         "Glob lists files newest first",
         // Instructions keep to the preset.
@@ -429,7 +429,7 @@ fn prompt_says_what_each_preset_lets_the_dot_do() {
         // A task that needs more: sandboxed with a note, or a note of what it cannot do.
         "When the task needs file dates, sizes or commands, pick \"sandboxed\"",
         "say in \"notes\" that each command will ask for approval",
-        "say in \"notes\" what the dot cannot do",
+        "say in \"notes\" what the sol cannot do",
     ] {
         assert!(SETUP_INSTRUCTIONS.contains(part), "missing {part:?}");
     }

@@ -152,7 +152,7 @@ describe("the line a group of tool steps shows as", () => {
       ),
     ).toBe("Used Memory › remember 2 times · Used Memory › recall");
     expect(stepsLine([step("mcp__dots__remember", { text: "A fact." })], none)).toBe(
-      "Used dots › remember",
+      "Used Sage › remember",
     );
   });
 });

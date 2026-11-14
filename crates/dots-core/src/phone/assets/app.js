@@ -255,7 +255,7 @@
     fill("questions", "questions-box", questions, questionCard);
     fill("held", "held-box", held, heldCard);
     $("empty").hidden = approvals.length + questions.length + held.length > 0;
-    document.title = live.size > 0 ? "(" + live.size + ") Dots" : "Dots";
+    document.title = live.size > 0 ? "(" + live.size + ") Sage" : "Sage";
     if (focused) {
       const again = $(focused);
       if (again) {
