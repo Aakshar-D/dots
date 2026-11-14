@@ -175,7 +175,9 @@ impl Store {
         org_id: &str,
         roster: &[Workspace],
     ) -> Result<Vec<String>> {
-        let mut tx = self.pool.begin().await?;
+        // It reads before it writes: taking the write lock first keeps a write committed by
+        // another connection in between from failing it ("database is locked").
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let old = sqlx::query("SELECT id, created_at FROM workspaces WHERE scope = ?")
             .bind(org_id)
             .fetch_all(&mut *tx)

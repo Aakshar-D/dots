@@ -297,17 +297,30 @@ async fn read_run_status() {
             .create_run(&NewRun::new(&dot, TriggerKind::Manual))
             .await
             .unwrap();
-    let (status, body) = t.get(&format!("/v1/runs/{}", run.id), Some(&key)).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let stored = t.rt.store().get_run(&run.id).await.unwrap();
-    assert_eq!(
-        body,
+    // The runner takes the queued run up while this reads it, so the answer is compared with
+    // the stored run only when that was the same before the request and after it.
+    let shown = |r: &dots_core::model::Run| {
         json!({
-            "id": run.id, "dot_id": dot, "status": stored.status.as_str(),
-            "queued_at": stored.queued_at, "started_at": stored.started_at,
-            "ended_at": stored.ended_at, "summary": stored.summary, "error": stored.error
+            "id": r.id, "dot_id": r.dot_id, "status": r.status.as_str(),
+            "queued_at": r.queued_at, "started_at": r.started_at,
+            "ended_at": r.ended_at, "summary": r.summary, "error": r.error
         })
-    );
+    };
+    let mut compared = false;
+    for _ in 0..50 {
+        let before = shown(&t.rt.store().get_run(&run.id).await.unwrap());
+        let (status, body) = t.get(&format!("/v1/runs/{}", run.id), Some(&key)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let after = shown(&t.rt.store().get_run(&run.id).await.unwrap());
+        if before == after {
+            assert_eq!(body, after);
+            assert_eq!(body["id"], json!(run.id));
+            assert_eq!(body["dot_id"], json!(dot));
+            compared = true;
+            break;
+        }
+    }
+    assert!(compared, "the run never held still between two reads");
 
     let (status, body) = t.get("/v1/runs/nope", Some(&key)).await;
     assert_eq!((status, body), (StatusCode::NOT_FOUND, error(NOT_FOUND)));
