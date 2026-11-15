@@ -8,6 +8,8 @@ pub enum Quick {
     Stop,
     Cancel,
     Repeat,
+    /// The person is done: "thank you", "goodbye", "close". The stage closes.
+    Bye,
     Yes,
     No,
     /// 0-based index into the options currently offered.
@@ -31,6 +33,64 @@ const CANCEL: &[&str] = &[
     "forget it",
     "forget that",
     "scrap that",
+];
+/// Said alone, these end the conversation.
+const BYE: &[&str] = &[
+    "thank you",
+    "thanks",
+    "thank you very much",
+    "thank you so much",
+    "thanks a lot",
+    "bye",
+    "bye bye",
+    "goodbye",
+    "good bye",
+    "see you",
+    "see you later",
+    "talk later",
+    "talk to you later",
+    "ill call you",
+    "ill call you later",
+    "ill call you back",
+    "thats all",
+    "that is all",
+    "thats all for now",
+    "thats it",
+    "that is it",
+    "im done",
+    "i am done",
+    "were done",
+    "done",
+    "close",
+    "close it",
+    "close this",
+    "you can close",
+    "you can go",
+    "go away",
+    "dismiss",
+];
+/// After "thank you" or "thanks", words that start one of these still end the conversation
+/// ("thank you, I'll call you later", "thanks, that's all for now"). Anything else after the
+/// thanks is a request ("thanks, now open settings") and goes to the model.
+const AFTER_THANKS: &[&str] = &[
+    "ill",
+    "i will",
+    "thats",
+    "that is",
+    "that will",
+    "bye",
+    "goodbye",
+    "good bye",
+    "im done",
+    "i am done",
+    "for now",
+    "see you",
+    "talk",
+    "close",
+    "you can",
+    "very much",
+    "so much",
+    "a lot",
 ];
 const REPEAT: &[&str] = &[
     "say that again",
@@ -216,6 +276,42 @@ fn position(joined: &str) -> Option<usize> {
     None
 }
 
+/// Whether the utterance only takes leave: a phrase of `BYE`, or thanks and then leave
+/// (`thanks_and_leaves`), with the wake word, "okay" and the like before it and "Sage" or
+/// "please" after it left out. "Yes, thank you" and "no thank you" are not that.
+fn takes_leave(mut w: Vec<String>) -> bool {
+    while w.len() >= 2 && matches!(w[w.len() - 1].as_str(), "please" | "sage") {
+        w.pop();
+    }
+    loop {
+        let n = w.len();
+        if n >= 3 && w[0] == "hey" && w[1] == "sage" {
+            w.drain(..2);
+        } else if n >= 2 && matches!(w[0].as_str(), "sage" | "okay" | "ok" | "um" | "uh") {
+            w.remove(0);
+        } else {
+            break;
+        }
+    }
+    let joined = w.join(" ");
+    BYE.contains(&joined.as_str()) || thanks_and_leaves(&joined)
+}
+
+/// Whether `joined` thanks and then takes leave: "thank you" or "thanks", then words that
+/// start one of `AFTER_THANKS`, at most ten words in all.
+fn thanks_and_leaves(joined: &str) -> bool {
+    let Some(rest) = joined
+        .strip_prefix("thank you ")
+        .or_else(|| joined.strip_prefix("thanks "))
+    else {
+        return false;
+    };
+    joined.split(' ').count() <= 10
+        && AFTER_THANKS
+            .iter()
+            .any(|start| rest == *start || rest.starts_with(&format!("{start} ")))
+}
+
 /// Whether a heard word can pick an option by part of its name: 3 or more letters, and not a
 /// filler word or a word of the stop, cancel, repeat, yes or no phrases.
 fn names_something(word: &str) -> bool {
@@ -319,6 +415,12 @@ pub(crate) fn common_word(word: &str) -> bool {
 /// `options`: the options currently offered (empty when none).
 pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
     let w = trimmed(words_of(heard));
+    // Before the thanks at the end are trimmed away as filler: here they are the message.
+    // An option that is these very words ("Done", "Close") is a pick, not a goodbye.
+    let an_option = options.iter().any(|o| words_of(o) == w);
+    if takes_leave(words_of(heard)) && !an_option {
+        return Some(Quick::Bye);
+    }
     if w.is_empty() {
         return None;
     }
@@ -327,10 +429,11 @@ pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
         (STOP, Quick::Stop),
         (CANCEL, Quick::Cancel),
         (REPEAT, Quick::Repeat),
+        (BYE, Quick::Bye),
         (YES, Quick::Yes),
         (NO, Quick::No),
     ] {
-        if table.contains(&joined.as_str()) {
+        if table.contains(&joined.as_str()) && !(answer == Quick::Bye && an_option) {
             return Some(answer);
         }
     }
@@ -382,11 +485,41 @@ mod tests {
     }
 
     #[test]
+    fn thanks_and_goodbyes_end_the_conversation() {
+        for said in [
+            "Thank you.",
+            "Thanks, Sage.",
+            "Okay, thank you.",
+            "Goodbye.",
+            "Close it.",
+            "That's all.",
+            "Thank you, I'll call you later.",
+            "Thank you, I'll call you up.",
+            "Thanks, that's all for now.",
+            "Thank you so much, bye.",
+        ] {
+            assert_eq!(quick(said, &[]), Some(Quick::Bye), "{said}");
+        }
+        // A request after the thanks is not a goodbye, and "no thank you" is still a no.
+        assert_eq!(quick("Thanks, now open settings.", &[]), None);
+        assert_eq!(quick("Thank you, what needs me?", &[]), None);
+        assert_eq!(quick("No, thank you.", &[]), Some(Quick::No));
+        assert_eq!(quick("Close the research sol.", &[]), None);
+        // An option with those very words is picked, and a word of a goodbye phrase still
+        // picks an option by part of its name.
+        let options = opts(&["Done", "Call notes"]);
+        assert_eq!(quick("Done.", &options), Some(Quick::Pick(0)));
+        assert_eq!(quick("Call.", &options), Some(Quick::Pick(1)));
+        assert_eq!(quick("Thank you.", &options), Some(Quick::Bye));
+    }
+
+    #[test]
     fn quick_matches() {
-        let table: [(&[&str], Quick); 5] = [
+        let table: [(&[&str], Quick); 6] = [
             (STOP, Quick::Stop),
             (CANCEL, Quick::Cancel),
             (REPEAT, Quick::Repeat),
+            (BYE, Quick::Bye),
             (YES, Quick::Yes),
             (NO, Quick::No),
         ];
@@ -413,9 +546,15 @@ mod tests {
                 Some(want.clone()),
                 "sage: {p}"
             );
+            // "Okay, thanks" is a goodbye: "okay" before the thanks is filler there.
+            let thanked = if matches!(p.as_str(), "okay" | "ok") {
+                Quick::Bye
+            } else {
+                want.clone()
+            };
             assert_eq!(
                 quick(&format!("{p} thanks"), &[]),
-                Some(want.clone()),
+                Some(thanked.clone()),
                 "thanks: {p}"
             );
             assert_eq!(
@@ -430,11 +569,11 @@ mod tests {
             );
             assert_eq!(
                 quick(&format!("{p} thank you"), &[]),
-                Some(want.clone()),
+                Some(thanked.clone()),
                 "thank you: {p}"
             );
         }
-        assert_eq!(phrases.len(), 7 + 7 + 9 + 20 + 12 + 4);
+        assert_eq!(phrases.len(), 7 + 7 + 9 + 32 + 20 + 12 + 4);
     }
 
     const EVERY_KIND: &[&str] = &[

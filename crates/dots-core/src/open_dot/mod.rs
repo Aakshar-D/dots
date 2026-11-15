@@ -927,7 +927,7 @@ impl Mind {
         };
 
         match quick {
-            Some(Quick::Stop) | Some(Quick::Cancel) => {
+            Some(Quick::Stop) | Some(Quick::Cancel) | Some(Quick::Bye) => {
                 let setup = waiting
                     .as_ref()
                     .and_then(|w| w.kind.setup_id().map(str::to_string));
@@ -945,7 +945,14 @@ impl Mind {
                     self.finish(o, &heard, OKAY, Then::Rest);
                     return "cancel";
                 }
+                // "Thank you", "goodbye", "close": what waited is dropped and the card goes, the
+                // session rests and the stage closes. Nothing is said: the recogniser can make
+                // "thank you" of speech in the room, and an answer to nobody would be worse
+                // than a stage that closes quietly.
                 o.end(Then::Rest);
+                if quick == Some(Quick::Bye) {
+                    return "bye";
+                }
                 return "stop";
             }
             Some(Quick::Repeat) => {
