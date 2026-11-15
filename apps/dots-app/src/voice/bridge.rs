@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use async_trait::async_trait;
 use dots_core::open_dot::picture::View;
+use dots_core::open_dot::quick::{quick, Quick};
 use dots_core::open_dot::{MindEvent, Then};
 use dots_voice::{After, Session, SessionEvent, State};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
@@ -365,8 +366,11 @@ impl Bridge {
             self.mind.input_arrived();
             // A card left from an older turn (a list, with no question waiting) goes now: the
             // person has moved on, and it must not show beside the next reply. A card with
-            // its question stays, since this sentence may be the answer.
-            self.drop_card(&mut s);
+            // its question stays, since this sentence may be the answer, and "say that again"
+            // keeps the card it repeats.
+            if quick(&text, &[]) != Some(Quick::Repeat) {
+                self.drop_card(&mut s);
+            }
             // a card left from an older turn is no longer cleared on that turn's clock
             s.shown += 1;
             self.session.thinking();
@@ -1052,6 +1056,13 @@ mod tests {
         r.heard("what needs me", 1);
         settle().await;
         r.ui();
+        // "Say that again" keeps the card it repeats.
+        r.mind
+            .script(vec![say("One thing needs you."), end(Then::FollowUp)]);
+        r.heard("Say that again.", 9);
+        settle().await;
+        assert!(!r.ui().contains(&VoiceEvent::Cleared));
+        assert!(!r.bridge.at_rest(), "the card still shows");
         r.mind
             .script(vec![say("It is sunny."), end(Then::FollowUp)]);
         r.heard("what is the weather", 2);

@@ -317,7 +317,7 @@ fn thanks_and_leaves(joined: &str) -> bool {
 fn names_something(word: &str) -> bool {
     word.chars().count() >= 3
         && !FILLER_WORDS.contains(&word)
-        && ![STOP, CANCEL, REPEAT, BYE, YES, NO]
+        && ![STOP, CANCEL, REPEAT, YES, NO]
             .iter()
             .flat_map(|table| table.iter())
             .any(|phrase| phrase.split(' ').any(|p| p == word))
@@ -414,11 +414,13 @@ pub(crate) fn common_word(word: &str) -> bool {
 
 /// `options`: the options currently offered (empty when none).
 pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
+    let w = trimmed(words_of(heard));
     // Before the thanks at the end are trimmed away as filler: here they are the message.
-    if takes_leave(words_of(heard)) {
+    // An option that is these very words ("Done", "Close") is a pick, not a goodbye.
+    let an_option = options.iter().any(|o| words_of(o) == w);
+    if takes_leave(words_of(heard)) && !an_option {
         return Some(Quick::Bye);
     }
-    let w = trimmed(words_of(heard));
     if w.is_empty() {
         return None;
     }
@@ -431,7 +433,7 @@ pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
         (YES, Quick::Yes),
         (NO, Quick::No),
     ] {
-        if table.contains(&joined.as_str()) {
+        if table.contains(&joined.as_str()) && !(answer == Quick::Bye && an_option) {
             return Some(answer);
         }
     }
@@ -503,6 +505,12 @@ mod tests {
         assert_eq!(quick("Thank you, what needs me?", &[]), None);
         assert_eq!(quick("No, thank you.", &[]), Some(Quick::No));
         assert_eq!(quick("Close the research sol.", &[]), None);
+        // An option with those very words is picked, and a word of a goodbye phrase still
+        // picks an option by part of its name.
+        let options = opts(&["Done", "Call notes"]);
+        assert_eq!(quick("Done.", &options), Some(Quick::Pick(0)));
+        assert_eq!(quick("Call.", &options), Some(Quick::Pick(1)));
+        assert_eq!(quick("Thank you.", &options), Some(Quick::Bye));
     }
 
     #[test]

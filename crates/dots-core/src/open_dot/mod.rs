@@ -144,9 +144,6 @@ const SAID_BYTES: usize = 400;
 
 const FILLER: &str = "One moment.";
 const OKAY: &str = "Okay.";
-/// Said to "thank you", "goodbye" or "close" before the stage closes.
-const WELCOME: &str = "You're welcome.";
-const BYE: &str = "Bye.";
 const WONT: &str = "Okay, I won't.";
 const NOT_SENT: &str = "Okay, not sent.";
 const NOT_CREATED: &str = "Okay, not created.";
@@ -948,18 +945,14 @@ impl Mind {
                     self.finish(o, &heard, OKAY, Then::Rest);
                     return "cancel";
                 }
+                // "Thank you", "goodbye", "close": what waited is dropped and the card goes, the
+                // session rests and the stage closes. Nothing is said: the recogniser can make
+                // "thank you" of speech in the room, and an answer to nobody would be worse
+                // than a stage that closes quietly.
+                o.end(Then::Rest);
                 if quick == Some(Quick::Bye) {
-                    // What waited is dropped and the card goes: after the line the session
-                    // rests, and the stage closes.
-                    let line = if heard.to_lowercase().contains("thank") {
-                        WELCOME
-                    } else {
-                        BYE
-                    };
-                    self.finish(o, &heard, line, Then::Rest);
                     return "bye";
                 }
-                o.end(Then::Rest);
                 return "stop";
             }
             Some(Quick::Repeat) => {
