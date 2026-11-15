@@ -34,6 +34,13 @@ use crate::models::ModelPaths;
 /// run, as the synthetic voices do: at 0.25 and at 0.35 one near miss in 40 woke it. At 0.6
 /// the phrase itself was missed.
 ///
+/// That was with a voice close to the microphone. A faint voice, made louder by `Gain`, in
+/// room noise (speech at 16 parts in 32768, noise at 4) was caught 7 times in 20 with that
+/// setting. Listed in all three spellings, boosted 1.5 and held to 0.15, it was caught 12
+/// times in 20 there, 19 in 20 at twice that level and close up, and eight near misses in
+/// ten voices at three levels woke it once in 240. Boosted 2.0 and held to 0.1 they woke it
+/// 5 times in 240. So the figures of 1.0 and 0.3 above are those of the setting before.
+///
 /// The stop phrase is caught when it is said in one go: "Sage stop." 19 or 20 times in 20,
 /// "Sage, stop!" 18 or 19, "Sage, stop please." 20, as "Dot" was. A pause after "Sage" loses
 /// it: the voices put one in "Sage, stop." (13 to 16 in 20; "Dot, stop." 18 or 19) and a long
@@ -41,7 +48,7 @@ use crate::models::ModelPaths;
 /// pieces brought those clips back, and a wider search (`max_active_paths` 8 or 16) only added
 /// wrong stops ("The stage stopped moving." 16 times in 20). "Sage, start the next one." is
 /// taken for it 4 times in 20, as "Dot, start the next one." was.
-const WAKE_KEYWORDS: &str = "▁HE Y ▁S AGE :1.0 #0.3 @HEY_DOT\n▁S AGE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁SA GE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁S A GE ▁ST O P :2.0 #0.1 @DOT_STOP";
+const WAKE_KEYWORDS: &str = "▁HE Y ▁S AGE :1.5 #0.15 @HEY_DOT\n▁HE Y ▁SA GE :1.5 #0.15 @HEY_DOT\n▁HE Y ▁S A GE :1.5 #0.15 @HEY_DOT\n▁S AGE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁SA GE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁S A GE ▁ST O P :2.0 #0.1 @DOT_STOP";
 const SPEAK_STEPS: i32 = 5;
 const VOICES: u8 = 10;
 

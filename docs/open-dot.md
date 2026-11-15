@@ -20,7 +20,7 @@ Any of these opens the stage, a small panel at the bottom of the window, and pla
 - Press the hotkey. The default is Ctrl+Shift+Space (Cmd+Shift+Space on a Mac). You can change it in Settings, Voice, Listening, or clear it. If the Sage window is hidden, the hotkey brings it forward.
 - Click the Open Sage mark at the bottom of the rail.
 - In the tray menu, choose **Talk to Sage**. It is available once Open Sage is ready.
-- Say "Hey Sage". This is off until you turn on **Hey Sage** in Settings. See Privacy.
+- Say "Hey Sage". This is off until you turn on **Hey Sage** in Settings. See Privacy. If you then wait, Sage says "How can I help?" and listens. If you carry straight on with your request, it just listens. Saying "Hey Sage" again while it already listens is not taken as your request.
 
 You do not press a button to finish. Sage notices when you stop talking: it waits a little over a second of quiet, and about two seconds when your words so far stop in the middle of a thought ("open the research sol and..."), so you can pause to think. After it answers, it listens a few more seconds so you can follow up. Esc closes the stage. So does "thank you", "goodbye" or "close". A list Sage showed stays 10 seconds after it rests, and goes at once when you say the next thing.
 
@@ -106,7 +106,7 @@ All in Settings, Voice.
 | **Hotkey** | Default Ctrl+Shift+Space (Cmd+Shift+Space on a Mac). Write names like Ctrl, Shift, Alt and a key, joined with +. **Clear** removes it. |
 | **Hey Sage** | Off by default. Lets you start by saying "Hey Sage". The microphone stays on while Sage runs. |
 | **Interrupt by just talking** | Off by default. Best with headphones. |
-| **Play a tone when Sage starts listening** | On by default. |
+| **Play a tone when Sage starts listening** | On by default. The tone plays for the hotkey, the rail mark and the tray. After "Hey Sage" and a pause Sage says "How can I help?" instead; with this off it says nothing and just listens. |
 | **Microphone** and **Speaker** | Choose a device, or System default. |
 | **Which model thinks** | Fast (the default), Balanced or Most capable. Fast is the smallest model and the quickest. |
 | **Remove speech files** | Shown once the files are downloaded. Turns Open Sage off and deletes the files. Turning it on again downloads them again. |
