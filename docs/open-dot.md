@@ -22,7 +22,7 @@ Any of these opens the stage, a small panel at the bottom of the window, and pla
 - In the tray menu, choose **Talk to Sage**. It is available once Open Sage is ready.
 - Say "Hey Sage". This is off until you turn on **Hey Sage** in Settings. See Privacy.
 
-You do not press a button to finish. Sage notices when you stop talking. After it answers, it listens a few more seconds so you can follow up. Esc closes the stage. So does "thank you", "goodbye" or "close". A list Sage showed stays 10 seconds after it rests, and goes at once when you say the next thing.
+You do not press a button to finish. Sage notices when you stop talking: it waits a little over a second of quiet, and about two seconds when your words so far stop in the middle of a thought ("open the research sol and..."), so you can pause to think. After it answers, it listens a few more seconds so you can follow up. Esc closes the stage. So does "thank you", "goodbye" or "close". A list Sage showed stays 10 seconds after it rests, and goes at once when you say the next thing.
 
 ## What you can say
 
@@ -117,7 +117,7 @@ Sage answers short things itself, with no model: stop, cancel, repeat, yes, no, 
 
 One measurement, on one computer, with the Fast model (haiku):
 
-- Sage's own time is about 1.3 seconds from the end of your sentence to the first sound. About 0.7 seconds of that is the quiet that tells Sage you finished.
+- Sage's own time is about 1.3 seconds from the end of your sentence to the first sound. That was measured when 0.7 seconds of quiet told Sage you had finished. It now waits 1.1 seconds, so add 0.4 seconds.
 - With the real model, "One moment." came about 3 seconds after you stopped talking. It is said if nothing has been said 1.5 seconds after the request starts.
 - The answer itself was first heard about 6 seconds after you stopped talking (median 5.7 seconds, range 4.5 to 7 seconds).
 
@@ -137,6 +137,6 @@ That is slower than the two-second goal. Most of the time is the Claude CLI star
 
 **Sage heard itself on speakers.** Sage has no echo cancellation. Use headphones, or turn down the speaker, and leave **Interrupt by just talking** off.
 
-**"Hey Sage" was missed.** It is a small on-device detector and it will miss sometimes, more in a noisy room, from far away or with music playing. Say it a little slower, or use the hotkey. "Hey Sage" must be turned on in Settings, and the microphone must be allowed. Say "Hey Sage" and then wait a moment, or carry straight on with your request in the same breath.
+**"Hey Sage" was missed.** It is a small on-device detector and it will miss sometimes, more in a noisy room, from far away or with music playing. Sage makes a faint microphone louder by itself, up to 40 times, once it has heard your voice; the first thing you say after Sage starts gets less of that help. Say it a little slower, or use the hotkey. "Hey Sage" must be turned on in Settings, and the microphone must be allowed. Say "Hey Sage" and then wait a moment, or carry straight on with your request in the same breath.
 
 **Sage says "Sorry, I didn't catch that."** It heard sound it could not make a sentence of (noise can come out as one word over and over). Say it again.

@@ -16,6 +16,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::audio::{Mic, MicFrame};
 use crate::ears::{level, EarEvent, Ears};
 use crate::engine::{EngineError, WakeSpotter, WakeWord, FRAME};
+use crate::gain::Gain;
 use crate::tone::{listen_tone, TONE_RATE};
 use crate::voice::{Sink, Voice, VoiceEvent};
 
@@ -629,6 +630,8 @@ struct Worker {
     recent: VecDeque<Vec<f32>>,
     /// Stop handling frames for the rest of this pass.
     halt_frames: bool,
+    /// Makes a faint microphone louder before the spotter and the ears hear it.
+    gain: Gain,
     /// Frames were left waiting at the end of the last pass.
     frames_left: bool,
 
@@ -721,6 +724,7 @@ impl Worker {
             after_wake: false,
             recent: VecDeque::new(),
             halt_frames: false,
+            gain: Gain::new(),
             frames_left: false,
             voice_heard_at: now,
             thinking_since: now,
@@ -1387,6 +1391,21 @@ impl Worker {
 
     fn frame(&mut self, frame: &[f32]) {
         let now = self.clock.now();
+        // A faint microphone is made louder before anything hears it. The level followed is
+        // the person's: while the session's own sound is in the microphone (its voice, a
+        // filler, the tone, the tail after them) the frame is left as it is.
+        let own_sound = self.state == State::Speaking
+            || self.fillers_pending > 0
+            || self.deaf_until.is_some()
+            || self.tone_until.is_some();
+        let louder;
+        let frame = if own_sound {
+            self.gain.pass(frame);
+            frame
+        } else {
+            louder = self.gain.apply(frame);
+            &louder[..]
+        };
         // The spotter hears every frame, the listening tone's too. Nothing is done about the
         // tone: it is two pure notes with no words in them, so it cannot match "Hey Dot" or
         // "Dot, stop" (the spotter needs the keywords' sounds in order), and keeping the
@@ -2038,6 +2057,7 @@ mod tests {
         // every two speech frames.
         EarSettings {
             end_quiet_ms: 64,
+            unfinished_quiet_ms: 64,
             min_speech_ms: 64,
             pre_roll_ms: 0,
             partial_every_ms: 64,
