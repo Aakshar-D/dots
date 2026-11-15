@@ -205,6 +205,11 @@ impl Ears {
         !self.unfinished || self.quiet_run >= self.unfinished_quiet
     }
 
+    /// How many frames of quiet the clip in progress ends in; `None` when no clip is open.
+    pub fn quiet_frames(&self) -> Option<usize> {
+        self.in_clip.then_some(self.quiet_run)
+    }
+
     /// Fills the pre-roll with silence, as if the person had been quiet until now. For words
     /// that start the moment the ears open (straight after "Hey Dot"): the recogniser can
     /// return nothing at all for a clip that begins in the middle of speech.
