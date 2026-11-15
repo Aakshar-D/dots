@@ -344,6 +344,8 @@ command_list![
     voice_view,
     voice_preview,
     voice_devices,
+    voice_setup,
+    voice_setup_run,
 ];
 
 /// Keeps the log writer flushing until the app exits.

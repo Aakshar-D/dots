@@ -33,6 +33,7 @@ function voice(status: VoiceStatus, stored: Settings = sample.settings) {
   backend.on("voice_status", () => now.status);
   backend.on("voice_devices", () => devices);
   backend.on("voice_preview", () => null);
+  backend.on("voice_setup", () => null);
   backend.on("voice_download_cancel", () => null);
   backend.on("voice_enable", (args) => {
     now.settings = { ...now.settings, voice_enabled: args.on as boolean };
@@ -160,6 +161,49 @@ describe("Settings > Voice", () => {
     expect(screen.getByText("1.15×")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Play voice 10" }));
     expect(backend.callsTo("voice_preview")[1]).toEqual({ voice: 9, speed: 1.15 });
+  });
+
+  it("teaches Sage the voice: names each take, then says what it found", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true, voice_wake_phrase: true });
+    const run = later<unknown>();
+    backend.on("voice_setup_run", () => run.answer);
+    const { user } = renderApp("/settings/voice");
+    const teach = await screen.findByRole("button", { name: "Teach Sage your voice" });
+    await user.click(teach);
+    expect(teach).toBeDisabled();
+    expect(await screen.findByText("Get ready…")).toBeVisible();
+    act(() => backend.emit("voice", { kind: "setting_up", take: 2, of: 5 }));
+    expect(await screen.findByText('Say "Hey Sage" now (2 of 5)')).toBeVisible();
+    const found = {
+      takes: 5,
+      heard: 4,
+      faint: false,
+      message: "Sage heard you 4 times out of 5 and is set up for your voice.",
+    };
+    await act(async () => run.give(found));
+    expect(await screen.findByText(found.message)).toBeVisible();
+    expect(screen.queryByText(/now \(2 of 5\)/)).toBeNull();
+    // Done once, the button offers to do it again.
+    expect(
+      await screen.findByRole("button", { name: "Teach Sage your voice again" }),
+    ).toBeEnabled();
+  });
+
+  it("offers the voice setup only with Hey Sage on, and shows the one done before", async () => {
+    const now = voice(ready, { ...sample.settings, voice_enabled: true });
+    backend.on("voice_setup", () => ({
+      takes: 5,
+      heard: 5,
+      faint: true,
+      message: "Sage heard you 5 times out of 5 and is set up for your voice.",
+    }));
+    renderApp("/settings/voice");
+    const teach = await screen.findByRole("button", { name: "Teach Sage your voice again" });
+    expect(teach).toBeDisabled();
+    expect(
+      screen.getByText("Sage heard you 5 times out of 5 and is set up for your voice."),
+    ).toBeVisible();
+    expect(now.settings.voice_wake_phrase).toBe(false);
   });
 
   it("says why a preview could not play", async () => {

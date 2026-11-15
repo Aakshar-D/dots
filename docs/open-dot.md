@@ -86,6 +86,7 @@ Sage listens for at most five follow-ups in a row. Then it rests until you use t
 ## Privacy
 
 - Speech is recognised and spoken on this computer. Audio is never sent anywhere.
+- **Teach Sage your voice** keeps no sound. The five takes are held in memory for the few seconds it takes to check them. What is stored is the setting it picked, how loud your voice was, and how many takes it heard.
 - No audio and no transcript is saved. What Sage heard and said is kept in memory for the conversation and dropped when you close the stage or after 10 minutes without a turn. Logs say that a turn happened and how long it took, not what was said.
 - To understand a request, Sage sends the model your words and a short picture of now: your sols, the pending approvals and the open questions. The request goes through your own Claude CLI sign-in. Nothing else is sent. Vault values are never in the picture.
 - A private approval is only counted ("one private approval needs you"). Its tool and target are not sent, not read aloud, and it opens on screen.
@@ -105,6 +106,7 @@ All in Settings, Voice.
 | **Tell me aloud when something needs me** | Off by default. Sage says a short line when an approval or a question needs you. It never says more than one line in 30 seconds. It speaks only while Sage is resting, and does not announce the sol you are looking at. |
 | **Hotkey** | Default Ctrl+Shift+Space (Cmd+Shift+Space on a Mac). Write names like Ctrl, Shift, Alt and a key, joined with +. **Clear** removes it. |
 | **Hey Sage** | Off by default. Lets you start by saying "Hey Sage". The microphone stays on while Sage runs. |
+| **Teach Sage your voice** | Under **Hey Sage**. You say "Hey Sage" five times, about three seconds apart, from where you usually sit. Sage sets the phrase up for how you sound at your microphone, starts its microphone boost at your level, and tells you how many of the five it heard. It takes about 20 seconds. No recording is kept: only the setting, your voice level and the count, in `voice-setup.json` beside the speech files. Do it again whenever you move or change microphone. |
 | **Interrupt by just talking** | Off by default. Best with headphones. |
 | **Play a tone when Sage starts listening** | On by default. The tone plays for the hotkey, the rail mark and the tray. After "Hey Sage" and a pause Sage says "How can I help?" instead; with this off it says nothing and just listens. |
 | **Microphone** and **Speaker** | Choose a device, or System default. |
@@ -137,6 +139,6 @@ That is slower than the two-second goal. Most of the time is the Claude CLI star
 
 **Sage heard itself on speakers.** Sage has no echo cancellation. Use headphones, or turn down the speaker, and leave **Interrupt by just talking** off.
 
-**"Hey Sage" was missed.** It is a small on-device detector and it will miss sometimes, more in a noisy room, from far away or with music playing. Sage makes a faint microphone louder by itself, up to 40 times, once it has heard your voice; the first thing you say after Sage starts gets less of that help. Say it a little slower, or use the hotkey. "Hey Sage" must be turned on in Settings, and the microphone must be allowed. Say "Hey Sage" and then wait a moment, or carry straight on with your request in the same breath.
+**"Hey Sage" was missed.** First do **Teach Sage your voice** in Settings, Voice: it tells you how well Sage hears you where you sit. It is a small on-device detector and it will miss sometimes, more in a noisy room, from far away or with music playing. Sage makes a faint microphone louder by itself, up to 40 times, once it has heard your voice; the first thing you say after Sage starts gets less of that help. Say it a little slower, or use the hotkey. "Hey Sage" must be turned on in Settings, and the microphone must be allowed. Say "Hey Sage" and then wait a moment, or carry straight on with your request in the same breath.
 
 **Sage says "Sorry, I didn't catch that."** It heard sound it could not make a sentence of (noise can come out as one word over and over). Say it again.

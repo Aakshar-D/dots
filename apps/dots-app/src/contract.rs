@@ -2394,7 +2394,7 @@ pub fn samples() -> Value {
 /// Open Dot's voice (Open Dot design spec, step 3): every `voice` event kind, each card and
 /// deed and place to open, the status off and ready, the devices and the view.
 fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
-    use crate::voice::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceStatus};
+    use crate::voice::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceSetup, VoiceStatus};
     use dots_core::open_dot::act::{Deed, OpenTarget};
     use dots_core::open_dot::picture::View;
     use dots_core::open_dot::Card;
@@ -2507,6 +2507,7 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
         },
         VoiceEvent::Cleared,
         VoiceEvent::Woke,
+        VoiceEvent::SettingUp { take: 2, of: 5 },
         VoiceEvent::Trouble {
             message: "Open Sage is off. Turn it on in Settings, under Voice.".into(),
         },
@@ -2536,6 +2537,20 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
     events.extend(targets.map(|target| VoiceEvent::Open { target }));
     samples["VoiceEvent"] = to(events);
     samples["VoiceStatus"] = to([off, ready]);
+    samples["VoiceSetup"] = to([
+        VoiceSetup {
+            takes: 5,
+            heard: 5,
+            faint: false,
+            message: "Sage heard you 5 times out of 5 and is set up for your voice.".into(),
+        },
+        VoiceSetup {
+            takes: 5,
+            heard: 2,
+            faint: true,
+            message: "Sage heard you only 2 times out of 5.".into(),
+        },
+    ]);
     samples["VoiceDevices"] = to([
         VoiceDevices::default(),
         VoiceDevices {

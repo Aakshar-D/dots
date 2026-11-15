@@ -341,6 +341,7 @@ enum Command {
     },
     Notice(String),
     Settings(SessionSettings),
+    VoiceLevel(f32),
     SetVoice {
         voice: u8,
         speed: f32,
@@ -557,6 +558,12 @@ impl Session {
     /// (speed is kept within 0.8..=1.4).
     pub fn set_voice(&self, voice: u8, speed: f32) {
         self.send(Command::SetVoice { voice, speed });
+    }
+
+    /// How loud the voice of the person is at the microphone, from a setup done before: the
+    /// gain starts there, not at the first words it hears.
+    pub fn set_voice_level(&self, level: f32) {
+        self.send(Command::VoiceLevel(level));
     }
 
     /// Final: speech stops, the microphone closes, the state becomes `Off` and the worker
@@ -937,6 +944,7 @@ impl Worker {
                 self.refresh();
             }
             Command::SetVoice { voice, speed } => self.voice.set_voice(voice, speed),
+            Command::VoiceLevel(level) => self.gain = Gain::with_voice(level),
             Command::Shutdown => {}
             #[cfg(test)]
             Command::Probe(_) => {}

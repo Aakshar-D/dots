@@ -63,6 +63,19 @@ impl Gain {
         }
     }
 
+    /// A gain that already knows the level of the voice (from a setup done before): the
+    /// first words are made as loud as the later ones.
+    pub fn with_voice(level: f32) -> Self {
+        if !(level.is_finite() && level > 0.0) {
+            return Self::new();
+        }
+        Self {
+            noise: None,
+            voice: Some(level),
+            gain: (TARGET / level).clamp(1.0, MAX_GAIN),
+        }
+    }
+
     /// What the frames are multiplied by now.
     pub fn factor(&self) -> f32 {
         self.gain
@@ -204,6 +217,18 @@ mod tests {
         feed(&mut gain, 0.001, 60);
         feed(&mut gain, 0.2, 20);
         assert_eq!(gain.factor(), 1.0);
+    }
+
+    #[test]
+    fn a_known_voice_is_loud_from_its_first_frame() {
+        let mut gain = Gain::with_voice(0.001);
+        assert!((gain.factor() - 30.0).abs() < 0.01);
+        feed(&mut gain, 0.000_1, 3);
+        let out = gain.apply(&tone(0.001));
+        assert!((rms(&out) - TARGET).abs() < 0.003, "{}", rms(&out));
+        // A level that makes no sense is no level.
+        assert_eq!(Gain::with_voice(0.0).factor(), 1.0);
+        assert_eq!(Gain::with_voice(f32::NAN).factor(), 1.0);
     }
 
     #[test]

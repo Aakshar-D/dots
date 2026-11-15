@@ -57,6 +57,11 @@ pub enum VoiceEvent {
         done_bytes: u64,
         total_bytes: u64,
     },
+    /// A voice setup is recording take `take` of `of`: the person says "Hey Sage" now.
+    SettingUp {
+        take: u8,
+        of: u8,
+    },
     /// Sent whenever the status changes.
     Status {
         status: VoiceStatus,
@@ -79,6 +84,29 @@ pub struct VoiceStatus {
     pub trouble: Option<String>,
 }
 
+/// What a voice setup found, for the settings page.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VoiceSetup {
+    /// How many takes were recorded, and how many of them Sage heard the phrase in.
+    pub takes: u8,
+    pub heard: u8,
+    /// The voice reaches the microphone faintly.
+    pub faint: bool,
+    /// The outcome in a sentence or two.
+    pub message: String,
+}
+
+impl VoiceSetup {
+    pub fn of(found: &dots_voice::Calibration) -> Self {
+        Self {
+            takes: found.takes,
+            heard: found.heard,
+            faint: found.faint(),
+            message: super::service::setup_message(found),
+        }
+    }
+}
+
 /// A microphone or a speaker the person can choose.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct VoiceDevice {
@@ -98,6 +126,46 @@ pub struct VoiceDevices {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_voice_setup_is_told_in_plain_words() {
+        use dots_voice::{Calibration, WakeTuning};
+        let found = |heard: u8, level: Option<f32>| Calibration {
+            takes: 5,
+            heard,
+            tuning: WakeTuning::Standard,
+            level,
+        };
+        let good = VoiceSetup::of(&found(5, Some(0.05)));
+        assert_eq!(
+            good.message,
+            "Sage heard you 5 times out of 5 and is set up for your voice."
+        );
+        assert!(!good.faint);
+        // Four of five is still set up; a faint voice is told how to be heard better.
+        let faint = VoiceSetup::of(&found(4, Some(0.001)));
+        assert!(faint.faint);
+        assert_eq!(
+            faint.message,
+            "Sage heard you 4 times out of 5 and is set up for your voice. Your voice reaches \
+             the microphone faintly: nearer to it, or with a headset, Sage will hear you better."
+        );
+        let few = VoiceSetup::of(&found(2, Some(0.05)));
+        assert_eq!(
+            few.message,
+            "Sage heard you only 2 times out of 5. It is set as keen as it safely can be."
+        );
+        let none = VoiceSetup::of(&found(0, None));
+        assert_eq!(
+            none.message,
+            "Sage did not hear \"Hey Sage\" in any of the 5 tries, so nothing was changed. Check \
+             the microphone, move closer to it and try again."
+        );
+        assert_eq!(
+            serde_json::to_value(VoiceEvent::SettingUp { take: 2, of: 5 }).unwrap(),
+            json!({"kind": "setting_up", "take": 2, "of": 5})
+        );
+    }
 
     #[test]
     fn events_serialise_with_a_kind_tag() {

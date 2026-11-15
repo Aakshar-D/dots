@@ -96,6 +96,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   VoiceEvent: T.VoiceEvent.array(),
   VoiceStatus: T.VoiceStatus.array(),
   VoiceDevices: T.VoiceDevices.array(),
+  VoiceSetup: T.VoiceSetup.array(),
   View: T.View.array(),
   Watcher: T.Watcher.array(),
   WatchHours: T.WatchHours,

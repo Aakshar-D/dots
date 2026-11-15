@@ -69,7 +69,7 @@ use crate::state::{AppState, StartupError};
 use crate::tray::Tray;
 use crate::update::{Next, UpdateNote};
 use crate::update_service;
-use crate::voice::events::{VoiceDevices, VoiceStatus};
+use crate::voice::events::{VoiceDevices, VoiceSetup, VoiceStatus};
 use crate::voice::VoiceHandle;
 use dots_core::open_dot::picture::View;
 
@@ -2922,6 +2922,20 @@ pub fn voice_view(voice: State<'_, VoiceHandle>, view: View) -> Res<()> {
 #[tauri::command]
 pub async fn voice_preview(handle: State<'_, VoiceHandle>, voice: u8, speed: f32) -> Res<()> {
     handle.get()?.preview(voice, speed).await
+}
+
+/// The voice setup the person did, in words; nothing when they did none.
+#[tauri::command]
+pub fn voice_setup(voice: State<'_, VoiceHandle>) -> Res<Option<VoiceSetup>> {
+    Ok(voice.get()?.setup())
+}
+
+/// Listens to the person say "Hey Sage" five times (a setting_up voice event names each
+/// take as it begins) and sets the wake phrase up for their voice. Takes about 20 seconds.
+/// Refused while Open Sage is not ready or not resting.
+#[tauri::command]
+pub async fn voice_setup_run(handle: State<'_, VoiceHandle>) -> Res<VoiceSetup> {
+    handle.get()?.set_up().await
 }
 
 /// The microphones and speakers to choose from.
