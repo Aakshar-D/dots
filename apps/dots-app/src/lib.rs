@@ -433,6 +433,9 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             waker.spawn_send_later();
         });
     }
+    // Before the check below is spawned: the check writes its answer into this, and a task
+    // that ran first found nothing there and logged that the app "did not start".
+    app.manage(publishing::Publisher::default());
     // Managed whenever the data folder is known, so the fatal page can go back too (updates UI
     // spec section 4.4); only the checks need the runtime. What a failed install left is read
     // while Dots holds the data folder.
@@ -460,7 +463,6 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         stay_hidden = startup::take_stay_hidden_mark(dir);
     }
     app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
-    app.manage(publishing::Publisher::default());
     phone::manage(app, runtime.as_ref().ok().map(|(rt, _)| rt.clone()));
     // Open Dot's voice, and the listener for its spoken notices (it subscribes to the runtime
     // here, after the tray): with voice off nothing is built and nothing is said.

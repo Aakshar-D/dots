@@ -22,11 +22,34 @@ Var DotsDir
   ${If} $R8 != ""
   ${AndIf} ${FileExists} "$R8\${MAINBINARYNAME}.exe"
     StrCpy $DotsDir $R8
-    ${If} $INSTDIR != $R8
+    ${If} $INSTDIR != $DotsDir
       ; The folder the template has just made is empty: nothing of Sage is in it yet.
-      SetOutPath $R8
+      SetOutPath $DotsDir
       RMDir "$INSTDIR"
-      StrCpy $INSTDIR $R8
+      StrCpy $INSTDIR $DotsDir
+    ${EndIf}
+    ; Next the template asks a running copy to close. Dots 0.4.0 does not close when asked
+    ; that way, and the template then stops with "Failed to kill". Dots starts at sign-in, so
+    ; it is nearly always running when someone runs this installer by hand: it is ended here
+    ; first. With the pages showing the person is asked; on Cancel the template's own check
+    ; stops the install.
+    nsis_tauri_utils::FindProcessCurrentUser "${MAINBINARYNAME}.exe"
+    Pop $R8
+    ${If} $R8 = 0
+      StrCpy $R8 "ask"
+      ${If} ${Silent}
+      ${OrIf} $PassiveMode = 1
+        StrCpy $R8 "end"
+      ${EndIf}
+      ${If} $R8 == "ask"
+        MessageBox MB_OKCANCEL "${DOTS_NAME} is running. Click OK to close it and go on." IDOK 0 IDCANCEL +2
+        StrCpy $R8 "end"
+      ${EndIf}
+      ${If} $R8 == "end"
+        nsis_tauri_utils::KillProcessCurrentUser "${MAINBINARYNAME}.exe"
+        Pop $R8
+        Sleep 500
+      ${EndIf}
     ${EndIf}
   ${EndIf}
 !macroend
