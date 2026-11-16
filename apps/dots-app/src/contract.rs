@@ -1887,7 +1887,9 @@ pub fn samples() -> Value {
             signing_in: false,
             account: None,
             expires_at: None,
-            setup_error: Some("ChatGPT sign-in needs a registered OpenAI client for Sage.".into()),
+            setup_error: Some(
+                "Sign in with ChatGPT is not available in this version of Sage yet.".into(),
+            ),
         },
         dots_core::chatgpt::ChatGptStatus {
             configured: true,

@@ -36,6 +36,8 @@ pub const OFF: &str = "Open Sage is off. Turn it on in Settings, under Voice.";
 pub const GETTING_READY: &str = "Open Sage is still getting ready.";
 pub const NOT_READY: &str =
     "Open Sage is not ready yet. Turn it on in Settings, under Voice, and wait until it is ready.";
+/// Sage is on but in the middle of something: listening, thinking or speaking.
+pub const BUSY: &str = "Sage is busy just now. Try again when it has finished.";
 pub const IN_USE: &str = "The speech files are in use. Close Sage and try again.";
 pub const MODELS_BROKEN: &str = "The speech files could not be loaded. Remove them in Settings, \
      under Voice, and turn Open Sage on again.";
@@ -821,8 +823,11 @@ impl Service {
         let spec = {
             let mut s = self.lock();
             let ready = s.settings.voice_enabled && s.installed && s.live.is_some();
-            if !ready || s.state != State::Idle {
+            if !ready {
                 return Err(CmdError::invalid(NOT_READY));
+            }
+            if s.state != State::Idle {
+                return Err(CmdError::invalid(BUSY));
             }
             if s.setting_up {
                 return Err(CmdError::invalid(SETUP_BUSY));
@@ -1157,7 +1162,8 @@ impl Service {
             let s = self.lock();
             match &s.live {
                 Some(l) if s.state == State::Idle => l.session.clone(),
-                _ => return Err(CmdError::invalid(NOT_READY)),
+                Some(_) => return Err(CmdError::invalid(BUSY)),
+                None => return Err(CmdError::invalid(NOT_READY)),
             }
         };
         let mut states = self.state_tx.subscribe();
@@ -1570,7 +1576,14 @@ impl SessionFactory for RealFactory {
             takes.push(heard);
         }
         drop(mic);
+        // Take 0: the recording is over and the takes are being worked out. The microphone
+        // is closed, so the person must not be told to speak any more.
+        on_take(0);
         let level = dots_voice::voice_level(&takes);
+        tracing::info!(
+            "voice: setup recorded {} takes, voice level {level:?}",
+            takes.len()
+        );
         let mut spotters = Vec::new();
         for tuning in WakeTuning::STRICTEST_FIRST {
             let wake =
@@ -1581,7 +1594,12 @@ impl SessionFactory for RealFactory {
             spotters
                 .iter_mut()
                 .find(|(t, _)| *t == tuning)
-                .map_or(0, |(_, wake)| dots_voice::heard_times(wake, &takes, level))
+                .map_or(0, |(_, wake)| {
+                    let heard = dots_voice::heard_times(wake, &takes, level);
+                    // Each tuning's count: a poor run can then be told from a poor pick.
+                    tracing::info!("voice: setup at {tuning:?} heard {heard}");
+                    heard
+                })
         }))
     }
 

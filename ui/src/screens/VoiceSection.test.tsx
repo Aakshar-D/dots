@@ -218,6 +218,9 @@ describe("Settings > Voice", () => {
     expect(await screen.findByText("Get ready…")).toBeVisible();
     act(() => backend.emit("voice", { kind: "setting_up", take: 2, of: 5 }));
     expect(await screen.findByText('Say "Hey Sage" now (2 of 5)')).toBeVisible();
+    // The recording is over: nobody is told to speak to a closed microphone.
+    act(() => backend.emit("voice", { kind: "setting_up", take: 0, of: 5 }));
+    expect(await screen.findByText("Working it out… No need to speak now.")).toBeVisible();
     const found = {
       takes: 5,
       heard: 4,
@@ -245,6 +248,7 @@ describe("Settings > Voice", () => {
     renderApp("/settings/voice");
     const teach = await screen.findByRole("button", { name: "Teach Sage your voice again" });
     expect(teach).toBeDisabled();
+    expect(screen.getByText("Turn on Hey Sage and save, then teach Sage your voice.")).toBeVisible();
     expect(
       screen.getByText("Sage heard you 5 times out of 5 and is set up for your voice."),
     ).toBeVisible();

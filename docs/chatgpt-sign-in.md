@@ -21,7 +21,7 @@ and [client registration](https://developers.openai.com/siwc/request-client-id).
 The publisher sets these environment variables when compiling Sage:
 
 ```powershell
-$env:DOTS_OPENAI_CLIENT_ID = '<the registered Dots client ID>'
+$env:DOTS_OPENAI_CLIENT_ID = '<the registered Sage client ID>'
 $env:DOTS_OPENAI_REDIRECT_URI = 'http://127.0.0.1:47322/auth/openai/callback'
 bun run tauri build
 ```

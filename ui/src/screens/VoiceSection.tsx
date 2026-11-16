@@ -180,6 +180,9 @@ function VoiceSetupBlock({ ready, wake }: { ready: boolean; wake: boolean }) {
     enabled: ready,
   });
   const take = useVoiceLive((live) => live.settingUp);
+  // The setup uses the settings as saved, not the form: "Hey Sage" must be on and saved.
+  const stored = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
+  const wakeSaved = wake && (stored?.voice_wake_phrase ?? false);
   const run = useMutation({
     mutationFn: commands.voiceSetupRun,
     onSuccess: (found: VoiceSetup) => {
@@ -197,17 +200,26 @@ function VoiceSetupBlock({ ready, wake }: { ready: boolean; wake: boolean }) {
           type="button"
           variant="outline"
           size="sm"
-          disabled={!ready || !wake || run.isPending}
+          disabled={!ready || !wakeSaved || run.isPending}
           onClick={() => run.mutate()}
         >
           {saved.data ? "Teach Sage your voice again" : "Teach Sage your voice"}
         </Button>
         {run.isPending && (
           <p role="status" className="text-sm font-medium">
-            {take ? `Say "Hey Sage" now (${take.take} of ${take.of})` : "Get ready…"}
+            {!take
+              ? "Get ready…"
+              : take.take === 0
+                ? "Working it out… No need to speak now."
+                : `Say "Hey Sage" now (${take.take} of ${take.of})`}
           </p>
         )}
       </div>
+      {ready && !wakeSaved && (
+        <p data-voice-setup-why="" className="text-xs text-muted-foreground">
+          Turn on Hey Sage and save, then teach Sage your voice.
+        </p>
+      )}
       {!run.isPending && run.data && (
         <p role="status" data-voice-setup-done="" className="text-sm font-medium">
           {run.data.heard > 0

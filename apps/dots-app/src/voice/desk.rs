@@ -24,6 +24,8 @@ const NOT_OPEN: &str = "That one isn't open.";
 
 const NO_FOLDER: &str = "I can't find that folder on this computer.";
 const NOT_WRITTEN: &str = "I couldn't write the note.";
+const NOTE_NOT_OPENED: &str =
+    "The note is written, in your Sage Notes folder, but I couldn't open it.";
 #[cfg(not(any(windows, target_os = "macos")))]
 const NO_APPS_HERE: &str = "I can't open apps on this computer yet.";
 
@@ -97,6 +99,7 @@ impl Desk for SystemDesk {
                     NOT_WRITTEN.to_string()
                 })?;
                 self.open_path(&path)
+                    .map_err(|_| NOTE_NOT_OPENED.to_string())
             }
             DeskTask::Web { url, .. } | DeskTask::Search { url } => self.open_url(url),
             DeskTask::App { app } => self.open_app(*app),
