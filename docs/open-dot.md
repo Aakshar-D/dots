@@ -47,6 +47,8 @@ You do not press a button to finish. Sage notices when you stop talking: it wait
 | "Open github dot com." | Opens the site's front page in your browser. | No |
 | "Search for flights to Lisbon." | Opens a web search in your browser. | No |
 | "Open the calculator." or "Open my Downloads." | Opens an app or folder: Notepad, Calculator, your files, a terminal, Paint, the system settings, your browser, Documents, Downloads, Desktop, Pictures or your notes folder. | No |
+| "Remember that I like short answers." or "Call the research sol Scout." | Keeps one short note about you for later conversations and says "I'll remember that." | No |
+| "Forget what you know about me." | Forgets every note and what it counted about how you talk. | No |
 | "Stop." or "Never mind." or "Cancel." | Stops speaking and drops the step it was waiting on. | No |
 | "Say that again." | Repeats its last reply. | No |
 | "Thank you." or "Goodbye." or "Close." or "Thank you, I'll call you later." | Says nothing, drops the step it was waiting on and closes the stage. | No |
@@ -96,6 +98,17 @@ A yes counts only for a question Sage said to its end. If you stop Sage or talk 
 
 Just before it acts, Sage checks that the approval, sol or question is still there. If it is not, it says "That one is already handled." or "I can't find that sol anymore." and does nothing.
 
+## What Sage learns about you
+
+Sage gets to know you as you talk to it, so that it answers the way you like and guesses better what you mean.
+
+- **Notes.** When you tell it how you like to be answered, what you call things or what you are working on, it keeps one short sentence about that. It keeps at most 30; the oldest goes when one more is learned.
+- **Habits.** It counts how many words you usually say at a time and which kinds of things you ask for (seeing what needs you, messaging a sol, opening a screen and so on). After five requests it tells the model, for example, that you like it brief and what you ask for most.
+
+It never keeps what you said, only those notes and counts. They are in `open-sage-memory.json` in Sage's data folder on this computer, and they go to the model at the start of each request.
+
+In Settings, Voice, **What Sage has learned** lists the notes. Remove any one with its ✕, or **Forget everything**. Turn off **Learn how I talk and what I need** and Sage keeps nothing more and sends nothing it learned; what it had learned stays in the list until you forget it.
+
 ## Stopping and interrupting
 
 - Esc closes the stage and stops any speech. Work already started in a sol carries on.
@@ -109,6 +122,7 @@ Sage listens for at most five follow-ups in a row. Then it rests until you use t
 
 - Speech is recognised and spoken on this computer. Audio is never sent anywhere.
 - **Teach Sage your voice** keeps no sound. The five takes are held in memory for the few seconds it takes to check them. What is stored is the setting it picked, how loud your voice was, and how many takes it heard.
+- What Sage learns about you (short notes and counts, never what you said) is kept on this computer and sent to the model with your requests. See "What Sage learns about you"; you can turn it off.
 - No audio and no transcript is saved. What Sage heard and said is kept in memory for the conversation and dropped when you close the stage or after 10 minutes without a turn. Logs say that a turn happened and how long it took, not what was said.
 - To understand a request, Sage sends the model your words and a short picture of now: your sols, the pending approvals, the open questions, the names of your connectors with whether each is connected and which sols use it, and the names of the apps in the workspace. The request goes through your own Claude CLI sign-in. Nothing else is sent. Vault values are never in the picture.
 - A private approval is only counted ("one private approval needs you"). Its tool and target are not sent, not read aloud, and it opens on screen.

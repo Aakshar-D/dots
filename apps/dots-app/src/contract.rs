@@ -2542,6 +2542,19 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
     events.extend(targets.map(|target| VoiceEvent::Open { target }));
     samples["VoiceEvent"] = to(events);
     samples["VoiceStatus"] = to([off, ready]);
+    samples["VoiceMemory"] = to([
+        dots_core::open_dot::memory::Learned {
+            learning: true,
+            notes: vec![
+                "Prefers answers in one sentence.".into(),
+                "Calls the research sol Scout.".into(),
+            ],
+        },
+        dots_core::open_dot::memory::Learned {
+            learning: false,
+            notes: Vec::new(),
+        },
+    ]);
     samples["VoiceSetup"] = to([
         VoiceSetup {
             takes: 5,

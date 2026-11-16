@@ -723,7 +723,8 @@ impl Runtime {
                     cfg.data_dir.join(DRAFTS_DIR),
                     crate::open_dot::think::THINK_LIMIT,
                 ),
-            )),
+            ))
+            .remembering(cfg.data_dir.join("open-sage-memory.json")),
             setup_lock: Mutex::new(()),
             claude_program,
             claude_version,

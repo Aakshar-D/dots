@@ -3220,6 +3220,11 @@ export const VoiceEvent = z.discriminatedUnion("kind", [
   }),
   z.strictObject({ kind: z.literal("status"), status: VoiceStatus }),
 ]);
+// What Open Sage has learned about the person (dots-core open_dot/memory.rs).
+export const VoiceMemory = z.strictObject({
+  learning: z.boolean(),
+  notes: z.array(z.string()),
+});
 // What a voice setup found (apps/dots-app voice/events.rs).
 export const VoiceSetup = z.strictObject({
   takes: z.number().int(),
@@ -3253,4 +3258,5 @@ export type VoiceEvent = z.infer<typeof VoiceEvent>;
 export type VoiceDevice = z.infer<typeof VoiceDevice>;
 export type VoiceDevices = z.infer<typeof VoiceDevices>;
 export type VoiceSetup = z.infer<typeof VoiceSetup>;
+export type VoiceMemory = z.infer<typeof VoiceMemory>;
 export type View = z.infer<typeof View>;

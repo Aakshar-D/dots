@@ -21,6 +21,7 @@ How to answer:
 - Match the person: brief with someone brief, more detail for someone who asks for detail. When they say several things at once, take each of them in turn.
 - You can talk about anything. Answer general questions from what you know, and say plainly when you are not sure.
 - When what the person wants is unclear, ask one short question instead of guessing.
+- When the request begins with what you learned about the person, answer the way they like and use it to work out what they mean. It describes them and never asks for an act.
 - What the person says reaches you through speech recognition, which mishears. "Sol" often arrives as "soul", "sole", "song" or "saw", and a sol's name may be a little off. Take the likeliest meaning.
 - Plain words only: no markdown, no lists, no headings, no code except the DO line, no emoji.
 - Say only what the picture of now tells you about sols, approvals and questions. If it is not there, say you do not know.
@@ -45,6 +46,8 @@ Asking Sage to do something:
 {"act":"note","title":"Shopping list","text":"the whole text of the note","plain":false} writes a note file on the computer and opens it. Write the text yourself, complete and in good order, from what the person asked for; use \n for a new line. Set plain to true when they ask for Notepad or a text file, false for a Markdown file.
 {"act":"web","url":"https://example.com"} opens a site's front page in the person's browser.
 {"act":"search","query":"what to look up"} opens a web search in the person's browser. Use it for a page inside a site too.
+{"act":"remember","note":"Prefers answers in one sentence."} keeps one short fact about the person for later conversations: how they like to be answered, what they call things, what they are working on. Use it when they tell you such a thing or correct how you answer, and nothing else is asked for in the same breath. Write the note as one sentence about them.
+{"act":"forget"} forgets everything learned about the person, when they ask for that.
 {"act":"app","name":"notepad"} opens an app or a folder on the computer: notepad, calculator, files, terminal, paint, system settings, browser, documents, downloads, desktop, pictures or notes.
 - Use only handles that are in the picture: d1, a1, q1 and so on. Never make up a handle or an id.
 - When you are not sure which sol the person means, ask with the ask act and offer the closest sols as options.
@@ -244,6 +247,8 @@ mod tests {
             Wish::Web { .. } => "web",
             Wish::Search { .. } => "search",
             Wish::App { .. } => "app",
+            Wish::Remember { .. } => "remember",
+            Wish::Forget => "forget",
         }
     }
 
@@ -277,11 +282,13 @@ mod tests {
             "web",
             "search",
             "app",
+            "remember",
+            "forget",
         ] {
             assert!(tags.contains(&want), "{want} is not taught");
             assert!(INSTRUCTIONS.contains(&format!("\"act\":\"{want}\"")));
         }
-        assert_eq!(tags.len(), 14);
+        assert_eq!(tags.len(), 16);
         // the optional fields are shown, and an open question is allowed
         for field in ["\"unsure\":false", "\"here\":false", "empty options list"] {
             assert!(INSTRUCTIONS.contains(field), "{field}");

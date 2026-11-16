@@ -346,6 +346,10 @@ command_list![
     voice_devices,
     voice_setup,
     voice_setup_run,
+    voice_memory,
+    voice_memory_forget,
+    voice_memory_clear,
+    voice_memory_learning,
 ];
 
 /// Keeps the log writer flushing until the app exits.

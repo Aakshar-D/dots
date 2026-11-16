@@ -75,6 +75,12 @@ pub enum Wish {
     App {
         name: String,
     },
+    /// One sentence about the person to keep for later conversations.
+    Remember {
+        note: String,
+    },
+    /// Forget everything learned about the person.
+    Forget,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -104,6 +110,24 @@ pub fn read_reply(text: &str) -> (Reply, bool) {
 }
 
 impl Wish {
+    /// What the person asked for, in a few plain words, for the tally of what they ask for
+    /// most (`memory`). None for what says nothing about their needs.
+    pub fn habit(&self) -> Option<&'static str> {
+        Some(match self {
+            Wish::Needs => "see what needs them",
+            Wish::ReadQuestion { .. } | Wish::Answer { .. } => "answer a sol's question",
+            Wish::Approve { .. } | Wish::Deny { .. } => "decide an approval",
+            Wish::Create { .. } => "set up a new sol",
+            Wish::Send { .. } => "message a sol",
+            Wish::Run { .. } => "run a sol",
+            Wish::Open { .. } => "open a screen",
+            Wish::Note { .. } => "write a note",
+            Wish::Web { .. } | Wish::Search { .. } => "open something on the web",
+            Wish::App { .. } => "open an app or a folder",
+            Wish::Ask { .. } | Wish::Remember { .. } | Wish::Forget => return None,
+        })
+    }
+
     /// Whether every value is usable. Blank ids, texts and options are not.
     fn is_usable(&self) -> bool {
         let filled = |s: &str| !s.trim().is_empty();
@@ -120,6 +144,8 @@ impl Wish {
             Wish::Web { url } => filled(url),
             Wish::Search { query } => filled(query),
             Wish::App { name } => filled(name),
+            Wish::Remember { note } => filled(note),
+            Wish::Forget => true,
             Wish::Ask { question, options } => {
                 filled(question)
                     && options.len() <= MAX_OPTIONS

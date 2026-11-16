@@ -91,6 +91,10 @@ pub enum Step {
     },
     /// Something on the computer itself: a note, a site, a search, an app.
     Desk(DeskTask),
+    /// One sentence about the person, kept for later conversations.
+    Remember(String),
+    /// Everything learned about the person is forgotten.
+    Forget,
 }
 
 /// What an answer to an `Ask` is for.
@@ -251,6 +255,8 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
         Wish::Note { title, text, plain } => on_desk(desk::note(title, text, *plain)),
         Wish::Web { url } => on_desk(desk::web(url)),
         Wish::Search { query } => on_desk(desk::search(query)),
+        Wish::Remember { note } => Step::Remember(note.clone()),
+        Wish::Forget => Step::Forget,
         Wish::App { name } => match desk::app(name) {
             Some(app) => Step::Desk(DeskTask::App { app }),
             None => Step::Say(desk::NO_APP.into()),

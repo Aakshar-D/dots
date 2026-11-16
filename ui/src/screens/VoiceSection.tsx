@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play } from "lucide-react";
+import { Play, X } from "lucide-react";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
-import type { Settings, VoiceDevice, VoiceSetup, VoiceStatus } from "@/api/types";
+import type { Settings, VoiceDevice, VoiceMemory, VoiceSetup, VoiceStatus } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
@@ -219,6 +219,97 @@ function VoiceSetupBlock({ ready, wake }: { ready: boolean; wake: boolean }) {
         seconds, and no recording is kept.
       </p>
     </div>
+  );
+}
+
+/// What Sage has learned about the person from talking with them: the notes it keeps, each
+/// with a way to remove it, a way to forget them all, and the switch that turns the learning
+/// off. Everything here acts at once.
+function LearnedBlock({ enabled }: { enabled: boolean }) {
+  const qc = useQueryClient();
+  const memory = useQuery({
+    queryKey: keys.voiceMemory,
+    queryFn: commands.voiceMemory,
+    enabled,
+    // It changes while the person talks to Sage, with no event to say so.
+    staleTime: 0,
+  });
+  const took = (next: VoiceMemory) => qc.setQueryData(keys.voiceMemory, next);
+  const learning = useMutation({
+    mutationFn: commands.voiceMemoryLearning,
+    onSuccess: took,
+    onError: notifyError,
+  });
+  const forget = useMutation({
+    mutationFn: (at: { index: number; note: string }) => commands.voiceMemoryForget(at.index, at.note),
+    onSuccess: took,
+    onError: notifyError,
+  });
+  const clear = useMutation({
+    mutationFn: commands.voiceMemoryClear,
+    onSuccess: (next) => {
+      took(next);
+      toast.success("Forgotten");
+    },
+    onError: notifyError,
+  });
+  const m = memory.data;
+  const busy = !m || learning.isPending || forget.isPending || clear.isPending;
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <Switch
+          id="settings-voice-learning"
+          checked={m?.learning ?? false}
+          aria-disabled={busy}
+          onCheckedChange={(on) => {
+            if (!busy) learning.mutate(on);
+          }}
+        />
+        <Label htmlFor="settings-voice-learning">Learn how I talk and what I need</Label>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Sage keeps short notes about how you like to be answered and what you ask for most, and uses them
+        in later conversations. They stay on this computer and go to the model with your requests. Say
+        "remember that…" to teach it something, or "forget what you know about me".
+      </p>
+      {!enabled && <p className="text-xs text-muted-foreground">Turn Open Sage on to see what it has learned.</p>}
+      {m && m.notes.length === 0 && (
+        <p className="text-xs text-muted-foreground">Nothing learned yet.</p>
+      )}
+      {m && m.notes.length > 0 && (
+        <ul aria-label="What Sage has learned" className="flex flex-col gap-1">
+          {m.notes.map((note, index) => (
+            <li key={`${index}:${note}`} className="flex items-start gap-2 rounded-md border px-2 py-1 text-sm">
+              <span className="min-w-0 flex-1 wrap-anywhere">{note}</span>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`Forget: ${note}`}
+                disabled={busy}
+                onClick={() => forget.mutate({ index, note })}
+              >
+                <X aria-hidden />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {m && (
+        <div>
+          <ConfirmButton
+            title="Forget everything Sage has learned?"
+            description="The notes and what it counted about how you talk are removed. It starts learning again from nothing."
+            confirmLabel="Forget"
+            disabled={busy}
+            onConfirm={() => clear.mutate()}
+          >
+            Forget everything
+          </ConfirmButton>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -437,6 +528,10 @@ export function VoiceSection({
           />
           <Label htmlFor="settings-voice-tone">Play a tone when Sage starts listening</Label>
         </div>
+      </Section>
+
+      <Section title="What Sage has learned">
+        <LearnedBlock enabled={s?.enabled === true} />
       </Section>
 
       <Section title="Devices">
