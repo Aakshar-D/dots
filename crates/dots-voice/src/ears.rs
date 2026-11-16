@@ -257,6 +257,11 @@ impl Ears {
         self.in_clip.then_some(self.quiet_run)
     }
 
+    /// The longest run of speech frames in the clip in progress; None when no clip is open.
+    pub fn speech_frames(&self) -> Option<usize> {
+        self.in_clip.then_some(self.longest_run)
+    }
+
     /// Fills the pre-roll with silence, as if the person had been quiet until now. For words
     /// that start the moment the ears open (straight after "Hey Dot"): the recogniser can
     /// return nothing at all for a clip that begins in the middle of speech.

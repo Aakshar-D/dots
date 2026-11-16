@@ -51,6 +51,10 @@ const TONE_TAIL: Duration = Duration::from_millis(60);
 const PAUSE_FRAMES: usize = 4;
 /// Quiet frames in a sentence (about 100 ms) at which `Pausing` is sent.
 const PAUSE_HINT_FRAMES: usize = 3;
+/// Speech frames in a row (about 400 ms) that show the person is going on with a sentence
+/// just taken. A breath, a cough or a noise of the room is shorter: with a faint microphone
+/// made louder such sounds start a clip often, and each must not take the answer back.
+const CARRY_SPEECH_FRAMES: usize = 12;
 /// Idle frames kept for the ears (about a second): the spotter answers at most this late.
 const RECENT_FRAMES: usize = 32;
 
@@ -1493,18 +1497,27 @@ impl Worker {
                     self.wake_over_dot(word);
                 } else if self.carry.is_some()
                     && self.fillers_pending == 0
-                    && self.carry_until.is_some_and(|until| now < until)
-                    && self.ears.push(frame).contains(&EarEvent::Started)
+                    && (self.ears.quiet_frames().is_some()
+                        || self.carry_until.is_some_and(|until| now < until))
                 {
-                    // The person goes on with what they were saying: the request on its
-                    // way is given up (a reply for it is dropped), and the session listens
-                    // to the rest. The clip just begun carries on: the ears are not reset.
-                    self.stop_speech();
-                    self.in_speech = true;
-                    self.clip_started = now;
-                    self.quiet_since = now;
-                    self.listen_limit = LISTEN_AFTER_OPEN;
-                    self.enter(State::Listening);
+                    // A sound in the time the person may go on. A clip that ends by itself
+                    // here was too short to be them going on: the answer on its way stands.
+                    let _ = self.ears.push(frame);
+                    if self
+                        .ears
+                        .speech_frames()
+                        .is_some_and(|run| run >= CARRY_SPEECH_FRAMES)
+                    {
+                        // The person goes on with what they were saying: the request on
+                        // its way is given up (a reply for it is dropped), and the session
+                        // listens to the rest. The clip carries on: the ears are not reset.
+                        self.stop_speech();
+                        self.in_speech = true;
+                        self.clip_started = now;
+                        self.quiet_since = now;
+                        self.listen_limit = LISTEN_AFTER_OPEN;
+                        self.enter(State::Listening);
+                    }
                 }
             }
             State::Speaking => {
@@ -1838,7 +1851,10 @@ impl Worker {
                 }
             }
             State::Thinking => {
-                if self.carry.is_some() && self.carry_until.is_none_or(|until| now >= until) {
+                if self.carry.is_some()
+                    && self.ears.quiet_frames().is_none()
+                    && self.carry_until.is_none_or(|until| now >= until)
+                {
                     // The person did not go on: the sentence stands as it was.
                     self.carry = None;
                     self.ears.reset();
@@ -3043,14 +3059,13 @@ mod tests {
     fn a_person_who_goes_on_after_a_pause_is_heard_whole() {
         let mut r = carrying();
         let first = heard_and_may_go_on(&mut r);
-        r.sentence();
+        // Not yet: a sound this short could be a breath.
+        r.mic.send(SPEECH, CARRY_SPEECH_FRAMES - 1);
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Thinking);
+        r.mic.send(SPEECH, 1);
         r.expect_state(State::Listening, true);
-        assert_eq!(
-            r.next(),
-            SessionEvent::Hearing {
-                text: "hello hello".into()
-            }
-        );
+        r.mic.send(QUIET, 2);
         let second = match r.next() {
             SessionEvent::Heard { text, turn } => {
                 assert_eq!(text, "hello hello");
@@ -3066,24 +3081,44 @@ mod tests {
         r.expect_saying("New.");
     }
 
-    /// A cough while the session thinks is not the person going on: the sentence is asked
-    /// again as it was, and not waited on a second time.
+    /// A cough, a breath or a short word while the session thinks is not the person going
+    /// on: the person is done, and the answer on its way is the one they hear.
     #[test]
-    fn a_noise_after_a_sentence_asks_the_sentence_again() {
+    fn a_short_sound_after_a_sentence_does_not_take_the_answer_back() {
         let mut r = carrying();
         let first = heard_and_may_go_on(&mut r);
-        r.mic.send(SPEECH, 1);
+        for sound in [1, 3, CARRY_SPEECH_FRAMES - 1] {
+            r.mic.send(SPEECH, sound);
+            r.mic.send(QUIET, 2);
+            r.nothing_more();
+            assert_eq!(r.sync().state, State::Thinking);
+        }
+        r.session.say(first, "Sure.", After::Rest);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Sure.");
+    }
+
+    /// A sound still going when the time to go on is over is heard to its end before the
+    /// microphone closes: speech that began in time still counts.
+    #[test]
+    fn speech_that_began_in_time_is_heard_out() {
+        let mut r = carrying();
+        let first = heard_and_may_go_on(&mut r);
+        r.mic.send(SPEECH, 4);
+        r.sync();
+        r.clock.advance(2_500);
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Thinking);
+        r.mic.send(SPEECH, CARRY_SPEECH_FRAMES);
         r.expect_state(State::Listening, true);
         r.mic.send(QUIET, 2);
         match r.next() {
             SessionEvent::Heard { text, turn } => {
-                assert_eq!(text, "hello");
+                assert_eq!(text, "hello hello");
                 assert!(turn > first);
             }
             other => panic!("expected Heard, got {other:?}"),
         }
-        r.expect_state(State::Thinking, false);
-        assert!(!r.mic.is_open());
     }
 
     /// After the time to go on has passed the microphone closes, and speech is not heard.
