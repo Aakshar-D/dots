@@ -49,12 +49,19 @@ const TONE_TAIL: Duration = Duration::from_millis(60);
 /// A clip open when the wait after "Hey Sage" is over, and quiet for this many frames (about
 /// 130 ms), is the end of the phrase itself and not the start of a request.
 const PAUSE_FRAMES: usize = 4;
-/// Quiet frames in a sentence (about 100 ms) at which `Pausing` is sent.
-const PAUSE_HINT_FRAMES: usize = 3;
+/// Quiet frames in a sentence (about 250 ms) at which `Pausing` is sent: longer than the gap
+/// between two words, so that it is sent at a real pause and not many times a sentence.
+const PAUSE_HINT_FRAMES: usize = 8;
 /// Speech frames in a row (about 400 ms) that show the person is going on with a sentence
 /// just taken. A breath, a cough or a noise of the room is shorter: with a faint microphone
 /// made louder such sounds start a clip often, and each must not take the answer back.
 const CARRY_SPEECH_FRAMES: usize = 12;
+/// A sound in the time to go on that has been quiet this long (about 200 ms) without
+/// becoming speech is let go, unread.
+const CARRY_NOISE_QUIET: usize = 6;
+/// Speech frames in a row that count as the person speaking when a reply or a filler is
+/// about to sound over them.
+const SPEAKING_NOW_FRAMES: usize = 3;
 /// Idle frames kept for the ears (about a second): the spotter answers at most this late.
 const RECENT_FRAMES: usize = 32;
 
@@ -886,7 +893,7 @@ impl Worker {
                 }
             }
             Command::Say { turn, text, then } => {
-                if self.answers(turn) {
+                if self.answers(turn) && !self.gone_on() {
                     self.voice_heard_at = self.clock.now();
                     if !self.ready_sink() {
                         return self.speaker_gone();
@@ -899,7 +906,7 @@ impl Worker {
                 }
             }
             Command::Question { turn, text } => {
-                if self.answers(turn) {
+                if self.answers(turn) && !self.gone_on() {
                     self.voice_heard_at = self.clock.now();
                     if self.reply_open {
                         // The words before it are a reply of their own.
@@ -919,7 +926,7 @@ impl Worker {
                 }
             }
             Command::Delta { turn, text } => {
-                if self.answers(turn) {
+                if self.answers(turn) && !self.gone_on() {
                     // A long streamed reply is not cut while its text is still arriving.
                     self.voice_heard_at = self.clock.now();
                     if !self.reply_open && !self.ready_sink() {
@@ -946,6 +953,8 @@ impl Worker {
                 if self.state != State::Off {
                     self.follow_ups = 0;
                     self.stop_speech();
+                    // A click is its own turn: nothing said before it is gone on with.
+                    self.carry = None;
                     self.heard(turn, text);
                 }
             }
@@ -953,8 +962,15 @@ impl Worker {
                 if self.turn_open
                     && turn == self.turn
                     && self.state == State::Thinking
+                    && !self.gone_on()
                     && self.ready_sink()
                 {
+                    // Sage speaks now: the time to go on is over, and what the microphone
+                    // heard in it is let go, so the filler is never taken for the person.
+                    if self.carry.take().is_some() {
+                        self.ears.reset();
+                        self.refresh();
+                    }
                     self.voice.say(&text);
                     self.fillers_pending += 1;
                 }
@@ -1500,23 +1516,22 @@ impl Worker {
                     && (self.ears.quiet_frames().is_some()
                         || self.carry_until.is_some_and(|until| now < until))
                 {
-                    // A sound in the time the person may go on. A clip that ends by itself
-                    // here was too short to be them going on: the answer on its way stands.
+                    // A sound in the time the person may go on.
                     let _ = self.ears.push(frame);
                     if self
                         .ears
                         .speech_frames()
                         .is_some_and(|run| run >= CARRY_SPEECH_FRAMES)
                     {
-                        // The person goes on with what they were saying: the request on
-                        // its way is given up (a reply for it is dropped), and the session
-                        // listens to the rest. The clip carries on: the ears are not reset.
-                        self.stop_speech();
-                        self.in_speech = true;
-                        self.clip_started = now;
-                        self.quiet_since = now;
-                        self.listen_limit = LISTEN_AFTER_OPEN;
-                        self.enter(State::Listening);
+                        self.take_back();
+                    } else if self
+                        .ears
+                        .quiet_frames()
+                        .is_some_and(|quiet| quiet >= CARRY_NOISE_QUIET)
+                    {
+                        // Too short to be them going on, and over: it is let go before
+                        // the ears read it. The answer on its way stands.
+                        self.ears.reset();
                     }
                 }
             }
@@ -1558,8 +1573,10 @@ impl Worker {
                     }
                     self.ear_event(event, now);
                 }
+                // Not for the end of the wake phrase: no request was said yet.
                 if self.state == State::Listening
                     && self.in_speech
+                    && !self.after_wake
                     && self.ears.quiet_frames() == Some(PAUSE_HINT_FRAMES)
                 {
                     self.send(SessionEvent::Pausing);
@@ -1650,6 +1667,40 @@ impl Worker {
                 self.nothing_caught(now);
             }
         }
+    }
+
+    /// The person goes on with what they were saying: the request on its way is given up (a
+    /// reply for it is dropped), and the session listens to the rest. The clip in progress
+    /// carries on: the ears are not reset.
+    fn take_back(&mut self) {
+        let now = self.clock.now();
+        self.stop_speech();
+        self.in_speech = true;
+        self.clip_started = now;
+        self.quiet_since = now;
+        self.listen_limit = LISTEN_AFTER_OPEN;
+        self.enter(State::Listening);
+    }
+
+    /// A reply or a filler is about to sound. When the person is speaking at this moment, in
+    /// the time they may go on, they are heard out instead: the request is taken back, and
+    /// whether it was is returned. Should the sound turn out to be no sentence, the sentence
+    /// as it was is asked again (`carried_alone`).
+    fn gone_on(&mut self) -> bool {
+        let speaking = self.state == State::Thinking
+            && self.carry.is_some()
+            && self
+                .ears
+                .quiet_frames()
+                .is_some_and(|quiet| quiet < CARRY_NOISE_QUIET)
+            && self
+                .ears
+                .speech_frames()
+                .is_some_and(|run| run >= SPEAKING_NOW_FRAMES);
+        if speaking {
+            self.take_back();
+        }
+        speaking
     }
 
     /// The person seemed to go on with their sentence, and what came was no sentence (a
@@ -3010,7 +3061,8 @@ mod tests {
         r.session.open();
         r.expect_state(State::Listening, true);
         r.mic.send(SPEECH, 3);
-        r.mic.send(QUIET, 2);
+        // The gap between two words is not a pause.
+        r.mic.send(QUIET, PAUSE_HINT_FRAMES - 1);
         r.nothing_more();
         r.mic.send(QUIET, 1);
         assert_eq!(r.next(), SessionEvent::Pausing);
@@ -3018,7 +3070,7 @@ mod tests {
         r.nothing_more();
         // The person goes on and pauses again: told again.
         r.mic.send(SPEECH, 2);
-        r.mic.send(QUIET, 3);
+        r.mic.send(QUIET, PAUSE_HINT_FRAMES);
         assert_eq!(r.next(), SessionEvent::Pausing);
     }
 
@@ -3098,6 +3150,38 @@ mod tests {
         r.expect_saying("Sure.");
     }
 
+    /// The answer arrives while the person has just begun to go on: they are heard out, and
+    /// the answer to the first part is not spoken over them.
+    #[test]
+    fn a_reply_that_arrives_while_the_person_goes_on_is_not_spoken_over_them() {
+        let mut r = carrying();
+        let first = heard_and_may_go_on(&mut r);
+        r.mic.send(SPEECH, SPEAKING_NOW_FRAMES + 1);
+        r.sync();
+        r.session.say(first, "Old.", After::Rest);
+        r.expect_state(State::Listening, true);
+        r.mic.send(SPEECH, 2);
+        r.mic.send(QUIET, 2);
+        match r.next() {
+            SessionEvent::Heard { text, turn } => {
+                assert_eq!(text, "hello hello");
+                assert!(turn > first);
+            }
+            other => panic!("expected Heard, got {other:?}"),
+        }
+    }
+
+    /// "One moment." ends the time to go on: the microphone closes, so the filler is never
+    /// taken for the person.
+    #[test]
+    fn a_filler_ends_the_time_to_go_on() {
+        let mut r = carrying();
+        let turn = heard_and_may_go_on(&mut r);
+        r.session.filler(turn, "One moment.");
+        r.expect_state(State::Thinking, false);
+        assert!(!r.mic.is_open());
+    }
+
     /// A sound still going when the time to go on is over is heard to its end before the
     /// microphone closes: speech that began in time still counts.
     #[test]
@@ -3157,7 +3241,6 @@ mod tests {
         // The tail of the phrase: a clip still open, already quiet, when the wait is over.
         r.mic.send(SPEECH, 3);
         r.mic.send(QUIET, 5);
-        assert_eq!(r.next(), SessionEvent::Pausing);
         r.sync();
         r.clock.advance(300);
         r.sync();

@@ -225,12 +225,11 @@ function VoiceSetupBlock({ ready, wake }: { ready: boolean; wake: boolean }) {
 /// What Sage has learned about the person from talking with them: the notes it keeps, each
 /// with a way to remove it, a way to forget them all, and the switch that turns the learning
 /// off. Everything here acts at once.
-function LearnedBlock({ enabled }: { enabled: boolean }) {
+function LearnedBlock() {
   const qc = useQueryClient();
   const memory = useQuery({
     queryKey: keys.voiceMemory,
     queryFn: commands.voiceMemory,
-    enabled,
     // It changes while the person talks to Sage, with no event to say so.
     staleTime: 0,
   });
@@ -257,23 +256,29 @@ function LearnedBlock({ enabled }: { enabled: boolean }) {
   const busy = !m || learning.isPending || forget.isPending || clear.isPending;
   return (
     <>
-      <div className="flex items-center gap-2">
-        <Switch
-          id="settings-voice-learning"
-          checked={m?.learning ?? false}
-          aria-disabled={busy}
-          onCheckedChange={(on) => {
-            if (!busy) learning.mutate(on);
-          }}
-        />
-        <Label htmlFor="settings-voice-learning">Learn how I talk and what I need</Label>
-      </div>
+      {m && (
+        <div className="flex items-center gap-2">
+          <Switch
+            id="settings-voice-learning"
+            checked={m.learning}
+            aria-disabled={busy}
+            onCheckedChange={(on) => {
+              if (!busy) learning.mutate(on);
+            }}
+          />
+          <Label htmlFor="settings-voice-learning">Learn how I talk and what I need</Label>
+        </div>
+      )}
+      {memory.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          What Sage has learned could not be read.
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">
         Sage keeps short notes about how you like to be answered and what you ask for most, and uses them
         in later conversations. They stay on this computer and go to the model with your requests. Say
         "remember that…" to teach it something, or "forget what you know about me".
       </p>
-      {!enabled && <p className="text-xs text-muted-foreground">Turn Open Sage on to see what it has learned.</p>}
       {m && m.notes.length === 0 && (
         <p className="text-xs text-muted-foreground">Nothing learned yet.</p>
       )}
@@ -531,7 +536,7 @@ export function VoiceSection({
       </Section>
 
       <Section title="What Sage has learned">
-        <LearnedBlock enabled={s?.enabled === true} />
+        <LearnedBlock />
       </Section>
 
       <Section title="Devices">

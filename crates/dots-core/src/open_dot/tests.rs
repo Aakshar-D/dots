@@ -2514,7 +2514,10 @@ async fn what_the_person_says_about_themselves_is_kept_and_told_to_the_model() {
         "Got it.\nDO {\"act\":\"remember\",\"note\":\"Prefers answers in one sentence.\"}",
     ));
     let got = t.hear("keep your answers to one sentence").await;
-    assert_eq!(said(&got), format!("Got it. {}", memory::REMEMBERED));
+    assert_eq!(
+        said(&got),
+        "Got it. I'll remember this: Prefers answers in one sentence."
+    );
     assert_eq!(
         t.mind.memory().learned().notes,
         vec!["Prefers answers in one sentence."]
@@ -2536,6 +2539,12 @@ async fn what_the_person_says_about_themselves_is_kept_and_told_to_the_model() {
     let got = t.hear("forget what you know about me").await;
     assert_eq!(said(&got), format!("Done. {}", memory::FORGOT));
     assert!(t.mind.memory().learned().notes.is_empty());
+    // The model alone does not wipe it: the person has to have said so.
+    t.mind.memory().remember("Likes tea.");
+    t.fake.push(says("Done.\nDO {\"act\":\"forget\"}"));
+    let got = t.hear("what needs me").await;
+    assert_eq!(said(&got), format!("Done. {}", memory::FORGET_HOW));
+    assert_eq!(t.mind.memory().learned().notes, vec!["Likes tea."]);
     t.rt.shutdown();
 }
 

@@ -350,10 +350,17 @@ impl Ears {
     /// The piece heard so far is read and put with the ones before it, and the next begins.
     /// The sentence goes on: no event tells of it.
     fn next_piece(&mut self) {
+        // Read once: the person is still speaking, and the frames that come while this
+        // reads wait in a short queue. (The end of the sentence is read with more care.)
         let piece = if self.piece_is_quiet() {
             None
         } else {
-            self.sentence()
+            self.recognizer
+                .transcribe(&self.clip_audio())
+                .ok()
+                .map(|text| text.trim().to_string())
+                .filter(|text| !text.is_empty())
+                .or_else(|| (!self.last_partial.is_empty()).then(|| self.last_partial.clone()))
         };
         if let Some(text) = joined(&self.earlier, piece) {
             self.earlier = text;

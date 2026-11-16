@@ -28,6 +28,8 @@ const HABIT_MIN: u64 = 3;
 pub const REMEMBERED: &str = "I'll remember that.";
 pub const KNEW: &str = "I had that already.";
 pub const FORGOT: &str = "I've forgotten what I learned about you.";
+pub const FORGET_HOW: &str =
+    "Say \"forget what you know about me\" and I'll forget what I learned about you.";
 pub const LEARNING_OFF: &str = "Learning is turned off in Settings, so I won't keep that.";
 pub const NOTHING_TO_KEEP: &str = "I didn't catch what to remember.";
 
@@ -91,10 +93,19 @@ impl Memory {
     /// The memory kept in `path`. A file that is missing or cannot be read is an empty
     /// memory: nothing is lost that was not lost already.
     pub fn kept_in(path: PathBuf) -> Self {
-        let known = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Known>(&text).ok())
-            .unwrap_or_default();
+        let known = match std::fs::read_to_string(&path) {
+            // A new install: learning is on, as the person is told in Settings.
+            Err(_) => Known::default(),
+            Ok(text) => serde_json::from_str::<Known>(&text).unwrap_or_else(|e| {
+                // The file is there and cannot be read: whether the person had turned the
+                // learning off is not known, so it is off until they turn it on.
+                tracing::warn!("open sage: what was learned could not be read: {e}");
+                Known {
+                    learning: false,
+                    ..Known::default()
+                }
+            }),
+        };
         Self {
             path: Some(path),
             known: Mutex::new(known),
@@ -107,9 +118,12 @@ impl Memory {
         let out = change(&mut known);
         if *known != before {
             if let Some(path) = &self.path {
+                // Written beside it and moved over it: a write cut short leaves the old file.
+                let beside = path.with_extension("json.new");
                 let saved = serde_json::to_string(&*known)
                     .map_err(std::io::Error::other)
-                    .and_then(|json| std::fs::write(path, json));
+                    .and_then(|json| std::fs::write(&beside, json))
+                    .and_then(|()| std::fs::rename(&beside, path));
                 if let Err(e) = saved {
                     tracing::warn!("open sage: what was learned could not be saved: {e}");
                 }
@@ -374,6 +388,14 @@ mod tests {
         assert_eq!(file["turns"], 1);
         assert_eq!(file["words"], 2);
         std::fs::write(&path, "not json").unwrap();
-        assert_eq!(Memory::kept_in(path).learned().notes, Vec::<String>::new());
+        // A file that cannot be read: nothing learned, and learning off until turned on.
+        assert_eq!(
+            Memory::kept_in(path.clone()).learned(),
+            Learned {
+                learning: false,
+                notes: Vec::new()
+            }
+        );
+        assert!(!path.with_extension("json.new").exists());
     }
 }

@@ -49,7 +49,7 @@ You do not press a button to finish. Sage notices when you stop talking: it wait
 | "Open the calculator." or "Open my Downloads." | Opens an app or folder: Notepad, Calculator, your files, a terminal, Paint, the system settings, your browser, Documents, Downloads, Desktop, Pictures or your notes folder. | No |
 | "Remember that I like short answers." or "Call the research sol Scout." | Keeps one short note about you for later conversations and says "I'll remember that." | No |
 | "Forget what you know about me." | Forgets every note and what it counted about how you talk. | No |
-| "Close Notepad." | Asks the app to close, as its close button does, so it still asks about unsaved work. Works for Notepad, Calculator, Paint, the terminal and the system settings. | No |
+| "Close Notepad." | Asks the app to close, as its close button does, so it still asks about unsaved work. Works for Notepad, Calculator, Paint and the system settings. | No |
 | "Close Chrome." or "Make a folder called Invoices on my desktop." or "Turn the volume down." | Anything else on your computer: Sage writes one command for it, shows it on screen and says what it will do. | Always. It runs only on a clear yes. |
 | "Stop." or "Never mind." or "Cancel." | Stops speaking and drops the step it was waiting on. | No |
 | "Say that again." | Repeats its last reply. | No |
@@ -69,7 +69,7 @@ Sage writes notes, opens sites and web searches, and opens and closes a fixed li
 
 - Closing asks the app to close. Nothing is forced, so an app with unsaved work still asks you.
 
-**Anything else is a command, and a command always asks first.** When you ask for something those cannot do (close another program, make or move files, change the volume, start something), Sage has the model write one command for your system's shell: PowerShell on Windows, zsh on a Mac. It puts the command on screen, says in a sentence what it is meant to do, and asks "Run this command?". It runs only on a clear yes ("yes", "do it", "go ahead"); "okay" is not enough, and saying anything else drops it.
+**Anything else is a command, and a command always asks first.** When you ask for something those cannot do (close another program, make or move files, change the volume, start something), Sage has the model write one command for your system's shell: PowerShell on Windows, zsh on a Mac. It brings the Sage window forward, puts the command on screen in full, says in a sentence what it is meant to do, and asks "Run this command?". A command is one plain line of at most 300 characters: one with a second line or with characters that hide text is refused. It runs only on a clear yes ("yes", "do it", "go ahead"); "okay" is not enough, and saying anything else drops it.
 
 Read the command before you say yes. The sentence about it is the model's own and can be wrong; what runs is what is on screen. It runs as you, with everything you are allowed to do, for at most a minute, and what it prints is shown afterwards. Sage does not undo it. For work that takes several steps, or that you want checked as it goes, ask a sol: it works with approvals.
 
@@ -108,7 +108,7 @@ Just before it acts, Sage checks that the approval, sol or question is still the
 
 Sage gets to know you as you talk to it, so that it answers the way you like and guesses better what you mean.
 
-- **Notes.** When you tell it how you like to be answered, what you call things or what you are working on, it keeps one short sentence about that. It keeps at most 30; the oldest goes when one more is learned.
+- **Notes.** When you tell it how you like to be answered, what you call things or what you are working on, it keeps one short sentence about that and says it back to you ("I'll remember this: ..."). It keeps at most 30; the oldest goes when one more is learned.
 - **Habits.** It counts how many words you usually say at a time and which kinds of things you ask for (seeing what needs you, messaging a sol, opening a screen and so on). After five requests it tells the model, for example, that you like it brief and what you ask for most.
 
 It never keeps what you said, only those notes and counts. They are in `open-sage-memory.json` in Sage's data folder on this computer, and they go to the model at the start of each request.

@@ -137,17 +137,32 @@ impl Thinker for CliThinker {
             return Err(OnceFailure::NoCli);
         };
         let started = std::time::Instant::now();
-        let asked = match self.take_warm(system, model) {
+        // A CLI started ahead can have given up waiting just as the request came. When it
+        // fails with nothing said, the request is asked again of a new one.
+        let mut said = false;
+        let ahead = match self.take_warm(system, model) {
             Some(warm) => {
                 self.warm_used.fetch_add(1, Ordering::SeqCst);
                 let Warm {
                     started, folder, ..
                 } = warm;
+                let mut each = |text: &str| {
+                    said = true;
+                    on_text(text);
+                };
                 let asked =
-                    ask_started_streamed(started, prompt, self.limit, cancel, on_text).await;
+                    ask_started_streamed(started, prompt, self.limit, cancel, &mut each).await;
                 drop(folder);
-                asked
+                Some(asked)
             }
+            None => None,
+        };
+        let asked = match ahead {
+            Some(Err(OnceFailure::Failed(_))) if !said && !cancel.is_cancelled() => None,
+            other => other,
+        };
+        let asked = match asked {
+            Some(asked) => asked,
             None => {
                 let folder = self.new_folder()?;
                 let once = Once {

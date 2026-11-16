@@ -154,41 +154,75 @@ fn kept(text: &str) -> String {
     text[..end].trim().to_string()
 }
 
-/// Runs one command the person said yes to. What it printed, or a sentence saying that it
-/// failed (with the first line of its error) or took too long.
+/// The first `OUTPUT_BYTES` of the file at `path`, as text; the file is removed.
+fn printed(path: &Path) -> String {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    if let Ok(file) = std::fs::File::open(path) {
+        let _ = file.take(OUTPUT_BYTES as u64).read_to_end(&mut bytes);
+    }
+    let _ = std::fs::remove_file(path);
+    kept(&String::from_utf8_lossy(&bytes))
+}
+
+/// Runs one command the person said yes to. What it printed (its errors after its output),
+/// or a sentence saying that it failed, with the first line of its error, or took too long.
+///
+/// Its output goes to two files, not to pipes: a program the command starts and leaves
+/// running would hold a pipe open, and the command would seem never to end. So the wait is
+/// for the shell itself.
 pub fn run_command(command: &str) -> Result<String, String> {
-    let mut shell = shell(command);
-    shell
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let child = quiet(&mut shell).spawn().map_err(|e| {
-        tracing::warn!("open sage: the shell could not be started: {e}");
+    let failed = |e: std::io::Error| {
+        tracing::warn!("open sage: a command could not be run: {e}");
         FAILED.to_string()
-    })?;
-    let pid = child.id();
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let _ = tx.send(child.wait_with_output());
+    };
+    let id = format!("sage-command-{}-{}", std::process::id(), {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
     });
-    match rx.recv_timeout(COMMAND_LIMIT) {
-        Ok(Ok(out)) if out.status.success() => Ok(kept(&String::from_utf8_lossy(&out.stdout))),
-        Ok(Ok(out)) => {
-            let error = String::from_utf8_lossy(&out.stderr);
-            let printed = String::from_utf8_lossy(&out.stdout);
+    let out_path = std::env::temp_dir().join(format!("{id}.out"));
+    let err_path = std::env::temp_dir().join(format!("{id}.err"));
+    let out = std::fs::File::create(&out_path).map_err(failed)?;
+    let err = std::fs::File::create(&err_path).map_err(failed)?;
+    let mut shell = shell(command);
+    shell.stdin(Stdio::null()).stdout(out).stderr(err);
+    let mut child = quiet(&mut shell).spawn().map_err(failed)?;
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < COMMAND_LIMIT => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Ok(None) => {
+                stop(child.id());
+                let _ = child.wait();
+                break None;
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&out_path);
+                let _ = std::fs::remove_file(&err_path);
+                return Err(failed(e));
+            }
+        }
+    };
+    let (output, error) = (printed(&out_path), printed(&err_path));
+    match status {
+        None => Err(TOO_LONG.to_string()),
+        // An error the shell went on after is shown with what was printed.
+        Some(status) if status.success() => Ok(format!("{output}\n{error}").trim().to_string()),
+        Some(_) => {
             let first = error
                 .lines()
-                .chain(printed.lines())
+                .chain(output.lines())
                 .map(str::trim)
                 .find(|line| !line.is_empty())
                 .unwrap_or("");
             let first: String = first.chars().take(160).collect();
             Err(format!("That failed. {first}").trim().to_string())
-        }
-        Ok(Err(_)) => Err(FAILED.to_string()),
-        Err(_) => {
-            stop(pid);
-            Err(TOO_LONG.to_string())
         }
     }
 }
@@ -200,7 +234,6 @@ fn close(app: DeskApp) -> Result<(), String> {
         DeskApp::Notepad => &["notepad.exe"],
         DeskApp::Calculator => &["CalculatorApp.exe", "calc.exe"],
         DeskApp::Paint => &["mspaint.exe"],
-        DeskApp::Terminal => &["WindowsTerminal.exe", "cmd.exe"],
         DeskApp::SystemSettings => &["SystemSettings.exe"],
         _ => return Err(FAILED.to_string()),
     };
@@ -223,7 +256,6 @@ fn close(app: DeskApp) -> Result<(), String> {
         DeskApp::Notepad => "TextEdit",
         DeskApp::Calculator => "Calculator",
         DeskApp::Paint => "Preview",
-        DeskApp::Terminal => "Terminal",
         DeskApp::SystemSettings => "System Settings",
         _ => return Err(FAILED.to_string()),
     };
@@ -332,6 +364,16 @@ mod tests {
     #[test]
     fn a_command_gives_what_it_printed_or_says_how_it_failed() {
         assert_eq!(run_command("echo hello").unwrap(), "hello");
+        // A program the command starts and leaves running does not hold it up.
+        #[cfg(windows)]
+        {
+            let started = std::time::Instant::now();
+            run_command(
+                "Start-Process cmd.exe -ArgumentList '/c','timeout','/t','20' -WindowStyle Hidden",
+            )
+            .unwrap();
+            assert!(started.elapsed() < Duration::from_secs(15));
+        }
         let failed = run_command("exit 3").unwrap_err();
         assert!(failed.starts_with("That failed."), "{failed}");
         #[cfg(windows)]
