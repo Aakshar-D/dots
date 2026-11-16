@@ -8,7 +8,8 @@
 
 use serde::Deserialize;
 
-pub const MAX_SPOKEN_BYTES: usize = 600;
+/// The most of a reply that is spoken: about eight sentences.
+pub const MAX_SPOKEN_BYTES: usize = 1600;
 
 /// Most options a question may offer, and the longest one.
 const MAX_OPTIONS: usize = 6;
@@ -641,17 +642,21 @@ mod tests {
     #[test]
     fn over_long_words_trimmed_on_sentence() {
         let sentence = "This is a sentence of some length. ";
-        let text = sentence.repeat(30);
+        let text = sentence.repeat(80);
         assert!(text.len() > MAX_SPOKEN_BYTES);
         let (r, _) = read(&text);
         assert!(r.words.len() <= MAX_SPOKEN_BYTES);
         assert!(r.words.ends_with("length."));
         assert!(r.words.len() > MAX_SPOKEN_BYTES - sentence.len());
         // no sentence end: cut on a char boundary at the limit
-        let (r, _) = read(&"word ".repeat(200));
+        let (r, _) = read(&"word ".repeat(500));
         assert!(r.words.len() <= MAX_SPOKEN_BYTES && r.words.len() >= MAX_SPOKEN_BYTES - 1);
         // a dot inside a number is not a sentence end
-        let text = format!("{} 3.14159 {}", "a".repeat(595), "b".repeat(50));
+        let text = format!(
+            "{} 3.14159 {}",
+            "a".repeat(MAX_SPOKEN_BYTES - 5),
+            "b".repeat(50)
+        );
         let (r, _) = read(&text);
         assert!(r.words.len() <= MAX_SPOKEN_BYTES);
         // exactly at the limit is untouched
@@ -670,7 +675,7 @@ mod tests {
         assert!(r.words.len() <= MAX_SPOKEN_BYTES);
         assert!(r.words.len() >= MAX_SPOKEN_BYTES - 3);
         assert!(text.starts_with(&r.words));
-        let text = "é".repeat(400);
+        let text = "é".repeat(1000);
         let (r, _) = read(&text);
         assert!(r.words.len() <= MAX_SPOKEN_BYTES);
         assert_eq!(r.words.chars().count(), r.words.len() / 2);
@@ -727,7 +732,7 @@ mod tests {
             "日本語の文章です。\nDO {\"act\":\"needs\"}".to_string(),
             format!("{long}\nDO {{\"act\":\"needs\"}}"),
             "word ".repeat(200),
-            format!("{} 3.14159 {}", "a".repeat(595), "b".repeat(50)),
+            format!("{} 3.14159 {}", "a".repeat(MAX_SPOKEN_BYTES - 5), "b".repeat(50)),
             // CRLF line ends
             "Two things need you.\r\nDO {\"act\":\"needs\"}\r\n".to_string(),
             "Opening it.\r\n```\r\nDO {\"act\":\"open\",\"target\":\"usage\"}\r\n```\r\n".to_string(),

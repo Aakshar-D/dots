@@ -140,7 +140,7 @@ const MAX_WAITS: u32 = 3;
 pub const FILLER_AFTER: Duration = Duration::from_millis(1500);
 /// Most turns kept, and the longest record of what was said in one.
 const KEPT_TURNS: usize = 12;
-const SAID_BYTES: usize = 400;
+const SAID_BYTES: usize = 800;
 
 const FILLER: &str = "One moment.";
 const OKAY: &str = "Okay.";
