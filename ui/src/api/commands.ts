@@ -824,4 +824,11 @@ export const commands = {
   /// take) and sets the wake phrase up for their voice. Takes about 20 seconds. Rejects with
   /// kind `invalid` while Open Sage is not ready or not resting.
   voiceSetupRun: () => call(T.VoiceSetup, "voice_setup_run"),
+  /// What Open Sage has learned about the person, and whether it is learning.
+  voiceMemory: () => call(T.VoiceMemory, "voice_memory"),
+  /// Removes the note at `index` when it is still `note`; what is left comes back.
+  voiceMemoryForget: (index: number, note: string) =>
+    call(T.VoiceMemory, "voice_memory_forget", { index, note }),
+  voiceMemoryClear: () => call(T.VoiceMemory, "voice_memory_clear"),
+  voiceMemoryLearning: (on: boolean) => call(T.VoiceMemory, "voice_memory_learning", { on }),
 };

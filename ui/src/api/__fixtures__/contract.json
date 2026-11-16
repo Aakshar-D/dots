@@ -1298,7 +1298,11 @@
     "voice_preview",
     "voice_devices",
     "voice_setup",
-    "voice_setup_run"
+    "voice_setup_run",
+    "voice_memory",
+    "voice_memory_forget",
+    "voice_memory_clear",
+    "voice_memory_learning"
   ],
   "ConnectorEntry": [
     {
@@ -9337,6 +9341,19 @@
       "target": {
         "kind": "intents"
       }
+    }
+  ],
+  "VoiceMemory": [
+    {
+      "learning": true,
+      "notes": [
+        "Prefers answers in one sentence.",
+        "Calls the research sol Scout."
+      ]
+    },
+    {
+      "learning": false,
+      "notes": []
     }
   ],
   "VoiceSetup": [

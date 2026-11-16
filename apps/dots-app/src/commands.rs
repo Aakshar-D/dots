@@ -71,6 +71,7 @@ use crate::update::{Next, UpdateNote};
 use crate::update_service;
 use crate::voice::events::{VoiceDevices, VoiceSetup, VoiceStatus};
 use crate::voice::VoiceHandle;
+use dots_core::open_dot::memory::Learned;
 use dots_core::open_dot::picture::View;
 
 type Res<T> = Result<T, CmdError>;
@@ -2936,6 +2937,37 @@ pub fn voice_setup(voice: State<'_, VoiceHandle>) -> Res<Option<VoiceSetup>> {
 #[tauri::command]
 pub async fn voice_setup_run(handle: State<'_, VoiceHandle>) -> Res<VoiceSetup> {
     handle.get()?.set_up().await
+}
+
+/// What Open Sage has learned about the person, and whether it is learning.
+#[tauri::command]
+pub fn voice_memory(state: State<'_, AppState>) -> Res<Learned> {
+    Ok(state.rt()?.open_dot().memory().learned())
+}
+
+/// Removes one thing it learned: the note at `index`, when it is still `note`.
+#[tauri::command]
+pub fn voice_memory_forget(state: State<'_, AppState>, index: usize, note: String) -> Res<Learned> {
+    let rt = state.rt()?;
+    rt.open_dot().memory().forget_note(index, &note);
+    Ok(rt.open_dot().memory().learned())
+}
+
+/// Forgets everything it learned.
+#[tauri::command]
+pub fn voice_memory_clear(state: State<'_, AppState>) -> Res<Learned> {
+    let rt = state.rt()?;
+    rt.open_dot().memory().forget_all();
+    Ok(rt.open_dot().memory().learned())
+}
+
+/// Turns the learning on or off. Off, nothing more is kept and nothing learned is sent with
+/// a request; what was learned stays until it is forgotten.
+#[tauri::command]
+pub fn voice_memory_learning(state: State<'_, AppState>, on: bool) -> Res<Learned> {
+    let rt = state.rt()?;
+    rt.open_dot().memory().set_learning(on);
+    Ok(rt.open_dot().memory().learned())
 }
 
 /// The microphones and speakers to choose from.

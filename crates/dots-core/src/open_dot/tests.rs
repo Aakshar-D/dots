@@ -2503,3 +2503,57 @@ async fn the_picture_of_a_running_core_tells_its_connectors() {
     assert!(picture.text().contains("Connectors: "));
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn what_the_person_says_about_themselves_is_kept_and_told_to_the_model() {
+    let t = T::start().await;
+    t.fake.push(says(
+        "Got it.\nDO {\"act\":\"remember\",\"note\":\"Prefers answers in one sentence.\"}",
+    ));
+    let got = t.hear("keep your answers to one sentence").await;
+    assert_eq!(said(&got), format!("Got it. {}", memory::REMEMBERED));
+    assert_eq!(
+        t.mind.memory().learned().notes,
+        vec!["Prefers answers in one sentence."]
+    );
+    // The next request begins with it.
+    t.fake.push(says("Nothing needs you."));
+    t.hear("anything for me").await;
+    let last = t.fake.last_prompt();
+    assert!(
+        last.starts_with("What you learned about the person"),
+        "{last}"
+    );
+    assert!(last.contains("- Prefers answers in one sentence."));
+    assert!(
+        last.find("End of what you learned.").unwrap() < last.find("The picture of now").unwrap()
+    );
+    // And it is forgotten when they ask.
+    t.fake.push(says("Done.\nDO {\"act\":\"forget\"}"));
+    let got = t.hear("forget what you know about me").await;
+    assert_eq!(said(&got), format!("Done. {}", memory::FORGOT));
+    assert!(t.mind.memory().learned().notes.is_empty());
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn what_is_asked_for_most_is_tallied_and_told() {
+    let t = T::start().await;
+    for _ in 0..5 {
+        t.fake
+            .push(says("Here's what needs you.\nDO {\"act\":\"needs\"}"));
+        t.hear("what needs me").await;
+    }
+    let text = t.mind.memory().text();
+    assert!(
+        text.contains("They most often ask to see what needs them."),
+        "{text}"
+    );
+    assert!(text.contains("about 3 words at a time"), "{text}");
+    // With learning off the next request carries none of it.
+    t.mind.memory().set_learning(false);
+    t.fake.push(says("Nothing needs you."));
+    t.hear("anything for me").await;
+    assert!(t.fake.last_prompt().starts_with("The picture of now"));
+    t.rt.shutdown();
+}

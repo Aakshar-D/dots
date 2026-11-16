@@ -12,6 +12,7 @@
 
 pub mod act;
 pub mod desk;
+pub mod memory;
 pub mod picture;
 pub mod prompt;
 pub mod quick;
@@ -170,6 +171,8 @@ pub struct Mind {
     thinker: Arc<dyn Thinker>,
     /// What carries out a task on the computer itself; the app's, once it has set it.
     desk: Mutex<Arc<dyn desk::Desk>>,
+    /// What was learned about the person in earlier conversations.
+    memory: Arc<memory::Memory>,
     state: Mutex<State>,
     /// `FILLER_AFTER`; shorter in tests.
     filler_after: Duration,
@@ -501,12 +504,24 @@ impl Mind {
         Mind {
             thinker,
             desk: Mutex::new(desk::no_desk()),
+            memory: Arc::new(memory::Memory::passing()),
             state: Mutex::new(State::default()),
             filler_after: FILLER_AFTER,
             idle_forget: IDLE_FORGET,
             pending_limit: PENDING_LIMIT,
             deeds: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// This mind, keeping what it learns about the person in `path`.
+    pub fn remembering(mut self, path: std::path::PathBuf) -> Mind {
+        self.memory = Arc::new(memory::Memory::kept_in(path));
+        self
+    }
+
+    /// What was learned about the person: Settings shows it and changes it.
+    pub fn memory(&self) -> &memory::Memory {
+        &self.memory
     }
 
     /// What carries out notes, sites and apps on the computer from now on.
@@ -1191,7 +1206,9 @@ impl Mind {
             }
         };
         let turns = lock(&self.state).turns.clone();
-        let asking = prompt(&picture, &turns, heard);
+        // What was learned about the person comes first, so the answer is theirs.
+        let asking = format!("{}{}", self.memory.text(), prompt(&picture, &turns, heard));
+        self.memory.heard(heard);
         let model = settings.open_dot_model.clone();
         lock(&self.state).model = Some(model.clone());
         let mut gate = SpeechGate::new();
@@ -1249,6 +1266,9 @@ impl Mind {
         match &reply.wish {
             Some(wish) if wish.may_ask_a_yes() => o.stream(&held.cut()),
             _ => o.stream(&held.release()),
+        }
+        if let Some(what) = reply.wish.as_ref().and_then(Wish::habit) {
+            self.memory.asked(what);
         }
         let Some(wish) = reply.wish else {
             // A wish that could not be read is said not to be done, after any words.
@@ -1406,6 +1426,16 @@ impl Mind {
                 let line = if o.just_said(&said) { "" } else { &said };
                 self.finish(o, heard, line, Then::FollowUp);
                 "open"
+            }
+            Step::Remember(note) => {
+                let line = self.memory.remember(&note);
+                self.finish(o, heard, line, Then::FollowUp);
+                "remember"
+            }
+            Step::Forget => {
+                self.memory.forget_all();
+                self.finish(o, heard, memory::FORGOT, Then::FollowUp);
+                "forget"
             }
             Step::Desk(task) => {
                 let desk = lock(&self.desk).clone();

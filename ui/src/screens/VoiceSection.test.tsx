@@ -34,6 +34,7 @@ function voice(status: VoiceStatus, stored: Settings = sample.settings) {
   backend.on("voice_devices", () => devices);
   backend.on("voice_preview", () => null);
   backend.on("voice_setup", () => null);
+  backend.on("voice_memory", () => ({ learning: true, notes: [] }));
   backend.on("voice_download_cancel", () => null);
   backend.on("voice_enable", (args) => {
     now.settings = { ...now.settings, voice_enabled: args.on as boolean };
@@ -161,6 +162,36 @@ describe("Settings > Voice", () => {
     expect(screen.getByText("1.15×")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Play voice 10" }));
     expect(backend.callsTo("voice_preview")[1]).toEqual({ voice: 9, speed: 1.15 });
+  });
+
+  it("shows what Sage has learned, removes a note, forgets all and turns learning off", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true });
+    let known = { learning: true, notes: ["Prefers answers in one sentence.", "Calls the research sol Scout."] };
+    backend.on("voice_memory", () => known);
+    backend.on("voice_memory_forget", (args) => {
+      const { index, note } = args as { index: number; note: string };
+      if (known.notes[index] === note) known = { ...known, notes: known.notes.filter((_, i) => i !== index) };
+      return known;
+    });
+    backend.on("voice_memory_clear", () => (known = { ...known, notes: [] }));
+    backend.on("voice_memory_learning", (args) => (known = { ...known, learning: (args as { on: boolean }).on }));
+    const { user } = renderApp("/settings/voice");
+    const list = await screen.findByRole("list", { name: "What Sage has learned" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Forget: Prefers answers in one sentence." }));
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(1));
+    expect(backend.callsTo("voice_memory_forget")).toEqual([
+      { index: 0, note: "Prefers answers in one sentence." },
+    ]);
+    const learning = screen.getByRole("switch", { name: "Learn how I talk and what I need" });
+    expect(learning.getAttribute("aria-checked")).toBe("true");
+    await user.click(learning);
+    await waitFor(() => expect(learning.getAttribute("aria-checked")).toBe("false"));
+    expect(backend.callsTo("voice_memory_learning")).toEqual([{ on: false }]);
+    await user.click(screen.getByRole("button", { name: "Forget everything" }));
+    await user.click(await screen.findByRole("button", { name: "Forget" }));
+    expect(await screen.findByText("Nothing learned yet.")).toBeTruthy();
+    expect(backend.callsTo("voice_memory_clear")).toHaveLength(1);
   });
 
   it("teaches Sage the voice: names each take, then says what it found", async () => {
