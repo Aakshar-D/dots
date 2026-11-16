@@ -1665,6 +1665,10 @@ impl MindPort for RuntimeMind {
     fn input_arrived(&self) {
         self.0.open_dot().input_arrived();
     }
+
+    fn warm(&self) {
+        self.0.open_dot().warm();
+    }
 }
 
 /// The runtime's settings (saved the way `update_settings` saves them) and its mind.

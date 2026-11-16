@@ -833,6 +833,96 @@ async fn streamed_text_arrives_in_order_and_equals_the_answer() {
     assert_eq!(folders_left(dir.path()), 0);
 }
 
+/// Waits until no request folder is left under `dir/think` (a folder a CLI held goes a
+/// moment after the CLI does).
+async fn no_folders_left(dir: &Path) {
+    for _ in 0..100 {
+        if folders_left(dir) == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("{} request folders left", folders_left(dir));
+}
+
+#[tokio::test]
+async fn a_cli_started_ahead_answers_the_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut script = vec![init(), delta("Hello "), delta("there.")];
+    script.extend(finished("Hello there."));
+    let t = thinker(dir.path(), Value::Array(script), THINK_LIMIT);
+    t.warm("system", "haiku");
+    // A second ask while the first is fresh starts nothing more.
+    t.warm("system", "haiku");
+    assert_eq!(folders_left(dir.path()), 1);
+    let mut got: Vec<String> = Vec::new();
+    let answer = t
+        .think(
+            "system",
+            "prompt",
+            "haiku",
+            &CancellationToken::new(),
+            &mut |s: &str| got.push(s.to_string()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(t.warm_used(), 1);
+    assert_eq!(got, vec!["Hello ", "there."]);
+    assert_eq!(answer.text, "Hello there.");
+    assert_eq!(answer.usage.map(|u| u.tokens_out), Some(30));
+    no_folders_left(dir.path()).await;
+    // The next request has none started ahead, and is answered all the same.
+    let answer = t
+        .think(
+            "system",
+            "prompt",
+            "haiku",
+            &CancellationToken::new(),
+            &mut |_: &str| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer.text, "Hello there.");
+    assert_eq!(t.warm_used(), 1);
+}
+
+#[tokio::test]
+async fn a_cli_started_ahead_for_another_model_is_not_used() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut script = vec![init()];
+    script.extend(finished("Sure."));
+    let t = thinker(dir.path(), Value::Array(script), THINK_LIMIT);
+    t.warm("system", "haiku");
+    let answer = t
+        .think(
+            "system",
+            "prompt",
+            "sonnet",
+            &CancellationToken::new(),
+            &mut |_: &str| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer.text, "Sure.");
+    assert_eq!(t.warm_used(), 0);
+    // The one started ahead was ended, and its folder went with it.
+    no_folders_left(dir.path()).await;
+}
+
+#[tokio::test]
+async fn a_cli_started_ahead_that_gets_no_request_is_ended() {
+    let dir = tempfile::tempdir().unwrap();
+    let t = thinker(dir.path(), Value::Array(vec![init()]), THINK_LIMIT);
+    t.warm("system", "haiku");
+    assert_eq!(folders_left(dir.path()), 1);
+    tokio::time::sleep(dots_core::open_dot::think::WARM_MOST).await;
+    no_folders_left(dir.path()).await;
+    // With no CLI there is nothing to start.
+    let none = CliThinker::new(None, vec![], dir.path().join("think"), THINK_LIMIT);
+    none.warm("system", "haiku");
+    assert_eq!(folders_left(dir.path()), 0);
+}
+
 #[tokio::test]
 async fn no_partials_still_delivers_the_text_once() {
     let dir = tempfile::tempdir().unwrap();

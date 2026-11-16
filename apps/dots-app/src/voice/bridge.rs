@@ -92,6 +92,9 @@ pub trait MindPort: Send + Sync {
     fn pending(&self) -> bool;
     /// The stage took a newer input than the turns in flight: none of them installs a step.
     fn input_arrived(&self);
+    /// A sentence is likely to follow within a moment: the mind gets ready to think.
+    /// Nothing by default.
+    fn warm(&self) {}
 }
 
 /// How a reply ends, in the session's terms.
@@ -247,6 +250,9 @@ impl Bridge {
                 self.send(VoiceEvent::Woke);
             }
             SessionEvent::Trouble { message } => self.send(VoiceEvent::Trouble { message }),
+            // The sentence may be over within a second: the model's CLI is started now, so
+            // it is ready when the sentence is.
+            SessionEvent::Pausing => self.mind.warm(),
         }
     }
 

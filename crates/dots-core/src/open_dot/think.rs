@@ -5,13 +5,18 @@
 //! Nothing here logs what was asked or answered: only how a request ended.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Local, Utc};
 use tokio_util::sync::CancellationToken;
 
-use crate::engine::claude::once::{ask_once_streamed, Once, OnceAnswer, OnceFailure};
+use crate::engine::claude::once::{
+    ask_once_streamed, ask_started_streamed, start_once_streamed, Once, OnceAnswer, OnceFailure,
+    Started,
+};
 use crate::settings::Settings;
 use crate::spend::{
     cost_reached, day_bounds_in, month_bounds_in, tokens_reached, GlobalCaps, Spend,
@@ -24,6 +29,12 @@ pub const DEFAULT_MODEL: &str = "haiku";
 
 /// The longest one request may take.
 pub const THINK_LIMIT: Duration = Duration::from_secs(45);
+
+/// A CLI started ahead of its request is used when it is no older than this: the CLI gives
+/// up on a request that does not come within about three seconds.
+pub const WARM_MOST: Duration = Duration::from_millis(2500);
+/// One this young is kept when another is asked for: starting a second would gain nothing.
+const WARM_FRESH: Duration = Duration::from_millis(1500);
 
 /// Asks the model: the CLI in Dots, a stand-in in tests.
 #[async_trait]
@@ -38,6 +49,11 @@ pub trait Thinker: Send + Sync {
         cancel: &CancellationToken,
         on_text: &mut (dyn for<'s> FnMut(&'s str) + Send),
     ) -> std::result::Result<OnceAnswer, OnceFailure>;
+
+    /// A request under `system` on `model` is likely to come within a moment (the person
+    /// has stopped speaking): whatever can be got ready for it is. Asking for nothing costs
+    /// nothing with the model. Does nothing by default.
+    fn warm(&self, _system: &str, _model: &str) {}
 }
 
 /// The thinker of Dots: `ask_once_streamed` in a new empty folder under `dir` for each request,
@@ -47,6 +63,20 @@ pub struct CliThinker {
     env: Vec<(String, String)>,
     dir: PathBuf,
     limit: Duration,
+    /// A CLI started ahead of the next request, if one was.
+    warm: Arc<Mutex<Option<Warm>>>,
+    next_warm: AtomicU64,
+    warm_used: AtomicU64,
+}
+
+/// A CLI started ahead of its request, with the folder it runs in.
+struct Warm {
+    id: u64,
+    // The CLI goes before its folder does.
+    started: Started,
+    folder: Folder,
+    model: String,
+    system: String,
 }
 
 impl CliThinker {
@@ -62,7 +92,34 @@ impl CliThinker {
             env,
             dir,
             limit,
+            warm: Arc::new(Mutex::new(None)),
+            next_warm: AtomicU64::new(0),
+            warm_used: AtomicU64::new(0),
         }
+    }
+
+    /// How many requests went to a CLI started ahead of them.
+    pub fn warm_used(&self) -> u64 {
+        self.warm_used.load(Ordering::SeqCst)
+    }
+
+    fn new_folder(&self) -> std::result::Result<Folder, OnceFailure> {
+        let cwd = self.dir.join(crate::util::new_id());
+        std::fs::create_dir_all(&cwd)
+            .map_err(|e| OnceFailure::Failed(format!("could not make {}: {e}", cwd.display())))?;
+        // Removed on every path: an answer, an error, this future dropped, a panic in `on_text`.
+        Ok(Folder(cwd))
+    }
+
+    /// The CLI started ahead for a request under `system` on `model`, if there is one still
+    /// of use. Any other one is ended.
+    fn take_warm(&self, system: &str, model: &str) -> Option<Warm> {
+        let mut warm = self.warm.lock().unwrap_or_else(|e| e.into_inner()).take()?;
+        let fits = warm.model == model
+            && warm.system == system
+            && warm.started.age() < WARM_MOST
+            && warm.started.running();
+        fits.then_some(warm)
     }
 }
 
@@ -79,27 +136,34 @@ impl Thinker for CliThinker {
         let Some(program) = self.program.as_deref() else {
             return Err(OnceFailure::NoCli);
         };
-        let cwd = self.dir.join(crate::util::new_id());
-        if let Err(e) = std::fs::create_dir_all(&cwd) {
-            return Err(OnceFailure::Failed(format!(
-                "could not make {}: {e}",
-                cwd.display()
-            )));
-        }
-        // Removed on every path: an answer, an error, this future dropped, a panic in `on_text`.
-        let folder = Folder(cwd);
-        let once = Once {
-            program,
-            env: &self.env,
-            cwd: &folder.0,
-            model,
-            system_prompt: system,
-            prompt,
-            limit: self.limit,
-        };
         let started = std::time::Instant::now();
-        let asked = ask_once_streamed(&once, cancel, on_text).await;
-        drop(folder);
+        let asked = match self.take_warm(system, model) {
+            Some(warm) => {
+                self.warm_used.fetch_add(1, Ordering::SeqCst);
+                let Warm {
+                    started, folder, ..
+                } = warm;
+                let asked =
+                    ask_started_streamed(started, prompt, self.limit, cancel, on_text).await;
+                drop(folder);
+                asked
+            }
+            None => {
+                let folder = self.new_folder()?;
+                let once = Once {
+                    program,
+                    env: &self.env,
+                    cwd: &folder.0,
+                    model,
+                    system_prompt: system,
+                    prompt,
+                    limit: self.limit,
+                };
+                let asked = ask_once_streamed(&once, cancel, on_text).await;
+                drop(folder);
+                asked
+            }
+        };
         let ended = match &asked {
             Ok(_) => "answered",
             Err(OnceFailure::Cancelled) => "cancelled",
@@ -113,6 +177,52 @@ impl Thinker for CliThinker {
             "open sage request"
         );
         asked
+    }
+
+    fn warm(&self, system: &str, model: &str) {
+        let Some(program) = self.program.as_deref() else {
+            return;
+        };
+        // The one that is let go after a while needs a runtime to wait on.
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
+        let mut slot = self.warm.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(warm) = slot.as_mut() {
+            if warm.model == model
+                && warm.system == system
+                && warm.started.age() < WARM_FRESH
+                && warm.started.running()
+            {
+                return;
+            }
+        }
+        let Ok(folder) = self.new_folder() else {
+            return;
+        };
+        let Ok(started) = start_once_streamed(program, &self.env, &folder.0, model, system) else {
+            return;
+        };
+        let id = self.next_warm.fetch_add(1, Ordering::SeqCst);
+        // The one before it, if any, is ended here.
+        *slot = Some(Warm {
+            id,
+            started,
+            folder,
+            model: model.to_string(),
+            system: system.to_string(),
+        });
+        drop(slot);
+        // No request came: it is ended, and its folder goes.
+        let slot = Arc::downgrade(&self.warm);
+        runtime.spawn(async move {
+            tokio::time::sleep(WARM_MOST).await;
+            let Some(slot) = slot.upgrade() else { return };
+            let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
+            if slot.as_ref().is_some_and(|warm| warm.id == id) {
+                *slot = None;
+            }
+        });
     }
 }
 

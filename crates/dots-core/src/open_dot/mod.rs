@@ -185,6 +185,8 @@ type Gate<'a> = tokio::sync::MutexGuard<'a, ()>;
 
 #[derive(Default)]
 struct State {
+    /// The model the last request went to: the next one is got ready on it (`warm`).
+    model: Option<String>,
     turns: Vec<Turn>,
     pending: Option<Pending>,
     /// The words of the last reply, for "say that again", and how it ended.
@@ -570,6 +572,18 @@ impl Mind {
             c.cancel();
         }
         dropped
+    }
+
+    /// The person has stopped speaking for a moment, so a request is likely to follow: the
+    /// thinker gets ready for it, on the model the last request used (the first of a start
+    /// goes to the default one). A sentence that is answered without the model wastes this,
+    /// which costs nothing with the model.
+    pub fn warm(&self) {
+        let model = lock(&self.state)
+            .model
+            .clone()
+            .unwrap_or_else(|| think::DEFAULT_MODEL.to_string());
+        self.thinker.warm(INSTRUCTIONS, &model);
     }
 
     /// The stage took a newer input (a click, or a sentence heard) than the turns in flight.
@@ -1170,6 +1184,7 @@ impl Mind {
         let turns = lock(&self.state).turns.clone();
         let asking = prompt(&picture, &turns, heard);
         let model = settings.open_dot_model.clone();
+        lock(&self.state).model = Some(model.clone());
         let mut gate = SpeechGate::new();
         // Past 200 bytes the words wait until the reply is read: before a question Dots asks a
         // yes on, no more than that is said.

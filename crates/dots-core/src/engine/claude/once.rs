@@ -286,32 +286,122 @@ async fn run_once(
     req: &Once<'_>,
     cancel: &CancellationToken,
     extra: &[&str],
-    mut on_text: Option<&mut (dyn FnMut(&str) + Send + '_)>,
+    on_text: Option<&mut (dyn FnMut(&str) + Send + '_)>,
 ) -> Result<OnceAnswer, OnceFailure> {
-    let mut cmd = Command::new(req.program);
+    let started = start_once(
+        req.program,
+        req.env,
+        req.cwd,
+        req.model,
+        req.system_prompt,
+        extra,
+    )?;
+    finish_once(started, req.prompt, req.limit, cancel, on_text).await
+}
+
+/// A CLI started ahead of its request: it has read its command line and waits for the
+/// request on its input. Dropping it ends the CLI. The CLI itself gives up when no request
+/// comes within about three seconds, so one older than that is of no use (`age`).
+pub struct Started {
+    child: tokio::process::Child,
+    job: crate::proc::Job,
+    at: std::time::Instant,
+}
+
+impl Started {
+    /// How long ago the CLI was started.
+    pub fn age(&self) -> Duration {
+        self.at.elapsed()
+    }
+
+    /// Whether the CLI is still there to take a request.
+    pub fn running(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(None))
+    }
+}
+
+/// Starts the CLI for a streamed request without giving it the request yet. Starting takes
+/// the CLI about a second, so one started while the person is still speaking answers that
+/// much sooner (measured: the first words 1.6 to 1.7 seconds after the request, against 2.1
+/// to 2.9 for a CLI started with it).
+pub fn start_once_streamed(
+    program: &Path,
+    env: &[(String, String)],
+    cwd: &Path,
+    model: &str,
+    system_prompt: &str,
+) -> Result<Started, OnceFailure> {
+    start_once(program, env, cwd, model, system_prompt, &[PARTIAL_MESSAGES])
+}
+
+/// The request for a CLI started with `start_once_streamed`; as `ask_once_streamed` from
+/// there on.
+pub async fn ask_started_streamed(
+    started: Started,
+    prompt: &str,
+    limit: Duration,
+    cancel: &CancellationToken,
+    on_text: &mut (dyn FnMut(&str) + Send),
+) -> Result<OnceAnswer, OnceFailure> {
+    let mut streamed = false;
+    let mut each = |text: &str| {
+        streamed = true;
+        on_text(text);
+    };
+    let answer = finish_once(started, prompt, limit, cancel, Some(&mut each)).await?;
+    if !streamed && !answer.text.is_empty() {
+        on_text(&answer.text);
+    }
+    Ok(answer)
+}
+
+fn start_once(
+    program: &Path,
+    env: &[(String, String)],
+    cwd: &Path,
+    model: &str,
+    system_prompt: &str,
+    extra: &[&str],
+) -> Result<Started, OnceFailure> {
+    let mut cmd = Command::new(program);
     crate::vault::child_env::start_clean(&mut cmd, crate::vault::child_env::Child::Cli);
-    cmd.args(once_args(req.model, req.system_prompt))
+    cmd.args(once_args(model, system_prompt))
         .args(extra)
-        .current_dir(req.cwd)
+        .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
-    for (k, v) in req.env {
+    for (k, v) in env {
         cmd.env(k, v);
     }
     crate::proc::hide_window(&mut cmd);
-    let mut child = cmd.spawn().map_err(|e| {
-        OnceFailure::Failed(format!("failed to start {}: {e}", req.program.display()))
-    })?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| OnceFailure::Failed(format!("failed to start {}: {e}", program.display())))?;
     let job = crate::proc::Job::assign(&child).unwrap_or_else(|e| {
         tracing::warn!("no job object for claude, using kill_tree: {e}");
         crate::proc::Job::fallback(&child)
     });
+    Ok(Started {
+        child,
+        job,
+        at: std::time::Instant::now(),
+    })
+}
+
+async fn finish_once(
+    started: Started,
+    prompt: &str,
+    limit: Duration,
+    cancel: &CancellationToken,
+    mut on_text: Option<&mut (dyn FnMut(&str) + Send + '_)>,
+) -> Result<OnceAnswer, OnceFailure> {
+    let Started { mut child, job, .. } = started;
     let mut stdin = child.stdin.take().expect("stdin is piped");
     let stdout = child.stdout.take().expect("stdout is piped");
     let stderr = child.stderr.take().expect("stderr is piped");
-    let prompt = req.prompt.to_string();
+    let prompt = prompt.to_string();
     tokio::spawn(async move {
         if let Err(e) = stdin.write_all(prompt.as_bytes()).await {
             tracing::warn!("writing the request to claude failed: {e}");
@@ -365,7 +455,7 @@ async fn run_once(
     });
     let mut stderr_task = tokio::spawn(crate::proc::read_scrubbed_tail(stderr, STDERR_TAIL));
 
-    let deadline = tokio::time::sleep(req.limit);
+    let deadline = tokio::time::sleep(limit);
     tokio::pin!(deadline);
     let end = loop {
         // A cancel (also from `on_text`) or the time limit wins over more text.
