@@ -267,13 +267,19 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
         },
         Wish::Command { command, why } => match desk::command(command, why) {
             Ok((command, why)) => {
-                // The model's sentence is said, then Sage's own question: what runs is the
-                // command on screen, whatever the sentence says of it.
-                let question = if why.is_empty() {
-                    RUN_COMMAND.to_string()
+                // The model's sentence is said as the model's, then the command itself is
+                // read out, then Sage's own question: what runs is the command, whatever
+                // the sentence says of it. A long one is not read out; it is on screen.
+                let mut question = String::new();
+                if !why.is_empty() {
+                    question.push_str(&format!("The model says: {} ", sentence(&why)));
+                }
+                if command.len() <= SAY_COMMAND_BYTES {
+                    question.push_str(&format!("The command reads: {command}. "));
                 } else {
-                    format!("{} {RUN_COMMAND}", sentence(&why))
-                };
+                    question.push_str("The command is too long to read out. ");
+                }
+                question.push_str(RUN_COMMAND);
                 Step::Confirm {
                     deed: Deed::Command { command, why },
                     question,
@@ -341,6 +347,8 @@ pub(crate) const SEND_MESSAGE: &str = "Send this message?";
 pub(crate) const SEND_ANSWER: &str = "Send this answer?";
 pub(crate) const CREATE_THIS: &str = "Create this sol?";
 pub(crate) const RUN_COMMAND: &str = "It is on screen. Run this command?";
+/// The longest command that is read out before its question.
+const SAY_COMMAND_BYTES: usize = 120;
 
 /// The step for a checked task on the computer, or the sentence saying why not.
 fn on_desk(task: std::result::Result<DeskTask, &'static str>) -> Step {

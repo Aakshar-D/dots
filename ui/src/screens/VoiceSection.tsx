@@ -535,6 +535,22 @@ export function VoiceSection({
         </div>
       </Section>
 
+      <Section title="On this computer">
+        <div className="flex items-center gap-2">
+          <Switch
+            id="settings-voice-commands"
+            checked={draft.open_dot_commands}
+            onCheckedChange={(open_dot_commands) => set({ open_dot_commands })}
+          />
+          <Label htmlFor="settings-voice-commands">Let Sage run commands on this computer</Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          For what you ask that it has no other way to do, such as closing a program or making a folder.
+          Sage always shows the command, reads it to you and waits for a clear yes. Off, it still writes
+          notes, opens sites and opens or closes its listed apps, and never offers a command.
+        </p>
+      </Section>
+
       <Section title="What Sage has learned">
         <LearnedBlock />
       </Section>

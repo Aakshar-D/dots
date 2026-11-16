@@ -72,7 +72,9 @@ describe("a command to confirm", () => {
     );
     expect(screen.getByText("Run this command on your computer")).toBeTruthy();
     expect(document.querySelector("[data-command]")?.textContent).toBe("Stop-Process -Name chrome");
-    expect(screen.getByText("This closes every Chrome window.")).toBeTruthy();
+    expect(screen.getByText("This closes every Chrome window.").textContent).toBe(
+      "The model says: This closes every Chrome window.",
+    );
     expect(screen.getByText("It runs only when you say yes. Read it first.")).toBeTruthy();
   });
 });
