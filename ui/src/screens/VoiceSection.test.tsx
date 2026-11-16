@@ -226,6 +226,7 @@ describe("Settings > Voice", () => {
     };
     await act(async () => run.give(found));
     expect(await screen.findByText(found.message)).toBeVisible();
+    expect(screen.getByText("Done. Your voice setup is saved and in use now.")).toBeVisible();
     expect(screen.queryByText(/now \(2 of 5\)/)).toBeNull();
     // Done once, the button offers to do it again.
     expect(

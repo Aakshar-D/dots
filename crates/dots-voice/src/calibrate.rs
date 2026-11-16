@@ -107,7 +107,9 @@ pub fn heard_times(wake: &mut dyn WakeSpotter, takes: &[Vec<Vec<f32>>], level: O
 
 /// The tuning for these takes. `caught(tuning)` says how many times the spotter at `tuning`
 /// catches the phrase in them. The strictest tuning that catches `ENOUGH` wins; when none
-/// does, the one that catches the most, the stricter of two that tie.
+/// does, the one that catches the most, and the keener of two that tie: a voice no tuning
+/// catches well is hard to hear, and the takes are too few to show what the keener one adds.
+/// When none catches anything, nothing is known, and the tuning is the standard one.
 pub fn calibrate(takes: &[Vec<Vec<f32>>], mut caught: impl FnMut(WakeTuning) -> u8) -> Calibration {
     let level = voice_level(takes);
     let count = u8::try_from(takes.len()).unwrap_or(u8::MAX);
@@ -115,7 +117,7 @@ pub fn calibrate(takes: &[Vec<Vec<f32>>], mut caught: impl FnMut(WakeTuning) -> 
     let mut best = (WakeTuning::Standard, 0u8);
     for tuning in WakeTuning::STRICTEST_FIRST {
         let heard = caught(tuning).min(count);
-        if heard > best.1 {
+        if heard > 0 && heard >= best.1 {
             best = (tuning, heard);
         }
         if heard >= enough && heard > 0 {
@@ -193,12 +195,25 @@ mod tests {
     }
 
     #[test]
-    fn two_that_tie_give_the_stricter() {
+    fn two_that_tie_below_enough_give_the_keener() {
         let got = calibrate(&five(0.001), |_| 0);
         assert_eq!((got.tuning, got.heard), (WakeTuning::Standard, 0));
         assert!(!got.usable());
         let got = calibrate(&five(0.001), |_| 2);
-        assert_eq!((got.tuning, got.heard), (WakeTuning::Strict, 2));
+        assert_eq!((got.tuning, got.heard), (WakeTuning::Sensitive, 2));
+        // What a hard voice gave: the standard and the keen tuning both caught three.
+        let got = calibrate(&five(0.017), |tuning| match tuning {
+            WakeTuning::Strict => 1,
+            WakeTuning::Standard | WakeTuning::Sensitive => 3,
+        });
+        assert_eq!((got.tuning, got.heard), (WakeTuning::Sensitive, 3));
+        // A keener tuning that catches fewer does not win.
+        let got = calibrate(&five(0.017), |tuning| match tuning {
+            WakeTuning::Strict => 1,
+            WakeTuning::Standard => 3,
+            WakeTuning::Sensitive => 2,
+        });
+        assert_eq!((got.tuning, got.heard), (WakeTuning::Standard, 3));
     }
 
     #[test]
