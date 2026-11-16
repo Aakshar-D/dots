@@ -69,9 +69,11 @@ Sage writes notes, opens sites and web searches, and opens and closes a fixed li
 
 - Closing asks the app to close. Nothing is forced, so an app with unsaved work still asks you.
 
-**Anything else is a command, and a command always asks first.** When you ask for something those cannot do (close another program, make or move files, change the volume, start something), Sage has the model write one command for your system's shell: PowerShell on Windows, zsh on a Mac. It brings the Sage window forward, puts the command on screen in full, says in a sentence what it is meant to do, and asks "Run this command?". A command is one plain line of at most 300 characters: one with a second line or with characters that hide text is refused. It runs only on a clear yes ("yes", "do it", "go ahead"); "okay" is not enough, and saying anything else drops it.
+**Anything else is a command, and a command always asks first.** When you ask for something those cannot do (close another program, make or move files, change the volume, start something), Sage has the model write one command for your system's shell: PowerShell on Windows, zsh on a Mac. It brings the Sage window forward and puts the command on screen in full. Then it says what the model says the command does, as the model's words ("The model says: ..."), reads the command itself out when it is short (up to 120 characters), and asks "Run this command?". A command is one plain line of at most 300 characters: one with a second line or with characters that hide text is refused. It runs only on a clear yes ("yes", "do it", "go ahead"); "okay" is not enough, and saying anything else drops it.
 
-Read the command before you say yes. The sentence about it is the model's own and can be wrong; what runs is what is on screen. It runs as you, with everything you are allowed to do, for at most a minute, and what it prints is shown afterwards. Sage does not undo it. For work that takes several steps, or that you want checked as it goes, ask a sol: it works with approvals.
+Read the command, or listen to it, before you say yes. The sentence about it is the model's own and can be wrong; what runs is the command. It runs as you, with everything you are allowed to do, for at most a minute, and what it prints is shown afterwards. Saying "stop", pressing Esc or the hotkey ends a command that is still running. Sage does not undo what a command did.
+
+To turn this off, switch off **Let Sage run commands on this computer** in Settings, Voice. Sage then never offers a command; notes, sites and the listed apps still work. For work that takes several steps, or that you want checked as it goes, ask a sol: it works with approvals.
 
 ## Confirmations
 
@@ -152,6 +154,7 @@ All in Settings, Voice.
 | **Interrupt by just talking** | Off by default. Best with headphones. |
 | **Play a tone when Sage starts listening** | On by default. The tone plays for the hotkey, the rail mark and the tray. After "Hey Sage" and a pause Sage says "How can I help?" instead; with this off it says nothing and just listens. |
 | **Microphone** and **Speaker** | Choose a device, or System default. |
+| **Let Sage run commands on this computer** | On by default. Lets Sage offer one shell command for what it cannot do otherwise. It always shows and reads the command and waits for a clear yes. Off, it never offers one. |
 | **Which model thinks** | Fast (the default), Balanced or Most capable. Fast is the smallest model and the quickest. |
 | **Remove speech files** | Shown once the files are downloaded. Turns Open Sage off and deletes the files. Turning it on again downloads them again. |
 

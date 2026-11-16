@@ -95,6 +95,9 @@ pub struct Settings {
     /// A soft tone plays when Open Dot starts listening from rest (hotkey, click, tray or
     /// "Hey Dot"); not on a follow-up or after an interruption.
     pub voice_tone: bool,
+    /// Open Sage may run a command on this computer for what its other acts cannot do. It
+    /// always shows the command and waits for a spoken yes; off, it never offers one.
+    pub open_dot_commands: bool,
     /// The microphone's device id; `None` is the system's default.
     pub voice_mic: Option<String>,
     /// The speaker's device id; `None` is the system's default.
@@ -148,6 +151,7 @@ impl Default for Settings {
             voice_wake_phrase: false,
             voice_interrupt_by_talking: false,
             voice_tone: true,
+            open_dot_commands: true,
             voice_mic: None,
             voice_speaker: None,
             voice_notices: false,

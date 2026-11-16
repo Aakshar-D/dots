@@ -3,9 +3,10 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use dots_core::open_dot::desk::{Desk, DeskApp, DeskTask, FAILED};
+use dots_core::open_dot::desk::{Desk, DeskApp, DeskTask, COMMAND_STOPPED, FAILED};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -85,9 +86,9 @@ impl SystemDesk {
 }
 
 impl Desk for SystemDesk {
-    fn carry_out(&self, task: &DeskTask) -> Result<String, String> {
+    fn carry_out(&self, task: &DeskTask, stop: &AtomicBool) -> Result<String, String> {
         match task {
-            DeskTask::Command { command } => return run_command(command),
+            DeskTask::Command { command } => return run_command(command, stop),
             DeskTask::Close { app } => close(*app),
             DeskTask::Note { title, text, plain } => {
                 let dir = self.notes_dir()?;
@@ -138,7 +139,7 @@ fn shell(command: &str) -> Command {
 }
 
 /// Ends the process `pid` and what it started.
-fn stop(pid: u32) {
+fn end(pid: u32) {
     #[cfg(windows)]
     let _ = quiet(Command::new("taskkill").args(["/PID", &pid.to_string(), "/T", "/F"])).output();
     #[cfg(not(windows))]
@@ -171,7 +172,9 @@ fn printed(path: &Path) -> String {
 /// Its output goes to two files, not to pipes: a program the command starts and leaves
 /// running would hold a pipe open, and the command would seem never to end. So the wait is
 /// for the shell itself.
-pub fn run_command(command: &str) -> Result<String, String> {
+///
+/// It is ended, with what it started, soon after `stop` is set.
+pub fn run_command(command: &str, stop: &AtomicBool) -> Result<String, String> {
     let failed = |e: std::io::Error| {
         tracing::warn!("open sage: a command could not be run: {e}");
         FAILED.to_string()
@@ -191,14 +194,21 @@ pub fn run_command(command: &str) -> Result<String, String> {
     shell.stdin(Stdio::null()).stdout(out).stderr(err);
     let mut child = quiet(&mut shell).spawn().map_err(failed)?;
     let started = std::time::Instant::now();
+    let mut stopped = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
+            Ok(None) if stop.load(Ordering::SeqCst) => {
+                end(child.id());
+                let _ = child.wait();
+                stopped = true;
+                break None;
+            }
             Ok(None) if started.elapsed() < COMMAND_LIMIT => {
                 std::thread::sleep(Duration::from_millis(50));
             }
             Ok(None) => {
-                stop(child.id());
+                end(child.id());
                 let _ = child.wait();
                 break None;
             }
@@ -211,6 +221,7 @@ pub fn run_command(command: &str) -> Result<String, String> {
     };
     let (output, error) = (printed(&out_path), printed(&err_path));
     match status {
+        None if stopped => Err(COMMAND_STOPPED.to_string()),
         None => Err(TOO_LONG.to_string()),
         // An error the shell went on after is shown with what was printed.
         Some(status) if status.success() => Ok(format!("{output}\n{error}").trim().to_string()),
@@ -363,6 +374,8 @@ mod tests {
 
     #[test]
     fn a_command_gives_what_it_printed_or_says_how_it_failed() {
+        let go = AtomicBool::new(false);
+        let run_command = |command: &str| run_command(command, &go);
         assert_eq!(run_command("echo hello").unwrap(), "hello");
         // A program the command starts and leaves running does not hold it up.
         #[cfg(windows)]
@@ -384,6 +397,24 @@ mod tests {
                 "{failed}"
             );
         }
+    }
+
+    #[test]
+    fn a_command_told_to_stop_ends_at_once() {
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let told = stop.clone();
+        let teller = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(1500));
+            told.store(true, Ordering::SeqCst);
+        });
+        let started = std::time::Instant::now();
+        #[cfg(windows)]
+        let long = "Start-Sleep -Seconds 40";
+        #[cfg(not(windows))]
+        let long = "sleep 40";
+        assert_eq!(run_command(long, &stop), Err(COMMAND_STOPPED.to_string()));
+        assert!(started.elapsed() < Duration::from_secs(20));
+        teller.join().unwrap();
     }
 
     #[test]

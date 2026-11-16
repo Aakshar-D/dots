@@ -164,6 +164,19 @@ describe("Settings > Voice", () => {
     expect(backend.callsTo("voice_preview")[1]).toEqual({ voice: 9, speed: 1.15 });
   });
 
+  it("turns running commands off with the rest of the form", async () => {
+    const now = voice(ready, { ...sample.settings, voice_enabled: true, open_dot_commands: true });
+    const { user } = renderApp("/settings/voice");
+    const commandsSwitch = await screen.findByRole("switch", {
+      name: "Let Sage run commands on this computer",
+    });
+    expect(commandsSwitch).toBeChecked();
+    await user.click(commandsSwitch);
+    expect(commandsSwitch).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(now.settings.open_dot_commands).toBe(false));
+  });
+
   it("shows what Sage has learned, removes a note, forgets all and turns learning off", async () => {
     voice(ready, { ...sample.settings, voice_enabled: true });
     let known = { learning: true, notes: ["Prefers answers in one sentence.", "Calls the research sol Scout."] };

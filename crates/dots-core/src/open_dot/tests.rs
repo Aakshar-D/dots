@@ -2369,8 +2369,22 @@ struct FakeDesk {
 }
 
 impl desk::Desk for FakeDesk {
-    fn carry_out(&self, task: &desk::DeskTask) -> Result<String, String> {
+    fn carry_out(
+        &self,
+        task: &desk::DeskTask,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<String, String> {
         self.asked.lock().unwrap().push(task.clone());
+        // A command that runs until it is told to stop.
+        if matches!(task, desk::DeskTask::Command { command } if command == "wait") {
+            for _ in 0..500 {
+                if stop.load(Ordering::SeqCst) {
+                    return Err(desk::COMMAND_STOPPED.into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            return Err("never stopped".into());
+        }
         match self.refuse.lock().unwrap().clone() {
             Some(why) => Err(why),
             None => Ok(match task {
@@ -2580,9 +2594,11 @@ async fn a_command_is_shown_and_asked_about_and_runs_only_on_a_yes() {
     t.fake.push(says(CLOSE_CHROME));
     let got = t.hear("close chrome").await;
     let (question, options) = asks(&got).unwrap();
+    // The model's account is said as the model's, and the command itself is read out.
     assert_eq!(
         question,
-        "This closes every Chrome window. It is on screen. Run this command?"
+        "The model says: This closes every Chrome window. The command reads: \
+         Stop-Process -Name chrome. It is on screen. Run this command?"
     );
     assert_eq!(options, yes_no());
     assert!(got.contains(&MindEvent::Card {
@@ -2659,5 +2675,80 @@ async fn an_app_is_closed_by_name_without_a_question() {
     let got = t.hear("close chrome").await;
     assert_eq!(said(&got), format!("Closing it. {}", desk::NO_CLOSE));
     assert_eq!(on_desk.asked.lock().unwrap().len(), 1);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_long_command_is_not_read_out() {
+    let t = T::start().await;
+    t.mind.set_desk(Arc::new(FakeDesk::default()));
+    let long = format!("Get-ChildItem {}", "a".repeat(150));
+    t.fake.push(says(&format!(
+        "One moment.\nDO {{\"act\":\"command\",\"command\":\"{long}\",\"why\":\"Lists a folder\"}}"
+    )));
+    let got = t.hear("list that folder").await;
+    let (question, _) = asks(&got).unwrap();
+    assert_eq!(
+        question,
+        "The model says: Lists a folder. The command is too long to read out. \
+         It is on screen. Run this command?"
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn with_commands_turned_off_none_is_offered_or_run() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    // Asked while it was on, turned off before the yes: not run.
+    t.fake.push(says(CLOSE_CHROME));
+    t.hear("close chrome").await;
+    let mut settings = t.rt.settings().await;
+    settings.open_dot_commands = false;
+    t.rt.update_settings(settings).await.unwrap();
+    let got = t.hear("yes").await;
+    assert_eq!(said(&got), desk::COMMANDS_OFF);
+    // And while it is off none is offered.
+    t.fake.push(says(CLOSE_CHROME));
+    let got = t.hear("close chrome").await;
+    assert!(asks(&got).is_none());
+    assert_eq!(said(&got), format!("Closing it. {}", desk::COMMANDS_OFF));
+    assert!(on_desk.asked.lock().unwrap().is_empty());
+    // The acts that need no command still work.
+    t.fake.push(says(
+        "Closing it.\nDO {\"act\":\"close\",\"name\":\"notepad\"}",
+    ));
+    let got = t.hear("close notepad").await;
+    assert_eq!(said(&got), "Closing it. Notepad is closing.");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_running_command_ends_when_the_turn_is_cancelled() {
+    let t = Arc::new(T::start().await);
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    t.fake.push(says(
+        "Waiting.\nDO {\"act\":\"command\",\"command\":\"wait\",\"why\":\"Waits\"}",
+    ));
+    t.hear("wait for it").await;
+    let running = {
+        let t = t.clone();
+        tokio::spawn(async move { t.hear("yes").await })
+    };
+    // Once it runs, the person says stop.
+    for _ in 0..200 {
+        if !on_desk.asked.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(on_desk.asked.lock().unwrap().len(), 1);
+    let started = std::time::Instant::now();
+    t.mind.cancel();
+    running.await.unwrap();
+    // It ended because it was told to, long before it would have by itself.
+    assert!(started.elapsed() < Duration::from_secs(3));
     t.rt.shutdown();
 }

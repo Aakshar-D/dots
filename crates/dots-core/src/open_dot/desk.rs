@@ -18,6 +18,7 @@
 //! - A search goes to the search engine, which is no one's to read.
 //! - An app is one of a fixed list. Nothing is run by a name or a command the model gives.
 
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 /// Longest note, in bytes.
@@ -53,6 +54,11 @@ pub const COMMAND_NOT_PLAIN: &str =
 const WHY_BYTES: usize = 160;
 /// What is said when a command ran and gave no error.
 pub const COMMAND_DONE: &str = "Done.";
+/// Said for a request that needs a command while commands are turned off.
+pub const COMMANDS_OFF: &str =
+    "That needs a command on your computer, and running commands is turned off in Settings.";
+/// Said when a command was ended before it finished.
+pub const COMMAND_STOPPED: &str = "I stopped it.";
 
 /// An app or folder Open Sage can open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,16 +153,17 @@ impl DeskTask {
 
 /// Carries a `DeskTask` out. `Ok` holds what a command printed (empty for the other tasks,
 /// and for a command that printed nothing); `Err` is a sentence for the person saying why
-/// not.
+/// not. A command that is running ends soon after `stop` is set (the person said stop, or
+/// closed the stage).
 pub trait Desk: Send + Sync {
-    fn carry_out(&self, task: &DeskTask) -> Result<String, String>;
+    fn carry_out(&self, task: &DeskTask, stop: &AtomicBool) -> Result<String, String>;
 }
 
 /// The desk of a core with no app around it: nothing can be done.
 pub struct NoDesk;
 
 impl Desk for NoDesk {
-    fn carry_out(&self, _task: &DeskTask) -> Result<String, String> {
+    fn carry_out(&self, _task: &DeskTask, _stop: &AtomicBool) -> Result<String, String> {
         Err(NO_DESK.into())
     }
 }
@@ -559,6 +566,9 @@ mod tests {
             .done(),
             "Calculator is open."
         );
-        assert_eq!(NoDesk.carry_out(&search("x").unwrap()), Err(NO_DESK.into()));
+        assert_eq!(
+            NoDesk.carry_out(&search("x").unwrap(), &AtomicBool::new(false)),
+            Err(NO_DESK.into())
+        );
     }
 }

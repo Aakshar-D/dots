@@ -872,7 +872,12 @@ impl Mind {
                         o.end(Then::Rest);
                         return "ended before the deed";
                     }
-                    self.run_command(o, command).await
+                    // Turned off since it was asked: not run.
+                    if !rt.settings().await.open_dot_commands {
+                        Outcome::refused(desk::COMMANDS_OFF)
+                    } else {
+                        self.run_command(o, command, cancel).await
+                    }
                 } else {
                     let Some(done) = confirmed(rt, &deed, view, &may_act).await else {
                         o.end(Then::Rest);
@@ -914,14 +919,25 @@ impl Mind {
 
     /// Runs a command the person said yes to, on the desk. What it printed is shown on a
     /// card (its first lines); what is said is that it is done, or why it is not.
-    async fn run_command(&self, o: &Out<'_>, command: &str) -> Outcome {
+    async fn run_command(&self, o: &Out<'_>, command: &str, cancel: &CancellationToken) -> Outcome {
         let desk = lock(&self.desk).clone();
         let task = desk::DeskTask::Command {
             command: command.to_string(),
         };
-        let ran = tokio::task::spawn_blocking(move || desk.carry_out(&task))
-            .await
-            .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
+        // "Stop", a new sentence or closing the stage ends the turn: the command is told to
+        // stop, and is waited for (it ends within a moment).
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let told = stop.clone();
+        let running = tokio::task::spawn_blocking(move || desk.carry_out(&task, &told));
+        tokio::pin!(running);
+        let ran = tokio::select! {
+            ran = &mut running => ran,
+            _ = cancel.cancelled() => {
+                stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                running.await
+            }
+        }
+        .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
         match ran {
             Ok(printed) => {
                 let lines: Vec<String> = printed
@@ -1341,7 +1357,14 @@ impl Mind {
                 lock(&o.read_aloud).push(line.id.clone());
             }
         }
-        let step = plan(&wish, &picture, view);
+        let step = match plan(&wish, &picture, view) {
+            // Turned off in Settings: no command is offered, and the person is told why.
+            Step::Confirm {
+                deed: Deed::Command { .. },
+                ..
+            } if !settings.open_dot_commands => Step::Say(desk::COMMANDS_OFF.into()),
+            step => step,
+        };
         self.act(rt, step, &picture, heard, own, view, o, cancel)
             .await
     }
@@ -1501,9 +1524,11 @@ impl Mind {
                 let desk = lock(&self.desk).clone();
                 let doing = task.clone();
                 // Writing a file or starting a program is not for the async threads.
-                let done = tokio::task::spawn_blocking(move || desk.carry_out(&doing))
-                    .await
-                    .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
+                let done = tokio::task::spawn_blocking(move || {
+                    desk.carry_out(&doing, &std::sync::atomic::AtomicBool::new(false))
+                })
+                .await
+                .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
                 let line = match done {
                     Ok(_) => task.done(),
                     Err(why) => why,

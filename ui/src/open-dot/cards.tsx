@@ -166,7 +166,12 @@ function ConfirmCard({ deed }: { deed: Deed }) {
           >
             {deed.command}
           </code>
-          {deed.why.trim() !== "" && <p>{deed.why}</p>}
+          {deed.why.trim() !== "" && (
+            <p>
+              <span className="text-muted-foreground">The model says: </span>
+              {deed.why}
+            </p>
+          )}
           <p className="text-muted-foreground">It runs only when you say yes. Read it first.</p>
         </>
       )}
