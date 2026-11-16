@@ -165,7 +165,7 @@ Steps 1 to 28 were written after step 3 (app wiring). Steps 29 to 57 were added 
     - Should: each time a short, soft two-note tone plays, and what you say right after it is heard. The tone itself is never heard as words.
 
 41. Turn on **Hey Sage** and save. Say "Hey Sage", stop, and wait.
-    - Should: about a third of a second after you stop, the tone plays. Then say a sentence: it is heard.
+    - Should: about a third of a second after you stop, Sage says "How can I help?" (no tone). Then say a sentence: it is heard.
 
 42. Say "Hey Sage" and go straight on talking.
     - Should: no tone plays, and your sentence is heard.

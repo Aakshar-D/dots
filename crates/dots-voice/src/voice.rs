@@ -129,6 +129,7 @@ impl Voice {
             speaker,
             inbox,
             reply: None,
+            kept: Vec::new(),
         };
         std::thread::Builder::new()
             .name("dots-voice-speaking".into())
@@ -254,11 +255,22 @@ struct ReplyState {
     failed: bool,
 }
 
+/// A sentence this short is kept once made, so that it sounds at once the next time: the
+/// greeting after the wake phrase, "Okay.", "One moment.". Making one takes about 0.4 s.
+const KEPT_CHARS: usize = 40;
+/// How many short sentences are kept, the newest first.
+const KEPT: usize = 6;
+
+/// What a kept clip was made from: the words, the voice and the speed.
+type KeptKey = (String, u8, u32);
+
 struct Worker {
     shared: Arc<Shared>,
     speaker: Arc<dyn Speaker>,
     inbox: Receiver<Command>,
     reply: Option<ReplyState>,
+    /// Short sentences already made, in memory only.
+    kept: Vec<(KeptKey, Clip)>,
 }
 
 impl Worker {
@@ -359,7 +371,22 @@ impl Worker {
             let st = self.shared.lock();
             (st.voice, st.speed)
         };
-        match self.speaker.speak(&cleaned, voice, speed) {
+        let key: KeptKey = (cleaned.clone(), voice, speed.to_bits());
+        let short = cleaned.len() <= KEPT_CHARS;
+        let kept = short
+            .then(|| self.kept.iter().find(|(k, _)| *k == key))
+            .flatten()
+            .map(|(_, clip)| clip.clone());
+        let made = match kept {
+            Some(clip) => Ok(clip),
+            None => self.speaker.speak(&cleaned, voice, speed).inspect(|clip| {
+                if short {
+                    self.kept.insert(0, (key, clip.clone()));
+                    self.kept.truncate(KEPT);
+                }
+            }),
+        };
+        match made {
             Ok(clip) => {
                 let st = self.shared.lock();
                 if st.gen != gen {
@@ -614,6 +641,34 @@ mod tests {
         // The speaker only ever runs on the worker thread.
         let me = std::thread::current().id();
         assert!(rig.speaker.threads.lock().unwrap().iter().all(|t| *t != me));
+    }
+
+    /// A short sentence is made once and sounds again from memory; a long one, or the same
+    /// words in another voice, is made afresh.
+    #[test]
+    fn a_short_sentence_said_again_is_not_made_again() {
+        let mut rig = rig();
+        for _ in 0..3 {
+            rig.voice.say("How can I help?");
+            assert_eq!(rig.next(), say("How can I help?"));
+            assert_eq!(rig.next(), VoiceEvent::Finished);
+        }
+        assert_eq!(rig.speaker.sentences(), ["How can I help?"]);
+        assert_eq!(rig.sink.clips.lock().unwrap().len(), 3);
+
+        let long = "This sentence is a good deal longer than forty characters are.";
+        for _ in 0..2 {
+            rig.voice.say(long);
+            assert_eq!(rig.next(), say(long));
+            assert_eq!(rig.next(), VoiceEvent::Finished);
+        }
+        assert_eq!(rig.speaker.sentences(), ["How can I help?", long, long]);
+
+        rig.voice.set_voice(3, 1.0);
+        rig.voice.say("How can I help?");
+        assert_eq!(rig.next(), say("How can I help?"));
+        assert_eq!(rig.next(), VoiceEvent::Finished);
+        assert_eq!(rig.speaker.sentences().len(), 4);
     }
 
     #[test]

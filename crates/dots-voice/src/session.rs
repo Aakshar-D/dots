@@ -16,6 +16,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use crate::audio::{Mic, MicFrame};
 use crate::ears::{level, EarEvent, Ears};
 use crate::engine::{EngineError, WakeSpotter, WakeWord, FRAME};
+use crate::gain::Gain;
 use crate::tone::{listen_tone, TONE_RATE};
 use crate::voice::{Sink, Voice, VoiceEvent};
 
@@ -76,6 +77,8 @@ const MIC_WONT_OPEN: &str =
 /// Said once when words were heard live but the finished sentence came out empty.
 const DIDNT_CATCH: &str = "Sorry, I didn't catch that.";
 /// Shown when a question was not said in full: it is not asked, and nothing waits on it.
+/// Said when the person says "Hey Sage" and then waits: they are waiting to be answered.
+const GREETING: &str = "How can I help?";
 const QUESTION_CUT: &str = "The question could not be said in full, so nothing was done.";
 
 /// How many times in a row a word, or a group of two or three, must come for `babble`.
@@ -95,14 +98,30 @@ fn without_wake_phrase(text: &str) -> &str {
     let sage = |w: &str| {
         matches!(
             w,
-            "sage" | "sages" | "saige" | "sayge" | "seige" | "siege" | "stage" | "sedge"
+            "sage"
+                | "sages"
+                | "saige"
+                | "sayge"
+                | "seige"
+                | "siege"
+                | "stage"
+                | "sedge"
+                | "saj"
+                | "sej"
+                | "sayj"
+                | "cage"
         )
     };
     let mut rest = text.trim_start();
     let mut words = rest.split_whitespace();
     let first = words.next().map(word).unwrap_or_default();
     let second = words.next().map(word).unwrap_or_default();
-    let skip = if matches!(first.as_str(), "hey" | "hay") && sage(&second) {
+    // "A sage" and "He sage" were seen for the phrase from a faint voice.
+    let hey = matches!(
+        first.as_str(),
+        "hey" | "hay" | "hi" | "he" | "a" | "eh" | "ay"
+    );
+    let skip = if hey && sage(&second) {
         2
     } else if first == "sage" {
         1
@@ -629,6 +648,8 @@ struct Worker {
     recent: VecDeque<Vec<f32>>,
     /// Stop handling frames for the rest of this pass.
     halt_frames: bool,
+    /// Makes a faint microphone louder before the spotter and the ears hear it.
+    gain: Gain,
     /// Frames were left waiting at the end of the last pass.
     frames_left: bool,
 
@@ -721,6 +742,7 @@ impl Worker {
             after_wake: false,
             recent: VecDeque::new(),
             halt_frames: false,
+            gain: Gain::new(),
             frames_left: false,
             voice_heard_at: now,
             thinking_since: now,
@@ -1387,6 +1409,21 @@ impl Worker {
 
     fn frame(&mut self, frame: &[f32]) {
         let now = self.clock.now();
+        // A faint microphone is made louder before anything hears it. The level followed is
+        // the person's: while the session's own sound is in the microphone (its voice, a
+        // filler, the tone, the tail after them) the frame is left as it is.
+        let own_sound = self.state == State::Speaking
+            || self.fillers_pending > 0
+            || self.deaf_until.is_some()
+            || self.tone_until.is_some();
+        let louder;
+        let frame = if own_sound {
+            self.gain.pass(frame);
+            frame
+        } else {
+            louder = self.gain.apply(frame);
+            &louder[..]
+        };
         // The spotter hears every frame, the listening tone's too. Nothing is done about the
         // tone: it is two pure notes with no words in them, so it cannot match "Hey Dot" or
         // "Dot, stop" (the spotter needs the keywords' sounds in order), and keeping the
@@ -1507,10 +1544,18 @@ impl Worker {
         }
     }
 
-    /// `text` as heard, without the wake phrase when the clip began at it.
+    /// `text` as heard, without the wake phrase at its start. Straight after the wake the
+    /// clip began at the phrase, so a lone "Sage" at its start is the end of it. Later in
+    /// the listen only the whole phrase is taken off: a person who was not answered at once
+    /// says "Hey Sage" again, and that is not what they want to ask.
     fn without_wake(&self, text: String) -> String {
-        if self.after_wake {
-            without_wake_phrase(&text).to_string()
+        let rest = without_wake_phrase(&text);
+        let lone_sage = text
+            .split_whitespace()
+            .next()
+            .is_some_and(|w| w.to_lowercase().starts_with("sage"));
+        if self.after_wake || rest.is_empty() || !lone_sage {
+            rest.to_string()
         } else {
             text
         }
@@ -1609,11 +1654,14 @@ impl Worker {
         match self.state {
             State::Listening | State::Asking => {
                 if self.tone_due.is_some_and(|at| now >= at) {
-                    // A pause after "Hey Dot": the person waits to be acknowledged.
+                    // A pause after "Hey Dot": the person waits to be answered, and is: by
+                    // voice, then the ears open as after any reply. With a speaker that
+                    // has failed nothing can be said, and the ears stay open.
                     self.tone_due = None;
                     self.after_wake = false;
-                    if !self.in_speech {
-                        self.play_tone();
+                    if !self.in_speech && !self.sink.failed() {
+                        self.say_alone(GREETING, After::FollowUp);
+                        return;
                     }
                 }
                 if !self.in_speech
@@ -2038,6 +2086,7 @@ mod tests {
         // every two speech frames.
         EarSettings {
             end_quiet_ms: 64,
+            unfinished_quiet_ms: 64,
             min_speech_ms: 64,
             pre_roll_ms: 0,
             partial_every_ms: 64,
@@ -2528,8 +2577,9 @@ mod tests {
             (live, whole)
         };
         let said = "what needs me?".to_string();
-        assert_eq!(heard(true), (said.clone(), said));
-        let said = "Hey Saige, what needs me?".to_string();
+        assert_eq!(heard(true), (said.clone(), said.clone()));
+        // Opened by the hotkey, the whole phrase is still taken off: a person says it out
+        // of habit, and it is not part of what they ask.
         assert_eq!(heard(false), (said.clone(), said));
     }
 
@@ -2552,32 +2602,38 @@ mod tests {
     }
 
     #[test]
-    fn a_pause_after_the_wake_phrase_gets_the_tone() {
+    fn a_pause_after_the_wake_phrase_is_answered_aloud() {
         let mut r = woken();
-        // The ears are open at once: quiet frames reach them.
-        let seen = r.seen();
         r.mic.send(QUIET, 2);
         r.nothing_more();
-        assert_eq!(r.seen(), seen + 2);
         r.clock.advance(299);
         r.nothing_more();
-        assert_eq!(r.sink.tones(), 0, "the tone came before the pause");
-        // A pause of 300 ms: the tone answers it, and the ears are deaf while it sounds.
-        r.sink.hold_next.store(true, Ordering::SeqCst);
+        // A pause of 300 ms: the person is waiting, and is answered by voice, not a tone.
         r.clock.advance(1);
-        deaf_during_the_tone(&mut r);
-        r.sink.sounding(false);
-        r.sync();
-        // Then only the short tail.
-        r.clock.advance(59);
-        let seen = r.seen();
-        r.mic.send(SPEECH, 6);
-        r.nothing_more();
-        assert_eq!(r.seen(), seen, "a tail frame reached the ears");
-        r.clock.advance(1);
-        r.sync();
+        r.expect_state(State::Speaking, true);
+        r.expect_saying(GREETING);
+        assert_eq!(r.sink.tones(), 0);
+        r.until_speech_done();
+        r.clock.advance(250);
+        r.expect_state(State::Listening, true);
         r.hear_sentence();
-        assert_eq!(r.sink.tones(), 1);
+    }
+
+    /// "Hey Sage" said again while the session already listens is not a sentence: nothing
+    /// is passed on, and a sentence after it is heard without it.
+    #[test]
+    fn the_wake_phrase_said_again_while_listening_is_not_a_sentence() {
+        let mut r = rig(Opts {
+            recognizer: Some(FakeRecognizer::new("Hey Sage.")),
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, false);
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        r.sentence();
+        r.sync();
+        r.nothing_more();
+        assert_eq!(r.session.state(), State::Listening);
     }
 
     #[test]

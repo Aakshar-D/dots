@@ -5,6 +5,7 @@
 mod audio;
 mod ears;
 mod engine;
+mod gain;
 mod models;
 mod session;
 mod sherpa;
@@ -18,6 +19,7 @@ pub use engine::{
     resample, Clip, EngineError, Recognizer, Speaker, SpeechDetector, WakeSpotter, WakeWord,
     EAR_RATE, FRAME,
 };
+pub use gain::Gain;
 pub use models::{
     install, installed, remove, Manifest, ModelError, ModelFile, ModelPaths, Progress,
 };
