@@ -1,9 +1,11 @@
 import { cn } from "cn";
+import { Copy, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
 import { notifyError } from "@/lib/notify";
-import { useVoiceLive, useVoiceStatus, type VoiceLive } from "@/lib/use-voice";
+import { useVoiceLive, useVoiceStatus, voiceStore, type VoiceLive } from "@/lib/use-voice";
 
 import { Breath } from "./Breath";
 import { breathStateOf } from "./breath-model";
@@ -15,6 +17,38 @@ import { interrupts, LEAVE_MS, talk, useStage, type StageCommands } from "./use-
 const KEYED = 4;
 
 const REDUCE = "(prefers-reduced-motion: reduce)";
+
+/// Where the choice of the enlarged stage is kept on this computer.
+const LARGE_KEY = "open-sage-large";
+
+function readLarge(): boolean {
+  try {
+    return window.localStorage.getItem(LARGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function keepLarge(large: boolean): void {
+  try {
+    if (large) window.localStorage.setItem(LARGE_KEY, "1");
+    else window.localStorage.removeItem(LARGE_KEY);
+  } catch {
+    // The choice then lasts until the app closes.
+  }
+}
+
+function copy(text: string): void {
+  navigator.clipboard
+    .writeText(text)
+    .then(() => toast.success("Copied"))
+    .catch(notifyError);
+}
+
+/// The conversation as plain text, one paragraph per turn.
+export function talkText(talk: VoiceLive["talk"]): string {
+  return talk.map((line) => `${line.who === "you" ? "You" : "Sage"}: ${line.text}`).join("\n\n");
+}
 
 /// Whether the person asked for less motion, following the setting as it changes.
 function useReducedMotion(): boolean {
@@ -133,6 +167,65 @@ function Words({ question }: { question: string | null }) {
   );
 }
 
+/// The enlarged stage's words: the whole conversation, every reply in full, in text that can
+/// be selected and copied. The newest is kept in view. Words still coming show below it.
+function Talk() {
+  const talk = useVoiceLive((live) => live.talk);
+  const hearing = useVoiceLive((live) => live.hearing);
+  const heard = useVoiceLive((live) => live.heard);
+  const end = useRef<HTMLDivElement>(null);
+  const newest = talk[talk.length - 1];
+  const tail = `${newest?.n ?? 0}:${newest?.text.length ?? 0}:${heard ? "" : hearing}`;
+  useEffect(() => {
+    end.current?.scrollIntoView?.({ block: "end" });
+  }, [tail]);
+  const coming = hearing !== "" && !heard;
+  return (
+    <div
+      data-talk=""
+      role="log"
+      aria-label="Conversation"
+      tabIndex={0}
+      className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto rounded-lg bg-muted/40 px-5 py-4 text-left select-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    >
+      {talk.length === 0 && !coming && (
+        <p className="m-auto text-sm text-muted-foreground">What you say and what Sage answers shows here.</p>
+      )}
+      {talk.map((line) => (
+        <div key={line.n} data-who={line.who} className="group flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">{line.who === "you" ? "You" : "Sage"}</span>
+            {line.who === "sage" && (
+              <button
+                type="button"
+                aria-label="Copy this reply"
+                onClick={() => copy(line.text)}
+                className="inline-flex items-center rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <Copy aria-hidden className="size-3.5" />
+              </button>
+            )}
+          </div>
+          <p
+            className={cn(
+              "text-base leading-relaxed whitespace-pre-wrap wrap-anywhere",
+              line.who === "you" ? "text-muted-foreground" : "text-foreground",
+            )}
+          >
+            {line.text}
+          </p>
+        </div>
+      ))}
+      {coming && (
+        <p aria-live="off" className="text-base leading-relaxed text-muted-foreground/70 wrap-anywhere">
+          {hearing}
+        </p>
+      )}
+      <div ref={end} />
+    </div>
+  );
+}
+
 /// The question, printed above its options; an open question says how to answer it.
 function Question({ ask }: { ask: NonNullable<VoiceLive["ask"]> }) {
   return (
@@ -194,7 +287,13 @@ function Options(props: {
 /// a card. Once closed it fades away for `LEAVE_MS`, out of reach of the keyboard, the mouse
 /// and a screen reader, and then renders nothing, so The Breath inside it stops with it.
 export function OpenDotStage({ act = commands }: { act?: StageCommands } = {}) {
-  const stage = useStage(act);
+  // Enlarged, the stage fills the window and shows the whole conversation to read and copy.
+  const [large, setLarge] = useState(readLarge);
+  const resize = () => {
+    keepLarge(!large);
+    setLarge(!large);
+  };
+  const stage = useStage(act, large);
   // Whether the panel is drawn: while open, and for `LEAVE_MS` after. Adjusted while
   // rendering, so it never misses a frame between open and leaving.
   const [drawn, setDrawn] = useState(stage.open);
@@ -202,15 +301,36 @@ export function OpenDotStage({ act = commands }: { act?: StageCommands } = {}) {
   const leaving = drawn && !stage.open;
   useEffect(() => {
     if (!leaving) return;
-    const gone = setTimeout(() => setDrawn(false), LEAVE_MS);
+    const gone = setTimeout(() => {
+      setDrawn(false);
+      // The conversation is shown for as long as the stage is: gone with it.
+      voiceStore.set({ talk: [] });
+    }, LEAVE_MS);
     return () => clearTimeout(gone);
   }, [leaving]);
   if (!drawn) return null;
-  return <Panel act={act} close={stage.close} justFinished={stage.justFinished} leaving={leaving} />;
+  return (
+    <Panel
+      act={act}
+      close={stage.close}
+      justFinished={stage.justFinished}
+      leaving={leaving}
+      large={large}
+      resize={resize}
+    />
+  );
 }
 
-function Panel(props: { act: StageCommands; close: () => void; justFinished: boolean; leaving: boolean }) {
-  const { act, close, justFinished, leaving } = props;
+function Panel(props: {
+  act: StageCommands;
+  close: () => void;
+  justFinished: boolean;
+  leaving: boolean;
+  large: boolean;
+  resize: () => void;
+}) {
+  const { act, close, justFinished, leaving, large, resize } = props;
+  const spoken = useVoiceLive((live) => live.talk.length > 0);
   const state = useVoiceLive((live) => live.state);
   const micOpen = useVoiceLive((live) => live.micOpen);
   const trouble = useVoiceLive((live) => live.trouble);
@@ -292,23 +412,28 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
   return (
     <div
       aria-hidden={leaving || undefined}
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pr-4 pb-4 pl-[calc(46px+1rem)]"
+      className={cn(
+        "pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pr-4 pb-4 pl-[calc(46px+1rem)]",
+        large && "top-0 pt-4",
+      )}
     >
       <section
         role="region"
         aria-label="Open Sage"
+        data-large={large || undefined}
         inert={leaving}
         className={cn(
-          "flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col items-center gap-3 rounded-xl bg-popover px-6 pt-5 pb-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10",
+          "flex max-h-[calc(100dvh-2rem)] w-full flex-col items-center gap-3 rounded-xl bg-popover px-6 pt-5 pb-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10",
+          large ? "h-full max-w-5xl" : "max-w-xl",
           leaving
             ? "pointer-events-none animate-out duration-200 ease-in fill-mode-forwards fade-out-0"
             : "pointer-events-auto animate-in duration-250 ease-out fade-in-0",
           !reduced && (leaving ? "slide-out-to-bottom-4" : "slide-in-from-bottom-4"),
         )}
       >
-        <div data-breath-state={breath} className="shrink-0 p-3">
+        <div data-breath-state={breath} className={cn("shrink-0", large ? "p-1" : "p-3")}>
           <Breath
-            size={132}
+            size={large ? 84 : 132}
             state={breath}
             options={ask?.options.length ?? 3}
             label={interrupts(state) ? "Stop and listen" : "Listen"}
@@ -317,7 +442,7 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
             }}
           />
         </div>
-        <Words question={ask?.question ?? null} />
+        {large ? <Talk /> : <Words question={ask?.question ?? null} />}
         {ask !== null && <Question ask={ask} />}
         {options && <Options ask={ask} picked={picked} pick={pick} />}
         {card !== null && (
@@ -326,7 +451,10 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
             role="group"
             aria-label="Details"
             tabIndex={0}
-            className="max-h-48 min-h-0 w-full shrink overflow-y-auto rounded-lg bg-muted/60 px-3 py-2.5 text-xs leading-relaxed wrap-anywhere focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className={cn(
+              "min-h-0 w-full shrink overflow-y-auto rounded-lg bg-muted/60 px-3 py-2.5 leading-relaxed wrap-anywhere select-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+              large ? "max-h-[40%] shrink-0 text-sm" : "max-h-48 text-xs",
+            )}
           >
             <Card card={card} />
           </div>
@@ -345,6 +473,27 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
           ) : (
             <span className="flex-1" />
           )}
+          {large && spoken && (
+            <button
+              type="button"
+              onClick={() => copy(talkText(voiceStore.get().talk))}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              <Copy aria-hidden className="size-3.5" />
+              Copy all
+            </button>
+          )}
+          <button
+            type="button"
+            aria-pressed={large}
+            aria-label={large ? "Make Open Sage smaller" : "Enlarge Open Sage"}
+            title={large ? "Smaller" : "Enlarge to read and copy"}
+            onClick={resize}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            {large ? <Minimize2 aria-hidden className="size-3.5" /> : <Maximize2 aria-hidden className="size-3.5" />}
+            {large ? "Smaller" : "Enlarge"}
+          </button>
           <button
             type="button"
             aria-keyshortcuts="Escape"

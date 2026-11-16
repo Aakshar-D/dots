@@ -22,7 +22,11 @@ Any of these opens the stage, a small panel at the bottom of the window, and pla
 - In the tray menu, choose **Talk to Sage**. It is available once Open Sage is ready.
 - Say "Hey Sage". This is off until you turn on **Hey Sage** in Settings. See Privacy. If you then wait, Sage says "How can I help?" and listens. If you carry straight on with your request, it just listens. Saying "Hey Sage" again while it already listens is not taken as your request.
 
-You do not press a button to finish. Sage notices when you stop talking: it waits a little over a second of quiet, and about two seconds when your words so far stop in the middle of a thought ("open the research sol and..."), so you can pause to think. After it answers, it listens a few more seconds so you can follow up. Esc closes the stage. So does "thank you", "goodbye" or "close". A list Sage showed stays 10 seconds after it rests, and goes at once when you say the next thing.
+You do not press a button to finish. Sage notices when you stop talking: it waits a little over a second of quiet, and about two seconds when your words so far stop in the middle of a thought ("open the research sol and..."), so you can pause to think. After it answers, it listens a few more seconds so you can follow up. Esc closes the stage. So does "thank you", "goodbye" or "close".
+
+**Enlarge** in the stage's bottom row makes it fill the window. Enlarged, it shows the whole conversation, every reply in full, in text you can select. Each reply has a copy button and **Copy all** copies the lot. The enlarged stage does not close by itself: it stays until you press Esc or **Close**, and the conversation shown goes with it. **Smaller** brings the small panel back. Sage remembers which size you chose.
+
+ A list Sage showed stays 10 seconds after it rests, and goes at once when you say the next thing.
 
 ## What you can say
 

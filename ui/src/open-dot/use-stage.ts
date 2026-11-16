@@ -50,7 +50,12 @@ export function useOpenDotBusy(): boolean {
 /// question or a card; after that it stays `LINGER_MS` (The Breath in `done` for the first
 /// `DONE_MS`, `justFinished`) and closes. `close()` tells the core (`voice_close`) and closes
 /// at once; the stage opens again once the core has gone idle and is busy again, or listens.
-export function useStage(act: StageCommands = commands): {
+/// With `stay` (the enlarged stage, where replies are read and copied) it does not close by
+/// itself: it stays until the person closes it.
+export function useStage(
+  act: StageCommands = commands,
+  stay = false,
+): {
   open: boolean;
   justFinished: boolean;
   close: () => void;
@@ -98,12 +103,14 @@ export function useStage(act: StageCommands = commands): {
       () => setAfter((a) => (a?.id === lingerId ? { ...a, done: false } : a)),
       DONE_MS,
     );
-    const gone = setTimeout(() => setAfter((a) => (a?.id === lingerId ? null : a)), lingerMs);
+    const gone = stay
+      ? undefined
+      : setTimeout(() => setAfter((a) => (a?.id === lingerId ? null : a)), lingerMs);
     return () => {
       clearTimeout(done);
       clearTimeout(gone);
     };
-  }, [lingerId, lingerMs]);
+  }, [lingerId, lingerMs, stay]);
 
   const close = useCallback(() => {
     setClosed(true);
