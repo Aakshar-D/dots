@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dots_voice::{
-    calibrate, hears, resample, voice_level, After, Clip, EarEvent, EarSettings, Ears, Mic,
+    calibrate, heard_times, resample, voice_level, After, Clip, EarEvent, EarSettings, Ears, Mic,
     MicFrame, ModelPaths, Parts, Recognizer, Session, SessionEvent, SessionSettings,
     SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake, Sink, Speaker, SpeechDetector,
     State, Voice, WakeSpotter, WakeTuning, WakeWord, EAR_RATE, FRAME, TAKE_FRAMES,
@@ -238,9 +238,9 @@ fn a_voice_setup_picks_a_tuning_that_catches_the_voice() {
                 })
                 .collect();
             let found_level = voice_level(&takes);
-            let found = calibrate(&takes, |tuning, take| {
+            let found = calibrate(&takes, |tuning| {
                 let (_, wake) = spotters.iter_mut().find(|(t, _)| *t == tuning).unwrap();
-                hears(wake, take, found_level)
+                heard_times(wake, &takes, found_level)
             });
             println!(
                 "voice {voice} at {:.0}: {:?}, heard {}/{}, level found {:?}",

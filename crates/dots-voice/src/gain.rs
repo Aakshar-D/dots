@@ -27,6 +27,9 @@ const RISE: f32 = 0.5;
 const FALL: f32 = 0.03;
 /// How fast the room's noise level creeps up when no frame is quieter than it.
 const NOISE_CREEP: f32 = 1.002;
+/// A frame below this is no sound at all (a muted or noise-gated microphone, a stream
+/// that has just opened): it says nothing about the room.
+const NO_SOUND: f32 = 0.000_001;
 /// The most the gain changes from one frame to the next, as a factor.
 const STEP: f32 = 1.25;
 
@@ -136,6 +139,12 @@ impl Gain {
     }
 
     fn follow_noise(&mut self, level: f32) -> f32 {
+        // Exact silence is not the room's noise. Taken for it, the noise level would sit at
+        // nothing for good (it only creeps up by a factor), every hiss after it would count
+        // as a voice, and the room would be made as loud as a voice.
+        if level < NO_SOUND {
+            return self.noise.unwrap_or(0.0);
+        }
         let noise = match self.noise {
             None => level,
             Some(n) if level < n => level,
@@ -205,6 +214,28 @@ mod tests {
         feed(&mut gain, 0.007, 60);
         assert!(
             gain.factor() <= NOISE_CEILING / 0.002 * 1.2,
+            "{}",
+            gain.factor()
+        );
+    }
+
+    #[test]
+    fn frames_of_exact_silence_do_not_make_the_room_loud() {
+        let mut gain = Gain::new();
+        let quiet = vec![0.0; FRAME];
+        for _ in 0..10 {
+            gain.apply(&quiet);
+        }
+        // The room's hiss after it is still the room, not a voice.
+        let hiss = tone(0.001);
+        for _ in 0..60 {
+            assert_eq!(gain.apply(&hiss), hiss);
+        }
+        assert_eq!(gain.factor(), 1.0);
+        // And a voice over that hiss is held by the noise ceiling.
+        feed(&mut gain, 0.004, 60);
+        assert!(
+            gain.factor() <= NOISE_CEILING / 0.001 * 1.2,
             "{}",
             gain.factor()
         );

@@ -1576,11 +1576,11 @@ impl SessionFactory for RealFactory {
                 SherpaWake::load_tuned(&paths, tuning).map_err(|_| MODELS_BROKEN.to_string())?;
             spotters.push((tuning, wake));
         }
-        Ok(dots_voice::calibrate(&takes, |tuning, take| {
+        Ok(dots_voice::calibrate(&takes, |tuning| {
             spotters
                 .iter_mut()
                 .find(|(t, _)| *t == tuning)
-                .is_some_and(|(_, wake)| dots_voice::hears(wake, take, level))
+                .map_or(0, |(_, wake)| dots_voice::heard_times(wake, &takes, level))
         }))
     }
 

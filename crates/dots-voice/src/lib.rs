@@ -15,7 +15,7 @@ mod tone;
 mod voice;
 
 pub use audio::{frames_from, microphones, speakers, CpalMic, CpalSink, Device, Mic, MicFrame};
-pub use calibrate::{calibrate, hears, voice_level, Calibration, FAINT, TAKES, TAKE_FRAMES};
+pub use calibrate::{calibrate, heard_times, voice_level, Calibration, FAINT, TAKES, TAKE_FRAMES};
 pub use ears::{level, EarEvent, EarSettings, Ears};
 pub use engine::{
     resample, Clip, EngineError, Recognizer, Speaker, SpeechDetector, WakeSpotter, WakeWord,

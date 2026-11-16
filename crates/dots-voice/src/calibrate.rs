@@ -79,40 +79,42 @@ pub fn voice_level(takes: &[Vec<Vec<f32>>]) -> Option<f32> {
     levels.get(levels.len() / 2).copied()
 }
 
-/// Whether `wake` catches the wake phrase in `take`, made as loud as a session that knows
-/// the voice's `level` would make it.
-pub fn hears(wake: &mut dyn WakeSpotter, take: &[Vec<f32>], level: Option<f32>) -> bool {
+/// How many times `wake` catches the wake phrase in `takes`, made as loud as a session that
+/// knows the voice's `level` would make them. The takes are heard one after the other as one
+/// sound, as they were recorded: a phrase said across the end of one take and the start of
+/// the next is still caught. Never more than there are takes.
+pub fn heard_times(wake: &mut dyn WakeSpotter, takes: &[Vec<Vec<f32>>], level: Option<f32>) -> u8 {
     let mut gain = level.map_or_else(Gain::new, Gain::with_voice);
     wake.reset();
     let quiet = vec![0.0; FRAME];
-    let mut caught = false;
-    for frame in take {
+    let mut caught = 0usize;
+    for frame in takes.iter().flatten() {
         if frame.len() != FRAME {
             continue;
         }
-        caught |= wake.heard(&gain.apply(frame)) == Some(WakeWord::HeyDot);
+        if wake.heard(&gain.apply(frame)) == Some(WakeWord::HeyDot) {
+            caught += 1;
+        }
     }
     for _ in 0..TAIL_FRAMES {
-        caught |= wake.heard(&quiet) == Some(WakeWord::HeyDot);
+        if wake.heard(&quiet) == Some(WakeWord::HeyDot) {
+            caught += 1;
+        }
     }
     wake.reset();
-    caught
+    u8::try_from(caught.min(takes.len())).unwrap_or(u8::MAX)
 }
 
-/// The tuning for these takes. `caught(tuning, take)` says whether the spotter at `tuning`
-/// catches the phrase in `take`. The strictest tuning that catches `ENOUGH` of them wins;
-/// when none does, the one that catches the most, the stricter of two that tie.
-pub fn calibrate(
-    takes: &[Vec<Vec<f32>>],
-    mut caught: impl FnMut(WakeTuning, &[Vec<f32>]) -> bool,
-) -> Calibration {
+/// The tuning for these takes. `caught(tuning)` says how many times the spotter at `tuning`
+/// catches the phrase in them. The strictest tuning that catches `ENOUGH` wins; when none
+/// does, the one that catches the most, the stricter of two that tie.
+pub fn calibrate(takes: &[Vec<Vec<f32>>], mut caught: impl FnMut(WakeTuning) -> u8) -> Calibration {
     let level = voice_level(takes);
     let count = u8::try_from(takes.len()).unwrap_or(u8::MAX);
     let enough = ENOUGH.min(count);
     let mut best = (WakeTuning::Standard, 0u8);
     for tuning in WakeTuning::STRICTEST_FIRST {
-        let heard = takes.iter().filter(|take| caught(tuning, take)).count();
-        let heard = u8::try_from(heard).unwrap_or(u8::MAX);
+        let heard = caught(tuning).min(count);
         if heard > best.1 {
             best = (tuning, heard);
         }
@@ -157,9 +159,9 @@ mod tests {
     #[test]
     fn the_strictest_tuning_that_catches_four_of_five_is_used() {
         let mut asked = Vec::new();
-        let got = calibrate(&five(0.05), |tuning, _| {
+        let got = calibrate(&five(0.05), |tuning| {
             asked.push(tuning);
-            true
+            5
         });
         assert_eq!(
             (got.tuning, got.heard, got.takes),
@@ -171,28 +173,20 @@ mod tests {
 
     #[test]
     fn a_looser_tuning_is_used_when_the_strict_one_misses_too_many() {
-        let mut n = 0;
-        let got = calibrate(&five(0.001), |tuning, _| {
-            n += 1;
-            match tuning {
-                WakeTuning::Strict => n % 5 == 0,   // 1 of 5
-                WakeTuning::Standard => n % 5 != 0, // 4 of 5
-                WakeTuning::Sensitive => true,
-            }
+        let got = calibrate(&five(0.001), |tuning| match tuning {
+            WakeTuning::Strict => 1,
+            WakeTuning::Standard => 4,
+            WakeTuning::Sensitive => 5,
         });
         assert_eq!((got.tuning, got.heard), (WakeTuning::Standard, 4));
     }
 
     #[test]
     fn when_none_catches_enough_the_one_that_catches_most_is_used() {
-        let mut n = 0;
-        let got = calibrate(&five(0.001), |tuning, _| {
-            n += 1;
-            match tuning {
-                WakeTuning::Strict => false,
-                WakeTuning::Standard => n % 5 == 0, // 1 of 5
-                WakeTuning::Sensitive => n % 5 < 3, // 3 of 5
-            }
+        let got = calibrate(&five(0.001), |tuning| match tuning {
+            WakeTuning::Strict => 0,
+            WakeTuning::Standard => 1,
+            WakeTuning::Sensitive => 3,
         });
         assert_eq!((got.tuning, got.heard), (WakeTuning::Sensitive, 3));
         assert!(got.usable());
@@ -200,14 +194,10 @@ mod tests {
 
     #[test]
     fn two_that_tie_give_the_stricter() {
-        let got = calibrate(&five(0.001), |_, _| false);
+        let got = calibrate(&five(0.001), |_| 0);
         assert_eq!((got.tuning, got.heard), (WakeTuning::Standard, 0));
         assert!(!got.usable());
-        let mut n = 0;
-        let got = calibrate(&five(0.001), |_, _| {
-            n += 1;
-            n % 5 < 2 // 2 of 5 at every tuning
-        });
+        let got = calibrate(&five(0.001), |_| 2);
         assert_eq!((got.tuning, got.heard), (WakeTuning::Strict, 2));
     }
 
@@ -215,9 +205,11 @@ mod tests {
     fn the_level_is_that_of_the_voice_not_of_the_quiet_around_it() {
         let level = voice_level(&five(0.002)).unwrap();
         assert!((level - 0.002).abs() < 0.000_2, "{level}");
-        let got = calibrate(&five(0.002), |_, _| true);
+        let got = calibrate(&five(0.002), |_| 5);
         assert!(got.faint());
-        assert!(!calibrate(&five(0.05), |_, _| true).faint());
+        assert!(!calibrate(&five(0.05), |_| 5).faint());
+        // A spotter that fires more often than there are takes caught them all, no more.
+        assert_eq!(calibrate(&five(0.05), |_| 9).heard, 5);
     }
 
     #[test]
@@ -226,7 +218,7 @@ mod tests {
         assert_eq!(voice_level(&silent), None);
         // A click of three frames is not a voice.
         assert_eq!(voice_level(&five_of(take(0.05, 3))), None);
-        let got = calibrate(&silent, |_, _| false);
+        let got = calibrate(&silent, |_| 0);
         assert_eq!((got.level, got.heard), (None, 0));
         assert!(!got.faint());
     }
@@ -247,38 +239,51 @@ mod tests {
         assert_eq!(serde_json::from_str::<Calibration>(&json).unwrap(), c);
     }
 
+    /// Catches the phrase when a frame at least `over` loud comes after a quieter one.
     struct Spots {
-        /// Catches the phrase once a frame at least this loud came.
         over: f32,
-        seen: bool,
+        loud: bool,
     }
 
     impl WakeSpotter for Spots {
         fn heard(&mut self, frame: &[f32]) -> Option<WakeWord> {
-            if !self.seen && rms(frame) >= self.over {
-                self.seen = true;
-                return Some(WakeWord::HeyDot);
-            }
-            None
+            let loud = rms(frame) >= self.over;
+            let began = loud && !self.loud;
+            self.loud = loud;
+            began.then_some(WakeWord::HeyDot)
         }
         fn reset(&mut self) {
-            self.seen = false;
+            self.loud = false;
         }
     }
 
     #[test]
-    fn a_take_is_heard_as_loud_as_the_session_would_make_it() {
+    fn takes_are_heard_as_loud_as_the_session_would_make_them() {
         let mut wake = Spots {
             over: 0.02,
-            seen: false,
+            loud: false,
         };
-        let faint = take(0.001, 20);
+        let faint = five(0.001);
         // Unknown level: the gain finds the voice as it goes.
-        assert!(hears(&mut wake, &faint, None));
+        assert_eq!(heard_times(&mut wake, &faint, None), 5);
         // Known level: loud from the first frame.
-        assert!(hears(&mut wake, &faint, Some(0.001)));
+        assert_eq!(heard_times(&mut wake, &faint, Some(0.001)), 5);
         // Silence is never the phrase.
-        let silent = vec![tone(0.000_1); TAKE_FRAMES];
-        assert!(!hears(&mut wake, &silent, Some(0.001)));
+        let silent = five_of(vec![tone(0.000_1); TAKE_FRAMES]);
+        assert_eq!(heard_times(&mut wake, &silent, Some(0.001)), 0);
+    }
+
+    /// The person spoke late: the phrase began at the end of one take and ended in the next.
+    #[test]
+    fn a_phrase_said_across_two_takes_is_caught_once() {
+        let mut wake = Spots {
+            over: 0.02,
+            loud: false,
+        };
+        let mut first = vec![tone(0.000_1); TAKE_FRAMES - 10];
+        first.extend(vec![tone(0.05); 10]);
+        let mut second = vec![tone(0.05); 10];
+        second.extend(vec![tone(0.000_1); TAKE_FRAMES - 10]);
+        assert_eq!(heard_times(&mut wake, &[first, second], Some(0.05)), 1);
     }
 }

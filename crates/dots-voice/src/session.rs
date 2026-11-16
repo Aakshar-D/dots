@@ -91,40 +91,40 @@ const QUESTION_CUT: &str = "The question could not be said in full, so nothing w
 /// microphone's sound by the time the spotter gives for the phrase's end, which is not exact,
 /// so the phrase can still be in the clip. Only a word that sounds like "Sage" after "hey"
 /// is taken for it: "Hey, say that again" stays whole.
-fn without_wake_phrase(text: &str) -> &str {
+///
+/// Straight after the wake (`after_wake`) the clip began at the phrase, and anything that
+/// sounds like it is it. Later only a second word written as the name itself counts after a
+/// loose first one: "A sage" is the phrase said again, "A stage name" is a request.
+fn without_wake_phrase(text: &str, after_wake: bool) -> &str {
     let word = |s: &str| -> String {
         s.chars()
             .filter(|c| c.is_alphanumeric())
             .flat_map(char::to_lowercase)
             .collect()
     };
+    let name = |w: &str| matches!(w, "sage" | "sages" | "saige" | "sayge");
     let sage = |w: &str| {
-        matches!(
-            w,
-            "sage"
-                | "sages"
-                | "saige"
-                | "sayge"
-                | "seige"
-                | "siege"
-                | "stage"
-                | "sedge"
-                | "saj"
-                | "sej"
-                | "sayj"
-                | "cage"
-        )
+        name(w)
+            || matches!(
+                w,
+                "seige" | "siege" | "stage" | "sedge" | "saj" | "sej" | "sayj" | "cage"
+            )
     };
     let mut rest = text.trim_start();
     let mut words = rest.split_whitespace();
     let first = words.next().map(word).unwrap_or_default();
     let second = words.next().map(word).unwrap_or_default();
     // "A sage" and "He sage" were seen for the phrase from a faint voice.
-    let hey = matches!(
-        first.as_str(),
-        "hey" | "hay" | "hi" | "he" | "a" | "eh" | "ay"
-    );
-    let skip = if hey && sage(&second) {
+    let hey = matches!(first.as_str(), "hey" | "hay");
+    let loose = matches!(first.as_str(), "hi" | "he" | "a" | "eh" | "ay");
+    let phrase = (hey && sage(&second))
+        || (loose
+            && if after_wake {
+                sage(&second)
+            } else {
+                name(&second)
+            });
+    let skip = if phrase {
         2
     } else if first == "sage" {
         1
@@ -1199,6 +1199,11 @@ impl Worker {
             self.last_level = None;
             self.tone_due = None;
             self.after_wake = false;
+            // The greeting is owed only in the listen the wake opened: once a request was
+            // heard or the session rests, nothing later is answered with it.
+            if new != State::Listening {
+                self.greet_owed = false;
+            }
             self.recent.clear();
             if !new.hears() {
                 self.ears.reset();
@@ -1587,7 +1592,7 @@ impl Worker {
     /// the listen only the whole phrase is taken off: a person who was not answered at once
     /// says "Hey Sage" again, and that is not what they want to ask.
     fn without_wake(&self, text: String) -> String {
-        let rest = without_wake_phrase(&text);
+        let rest = without_wake_phrase(&text, self.after_wake);
         let lone_sage = text
             .split_whitespace()
             .next()
@@ -1724,7 +1729,10 @@ impl Worker {
                         .is_some_and(|quiet| quiet >= PAUSE_FRAMES);
                     if !self.in_speech || trailing {
                         if self.in_speech {
+                            // No clip is open any more, greeting or not: left set, the
+                            // listen would never end (its limit waits for the clip's end).
                             self.ears.reset();
+                            self.in_speech = false;
                         }
                         self.after_wake = false;
                         if self.greet() {
@@ -2880,6 +2888,38 @@ mod tests {
         r.expect_state(State::Idle, false);
     }
 
+    /// The end of "Hey Sage" opened a clip, and the speaker cannot greet: the clip is
+    /// dropped all the same, and the listen still ends when nothing is said.
+    #[test]
+    fn the_end_of_the_wake_phrase_with_a_failed_speaker_does_not_hold_the_listen_open() {
+        let mut r = rig(Opts {
+            wake: true,
+            tone: true,
+            ears: EarSettings {
+                end_quiet_ms: 640,
+                unfinished_quiet_ms: 640,
+                partial_every_ms: 30_000,
+                ..test_ears()
+            },
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        r.sink.fail();
+        r.sink_fails.store(true, Ordering::SeqCst);
+        r.mic.send(HEY_DOT, 1);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        // The tail of the phrase: a clip still open, already quiet, when the wait is over.
+        r.mic.send(SPEECH, 3);
+        r.mic.send(QUIET, 5);
+        r.sync();
+        r.clock.advance(300);
+        r.sync();
+        assert_eq!(r.sync().state, State::Listening);
+        r.clock.advance(8_000);
+        r.expect_state(State::Idle, true);
+    }
+
     #[test]
     fn a_follow_up_listens_for_follow_up_secs_then_rests() {
         let mut r = rig(Opts::default());
@@ -3399,7 +3439,27 @@ mod tests {
             ("Sols that failed today", "Sols that failed today"),
             ("", ""),
         ] {
-            assert_eq!(without_wake_phrase(heard), left, "{heard:?}");
+            assert_eq!(without_wake_phrase(heard, false), left, "{heard:?}");
+            assert_eq!(without_wake_phrase(heard, true), left, "{heard:?}");
+        }
+    }
+
+    /// A loose first word ("a", "he") is the phrase only before the name itself, except
+    /// straight after the wake, where the clip began at the phrase.
+    #[test]
+    fn a_request_that_starts_like_the_phrase_is_kept_outside_the_wake() {
+        for (heard, later, after_wake) in [
+            ("A sage, what needs me?", "what needs me?", "what needs me?"),
+            ("He sage.", "", ""),
+            (
+                "A stage name for the sol",
+                "A stage name for the sol",
+                "name for the sol",
+            ),
+            ("A cage.", "A cage.", ""),
+        ] {
+            assert_eq!(without_wake_phrase(heard, false), later, "{heard:?}");
+            assert_eq!(without_wake_phrase(heard, true), after_wake, "{heard:?}");
         }
     }
 
