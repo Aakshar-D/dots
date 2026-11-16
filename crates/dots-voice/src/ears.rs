@@ -45,7 +45,7 @@ impl Default for EarSettings {
             min_speech_ms: 250,
             pre_roll_ms: 300,
             partial_every_ms: 400,
-            max_clip_ms: 30_000,
+            max_clip_ms: 180_000,
         }
     }
 }
@@ -62,6 +62,25 @@ impl EarSettings {
             min_speech_ms: 160,
             ..Self::default()
         }
+    }
+}
+
+/// A long message is read a piece at a time: the recogniser is made for clips of up to half
+/// a minute and loses words in longer ones. Once this much has been said, the piece ends at
+/// the next short pause (`PIECE_GAP` frames of quiet), and at `PIECE_MOST_MS` without one.
+const PIECE_MS: u32 = 12_000;
+const PIECE_MOST_MS: u32 = 20_000;
+const PIECE_GAP: usize = 6;
+/// A later piece with fewer speech frames than this is the quiet after the words: it is not
+/// read (the recogniser makes words up for a clip of near silence).
+const PIECE_MIN_SPEECH: usize = 3;
+
+/// The pieces read before, and the piece just read, as one text.
+fn joined(earlier: &str, piece: Option<String>) -> Option<String> {
+    match (earlier.is_empty(), piece) {
+        (true, piece) => piece,
+        (false, None) => Some(earlier.to_string()),
+        (false, Some(piece)) => Some(format!("{earlier} {piece}")),
     }
 }
 
@@ -94,7 +113,15 @@ pub struct Ears {
     max_clip: usize,
     partial_budget: Duration,
     ring: VecDeque<Vec<f32>>,
+    /// The piece of the sentence being heard now; `earlier` holds the text of the pieces
+    /// before it, which were `earlier_frames` long together.
     clip: Vec<f32>,
+    earlier: String,
+    earlier_frames: usize,
+    /// Speech frames in the piece being heard now.
+    piece_speech: usize,
+    piece_after: usize,
+    piece_most: usize,
     in_clip: bool,
     /// Speech frames in a row right now, and the longest such run in this clip.
     speech_run: usize,
@@ -127,6 +154,11 @@ impl Ears {
             partial_budget: Duration::from_millis(u64::from(settings.partial_every_ms)),
             ring: VecDeque::new(),
             clip: Vec::new(),
+            earlier: String::new(),
+            earlier_frames: 0,
+            piece_speech: 0,
+            piece_after: frames_for(PIECE_MS),
+            piece_most: frames_for(PIECE_MOST_MS),
             in_clip: false,
             speech_run: 0,
             longest_run: 0,
@@ -161,6 +193,7 @@ impl Ears {
 
         self.clip.extend_from_slice(frame16k);
         if speech {
+            self.piece_speech += 1;
             self.speech_run += 1;
             self.longest_run = self.longest_run.max(self.speech_run);
             self.quiet_run = 0;
@@ -173,10 +206,14 @@ impl Ears {
             self.speech_run = 0;
         }
 
-        let clip_frames = self.clip.len() / FRAME;
+        let piece_frames = self.clip.len() / FRAME;
         let over = self.quiet_run >= self.end_quiet && self.sentence_over();
-        if over || clip_frames >= self.max_clip {
+        if over || self.earlier_frames + piece_frames >= self.max_clip {
             events.push(self.finish());
+        } else if (piece_frames >= self.piece_after && self.quiet_run >= PIECE_GAP)
+            || piece_frames >= self.piece_most
+        {
+            self.next_piece();
         } else if speech && self.speech_since_partial >= self.partial_every {
             self.speech_since_partial = 0;
             if let Some(text) = self.partial() {
@@ -196,16 +233,20 @@ impl Ears {
         }
         if !self.looked {
             self.looked = true;
-            let text = self
-                .recognizer
-                .transcribe(&self.clip_audio())
-                .ok()
-                .map(|t| t.trim().to_string())
-                .filter(|t| !t.is_empty());
-            self.unfinished = text.as_deref().is_some_and(stops_mid_thought);
-            if let Some(text) = &text {
-                self.last_partial.clone_from(text);
+            let piece = if self.piece_is_quiet() {
+                None
+            } else {
+                self.recognizer
+                    .transcribe(&self.clip_audio())
+                    .ok()
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+            };
+            if let Some(piece) = &piece {
+                self.last_partial.clone_from(piece);
             }
+            let text = joined(&self.earlier, piece);
+            self.unfinished = text.as_deref().is_some_and(stops_mid_thought);
             self.looked_text = text;
         }
         !self.unfinished || self.quiet_run >= self.unfinished_quiet
@@ -239,6 +280,9 @@ impl Ears {
         }
         self.clip.extend_from_slice(first_speech_frame);
         self.in_clip = true;
+        self.earlier.clear();
+        self.earlier_frames = 0;
+        self.piece_speech = 1;
         self.speech_run = 1;
         self.longest_run = 1;
         self.quiet_run = 0;
@@ -249,6 +293,9 @@ impl Ears {
 
     fn end_clip(&mut self) {
         self.clip = Vec::new(); // let go of the memory, not just the length
+        self.earlier = String::new();
+        self.earlier_frames = 0;
+        self.piece_speech = 0;
         self.in_clip = false;
         self.looked = false;
         self.looked_text = None;
@@ -287,7 +334,41 @@ impl Ears {
             return None;
         }
         self.last_partial = text.clone();
-        Some(text)
+        joined(&self.earlier, Some(text))
+    }
+
+    /// Whether the piece being heard is only the quiet after pieces read before.
+    fn piece_is_quiet(&self) -> bool {
+        self.earlier_frames > 0 && self.piece_speech < PIECE_MIN_SPEECH
+    }
+
+    /// The piece heard so far is read and put with the ones before it, and the next begins.
+    /// The sentence goes on: no event tells of it.
+    fn next_piece(&mut self) {
+        let piece = if self.piece_is_quiet() {
+            None
+        } else {
+            self.sentence()
+        };
+        if let Some(text) = joined(&self.earlier, piece) {
+            self.earlier = text;
+        }
+        self.earlier_frames += self.clip.len() / FRAME;
+        self.clip.clear();
+        self.piece_speech = 0;
+        self.speech_since_partial = 0;
+        self.last_partial.clear();
+        self.last_partial_cost = None;
+    }
+
+    /// Every piece of the sentence as one text.
+    fn whole(&self) -> Option<String> {
+        let piece = if self.piece_is_quiet() {
+            None
+        } else {
+            self.sentence()
+        };
+        joined(&self.earlier, piece)
     }
 
     fn finish(&mut self) -> EarEvent {
@@ -295,7 +376,7 @@ impl Ears {
         // Words read in this same quiet are the sentence: only quiet came after them, and
         // reading the clip a second time would hold the reply back by as long again.
         let read = self.looked_text.take();
-        let event = match enough.then(|| read.or_else(|| self.sentence())).flatten() {
+        let event = match enough.then(|| read.or_else(|| self.whole())).flatten() {
             Some(text) => EarEvent::Final(text),
             None => EarEvent::Dropped,
         };
@@ -842,6 +923,69 @@ mod tests {
         assert_eq!(r.recognizer.clips.lock().unwrap().len(), 1);
     }
 
+    /// `timed`, with no previews: every clip the recogniser gets is a piece of the sentence.
+    fn no_previews() -> EarSettings {
+        EarSettings {
+            partial_every_ms: 600_000,
+            ..timed()
+        }
+    }
+
+    /// A long message is read a piece at a time, each piece ending at a pause, and comes out
+    /// as one sentence.
+    #[test]
+    fn a_long_message_is_read_in_pieces_and_heard_whole() {
+        let mut r = rig(Mode::Count, no_previews());
+        let piece = frames_for(PIECE_MS);
+        let mut events = feed(&mut r.ears, true, piece + 5, 1.0);
+        // A breath: the first piece ends here, and nothing is told of it.
+        events.extend(feed(&mut r.ears, false, PIECE_GAP, 1.0));
+        assert_eq!(r.recognizer.clips.lock().unwrap().len(), 1);
+        events.extend(feed(&mut r.ears, true, 20, 1.0));
+        events.extend(feed(&mut r.ears, false, 40, 1.0));
+        let texts: Vec<&EarEvent> = finals(&events);
+        assert_eq!(texts.len(), 1, "{events:?}");
+        let EarEvent::Final(text) = texts[0] else {
+            unreachable!()
+        };
+        // Two pieces, in order, in one text.
+        assert_eq!(text.matches("frames").count(), 2, "{text}");
+        let clips = r.recognizer.clips.lock().unwrap();
+        assert_eq!(clips.len(), 2);
+        assert!(clips[0].samples.len() / FRAME >= piece);
+        assert!(clips[1].samples.len() / FRAME < piece);
+    }
+
+    /// Someone who never pauses: the piece ends anyway, and no clip the recogniser gets is
+    /// longer than it can read.
+    #[test]
+    fn a_message_with_no_pause_is_still_read_in_pieces() {
+        let mut r = rig(Mode::Count, no_previews());
+        let most = frames_for(PIECE_MOST_MS);
+        let mut events = feed(&mut r.ears, true, most * 2 + 50, 1.0);
+        events.extend(feed(&mut r.ears, false, 40, 1.0));
+        assert_eq!(finals(&events).len(), 1);
+        let clips = r.recognizer.clips.lock().unwrap();
+        assert_eq!(clips.len(), 3);
+        assert!(clips.iter().all(|c| c.samples.len() / FRAME <= most));
+    }
+
+    /// The quiet after the last piece is not read: it would only add made-up words.
+    #[test]
+    fn the_quiet_after_the_last_piece_is_not_read() {
+        let mut r = rig(Mode::Count, no_previews());
+        let piece = frames_for(PIECE_MS);
+        let mut events = feed(&mut r.ears, true, piece + 5, 1.0);
+        events.extend(feed(&mut r.ears, false, 60, 1.0));
+        let texts = finals(&events);
+        assert_eq!(texts.len(), 1);
+        let EarEvent::Final(text) = texts[0] else {
+            unreachable!()
+        };
+        assert_eq!(text.matches("frames").count(), 1, "{text}");
+        assert_eq!(r.recognizer.clips.lock().unwrap().len(), 1);
+    }
+
     /// A cough is dropped without being read at all.
     #[test]
     fn a_clip_too_short_to_be_a_sentence_is_not_read() {
@@ -890,7 +1034,7 @@ mod tests {
                 d.partial_every_ms,
                 d.max_clip_ms
             ),
-            (1100, 250, 300, 400, 30_000)
+            (1100, 250, 300, 400, 180_000)
         );
         assert_eq!(d.unfinished_quiet_ms, 2000);
         // A one-word answer ends at 450 ms, whatever the word.

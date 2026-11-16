@@ -352,6 +352,78 @@ fn one_word_answers_are_heard_with_the_short_answer_settings() {
     );
 }
 
+/// A message of about three quarters of a minute, said with a breath between its sentences,
+/// comes out as one sentence with its first and its last words in it. Three voices; at most
+/// one word in six of what was said may be missing.
+#[test]
+#[ignore]
+fn a_long_message_is_heard_whole() {
+    let paths = paths();
+    let speaker = SherpaSpeaker::load(&paths, 2).unwrap();
+    let recognizer: Arc<dyn Recognizer> = Arc::new(SherpaRecognizer::load(&paths).unwrap());
+    let said = [
+        "Please set up a new sol that checks my inbox every morning at nine.",
+        "It should sort the messages into three groups, urgent, this week and later.",
+        "For the urgent ones I want a short summary read to me when I start work.",
+        "Anything from my accountant always counts as urgent, even on weekends.",
+        "Newsletters and receipts can go straight to the later group without a summary.",
+        "And once a week on Friday afternoon it should tell me what is still open.",
+    ];
+    let breath = vec![0.0f32; EAR_RATE as usize * 4 / 10];
+    let tail = vec![0.0f32; EAR_RATE as usize * 3];
+    let mut worst = 0usize;
+    for voice in [0u8, 4, 8] {
+        let mut all = vec![0.0f32; EAR_RATE as usize * 3 / 10];
+        for sentence in said {
+            all.extend(trimmed(&ears(
+                &speaker.speak(sentence, voice, 1.0).unwrap(),
+            )));
+            all.extend(&breath);
+        }
+        all.extend(&tail);
+        let mut long = Ears::new(
+            Box::new(SherpaDetector::load(&paths).unwrap()),
+            recognizer.clone(),
+            EarSettings::default(),
+        );
+        let mut finals = Vec::new();
+        for frame in all.chunks_exact(FRAME) {
+            for event in long.push(frame) {
+                if let EarEvent::Final(text) = event {
+                    finals.push(text);
+                }
+            }
+        }
+        let secs = all.len() / EAR_RATE as usize;
+        println!("voice {voice}, {secs} s: {finals:?}");
+        assert_eq!(
+            finals.len(),
+            1,
+            "voice {voice}: one sentence, not {finals:?}"
+        );
+        let whole = said.join(" ");
+        let missed = words_missed(&whole, &finals[0]);
+        println!(
+            "voice {voice}: {missed} of {} words missed",
+            words(&whole).len()
+        );
+        worst = worst.max(missed);
+        let lower = finals[0].to_lowercase();
+        assert!(
+            lower.contains("inbox"),
+            "voice {voice}: the start is missing"
+        );
+        assert!(
+            lower.contains("friday"),
+            "voice {voice}: the end is missing"
+        );
+    }
+    assert!(
+        worst * 6 <= words(&said.join(" ")).len(),
+        "{worst} words missed"
+    );
+}
+
 #[test]
 #[ignore]
 fn an_empty_clip_hears_nothing() {

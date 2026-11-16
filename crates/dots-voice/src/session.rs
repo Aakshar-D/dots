@@ -248,6 +248,10 @@ pub struct SessionSettings {
     /// only while it sounds plus the same 60 ms tail. Not on a follow-up, an ask, an
     /// interruption or a click; with no working speaker there is no tone.
     pub tone: bool,
+    /// How long after a sentence the person may go on with it. Speech that starts within
+    /// this time, before anything was said back, joins the sentence: the request already
+    /// on its way is dropped and the whole of it is asked again. 0 turns this off.
+    pub carry_on_ms: u32,
 }
 
 impl Default for SessionSettings {
@@ -258,6 +262,7 @@ impl Default for SessionSettings {
             follow_up_secs: 6,
             reopen_after_ms: 250,
             tone: true,
+            carry_on_ms: 0,
         }
     }
 }
@@ -654,6 +659,10 @@ struct Worker {
     /// "Hey Sage" woke the session and it has not answered yet: it greets once it is clear
     /// that no request follows in the same breath.
     greet_owed: bool,
+    /// The sentence just heard, while the person may still go on with it: until
+    /// `carry_until`, or for as long as they are speaking again.
+    carry: Option<String>,
+    carry_until: Option<Instant>,
     /// The clip being heard began at "Hey Dot": it may still hold the end of the phrase.
     after_wake: bool,
     /// Idle with the wake phrase on: the last frames the spotter heard, newest last, so the
@@ -753,6 +762,8 @@ impl Worker {
             tone_until: None,
             tone_due: None,
             greet_owed: false,
+            carry: None,
+            carry_until: None,
             after_wake: false,
             recent: VecDeque::new(),
             halt_frames: false,
@@ -1166,6 +1177,7 @@ impl Worker {
     /// A listen begins: nothing heard yet in it.
     fn fresh_listen(&mut self) {
         self.greet_owed = false;
+        self.carry = None;
         self.may_retry = false;
         self.from_rest = false;
         self.partial_seen = false;
@@ -1203,6 +1215,10 @@ impl Worker {
             // heard or the session rests, nothing later is answered with it.
             if new != State::Listening {
                 self.greet_owed = false;
+            }
+            // Once something is said back, or the session rests, the sentence is done with.
+            if !matches!(new, State::Listening | State::Thinking) {
+                self.carry = None;
             }
             self.recent.clear();
             if !new.hears() {
@@ -1257,7 +1273,9 @@ impl Worker {
         match self.state {
             State::Off => false,
             State::Listening | State::Asking => true,
-            State::Idle | State::Thinking => wake,
+            State::Idle => wake,
+            // The person may go on with what they just said: the microphone stays open.
+            State::Thinking => wake || self.carry.is_some(),
             State::Speaking => wake || self.settings.interrupt_by_talking,
         }
     }
@@ -1467,6 +1485,20 @@ impl Worker {
             State::Thinking => {
                 if word.is_some() {
                     self.wake_over_dot(word);
+                } else if self.carry.is_some()
+                    && self.fillers_pending == 0
+                    && self.carry_until.is_some_and(|until| now < until)
+                    && self.ears.push(frame).contains(&EarEvent::Started)
+                {
+                    // The person goes on with what they were saying: the request on its
+                    // way is given up (a reply for it is dropped), and the session listens
+                    // to the rest. The clip just begun carries on: the ears are not reset.
+                    self.stop_speech();
+                    self.in_speech = true;
+                    self.clip_started = now;
+                    self.quiet_since = now;
+                    self.listen_limit = LISTEN_AFTER_OPEN;
+                    self.enter(State::Listening);
                 }
             }
             State::Speaking => {
@@ -1535,6 +1567,10 @@ impl Worker {
                     return; // only the wake phrase so far
                 }
                 self.partial_seen = true;
+                let text = match &self.carry {
+                    Some(before) => format!("{before} {text}"),
+                    None => text,
+                };
                 self.send(SessionEvent::Hearing { text });
             }
             EarEvent::Final(text) => {
@@ -1547,6 +1583,9 @@ impl Worker {
                 }
                 // Noise the recogniser made words of ("everywhere, everywhere, everywhere…")
                 // is not a sentence: nobody is asked about it and nothing acts on it.
+                if (text.is_empty() || babble(&text)) && self.carried_alone() {
+                    return;
+                }
                 if text.is_empty() {
                     // Only the wake phrase was in the clip: nothing was asked yet, and the
                     // person who said it is answered.
@@ -1562,17 +1601,45 @@ impl Worker {
                     self.nothing_caught(now);
                     return;
                 }
+                // What the person said before going on, and this, are one sentence.
+                let text = match self.carry.take() {
+                    Some(before) => format!("{before} {text}"),
+                    None => text,
+                };
+                if self.settings.carry_on_ms > 0 && self.state == State::Listening {
+                    self.carry = Some(text.clone());
+                    self.carry_until =
+                        Some(now + Duration::from_millis(u64::from(self.settings.carry_on_ms)));
+                }
                 let turn = self.shared.next_turn.fetch_add(1, Ordering::SeqCst) + 1;
                 self.heard(turn, text);
             }
             EarEvent::Dropped => {
                 self.after_wake = false;
+                if self.carried_alone() {
+                    return;
+                }
                 if self.greet() {
                     return;
                 }
                 self.nothing_caught(now);
             }
         }
+    }
+
+    /// The person seemed to go on with their sentence, and what came was no sentence (a
+    /// cough, a noise): the sentence as it was is asked again, since the request for it was
+    /// given up when the sound began. It is not waited on a second time. Whether there was
+    /// such a sentence.
+    fn carried_alone(&mut self) -> bool {
+        let Some(text) = self.carry.take() else {
+            return false;
+        };
+        self.in_speech = false;
+        self.partial_seen = false;
+        let turn = self.shared.next_turn.fetch_add(1, Ordering::SeqCst) + 1;
+        self.heard(turn, text);
+        true
     }
 
     /// Answers the person who said "Hey Sage" and no request with it, once: "How can I
@@ -1759,6 +1826,12 @@ impl Worker {
                 }
             }
             State::Thinking => {
+                if self.carry.is_some() && self.carry_until.is_none_or(|until| now >= until) {
+                    // The person did not go on: the sentence stands as it was.
+                    self.carry = None;
+                    self.ears.reset();
+                    self.refresh();
+                }
                 if now.saturating_duration_since(self.thinking_since) >= THINK_LIMIT {
                     self.trouble(NO_REPLY);
                     self.stop_speech();
@@ -2179,6 +2252,8 @@ mod tests {
         recognizer: Option<Arc<FakeRecognizer>>,
         /// Holds the sentence ears' first detector call.
         detector_gate: Option<Gate>,
+        /// The person may go on with a sentence for two and a half seconds.
+        carry_on: bool,
     }
 
     impl Default for Opts {
@@ -2190,6 +2265,7 @@ mod tests {
                 ears: test_ears(),
                 recognizer: None,
                 detector_gate: None,
+                carry_on: false,
             }
         }
     }
@@ -2265,6 +2341,7 @@ mod tests {
             wake_phrase: opts.wake,
             interrupt_by_talking: opts.talk,
             tone: opts.tone,
+            carry_on_ms: if opts.carry_on { 2_500 } else { 0 },
             ..SessionSettings::default()
         };
         let (tx, events) = unbounded_channel();
@@ -2886,6 +2963,98 @@ mod tests {
         r.nothing_more();
         r.clock.advance(1);
         r.expect_state(State::Idle, false);
+    }
+
+    fn carrying() -> Rig {
+        rig(Opts {
+            carry_on: true,
+            ..Opts::default()
+        })
+    }
+
+    /// A sentence heard by a rig that lets the person go on: the microphone stays open
+    /// while the session thinks.
+    fn heard_and_may_go_on(r: &mut Rig) -> u64 {
+        r.expect_state(State::Idle, false);
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        r.sentence();
+        assert_eq!(
+            r.next(),
+            SessionEvent::Hearing {
+                text: "hello".into()
+            }
+        );
+        let turn = match r.next() {
+            SessionEvent::Heard { text, turn } => {
+                assert_eq!(text, "hello");
+                turn
+            }
+            other => panic!("expected Heard, got {other:?}"),
+        };
+        r.expect_state(State::Thinking, true);
+        turn
+    }
+
+    /// The person pauses, the sentence is taken, and they go on: both parts are one
+    /// sentence, asked again whole, and a reply to the first part alone is never spoken.
+    #[test]
+    fn a_person_who_goes_on_after_a_pause_is_heard_whole() {
+        let mut r = carrying();
+        let first = heard_and_may_go_on(&mut r);
+        r.sentence();
+        r.expect_state(State::Listening, true);
+        assert_eq!(
+            r.next(),
+            SessionEvent::Hearing {
+                text: "hello hello".into()
+            }
+        );
+        let second = match r.next() {
+            SessionEvent::Heard { text, turn } => {
+                assert_eq!(text, "hello hello");
+                turn
+            }
+            other => panic!("expected Heard, got {other:?}"),
+        };
+        assert!(second > first);
+        r.expect_state(State::Thinking, true);
+        r.session.say(first, "Old.", After::Rest);
+        r.session.say(second, "New.", After::Rest);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("New.");
+    }
+
+    /// A cough while the session thinks is not the person going on: the sentence is asked
+    /// again as it was, and not waited on a second time.
+    #[test]
+    fn a_noise_after_a_sentence_asks_the_sentence_again() {
+        let mut r = carrying();
+        let first = heard_and_may_go_on(&mut r);
+        r.mic.send(SPEECH, 1);
+        r.expect_state(State::Listening, true);
+        r.mic.send(QUIET, 2);
+        match r.next() {
+            SessionEvent::Heard { text, turn } => {
+                assert_eq!(text, "hello");
+                assert!(turn > first);
+            }
+            other => panic!("expected Heard, got {other:?}"),
+        }
+        r.expect_state(State::Thinking, false);
+        assert!(!r.mic.is_open());
+    }
+
+    /// After the time to go on has passed the microphone closes, and speech is not heard.
+    #[test]
+    fn going_on_has_its_time() {
+        let mut r = carrying();
+        let turn = heard_and_may_go_on(&mut r);
+        r.clock.advance(2_500);
+        r.expect_state(State::Thinking, false);
+        r.session.say(turn, "Sure.", After::Rest);
+        r.expect_state(State::Speaking, false);
+        r.expect_saying("Sure.");
     }
 
     /// The end of "Hey Sage" opened a clip, and the speaker cannot greet: the clip is

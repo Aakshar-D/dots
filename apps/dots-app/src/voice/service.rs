@@ -150,6 +150,7 @@ pub fn session_settings(s: &Settings) -> SessionSettings {
         follow_up_secs: 6,
         reopen_after_ms: 250,
         tone: s.voice_tone,
+        carry_on_ms: 2_500,
     }
 }
 

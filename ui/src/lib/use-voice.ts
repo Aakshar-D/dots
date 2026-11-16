@@ -110,6 +110,11 @@ let lastLine = 0;
 /// The conversation with one more thing the person said.
 function withHeard(talk: TalkLine[], text: string): TalkLine[] {
   if (text.trim() === "") return talk;
+  // The person went on with what they were saying: the whole of it takes its place.
+  const last = talk[talk.length - 1];
+  if (last?.who === "you" && text.startsWith(last.text)) {
+    return [...talk.slice(0, -1), { ...last, text }];
+  }
   lastLine += 1;
   return [...talk, { n: lastLine, who: "you" as const, text }].slice(-TALK_KEPT);
 }
