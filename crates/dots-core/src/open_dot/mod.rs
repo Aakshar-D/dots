@@ -1476,13 +1476,25 @@ impl Mind {
                 "open"
             }
             Step::Remember(note) => {
-                let line = self.memory.remember(&note);
-                self.finish(o, heard, line, Then::FollowUp);
+                // What is kept is said, so the person hears what Sage took from it.
+                let line = match self.memory.remember(&note) {
+                    memory::REMEMBERED => format!(
+                        "I'll remember this: {}",
+                        sentence_of(&picture::clean(&note, memory::NOTE_BYTES))
+                    ),
+                    other => other.to_string(),
+                };
+                self.finish(o, heard, &line, Then::FollowUp);
                 "remember"
             }
             Step::Forget => {
-                self.memory.forget_all();
-                self.finish(o, heard, memory::FORGOT, Then::FollowUp);
+                // Only on the person's own word: the model alone does not wipe it.
+                if heard.to_lowercase().contains("forget") {
+                    self.memory.forget_all();
+                    self.finish(o, heard, memory::FORGOT, Then::FollowUp);
+                } else {
+                    self.finish(o, heard, memory::FORGET_HOW, Then::FollowUp);
+                }
                 "forget"
             }
             Step::Desk(task) => {
@@ -1741,6 +1753,16 @@ async fn confirmed(
         }));
     }
     Some(outcome(rt, deed).await)
+}
+
+/// `text` ending as a sentence does.
+fn sentence_of(text: &str) -> String {
+    let text = text.trim();
+    if text.ends_with(['.', '!', '?']) {
+        text.to_string()
+    } else {
+        format!("{text}.")
+    }
 }
 
 /// While alive, a step taken by a yes is being decided (`State::deciding`).

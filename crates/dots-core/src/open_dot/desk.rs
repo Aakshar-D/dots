@@ -27,9 +27,9 @@ const TITLE_CHARS: usize = 60;
 /// Longest search, in bytes.
 const SEARCH_BYTES: usize = 200;
 /// The longest site name, the most parts it may have, and the longest part.
-const SITE_BYTES: usize = 60;
+const SITE_BYTES: usize = 50;
 const SITE_PARTS: usize = 4;
-const SITE_PART_BYTES: usize = 30;
+const SITE_PART_BYTES: usize = 20;
 
 pub const NO_DESK: &str = "I can't do that on this computer.";
 pub const NO_NOTE: &str = "I didn't catch what to write in the note.";
@@ -42,12 +42,14 @@ pub const NO_APP: &str = "I can't open that one. I can open Notepad, Calculator,
      Desktop, Pictures and notes folders.";
 pub const FAILED: &str = "That didn't work.";
 pub const NO_CLOSE: &str = "I can't close that one by name. I can close Notepad, Calculator, \
-     Paint, the terminal and the system settings; ask me to close anything else and I'll \
-     show you the command first.";
+     Paint and the system settings; ask me to close anything else and I'll show you the \
+     command first.";
 pub const NO_COMMAND: &str = "I couldn't work out a command for that.";
 pub const COMMAND_TOO_LONG: &str = "That takes more than one short command. Ask a sol to do it.";
 /// Longest command, and longest sentence saying what it does, in bytes.
-pub const COMMAND_BYTES: usize = 1000;
+pub const COMMAND_BYTES: usize = 300;
+pub const COMMAND_NOT_PLAIN: &str =
+    "I won't run that one: the command is more than one plain line.";
 const WHY_BYTES: usize = 160;
 /// What is said when a command ran and gave no error.
 pub const COMMAND_DONE: &str = "Done.";
@@ -236,6 +238,8 @@ pub fn web(address: &str) -> Result<DeskTask, &'static str> {
         && parts.iter().all(|part| {
             !part.is_empty()
                 && part.len() <= SITE_PART_BYTES
+                // No name written in code for other letters: it can look like another site.
+                && !part.starts_with("xn--")
                 && part.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
         })
         // The last part of a name is never a number: that is an address by number.
@@ -270,19 +274,33 @@ pub fn search(query: &str) -> Result<DeskTask, &'static str> {
 }
 
 /// The app to close for `name`: one of the listed apps that closes when asked. A folder,
-/// the file manager and the browser are not closed by name (the first two are the system's
-/// own shell, the last holds the person's tabs): those go through a command they see first.
+/// the file manager, the browser and the terminal are not closed by name (the first two are
+/// the system's own shell, the browser holds the person's tabs, and a terminal closes with
+/// whatever runs in it and asks nothing): those go through a command they see first.
 pub fn closable(name: &str) -> Option<DeskApp> {
     app(name).filter(|app| {
         matches!(
             app,
-            DeskApp::Notepad
-                | DeskApp::Calculator
-                | DeskApp::Paint
-                | DeskApp::Terminal
-                | DeskApp::SystemSettings
+            DeskApp::Notepad | DeskApp::Calculator | DeskApp::Paint | DeskApp::SystemSettings
         )
     })
+}
+
+/// Whether `c` could make a line of text read otherwise than it is: a line break or other
+/// control character, or one of the marks that are not drawn or that turn the reading order.
+fn hides_text(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{2028}'..='\u{202F}'
+                | '\u{2060}'..='\u{206F}'
+                | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+        )
 }
 
 /// A command to ask the person about: the command as written, and one line saying what it
@@ -294,6 +312,11 @@ pub fn command(command: &str, why: &str) -> Result<(String, String), &'static st
     }
     if command.len() > COMMAND_BYTES {
         return Err(COMMAND_TOO_LONG);
+    }
+    // The person says yes to what they read. A second line, or a character that hides or
+    // reorders text, could put more in the command than the card shows.
+    if command.chars().any(hides_text) {
+        return Err(COMMAND_NOT_PLAIN);
     }
     let why = super::picture::clean(why, WHY_BYTES);
     Ok((command.to_string(), why))
@@ -378,6 +401,8 @@ mod tests {
             long.as_str(),
             "not a site",
             "https://exa_mple.com",
+            "https://xn--pple-43d.com",
+            "https://tok-abcdefghijklmnopqrstuv.example.com",
         ] {
             assert_eq!(web(address), Err(NO_SITE), "{address}");
         }
@@ -468,13 +493,12 @@ mod tests {
             ("notepad", DeskApp::Notepad),
             ("the calculator", DeskApp::Calculator),
             ("Paint", DeskApp::Paint),
-            ("terminal", DeskApp::Terminal),
             ("system settings", DeskApp::SystemSettings),
         ] {
             let name = name.trim_start_matches("the ");
             assert_eq!(closable(name), Some(app_), "{name}");
         }
-        for name in ["chrome", "files", "downloads", "regedit", ""] {
+        for name in ["chrome", "files", "downloads", "regedit", "terminal", ""] {
             assert_eq!(closable(name), None, "{name}");
         }
     }
@@ -489,6 +513,21 @@ mod tests {
             ))
         );
         assert_eq!(command("  ", "nothing"), Err(NO_COMMAND));
+        // What the card would not show as it is, is not run: a second line far below the
+        // first, a mark that turns the reading order, a character that is not drawn.
+        for hidden in [
+            "Get-Date\n\n\n\n; Remove-Item x",
+            "Get-Date\r; Remove-Item x",
+            "Get-Date \u{202E}x metI-evomeR",
+            "Get-\u{200B}Date",
+            "Get-Date\t; x",
+        ] {
+            assert_eq!(
+                command(hidden, "shows the date"),
+                Err(COMMAND_NOT_PLAIN),
+                "{hidden:?}"
+            );
+        }
         assert_eq!(
             command(&"a".repeat(COMMAND_BYTES + 1), "long"),
             Err(COMMAND_TOO_LONG)

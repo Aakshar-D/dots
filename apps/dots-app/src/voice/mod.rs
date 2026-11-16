@@ -135,6 +135,17 @@ fn spawn_forwarder(app: AppHandle, mut rx: UnboundedReceiver<VoiceEvent>) {
             if matches!(ev, VoiceEvent::Level { .. }) && !main_window_shown(&app) {
                 continue;
             }
+            // A command waits for a yes to what is on screen: the window comes forward, so
+            // that it is on screen.
+            if let VoiceEvent::Card {
+                card:
+                    dots_core::open_dot::Card::Confirm {
+                        deed: dots_core::open_dot::act::Deed::Command { .. },
+                    },
+            } = &ev
+            {
+                crate::show_main(&app);
+            }
             let _ = app.emit(VOICE_EVENT, &ev);
         }
     });

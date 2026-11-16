@@ -128,7 +128,10 @@ pub const MAX_CONNECTORS: usize = 12;
 pub const MAX_APPS: usize = 12;
 
 /// The connectors as the picture tells them. Those not yet offered are left out.
-fn connector_lines(entries: Vec<crate::connectors::ConnectorEntry>) -> Vec<ConnectorLine> {
+fn connector_lines(
+    entries: Vec<crate::connectors::ConnectorEntry>,
+    in_view: &HashSet<String>,
+) -> Vec<ConnectorLine> {
     use crate::connectors::ConnectorState;
     entries
         .into_iter()
@@ -143,7 +146,13 @@ fn connector_lines(entries: Vec<crate::connectors::ConnectorEntry>) -> Vec<Conne
             Some(ConnectorLine {
                 name: entry.connector.name,
                 state,
-                used_by: entry.used_by.into_iter().map(|dot| dot.name).collect(),
+                // Only the sols of this picture: one of another workspace is not named.
+                used_by: entry
+                    .used_by
+                    .into_iter()
+                    .filter(|dot| in_view.contains(&dot.id))
+                    .map(|dot| dot.name)
+                    .collect(),
             })
         })
         .take(MAX_CONNECTORS)
@@ -232,10 +241,11 @@ impl Picture {
         picture.viewing_topic = picture.viewing_dot.is_some() && view.topic_root.is_some();
         // What the person can reach beyond the sols themselves. A list that cannot be read
         // is left out: the picture is still a picture.
+        let in_view: HashSet<String> = picture.dots.iter().map(|d| d.id.clone()).collect();
         picture.connectors = rt
             .connectors()
             .await
-            .map(connector_lines)
+            .map(|entries| connector_lines(entries, &in_view))
             .unwrap_or_default();
         picture.apps = rt
             .apps()

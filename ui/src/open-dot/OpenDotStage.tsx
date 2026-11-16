@@ -298,6 +298,13 @@ export function OpenDotStage({ act = commands }: { act?: StageCommands } = {}) {
   // rendering, so it never misses a frame between open and leaving.
   const [drawn, setDrawn] = useState(stage.open);
   if (stage.open && !drawn) setDrawn(true);
+  // A stage that comes up shows a new conversation: nothing said while none was up (or
+  // after the last one went) is carried into it.
+  const wasDrawn = useRef(false);
+  useEffect(() => {
+    if (drawn && !wasDrawn.current) voiceStore.set({ talk: [] });
+    wasDrawn.current = drawn;
+  }, [drawn]);
   const leaving = drawn && !stage.open;
   useEffect(() => {
     if (!leaving) return;
@@ -453,7 +460,12 @@ function Panel(props: {
             tabIndex={0}
             className={cn(
               "min-h-0 w-full shrink overflow-y-auto rounded-lg bg-muted/60 px-3 py-2.5 leading-relaxed wrap-anywhere select-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
-              large ? "max-h-[40%] shrink-0 text-sm" : "max-h-48 text-xs",
+              // A command is said yes to as it is read: it shows whole, never behind a scroll.
+              card.kind === "confirm" && card.deed.kind === "command"
+                ? "shrink-0 text-xs"
+                : large
+                  ? "max-h-[40%] shrink-0 text-sm"
+                  : "max-h-48 text-xs",
             )}
           >
             <Card card={card} />
