@@ -2369,11 +2369,14 @@ struct FakeDesk {
 }
 
 impl desk::Desk for FakeDesk {
-    fn carry_out(&self, task: &desk::DeskTask) -> Result<(), String> {
+    fn carry_out(&self, task: &desk::DeskTask) -> Result<String, String> {
         self.asked.lock().unwrap().push(task.clone());
         match self.refuse.lock().unwrap().clone() {
             Some(why) => Err(why),
-            None => Ok(()),
+            None => Ok(match task {
+                desk::DeskTask::Command { .. } => "first line\n\nsecond line\n".into(),
+                _ => String::new(),
+            }),
         }
     }
 }
@@ -2555,5 +2558,97 @@ async fn what_is_asked_for_most_is_tallied_and_told() {
     t.fake.push(says("Nothing needs you."));
     t.hear("anything for me").await;
     assert!(t.fake.last_prompt().starts_with("The picture of now"));
+    t.rt.shutdown();
+}
+
+const CLOSE_CHROME: &str = "Closing it.\nDO {\"act\":\"command\",\"command\":\"Stop-Process -Name chrome\",\"why\":\"This closes every Chrome window\"}";
+
+#[tokio::test]
+async fn a_command_is_shown_and_asked_about_and_runs_only_on_a_yes() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    t.fake.push(says(CLOSE_CHROME));
+    let got = t.hear("close chrome").await;
+    let (question, options) = asks(&got).unwrap();
+    assert_eq!(
+        question,
+        "This closes every Chrome window. It is on screen. Run this command?"
+    );
+    assert_eq!(options, yes_no());
+    assert!(got.contains(&MindEvent::Card {
+        card: Card::Confirm {
+            deed: Deed::Command {
+                command: "Stop-Process -Name chrome".into(),
+                why: "This closes every Chrome window".into(),
+            }
+        }
+    }));
+    // Nothing ran yet.
+    assert!(on_desk.asked.lock().unwrap().is_empty());
+    let got = t.hear("yes").await;
+    assert_eq!(dids(&got), vec![desk::COMMAND_DONE.to_string()]);
+    assert_eq!(
+        on_desk.asked.lock().unwrap().clone(),
+        vec![desk::DeskTask::Command {
+            command: "Stop-Process -Name chrome".into()
+        }]
+    );
+    // What it printed is shown, without its empty lines.
+    assert!(got.contains(&MindEvent::Card {
+        card: Card::List {
+            title: "What it printed".into(),
+            lines: vec!["first line".into(), "second line".into()],
+        }
+    }));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_command_is_not_run_on_a_no_a_weak_yes_or_no_answer() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    for answer in ["no", "okay", "run it"] {
+        t.fake.push(says(CLOSE_CHROME));
+        t.hear("close chrome").await;
+        // Whatever else is said is a new request to the model.
+        t.fake.push(says("All right."));
+        t.hear(answer).await;
+        assert!(on_desk.asked.lock().unwrap().is_empty(), "{answer}");
+        t.mind.reset();
+    }
+    // A command that fails says so, and is not said to be done.
+    *on_desk.refuse.lock().unwrap() = Some("That failed. Cannot find a process.".into());
+    t.fake.push(says(CLOSE_CHROME));
+    t.hear("close chrome").await;
+    let got = t.hear("yes").await;
+    assert_eq!(said(&got), "That failed. Cannot find a process.");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn an_app_is_closed_by_name_without_a_question() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    t.fake.push(says(
+        "Closing it.\nDO {\"act\":\"close\",\"name\":\"notepad\"}",
+    ));
+    let got = t.hear("close notepad").await;
+    assert_eq!(said(&got), "Closing it. Notepad is closing.");
+    assert_eq!(
+        on_desk.asked.lock().unwrap().clone(),
+        vec![desk::DeskTask::Close {
+            app: desk::DeskApp::Notepad
+        }]
+    );
+    // The browser is not closed by name.
+    t.fake.push(says(
+        "Closing it.\nDO {\"act\":\"close\",\"name\":\"chrome\"}",
+    ));
+    let got = t.hear("close chrome").await;
+    assert_eq!(said(&got), format!("Closing it. {}", desk::NO_CLOSE));
+    assert_eq!(on_desk.asked.lock().unwrap().len(), 1);
     t.rt.shutdown();
 }

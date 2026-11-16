@@ -3148,6 +3148,7 @@ export const Deed = z.discriminatedUnion("kind", [
     dot_name: z.string(),
     text: z.string(),
   }),
+  z.strictObject({ kind: z.literal("command"), command: z.string(), why: z.string() }),
   z.strictObject({
     kind: z.literal("send"),
     dot_id: z.string(),

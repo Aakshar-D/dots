@@ -9275,6 +9275,17 @@
       "kind": "card"
     },
     {
+      "card": {
+        "deed": {
+          "command": "Stop-Process -Name chrome",
+          "kind": "command",
+          "why": "This closes every Chrome window."
+        },
+        "kind": "confirm"
+      },
+      "kind": "card"
+    },
+    {
       "kind": "open",
       "target": {
         "dot_id": "dot_1",

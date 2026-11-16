@@ -49,6 +49,8 @@ You do not press a button to finish. Sage notices when you stop talking: it wait
 | "Open the calculator." or "Open my Downloads." | Opens an app or folder: Notepad, Calculator, your files, a terminal, Paint, the system settings, your browser, Documents, Downloads, Desktop, Pictures or your notes folder. | No |
 | "Remember that I like short answers." or "Call the research sol Scout." | Keeps one short note about you for later conversations and says "I'll remember that." | No |
 | "Forget what you know about me." | Forgets every note and what it counted about how you talk. | No |
+| "Close Notepad." | Asks the app to close, as its close button does, so it still asks about unsaved work. Works for Notepad, Calculator, Paint, the terminal and the system settings. | No |
+| "Close Chrome." or "Make a folder called Invoices on my desktop." or "Turn the volume down." | Anything else on your computer: Sage writes one command for it, shows it on screen and says what it will do. | Always. It runs only on a clear yes. |
 | "Stop." or "Never mind." or "Cancel." | Stops speaking and drops the step it was waiting on. | No |
 | "Say that again." | Repeats its last reply. | No |
 | "Thank you." or "Goodbye." or "Close." or "Thank you, I'll call you later." | Says nothing, drops the step it was waiting on and closes the stage. | No |
@@ -59,13 +61,17 @@ A private approval cannot be decided by voice. Sage only counts it and opens it 
 
 ### What it does on your computer, and what it does not
 
-Sage does four things outside its own window by voice: write a note, open a site, open a web search, and open one of a fixed list of apps and folders. It does them without asking first, so each is kept harmless:
+Sage writes notes, opens sites and web searches, and opens and closes a fixed list of apps and folders without asking first. Each of those is kept harmless:
 
 - A note is always a new file in **Sage Notes**. Nothing is changed or written over.
 - A site is opened at its front page, by name. If more of an address was asked for, Sage opens the front page and says so. Ask for a search to reach a page inside a site.
 - Apps are opened from a fixed list. Sage never runs a command or a program by a name the model gives.
 
-For anything else on the computer (changing files, installing, running commands) ask a sol: it works with approvals.
+- Closing asks the app to close. Nothing is forced, so an app with unsaved work still asks you.
+
+**Anything else is a command, and a command always asks first.** When you ask for something those cannot do (close another program, make or move files, change the volume, start something), Sage has the model write one command for your system's shell: PowerShell on Windows, zsh on a Mac. It puts the command on screen, says in a sentence what it is meant to do, and asks "Run this command?". It runs only on a clear yes ("yes", "do it", "go ahead"); "okay" is not enough, and saying anything else drops it.
+
+Read the command before you say yes. The sentence about it is the model's own and can be wrong; what runs is what is on screen. It runs as you, with everything you are allowed to do, for at most a minute, and what it prints is shown afterwards. Sage does not undo it. For work that takes several steps, or that you want checked as it goes, ask a sol: it works with approvals.
 
 ## Confirmations
 

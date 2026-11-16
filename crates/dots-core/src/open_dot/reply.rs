@@ -81,6 +81,16 @@ pub enum Wish {
     },
     /// Forget everything learned about the person.
     Forget,
+    /// Ask an open app to close.
+    Close {
+        name: String,
+    },
+    /// Anything else on the computer: one command of the system's shell, asked about first.
+    Command {
+        command: String,
+        #[serde(default)]
+        why: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +134,8 @@ impl Wish {
             Wish::Note { .. } => "write a note",
             Wish::Web { .. } | Wish::Search { .. } => "open something on the web",
             Wish::App { .. } => "open an app or a folder",
+            Wish::Close { .. } => "close an app",
+            Wish::Command { .. } => "do something on the computer",
             Wish::Ask { .. } | Wish::Remember { .. } | Wish::Forget => return None,
         })
     }
@@ -146,6 +158,8 @@ impl Wish {
             Wish::App { name } => filled(name),
             Wish::Remember { note } => filled(note),
             Wish::Forget => true,
+            Wish::Close { name } => filled(name),
+            Wish::Command { command, .. } => filled(command),
             Wish::Ask { question, options } => {
                 filled(question)
                     && options.len() <= MAX_OPTIONS
@@ -376,6 +390,7 @@ impl Wish {
                 | Wish::Send { .. }
                 | Wish::Answer { .. }
                 | Wish::Create { .. }
+                | Wish::Command { .. }
         )
     }
 }

@@ -140,16 +140,19 @@ pub enum ConfirmKind {
     Send,
     /// An answer to a dot's question, read back: "... Send this answer?"
     Answer,
+    /// "... It is on screen. Run this command?"
+    Command,
 }
 
 impl ConfirmKind {
-    pub(crate) const ALL: [ConfirmKind; 6] = [
+    pub(crate) const ALL: [ConfirmKind; 7] = [
         ConfirmKind::Approve,
         ConfirmKind::Deny,
         ConfirmKind::Run,
         ConfirmKind::Create,
         ConfirmKind::Send,
         ConfirmKind::Answer,
+        ConfirmKind::Command,
     ];
 
     /// The words that pass this kind of step, beyond `FIRM_YES`.
@@ -161,6 +164,8 @@ impl ConfirmKind {
             ConfirmKind::Create => &["create it", "make it"],
             ConfirmKind::Send => &["send it", "send"],
             ConfirmKind::Answer => &["send it", "send that"],
+            // Only a plain yes passes a command: no verb of its own.
+            ConfirmKind::Command => &[],
         }
     }
 }
@@ -602,6 +607,8 @@ mod tests {
             ConfirmKind::Create => &["create it", "make it"],
             ConfirmKind::Send => &["send it", "send"],
             ConfirmKind::Answer => &["send it", "send that"],
+            // Only a plain yes passes a command: no verb of its own.
+            ConfirmKind::Command => &[],
         }
     }
 

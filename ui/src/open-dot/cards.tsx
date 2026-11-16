@@ -141,6 +141,8 @@ function deedTitle(deed: Deed): string {
       return `Send to ${deed.dot_name}`;
     case "answer":
       return `Answer ${deed.dot_name}`;
+    case "command":
+      return "Run this command on your computer";
   }
 }
 
@@ -155,6 +157,18 @@ function ConfirmCard({ deed }: { deed: Deed }) {
       )}
       {(deed.kind === "send" || deed.kind === "answer") && (
         <p className="whitespace-pre-wrap">{deed.text}</p>
+      )}
+      {deed.kind === "command" && (
+        <>
+          <code
+            data-command=""
+            className="block rounded-md bg-background/60 px-2 py-1 font-mono text-xs whitespace-pre-wrap wrap-anywhere select-text"
+          >
+            {deed.command}
+          </code>
+          {deed.why.trim() !== "" && <p>{deed.why}</p>}
+          <p className="text-muted-foreground">It runs only when you say yes. Read it first.</p>
+        </>
       )}
     </div>
   );

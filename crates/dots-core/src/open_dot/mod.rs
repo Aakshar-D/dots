@@ -143,6 +143,9 @@ pub const FILLER_AFTER: Duration = Duration::from_millis(1500);
 /// Most turns kept, and the longest record of what was said in one.
 const KEPT_TURNS: usize = 12;
 const SAID_BYTES: usize = 800;
+/// Most lines of what a command printed that are shown, and the longest of them.
+const OUTPUT_LINES: usize = 12;
+const OUTPUT_LINE_BYTES: usize = 200;
 
 const FILLER: &str = "One moment.";
 const OKAY: &str = "Okay.";
@@ -319,6 +322,7 @@ impl Waiting {
                 Deed::Run { .. } => ConfirmKind::Run,
                 Deed::Send { .. } => ConfirmKind::Send,
                 Deed::Answer { .. } => ConfirmKind::Answer,
+                Deed::Command { .. } => ConfirmKind::Command,
             }),
             Waiting::Create { .. } => Some(ConfirmKind::Create),
             Waiting::Ask {
@@ -863,9 +867,18 @@ impl Mind {
                 then: AskFor::AnswerCheck { deed },
                 ..
             } => {
-                let Some(done) = confirmed(rt, &deed, view, &may_act).await else {
-                    o.end(Then::Rest);
-                    return "ended before the deed";
+                let done = if let Deed::Command { command, .. } = &deed {
+                    if !may_act() {
+                        o.end(Then::Rest);
+                        return "ended before the deed";
+                    }
+                    self.run_command(o, command).await
+                } else {
+                    let Some(done) = confirmed(rt, &deed, view, &may_act).await else {
+                        o.end(Then::Rest);
+                        return "ended before the deed";
+                    };
+                    done
                 };
                 o.deed_done(&done.said);
                 let then = if done.done {
@@ -896,6 +909,41 @@ impl Mind {
                 o.end(Then::Rest);
                 "nothing to do"
             }
+        }
+    }
+
+    /// Runs a command the person said yes to, on the desk. What it printed is shown on a
+    /// card (its first lines); what is said is that it is done, or why it is not.
+    async fn run_command(&self, o: &Out<'_>, command: &str) -> Outcome {
+        let desk = lock(&self.desk).clone();
+        let task = desk::DeskTask::Command {
+            command: command.to_string(),
+        };
+        let ran = tokio::task::spawn_blocking(move || desk.carry_out(&task))
+            .await
+            .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
+        match ran {
+            Ok(printed) => {
+                let lines: Vec<String> = printed
+                    .lines()
+                    .map(|line| picture::clean(line, OUTPUT_LINE_BYTES))
+                    .filter(|line| !line.is_empty())
+                    .take(OUTPUT_LINES)
+                    .collect();
+                if !lines.is_empty() {
+                    o.send(MindEvent::Card {
+                        card: Card::List {
+                            title: "What it printed".into(),
+                            lines,
+                        },
+                    });
+                }
+                Outcome {
+                    said: desk::COMMAND_DONE.into(),
+                    done: true,
+                }
+            }
+            Err(why) => Outcome::refused(why),
         }
     }
 
@@ -1445,7 +1493,7 @@ impl Mind {
                     .await
                     .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
                 let line = match done {
-                    Ok(()) => task.done(),
+                    Ok(_) => task.done(),
                     Err(why) => why,
                 };
                 self.finish(o, heard, &line, Then::FollowUp);
@@ -1683,6 +1731,8 @@ async fn confirmed(
             picture.dots.iter().any(|d| &d.id == dot_id)
         }
         Deed::Answer { message_id, .. } => picture.questions.iter().any(|q| &q.id == message_id),
+        // Run by the mind itself (`run_command`); there is no record to look for.
+        Deed::Command { .. } => true,
     };
     if !still {
         return Some(Outcome::refused(match deed {
