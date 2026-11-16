@@ -35,6 +35,9 @@ export type VoiceLive = {
   card: OpenDotCard | null;
   /// The speech files' download, while one runs.
   download: { done: number; total: number } | null;
+  /// The take a voice setup is recording now; null when none runs. The settings page that
+  /// started it clears it when the setup ends.
+  settingUp: { take: number; of: number } | null;
   trouble: string | null;
   /// How many `trouble` events came: the stage opens on each new one, so a problem is seen
   /// even when nothing else changes (a microphone that will not open leaves Dot resting).
@@ -54,6 +57,7 @@ const quiet: VoiceLive = {
   ask: null,
   card: null,
   download: null,
+  settingUp: null,
   trouble: null,
   troubles: 0,
 };
@@ -226,6 +230,9 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       voiceStore.set({ hearing: "", heard: false, saying: "", said: [], ask: null, card: null });
       return;
     case "woke":
+      return;
+    case "setting_up":
+      voiceStore.set({ settingUp: { take: event.take, of: event.of } });
       return;
     case "trouble":
       voiceStore.set({ trouble: event.message, troubles: voiceStore.get().troubles + 1 });

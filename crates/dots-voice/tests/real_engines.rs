@@ -11,10 +11,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dots_voice::{
-    resample, After, Clip, EarEvent, EarSettings, Ears, Mic, MicFrame, ModelPaths, Parts,
-    Recognizer, Session, SessionEvent, SessionSettings, SherpaDetector, SherpaRecognizer,
-    SherpaSpeaker, SherpaWake, Sink, Speaker, SpeechDetector, State, Voice, WakeSpotter, WakeWord,
-    EAR_RATE, FRAME,
+    calibrate, heard_times, resample, voice_level, After, Clip, EarEvent, EarSettings, Ears, Mic,
+    MicFrame, ModelPaths, Parts, Recognizer, Session, SessionEvent, SessionSettings,
+    SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake, Sink, Speaker, SpeechDetector,
+    State, Voice, WakeSpotter, WakeTuning, WakeWord, EAR_RATE, FRAME, TAKE_FRAMES,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
@@ -184,6 +184,86 @@ fn wake_hit_rates_over_all_voices() {
         if want.is_none() {
             assert_eq!(hits, usize::from(speaker.voices()), "a near miss woke it");
         }
+    }
+}
+
+/// A take as a voice setup records it: about three seconds, the phrase said `level` loud
+/// (rms) in room noise of 4 parts in 32768.
+fn take_at(samples: &[f32], level: f32, seed: &mut u32) -> Vec<Vec<f32>> {
+    let loud: Vec<f32> = samples.iter().copied().filter(|x| x.abs() > 0.01).collect();
+    let rms = (loud.iter().map(|x| x * x).sum::<f32>() / loud.len().max(1) as f32).sqrt();
+    let scale = level / rms.max(1e-9);
+    let lead = EAR_RATE as usize / 2;
+    (0..TAKE_FRAMES)
+        .map(|f| {
+            (0..FRAME)
+                .map(|i| {
+                    let at = f * FRAME + i;
+                    let voice = at
+                        .checked_sub(lead)
+                        .and_then(|at| samples.get(at))
+                        .copied()
+                        .unwrap_or(0.0);
+                    *seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    let noise = ((*seed >> 8) as f32 / 8_388_608.0 - 1.0) * 4.3 / 32768.0 * 1.732;
+                    (voice * scale + noise).clamp(-1.0, 1.0)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// A voice setup on the real spotter, for three voices at three levels: prints the tuning it
+/// picks and how many of the five takes that tuning catches. Every voice is caught in at
+/// least three takes of five by the tuning picked, and its level is found within a factor
+/// of three. One run: the strict tuning for seven of the nine, the standard one for voice 0
+/// when faint; 4 or 5 takes of 5 caught in eight of the nine, 3 in one.
+#[test]
+#[ignore]
+fn a_voice_setup_picks_a_tuning_that_catches_the_voice() {
+    let paths = paths();
+    let speaker = SherpaSpeaker::load(&paths, 2).unwrap();
+    let mut spotters: Vec<(WakeTuning, SherpaWake)> = WakeTuning::STRICTEST_FIRST
+        .into_iter()
+        .map(|t| (t, SherpaWake::load_tuned(&paths, t).unwrap()))
+        .collect();
+    let mut seed = 17u32;
+    let mut results = Vec::new();
+    for voice in [0u8, 4, 8] {
+        for level in [0.1f32, 0.002, 0.001] {
+            let takes: Vec<Vec<Vec<f32>>> = (0..5)
+                .map(|_| {
+                    let clip = ears(&speaker.speak("Hey Sage.", voice, 1.0).unwrap());
+                    take_at(&clip, level, &mut seed)
+                })
+                .collect();
+            let found_level = voice_level(&takes);
+            let found = calibrate(&takes, |tuning| {
+                let (_, wake) = spotters.iter_mut().find(|(t, _)| *t == tuning).unwrap();
+                heard_times(wake, &takes, found_level)
+            });
+            println!(
+                "voice {voice} at {:.0}: {:?}, heard {}/{}, level found {:?}",
+                level * 32768.0,
+                found.tuning,
+                found.heard,
+                found.takes,
+                found.level.map(|l| (l * 32768.0).round())
+            );
+            results.push((voice, level, found));
+        }
+    }
+    for (voice, level, found) in results {
+        assert!(
+            found.heard >= 3,
+            "voice {voice} at {level}: heard {}",
+            found.heard
+        );
+        let l = found.level.expect("the takes have a voice in them");
+        assert!(
+            l > level / 3.0 && l < level * 2.0,
+            "voice {voice}: level {l} found for {level}"
+        );
     }
 }
 

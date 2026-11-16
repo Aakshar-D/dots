@@ -4,7 +4,7 @@ import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
-import type { Settings, VoiceDevice, VoiceStatus } from "@/api/types";
+import type { Settings, VoiceDevice, VoiceSetup, VoiceStatus } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
-import { takeVoiceStatus, useVoiceLive, useVoiceStatus } from "@/lib/use-voice";
+import { takeVoiceStatus, useVoiceLive, useVoiceStatus, voiceStore } from "@/lib/use-voice";
 import { shortcutLabel } from "@/open-dot/RailMark";
 
 function Section(props: { title: string; children: ReactNode }) {
@@ -169,6 +169,59 @@ function Download(props: { totalBytes: number; onGone: () => void }) {
 /// Settings > Voice: Open Dot, the voice assistant. The switch, the download, previews and
 /// removing the files act at once; the rest is part of the Settings form (`draft`, `set`).
 /// `voice_enabled` is the core's to save (`voice_enable`), so the form never sends its own.
+/// Teaches Sage the person's voice: they say "Hey Sage" five times, and Sage sets the wake
+/// phrase up for how they sound at their microphone. Shows the take being recorded, then
+/// what was found; the last result stays until the next setup.
+function VoiceSetupBlock({ ready, wake }: { ready: boolean; wake: boolean }) {
+  const qc = useQueryClient();
+  const saved = useQuery({
+    queryKey: keys.voiceSetup,
+    queryFn: commands.voiceSetup,
+    enabled: ready,
+  });
+  const take = useVoiceLive((live) => live.settingUp);
+  const run = useMutation({
+    mutationFn: commands.voiceSetupRun,
+    onSuccess: (found: VoiceSetup) => {
+      // A setup that heard nothing changed nothing: the one before it still holds.
+      if (found.heard > 0) qc.setQueryData(keys.voiceSetup, found);
+    },
+    onError: notifyError,
+    onSettled: () => voiceStore.set({ settingUp: null }),
+  });
+  const found = run.data ?? saved.data ?? null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!ready || !wake || run.isPending}
+          onClick={() => run.mutate()}
+        >
+          {saved.data ? "Teach Sage your voice again" : "Teach Sage your voice"}
+        </Button>
+        {run.isPending && (
+          <p role="status" className="text-sm font-medium">
+            {take ? `Say "Hey Sage" now (${take.take} of ${take.of})` : "Get ready…"}
+          </p>
+        )}
+      </div>
+      {!run.isPending && found && (
+        <p data-voice-setup="" className="text-xs text-muted-foreground">
+          {found.message}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Say "Hey Sage" five times, about three seconds apart, from where you usually sit. Sage
+        sets itself up for your voice and tells you how well it hears you. It takes about 20
+        seconds, and no recording is kept.
+      </p>
+    </div>
+  );
+}
+
 export function VoiceSection({
   draft,
   set,
@@ -366,6 +419,7 @@ export function VoiceSection({
           The microphone stays on while Sage is running so it can hear the phrase. Audio never
           leaves this computer.
         </p>
+        <VoiceSetupBlock ready={ready} wake={draft.voice_wake_phrase} />
         <div className="flex items-center gap-2">
           <Switch
             id="settings-voice-interrupt"

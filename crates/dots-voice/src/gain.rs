@@ -27,6 +27,9 @@ const RISE: f32 = 0.5;
 const FALL: f32 = 0.03;
 /// How fast the room's noise level creeps up when no frame is quieter than it.
 const NOISE_CREEP: f32 = 1.002;
+/// A frame below this is no sound at all (a muted or noise-gated microphone, a stream
+/// that has just opened): it says nothing about the room.
+const NO_SOUND: f32 = 0.000_001;
 /// The most the gain changes from one frame to the next, as a factor.
 const STEP: f32 = 1.25;
 
@@ -60,6 +63,19 @@ impl Gain {
             noise: None,
             voice: None,
             gain: 1.0,
+        }
+    }
+
+    /// A gain that already knows the level of the voice (from a setup done before): the
+    /// first words are made as loud as the later ones.
+    pub fn with_voice(level: f32) -> Self {
+        if !(level.is_finite() && level > 0.0) {
+            return Self::new();
+        }
+        Self {
+            noise: None,
+            voice: Some(level),
+            gain: (TARGET / level).clamp(1.0, MAX_GAIN),
         }
     }
 
@@ -123,6 +139,12 @@ impl Gain {
     }
 
     fn follow_noise(&mut self, level: f32) -> f32 {
+        // Exact silence is not the room's noise. Taken for it, the noise level would sit at
+        // nothing for good (it only creeps up by a factor), every hiss after it would count
+        // as a voice, and the room would be made as loud as a voice.
+        if level < NO_SOUND {
+            return self.noise.unwrap_or(0.0);
+        }
         let noise = match self.noise {
             None => level,
             Some(n) if level < n => level,
@@ -198,12 +220,46 @@ mod tests {
     }
 
     #[test]
+    fn frames_of_exact_silence_do_not_make_the_room_loud() {
+        let mut gain = Gain::new();
+        let quiet = vec![0.0; FRAME];
+        for _ in 0..10 {
+            gain.apply(&quiet);
+        }
+        // The room's hiss after it is still the room, not a voice.
+        let hiss = tone(0.001);
+        for _ in 0..60 {
+            assert_eq!(gain.apply(&hiss), hiss);
+        }
+        assert_eq!(gain.factor(), 1.0);
+        // And a voice over that hiss is held by the noise ceiling.
+        feed(&mut gain, 0.004, 60);
+        assert!(
+            gain.factor() <= NOISE_CEILING / 0.001 * 1.2,
+            "{}",
+            gain.factor()
+        );
+    }
+
+    #[test]
     fn a_loud_sound_brings_the_gain_down_within_a_few_frames() {
         let mut gain = Gain::new();
         feed(&mut gain, 0.000_1, 30);
         feed(&mut gain, 0.001, 60);
         feed(&mut gain, 0.2, 20);
         assert_eq!(gain.factor(), 1.0);
+    }
+
+    #[test]
+    fn a_known_voice_is_loud_from_its_first_frame() {
+        let mut gain = Gain::with_voice(0.001);
+        assert!((gain.factor() - 30.0).abs() < 0.01);
+        feed(&mut gain, 0.000_1, 3);
+        let out = gain.apply(&tone(0.001));
+        assert!((rms(&out) - TARGET).abs() < 0.003, "{}", rms(&out));
+        // A level that makes no sense is no level.
+        assert_eq!(Gain::with_voice(0.0).factor(), 1.0);
+        assert_eq!(Gain::with_voice(f32::NAN).factor(), 1.0);
     }
 
     #[test]

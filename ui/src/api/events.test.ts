@@ -46,7 +46,7 @@ describe("events", () => {
     for (const payload of fixture.VoiceEvent) handlers.get("voice")!({ payload });
     const kinds = new Set(fixture.VoiceEvent.map((e) => e.kind));
     expect([...new Set(seen)]).toEqual([...kinds]);
-    expect(kinds.size).toBe(13);
+    expect(kinds.size).toBe(14);
     seen.length = 0;
     handlers.get("voice")!({ payload: { kind: "from_a_newer_core" } });
     handlers.get("voice")!({ payload: { kind: "state", state: "dozing", mic_open: false } });

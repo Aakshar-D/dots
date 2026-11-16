@@ -1296,7 +1296,9 @@
     "voice_pick",
     "voice_view",
     "voice_preview",
-    "voice_devices"
+    "voice_devices",
+    "voice_setup",
+    "voice_setup_run"
   ],
   "ConnectorEntry": [
     {
@@ -9141,6 +9143,11 @@
       "kind": "woke"
     },
     {
+      "kind": "setting_up",
+      "of": 5,
+      "take": 2
+    },
+    {
       "kind": "trouble",
       "message": "Open Sage is off. Turn it on in Settings, under Voice."
     },
@@ -9300,6 +9307,20 @@
       "target": {
         "kind": "home"
       }
+    }
+  ],
+  "VoiceSetup": [
+    {
+      "faint": false,
+      "heard": 5,
+      "message": "Sage heard you 5 times out of 5 and is set up for your voice.",
+      "takes": 5
+    },
+    {
+      "faint": true,
+      "heard": 2,
+      "message": "Sage heard you only 2 times out of 5.",
+      "takes": 5
     }
   ],
   "VoiceStatus": [

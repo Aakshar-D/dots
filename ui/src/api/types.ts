@@ -3201,6 +3201,12 @@ export const VoiceEvent = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("open"), target: OpenTarget }),
   z.strictObject({ kind: z.literal("cleared") }),
   z.strictObject({ kind: z.literal("woke") }),
+  // A voice setup is recording this take: the person says "Hey Sage" now.
+  z.strictObject({
+    kind: z.literal("setting_up"),
+    take: z.number().int(),
+    of: z.number().int(),
+  }),
   z.strictObject({ kind: z.literal("trouble"), message: z.string() }),
   z.strictObject({
     kind: z.literal("download"),
@@ -3209,6 +3215,13 @@ export const VoiceEvent = z.discriminatedUnion("kind", [
   }),
   z.strictObject({ kind: z.literal("status"), status: VoiceStatus }),
 ]);
+// What a voice setup found (apps/dots-app voice/events.rs).
+export const VoiceSetup = z.strictObject({
+  takes: z.number().int(),
+  heard: z.number().int(),
+  faint: z.boolean(),
+  message: z.string(),
+});
 export const VoiceDevice = z.strictObject({
   id: z.string(),
   name: z.string(),
@@ -3234,4 +3247,5 @@ export type VoiceStatus = z.infer<typeof VoiceStatus>;
 export type VoiceEvent = z.infer<typeof VoiceEvent>;
 export type VoiceDevice = z.infer<typeof VoiceDevice>;
 export type VoiceDevices = z.infer<typeof VoiceDevices>;
+export type VoiceSetup = z.infer<typeof VoiceSetup>;
 export type View = z.infer<typeof View>;

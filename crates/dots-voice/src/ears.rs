@@ -85,6 +85,8 @@ pub struct Ears {
     unfinished_quiet: usize,
     /// In this quiet, the words so far were looked at, and whether they stop mid-thought.
     looked: bool,
+    /// What the words were when they were looked at; the sentence, when nothing more is said.
+    looked_text: Option<String>,
     unfinished: bool,
     min_speech: usize,
     pre_roll: usize,
@@ -116,6 +118,7 @@ impl Ears {
             end_quiet: frames_for(settings.end_quiet_ms).max(1),
             unfinished_quiet: frames_for(settings.unfinished_quiet_ms),
             looked: false,
+            looked_text: None,
             unfinished: false,
             min_speech: frames_for(settings.min_speech_ms),
             pre_roll: frames_for(settings.pre_roll_ms),
@@ -163,6 +166,7 @@ impl Ears {
             self.quiet_run = 0;
             self.speech_since_partial += 1;
             self.looked = false;
+            self.looked_text = None;
             self.unfinished = false;
         } else {
             self.quiet_run += 1;
@@ -186,7 +190,8 @@ impl Ears {
     /// once per quiet; when they stop in the middle of a thought the sentence waits on, up to
     /// the longer quiet.
     fn sentence_over(&mut self) -> bool {
-        if self.unfinished_quiet <= self.end_quiet {
+        // A clip too short to be a sentence is dropped whatever it says: it is not read.
+        if self.unfinished_quiet <= self.end_quiet || self.longest_run < self.min_speech {
             return true;
         }
         if !self.looked {
@@ -198,11 +203,17 @@ impl Ears {
                 .map(|t| t.trim().to_string())
                 .filter(|t| !t.is_empty());
             self.unfinished = text.as_deref().is_some_and(stops_mid_thought);
-            if let Some(text) = text {
-                self.last_partial = text;
+            if let Some(text) = &text {
+                self.last_partial.clone_from(text);
             }
+            self.looked_text = text;
         }
         !self.unfinished || self.quiet_run >= self.unfinished_quiet
+    }
+
+    /// How many frames of quiet the clip in progress ends in; `None` when no clip is open.
+    pub fn quiet_frames(&self) -> Option<usize> {
+        self.in_clip.then_some(self.quiet_run)
     }
 
     /// Fills the pre-roll with silence, as if the person had been quiet until now. For words
@@ -240,6 +251,7 @@ impl Ears {
         self.clip = Vec::new(); // let go of the memory, not just the length
         self.in_clip = false;
         self.looked = false;
+        self.looked_text = None;
         self.unfinished = false;
         self.speech_run = 0;
         self.longest_run = 0;
@@ -280,7 +292,10 @@ impl Ears {
 
     fn finish(&mut self) -> EarEvent {
         let enough = self.longest_run >= self.min_speech;
-        let event = match enough.then(|| self.sentence()).flatten() {
+        // Words read in this same quiet are the sentence: only quiet came after them, and
+        // reading the clip a second time would hold the reply back by as long again.
+        let read = self.looked_text.take();
+        let event = match enough.then(|| read.or_else(|| self.sentence())).flatten() {
             Some(text) => EarEvent::Final(text),
             None => EarEvent::Dropped,
         };
@@ -318,12 +333,13 @@ impl Ears {
     }
 }
 
-/// Words a finished sentence does not end on: after one of them more is coming.
+/// Words a finished sentence does not end on: after one of them more is coming. Words that
+/// often do end one are left out ("Turn it on.", "Yes please.", "What is that?", "What does
+/// it look like?"): a sentence that ends on them is answered at once.
 const MID_THOUGHT: &[&str] = &[
     "and", "or", "but", "so", "because", "then", "also", "to", "the", "a", "an", "of", "for",
-    "with", "in", "on", "at", "from", "about", "into", "like", "my", "your", "our", "their",
-    "that", "which", "who", "if", "when", "while", "is", "are", "was", "i", "we", "um", "uh",
-    "please", "can", "could", "would", "should", "will",
+    "with", "at", "from", "into", "my", "your", "our", "their", "which", "who", "if", "when",
+    "while", "are", "was", "i", "we", "um", "uh", "can", "could", "would", "should", "will",
 ];
 
 /// Whether `text` stops in the middle of a thought: it ends in a comma or trails off, or
@@ -813,6 +829,29 @@ mod tests {
         );
     }
 
+    /// The words are read once when the end quiet has passed, and that reading is the
+    /// sentence: the clip is not read a second time.
+    #[test]
+    fn a_whole_sentence_is_read_once() {
+        let mut r = rig(Mode::Says("Open the research sol."), patient());
+        for _ in 0..3 {
+            r.ears.push(&speech());
+        }
+        r.ears.push(&quiet());
+        assert_eq!(finals(&r.ears.push(&quiet())).len(), 1);
+        assert_eq!(r.recognizer.clips.lock().unwrap().len(), 1);
+    }
+
+    /// A cough is dropped without being read at all.
+    #[test]
+    fn a_clip_too_short_to_be_a_sentence_is_not_read() {
+        let mut r = rig(Mode::Says("Hm."), patient());
+        r.ears.push(&speech());
+        r.ears.push(&quiet());
+        assert_eq!(r.ears.push(&quiet()), vec![EarEvent::Dropped]);
+        assert!(r.recognizer.clips.lock().unwrap().is_empty());
+    }
+
     #[test]
     fn what_stops_mid_thought() {
         for text in [
@@ -820,11 +859,22 @@ mod tests {
             "Send a message to",
             "I want you to check my inbox, ",
             "Can you tell me about the...",
-            "Set up a sol that",
+            "Set up a sol for",
         ] {
             assert!(stops_mid_thought(text), "{text}");
         }
-        for text in ["What needs me?", "Approve it.", "Open settings", "Yes.", ""] {
+        for text in [
+            "What needs me?",
+            "Approve it.",
+            "Open settings",
+            "Yes.",
+            "",
+            "Turn it on.",
+            "Yes please.",
+            "What is that?",
+            "What is it about?",
+            "What does it look like?",
+        ] {
             assert!(!stops_mid_thought(text), "{text}");
         }
     }

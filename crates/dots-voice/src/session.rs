@@ -46,6 +46,9 @@ const TONE_WAIT: Duration = Duration::from_millis(300);
 /// Once the tone has stopped sounding, the ears wait this much longer before they hear: the
 /// tone is short and soft, so its echo dies far sooner than speech's `reopen_after_ms`.
 const TONE_TAIL: Duration = Duration::from_millis(60);
+/// A clip open when the wait after "Hey Sage" is over, and quiet for this many frames (about
+/// 130 ms), is the end of the phrase itself and not the start of a request.
+const PAUSE_FRAMES: usize = 4;
 /// Idle frames kept for the ears (about a second): the spotter answers at most this late.
 const RECENT_FRAMES: usize = 32;
 
@@ -88,40 +91,40 @@ const QUESTION_CUT: &str = "The question could not be said in full, so nothing w
 /// microphone's sound by the time the spotter gives for the phrase's end, which is not exact,
 /// so the phrase can still be in the clip. Only a word that sounds like "Sage" after "hey"
 /// is taken for it: "Hey, say that again" stays whole.
-fn without_wake_phrase(text: &str) -> &str {
+///
+/// Straight after the wake (`after_wake`) the clip began at the phrase, and anything that
+/// sounds like it is it. Later only a second word written as the name itself counts after a
+/// loose first one: "A sage" is the phrase said again, "A stage name" is a request.
+fn without_wake_phrase(text: &str, after_wake: bool) -> &str {
     let word = |s: &str| -> String {
         s.chars()
             .filter(|c| c.is_alphanumeric())
             .flat_map(char::to_lowercase)
             .collect()
     };
+    let name = |w: &str| matches!(w, "sage" | "sages" | "saige" | "sayge");
     let sage = |w: &str| {
-        matches!(
-            w,
-            "sage"
-                | "sages"
-                | "saige"
-                | "sayge"
-                | "seige"
-                | "siege"
-                | "stage"
-                | "sedge"
-                | "saj"
-                | "sej"
-                | "sayj"
-                | "cage"
-        )
+        name(w)
+            || matches!(
+                w,
+                "seige" | "siege" | "stage" | "sedge" | "saj" | "sej" | "sayj" | "cage"
+            )
     };
     let mut rest = text.trim_start();
     let mut words = rest.split_whitespace();
     let first = words.next().map(word).unwrap_or_default();
     let second = words.next().map(word).unwrap_or_default();
     // "A sage" and "He sage" were seen for the phrase from a faint voice.
-    let hey = matches!(
-        first.as_str(),
-        "hey" | "hay" | "hi" | "he" | "a" | "eh" | "ay"
-    );
-    let skip = if hey && sage(&second) {
+    let hey = matches!(first.as_str(), "hey" | "hay");
+    let loose = matches!(first.as_str(), "hi" | "he" | "a" | "eh" | "ay");
+    let phrase = (hey && sage(&second))
+        || (loose
+            && if after_wake {
+                sage(&second)
+            } else {
+                name(&second)
+            });
+    let skip = if phrase {
         2
     } else if first == "sage" {
         1
@@ -341,6 +344,7 @@ enum Command {
     },
     Notice(String),
     Settings(SessionSettings),
+    VoiceLevel(f32),
     SetVoice {
         voice: u8,
         speed: f32,
@@ -559,6 +563,12 @@ impl Session {
         self.send(Command::SetVoice { voice, speed });
     }
 
+    /// How loud the voice of the person is at the microphone, from a setup done before: the
+    /// gain starts there, not at the first words it hears.
+    pub fn set_voice_level(&self, level: f32) {
+        self.send(Command::VoiceLevel(level));
+    }
+
     /// Final: speech stops, the microphone closes, the state becomes `Off` and the worker
     /// ends. Later calls do nothing.
     ///
@@ -641,6 +651,9 @@ struct Worker {
     /// Listening after "Hey Dot" with the tone on and no speech yet: the tone is played then,
     /// unless speech starts first.
     tone_due: Option<Instant>,
+    /// "Hey Sage" woke the session and it has not answered yet: it greets once it is clear
+    /// that no request follows in the same breath.
+    greet_owed: bool,
     /// The clip being heard began at "Hey Dot": it may still hold the end of the phrase.
     after_wake: bool,
     /// Idle with the wake phrase on: the last frames the spotter heard, newest last, so the
@@ -739,6 +752,7 @@ impl Worker {
             deaf_until: None,
             tone_until: None,
             tone_due: None,
+            greet_owed: false,
             after_wake: false,
             recent: VecDeque::new(),
             halt_frames: false,
@@ -937,6 +951,7 @@ impl Worker {
                 self.refresh();
             }
             Command::SetVoice { voice, speed } => self.voice.set_voice(voice, speed),
+            Command::VoiceLevel(level) => self.gain = Gain::with_voice(level),
             Command::Shutdown => {}
             #[cfg(test)]
             Command::Probe(_) => {}
@@ -1103,6 +1118,7 @@ impl Worker {
         self.after_wake = true;
         if self.settings.tone {
             self.tone_due = Some(self.clock.now() + TONE_WAIT);
+            self.greet_owed = true;
         }
         // The words after the wake phrase start at once, with no quiet before them: the ears
         // are given a moment of silence first, as their pre-roll would have held, without
@@ -1149,6 +1165,7 @@ impl Worker {
 
     /// A listen begins: nothing heard yet in it.
     fn fresh_listen(&mut self) {
+        self.greet_owed = false;
         self.may_retry = false;
         self.from_rest = false;
         self.partial_seen = false;
@@ -1182,6 +1199,11 @@ impl Worker {
             self.last_level = None;
             self.tone_due = None;
             self.after_wake = false;
+            // The greeting is owed only in the listen the wake opened: once a request was
+            // heard or the session rests, nothing later is answered with it.
+            if new != State::Listening {
+                self.greet_owed = false;
+            }
             self.recent.clear();
             if !new.hears() {
                 self.ears.reset();
@@ -1503,7 +1525,9 @@ impl Worker {
             EarEvent::Started => {
                 self.in_speech = true;
                 self.clip_started = now;
-                self.tone_due = None; // the person kept talking after "Hey Dot": no tone
+                // Not yet a sign that the person kept talking: the end of "Hey Sage" itself,
+                // made louder for a faint voice, starts a clip too. Whether a request
+                // follows is looked at when the wait after the wake is over (`timers`).
             }
             EarEvent::Partial(text) => {
                 let text = self.without_wake(text);
@@ -1524,8 +1548,12 @@ impl Worker {
                 // Noise the recogniser made words of ("everywhere, everywhere, everywhere…")
                 // is not a sentence: nobody is asked about it and nothing acts on it.
                 if text.is_empty() {
-                    // Only the wake phrase was in the clip: nothing was asked yet.
+                    // Only the wake phrase was in the clip: nothing was asked yet, and the
+                    // person who said it is answered.
                     self.partial_seen = false;
+                    if self.greet() {
+                        return;
+                    }
                     self.nothing_caught(now);
                     return;
                 }
@@ -1539,9 +1567,24 @@ impl Worker {
             }
             EarEvent::Dropped => {
                 self.after_wake = false;
+                if self.greet() {
+                    return;
+                }
                 self.nothing_caught(now);
             }
         }
+    }
+
+    /// Answers the person who said "Hey Sage" and no request with it, once: "How can I
+    /// help?", then the ears open as after any reply. Whether it was said (not when it was
+    /// said already, or with a speaker that has failed).
+    fn greet(&mut self) -> bool {
+        if !std::mem::take(&mut self.greet_owed) || self.sink.failed() {
+            return false;
+        }
+        self.in_speech = false;
+        self.say_alone(GREETING, After::FollowUp);
+        true
     }
 
     /// `text` as heard, without the wake phrase at its start. Straight after the wake the
@@ -1549,11 +1592,30 @@ impl Worker {
     /// the listen only the whole phrase is taken off: a person who was not answered at once
     /// says "Hey Sage" again, and that is not what they want to ask.
     fn without_wake(&self, text: String) -> String {
-        let rest = without_wake_phrase(&text);
+        let rest = without_wake_phrase(&text, self.after_wake);
         let lone_sage = text
             .split_whitespace()
             .next()
             .is_some_and(|w| w.to_lowercase().starts_with("sage"));
+        // Straight after the wake, what is left of the phrase is written in many ways:
+        // "Age.", "Stage", "Hey". One or two such words alone are the phrase, not a request.
+        let leftover = |w: &str| {
+            let w: String = w
+                .chars()
+                .filter(|c| c.is_alphanumeric())
+                .flat_map(char::to_lowercase)
+                .collect();
+            matches!(
+                w.as_str(),
+                "age" | "sage" | "stage" | "saj" | "cage" | "page" | "hey" | "hay" | "eh" | "a"
+            )
+        };
+        if self.after_wake
+            && rest.split_whitespace().count() <= 2
+            && rest.split_whitespace().all(leftover)
+        {
+            return String::new();
+        }
         if self.after_wake || rest.is_empty() || !lone_sage {
             rest.to_string()
         } else {
@@ -1658,10 +1720,24 @@ impl Worker {
                     // voice, then the ears open as after any reply. With a speaker that
                     // has failed nothing can be said, and the ears stay open.
                     self.tone_due = None;
-                    self.after_wake = false;
-                    if !self.in_speech && !self.sink.failed() {
-                        self.say_alone(GREETING, After::FollowUp);
-                        return;
+                    // A clip that is open but already quiet is the end of the phrase, not
+                    // a request: it is dropped. One still going is the person talking on,
+                    // and the phrase at its start is taken off when it ends.
+                    let trailing = self
+                        .ears
+                        .quiet_frames()
+                        .is_some_and(|quiet| quiet >= PAUSE_FRAMES);
+                    if !self.in_speech || trailing {
+                        if self.in_speech {
+                            // No clip is open any more, greeting or not: left set, the
+                            // listen would never end (its limit waits for the clip's end).
+                            self.ears.reset();
+                            self.in_speech = false;
+                        }
+                        self.after_wake = false;
+                        if self.greet() {
+                            return;
+                        }
                     }
                 }
                 if !self.in_speech
@@ -2619,6 +2695,33 @@ mod tests {
         r.hear_sentence();
     }
 
+    /// The end of "Hey Sage" itself can start a clip (a faint voice made louder). Whatever
+    /// the recogniser writes for it, it is not a request: the person is greeted.
+    #[test]
+    fn the_end_of_the_wake_phrase_heard_as_speech_is_answered_with_the_greeting() {
+        for leftover in ["Sage.", "Age.", "Stage", "Hey Sage."] {
+            let mut r = rig(Opts {
+                wake: true,
+                tone: true,
+                recognizer: Some(FakeRecognizer::new(leftover)),
+                ..Opts::default()
+            });
+            r.expect_state(State::Idle, true);
+            r.mic.send(HEY_DOT, 1);
+            assert_eq!(r.next(), SessionEvent::Woke);
+            r.expect_state(State::Listening, true);
+            // The tail of the phrase: a short clip, then quiet.
+            r.mic.send(SPEECH, 3);
+            r.mic.send(QUIET, 2);
+            // No `Hearing`, no `Heard`: the greeting.
+            r.expect_state(State::Speaking, true);
+            r.expect_saying(GREETING);
+            r.until_speech_done();
+            r.clock.advance(250);
+            r.expect_state(State::Listening, true);
+        }
+    }
+
     /// "Hey Sage" said again while the session already listens is not a sentence: nothing
     /// is passed on, and a sentence after it is heard without it.
     #[test]
@@ -2783,6 +2886,38 @@ mod tests {
         r.nothing_more();
         r.clock.advance(1);
         r.expect_state(State::Idle, false);
+    }
+
+    /// The end of "Hey Sage" opened a clip, and the speaker cannot greet: the clip is
+    /// dropped all the same, and the listen still ends when nothing is said.
+    #[test]
+    fn the_end_of_the_wake_phrase_with_a_failed_speaker_does_not_hold_the_listen_open() {
+        let mut r = rig(Opts {
+            wake: true,
+            tone: true,
+            ears: EarSettings {
+                end_quiet_ms: 640,
+                unfinished_quiet_ms: 640,
+                partial_every_ms: 30_000,
+                ..test_ears()
+            },
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        r.sink.fail();
+        r.sink_fails.store(true, Ordering::SeqCst);
+        r.mic.send(HEY_DOT, 1);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        // The tail of the phrase: a clip still open, already quiet, when the wait is over.
+        r.mic.send(SPEECH, 3);
+        r.mic.send(QUIET, 5);
+        r.sync();
+        r.clock.advance(300);
+        r.sync();
+        assert_eq!(r.sync().state, State::Listening);
+        r.clock.advance(8_000);
+        r.expect_state(State::Idle, true);
     }
 
     #[test]
@@ -3304,7 +3439,27 @@ mod tests {
             ("Sols that failed today", "Sols that failed today"),
             ("", ""),
         ] {
-            assert_eq!(without_wake_phrase(heard), left, "{heard:?}");
+            assert_eq!(without_wake_phrase(heard, false), left, "{heard:?}");
+            assert_eq!(without_wake_phrase(heard, true), left, "{heard:?}");
+        }
+    }
+
+    /// A loose first word ("a", "he") is the phrase only before the name itself, except
+    /// straight after the wake, where the clip began at the phrase.
+    #[test]
+    fn a_request_that_starts_like_the_phrase_is_kept_outside_the_wake() {
+        for (heard, later, after_wake) in [
+            ("A sage, what needs me?", "what needs me?", "what needs me?"),
+            ("He sage.", "", ""),
+            (
+                "A stage name for the sol",
+                "A stage name for the sol",
+                "name for the sol",
+            ),
+            ("A cage.", "A cage.", ""),
+        ] {
+            assert_eq!(without_wake_phrase(heard, false), later, "{heard:?}");
+            assert_eq!(without_wake_phrase(heard, true), after_wake, "{heard:?}");
         }
     }
 

@@ -70,6 +70,7 @@ export const keys = {
   /// microphones and speakers it can use.
   voice: ["voice"] as const,
   voiceDevices: ["voice", "devices"] as const,
+  voiceSetup: ["voice", "setup"] as const,
   /// The orgs joined on this PC (Settings → Accounts, and the org names other screens
   /// show). What is read per org belongs under this prefix, so an org event reaches it too.
   orgs: ["orgs"] as const,

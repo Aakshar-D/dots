@@ -818,4 +818,10 @@ export const commands = {
   /// `invalid` when Open Dot is not ready.
   voicePreview: (voice: number, speed: number) => call(nothing, "voice_preview", { voice, speed }),
   voiceDevices: () => call(T.VoiceDevices, "voice_devices"),
+  /// The voice setup the person did; null when they did none.
+  voiceSetup: () => call(T.VoiceSetup.nullable(), "voice_setup"),
+  /// Listens to the person say "Hey Sage" five times (a `setting_up` voice event names each
+  /// take) and sets the wake phrase up for their voice. Takes about 20 seconds. Rejects with
+  /// kind `invalid` while Open Sage is not ready or not resting.
+  voiceSetupRun: () => call(T.VoiceSetup, "voice_setup_run"),
 };

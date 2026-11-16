@@ -48,7 +48,46 @@ use crate::models::ModelPaths;
 /// pieces brought those clips back, and a wider search (`max_active_paths` 8 or 16) only added
 /// wrong stops ("The stage stopped moving." 16 times in 20). "Sage, start the next one." is
 /// taken for it 4 times in 20, as "Dot, start the next one." was.
-const WAKE_KEYWORDS: &str = "▁HE Y ▁S AGE :1.5 #0.15 @HEY_DOT\n▁HE Y ▁SA GE :1.5 #0.15 @HEY_DOT\n▁HE Y ▁S A GE :1.5 #0.15 @HEY_DOT\n▁S AGE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁SA GE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁S A GE ▁ST O P :2.0 #0.1 @DOT_STOP";
+const STOP_KEYWORDS: &str = "▁S AGE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁SA GE ▁ST O P :2.0 #0.1 @DOT_STOP\n▁S A GE ▁ST O P :2.0 #0.1 @DOT_STOP";
+
+/// How readily "Hey Sage" is taken for said. A setup with the voice of the person picks the
+/// strictest one that still catches them (`calibrate`); without a setup it is `Standard`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WakeTuning {
+    /// One spelling, boosted 1.0, held to 0.3: for a voice close to the microphone. Near
+    /// misses woke it 0 times in 240.
+    Strict,
+    /// Three spellings, boosted 1.5, held to 0.15: once in 240.
+    #[default]
+    Standard,
+    /// Three spellings, boosted 2.0, held to 0.1: 5 times in 240. Only for a voice the
+    /// others miss.
+    Sensitive,
+}
+
+impl WakeTuning {
+    pub const STRICTEST_FIRST: [WakeTuning; 3] = [
+        WakeTuning::Strict,
+        WakeTuning::Standard,
+        WakeTuning::Sensitive,
+    ];
+
+    /// The keyword lines for "Hey Sage" at this tuning and for "Sage, stop".
+    fn keywords(self) -> String {
+        let (spellings, boost, score): (&[&str], &str, &str) = match self {
+            WakeTuning::Strict => (&["S AGE"], "1.0", "0.3"),
+            WakeTuning::Standard => (&["S AGE", "SA GE", "S A GE"], "1.5", "0.15"),
+            WakeTuning::Sensitive => (&["S AGE", "SA GE", "S A GE"], "2.0", "0.1"),
+        };
+        let mut lines: Vec<String> = spellings
+            .iter()
+            .map(|sage| format!("▁HE Y ▁{sage} :{boost} #{score} @HEY_DOT"))
+            .collect();
+        lines.push(STOP_KEYWORDS.to_owned());
+        lines.join("\n")
+    }
+}
 const SPEAK_STEPS: i32 = 5;
 const VOICES: u8 = 10;
 
@@ -257,6 +296,10 @@ const WORD_END_LEAD_SECS: f32 = 0.05;
 
 impl SherpaWake {
     pub fn load(paths: &ModelPaths) -> Result<Self, EngineError> {
+        Self::load_tuned(paths, WakeTuning::default())
+    }
+
+    pub fn load_tuned(paths: &ModelPaths, tuning: WakeTuning) -> Result<Self, EngineError> {
         let dir = paths.wake_dir();
         let mut cfg = KeywordSpotterConfig::default();
         cfg.model_config.transducer = OnlineTransducerModelConfig {
@@ -273,7 +316,7 @@ impl SherpaWake {
         cfg.model_config.tokens = Some(file(&dir, "tokens.txt")?);
         cfg.model_config.num_threads = 1;
         cfg.model_config.debug = false;
-        cfg.keywords_buf = Some(WAKE_KEYWORDS.to_owned());
+        cfg.keywords_buf = Some(tuning.keywords());
         let spotter = KeywordSpotter::create(&cfg).ok_or_else(|| failed("the wake phrase"))?;
         let stream = spotter.create_stream();
         Ok(Self {
