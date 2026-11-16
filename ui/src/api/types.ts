@@ -3164,6 +3164,11 @@ export const OpenTarget = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("settings") }),
   z.strictObject({ kind: z.literal("usage") }),
   z.strictObject({ kind: z.literal("home") }),
+  z.strictObject({ kind: z.literal("connectors") }),
+  z.strictObject({ kind: z.literal("apps") }),
+  z.strictObject({ kind: z.literal("library") }),
+  z.strictObject({ kind: z.literal("teams") }),
+  z.strictObject({ kind: z.literal("intents") }),
 ]);
 // What Open Dot shows beside its words.
 export const OpenDotCard = z.discriminatedUnion("kind", [

@@ -2467,6 +2467,11 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
         OpenTarget::Settings,
         OpenTarget::Usage,
         OpenTarget::Home,
+        OpenTarget::Connectors,
+        OpenTarget::Apps,
+        OpenTarget::Library,
+        OpenTarget::Teams,
+        OpenTarget::Intents,
     ];
     let mut events = vec![
         VoiceEvent::State {

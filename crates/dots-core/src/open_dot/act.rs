@@ -59,6 +59,11 @@ pub enum OpenTarget {
     Settings,
     Usage,
     Home,
+    Connectors,
+    Apps,
+    Library,
+    Teams,
+    Intents,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -343,6 +348,11 @@ fn open(target: &str, picture: &Picture) -> Step {
         "inbox" => return screen(OpenTarget::Inbox, "Opening the Inbox."),
         "usage" => return screen(OpenTarget::Usage, "Opening Usage."),
         "home" => return screen(OpenTarget::Home, "Opening Home."),
+        "connectors" => return screen(OpenTarget::Connectors, "Opening Connectors."),
+        "apps" => return screen(OpenTarget::Apps, "Opening Apps."),
+        "library" => return screen(OpenTarget::Library, "Opening the Library."),
+        "teams" => return screen(OpenTarget::Teams, "Opening Teams."),
+        "intents" => return screen(OpenTarget::Intents, "Opening Intents."),
         _ => {}
     }
     if let Some(d) = picture.dot(target) {
