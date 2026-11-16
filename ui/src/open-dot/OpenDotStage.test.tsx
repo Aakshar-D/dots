@@ -608,7 +608,79 @@ describe("the Open Sage stage", () => {
     expect(stage()!.className).toMatch(/slide-in-from-bottom/);
   });
 
-  it("is reached by Tab in order: The Breath, the options, then Close", async () => {
+  describe("enlarged", () => {
+    const say = (heard: string, ...said: string[]) => {
+      show({
+        state: "speaking",
+        talk: [
+          ...voiceStore.get().talk,
+          { n: ++line, who: "you", text: heard },
+          { n: ++line, who: "sage", text: said.join(" ") },
+        ],
+        said: lines(...said),
+      });
+    };
+    afterEach(() => window.localStorage.clear());
+
+    it("fills the window and shows the whole conversation, every reply in full", async () => {
+      const user = userEvent.setup();
+      render(<OpenDotStage />);
+      show({ state: "listening", micOpen: true });
+      expect(stage()!.hasAttribute("data-large")).toBe(false);
+      await user.click(screen.getByRole("button", { name: "Enlarge Open Sage" }));
+      expect(stage()!.hasAttribute("data-large")).toBe(true);
+      const long = "A long reply that the small stage would cut to two lines. ".repeat(8).trim();
+      say("What needs me?", long);
+      say("And the second?", "Here is the second.");
+      const log = within(screen.getByRole("log", { name: "Conversation" }));
+      expect(log.getByText("What needs me?")).toBeTruthy();
+      expect(log.getByText(long).className).not.toMatch(/line-clamp/);
+      expect(log.getByText("Here is the second.")).toBeTruthy();
+      // And it is remembered for the next time the stage opens.
+      expect(window.localStorage.getItem("open-sage-large")).toBe("1");
+      await user.click(screen.getByRole("button", { name: "Make Open Sage smaller" }));
+      expect(stage()!.hasAttribute("data-large")).toBe(false);
+      expect(screen.queryByRole("log")).toBeNull();
+      expect(window.localStorage.getItem("open-sage-large")).toBeNull();
+    });
+
+    it("copies one reply, or the whole conversation", async () => {
+      const user = userEvent.setup();
+      const written: string[] = [];
+      vi.spyOn(navigator.clipboard, "writeText").mockImplementation((text) => {
+        written.push(text);
+        return Promise.resolve();
+      });
+      window.localStorage.setItem("open-sage-large", "1");
+      render(<OpenDotStage />);
+      show({ state: "listening", micOpen: true });
+      expect(screen.queryByRole("button", { name: "Copy all" })).toBeNull();
+      say("What needs me?", "Two things.", "An approval and a question.");
+      await user.click(screen.getByRole("button", { name: "Copy this reply" }));
+      await user.click(screen.getByRole("button", { name: "Copy all" }));
+      expect(written).toEqual([
+        "Two things. An approval and a question.",
+        "You: What needs me?\n\nSage: Two things. An approval and a question.",
+      ]);
+    });
+
+    it("stays until it is closed, and the conversation goes with it", () => {
+      vi.useFakeTimers();
+      window.localStorage.setItem("open-sage-large", "1");
+      render(<OpenDotStage />);
+      show({ state: "listening", micOpen: true });
+      say("Hello.", "Hi.");
+      show({ state: "idle", micOpen: false });
+      act(() => void vi.advanceTimersByTime(LINGER_MS * 20));
+      expect(stage()).not.toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      act(() => void vi.advanceTimersByTime(LEAVE_MS));
+      expect(stage()).toBeNull();
+      expect(voiceStore.get().talk).toEqual([]);
+    });
+  });
+
+  it("is reached by Tab in order: The Breath, the options, Enlarge, then Close", async () => {
     const user = userEvent.setup();
     render(
       <>
@@ -622,6 +694,7 @@ describe("the Open Sage stage", () => {
       screen.getByRole("button", { name: "Listen" }),
       screen.getByRole("button", { name: "A" }),
       screen.getByRole("button", { name: "B" }),
+      screen.getByRole("button", { name: "Enlarge Open Sage" }),
       screen.getByRole("button", { name: "Close" }),
     ];
     for (const element of expected) {

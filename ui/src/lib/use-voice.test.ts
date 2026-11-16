@@ -173,6 +173,29 @@ describe("useVoice", () => {
     expect(voiceStore.get().said).toEqual([]);
   });
 
+  it("keeps the conversation: what was heard, and each reply whole in one entry", async () => {
+    mount("/home");
+    await hear({ kind: "heard", text: "What needs me?" }, () =>
+      expect(voiceStore.get().talk.length).toBeGreaterThan(0),
+    );
+    act(() => voiceStore.set({ talk: voiceStore.get().talk.slice(-1) }));
+    for (const text of ["Two things.", "An approval.", "And a question."]) {
+      act(() => backend.emit("voice", { kind: "saying", text }));
+    }
+    // Listening again and the next sentence: the reply before it stays in the conversation.
+    act(() => backend.emit("voice", { kind: "state", state: "listening", mic_open: true }));
+    act(() => backend.emit("voice", { kind: "heard", text: "Read the question." }));
+    act(() => backend.emit("voice", { kind: "saying", text: "It asks which server." }));
+    expect(voiceStore.get().talk.map((line) => [line.who, line.text])).toEqual([
+      ["you", "What needs me?"],
+      ["sage", "Two things. An approval. And a question."],
+      ["you", "Read the question."],
+      ["sage", "It asks which server."],
+    ]);
+    const numbers = voiceStore.get().talk.map((line) => line.n);
+    expect(new Set(numbers).size).toBe(numbers.length);
+  });
+
   it("keeps the last three lines of a reply, and starts afresh on what is heard next", async () => {
     mount("/home");
     await hear({ kind: "hearing", text: "what is" }, () =>

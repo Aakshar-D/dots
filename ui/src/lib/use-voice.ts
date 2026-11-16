@@ -33,6 +33,10 @@ export type VoiceLive = {
   /// `seq` names the question: a pick on its options sends it back.
   ask: { question: string; options: string[]; seq: number } | null;
   card: OpenDotCard | null;
+  /// The conversation so far, oldest first: what the person said and what Sage said back, a
+  /// whole reply in one entry. The enlarged stage shows it and drops it when it goes away.
+  /// Kept in memory only, the last `TALK_KEPT` entries.
+  talk: TalkLine[];
   /// The speech files' download, while one runs.
   download: { done: number; total: number } | null;
   /// The take a voice setup is recording now; null when none runs. The settings page that
@@ -46,6 +50,8 @@ export type VoiceLive = {
 
 export type SaidLine = { n: number; text: string };
 
+export type TalkLine = { n: number; who: "you" | "sage"; text: string };
+
 const quiet: VoiceLive = {
   state: "off",
   micOpen: false,
@@ -56,6 +62,7 @@ const quiet: VoiceLive = {
   said: [],
   ask: null,
   card: null,
+  talk: [],
   download: null,
   settingUp: null,
   trouble: null,
@@ -94,8 +101,30 @@ export function useVoiceLive<T>(select: (live: VoiceLive) => T): T {
 /// How many lines of a reply the store keeps.
 const SAID_KEPT = 3;
 
+/// How many entries of the conversation the store keeps.
+const TALK_KEPT = 60;
+
 /// The running number of the last reply line taken, over the app's life.
 let lastLine = 0;
+
+/// The conversation with one more thing the person said.
+function withHeard(talk: TalkLine[], text: string): TalkLine[] {
+  if (text.trim() === "") return talk;
+  lastLine += 1;
+  return [...talk, { n: lastLine, who: "you" as const, text }].slice(-TALK_KEPT);
+}
+
+/// The conversation with one more line of Sage's reply: a reply's lines are one entry, so the
+/// line joins the entry before it unless the person spoke in between (`first`).
+function withSaid(talk: TalkLine[], text: string, first: boolean): TalkLine[] {
+  if (text.trim() === "") return talk;
+  const last = talk[talk.length - 1];
+  if (!first && last?.who === "sage") {
+    return [...talk.slice(0, -1), { ...last, text: `${last.text} ${text}` }];
+  }
+  lastLine += 1;
+  return [...talk, { n: lastLine, who: "sage" as const, text }].slice(-TALK_KEPT);
+}
 
 /// How many times the voice status was set from something newer than a read (an event, or a
 /// command's answer), per query client. A read that began before such a change keeps the newer
@@ -202,15 +231,21 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       return;
     case "heard":
       // What the person said in full: the reply before it is done with.
-      voiceStore.set({ hearing: event.text, heard: true, said: [] });
+      voiceStore.set({
+        hearing: event.text,
+        heard: true,
+        said: [],
+        talk: withHeard(voiceStore.get().talk, event.text),
+      });
       return;
     case "saying": {
       // The first line of a reply: what was heard gives way to it.
-      const { said } = voiceStore.get();
+      const { said, talk } = voiceStore.get();
       lastLine += 1;
       voiceStore.set({
         saying: event.text,
         said: [...said, { n: lastLine, text: event.text }].slice(-SAID_KEPT),
+        talk: withSaid(talk, event.text, said.length === 0),
         ...(said.length === 0 ? { hearing: "", heard: false } : {}),
       });
       return;
