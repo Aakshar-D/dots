@@ -38,9 +38,12 @@ pub const NOTE_TOO_LONG: &str = "That's too long for one note. Ask a sol to writ
 pub const NO_SITE: &str =
     "I can't open that address. Say the name of the site, like example dot com.";
 pub const NO_SEARCH: &str = "I didn't catch what to search for.";
-pub const NO_APP: &str = "I can't open that one. I can open Notepad, Calculator, your files, \
-     a terminal, Paint, the system settings, your browser, or your Documents, Downloads, \
-     Desktop, Pictures and notes folders.";
+pub const NO_APP: &str = "I didn't catch which app to open. Say its name, like Chrome or \
+     Notepad, or a settings page, like the microphone settings.";
+pub const NO_KEY: &str = "I can turn the volume up or down, mute it, play or pause, and skip \
+     to the next or the previous track.";
+/// The longest name of an app to look for among the installed ones.
+const APP_NAME_BYTES: usize = 40;
 pub const FAILED: &str = "That didn't work.";
 pub const NO_CLOSE: &str = "I can't close that one by name. I can close Notepad, Calculator, \
      Paint and the system settings; ask me to close anything else and I'll show you the \
@@ -98,6 +101,173 @@ impl DeskApp {
     }
 }
 
+/// A page of the computer's own settings. Each opens by an address of the system that is
+/// written here: nothing the model wrote is part of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsPage {
+    Microphone,
+    Sound,
+    Bluetooth,
+    Wifi,
+    Network,
+    Display,
+    Notifications,
+    Camera,
+    Privacy,
+    Updates,
+    Apps,
+    Power,
+    Storage,
+    DateTime,
+    Keyboard,
+    Mouse,
+    Background,
+    Accounts,
+    Language,
+    Printers,
+}
+
+impl SettingsPage {
+    pub const ALL: [SettingsPage; 20] = [
+        SettingsPage::Microphone,
+        SettingsPage::Sound,
+        SettingsPage::Bluetooth,
+        SettingsPage::Wifi,
+        SettingsPage::Network,
+        SettingsPage::Display,
+        SettingsPage::Notifications,
+        SettingsPage::Camera,
+        SettingsPage::Privacy,
+        SettingsPage::Updates,
+        SettingsPage::Apps,
+        SettingsPage::Power,
+        SettingsPage::Storage,
+        SettingsPage::DateTime,
+        SettingsPage::Keyboard,
+        SettingsPage::Mouse,
+        SettingsPage::Background,
+        SettingsPage::Accounts,
+        SettingsPage::Language,
+        SettingsPage::Printers,
+    ];
+
+    /// The name as it is said: "The microphone settings".
+    pub fn name(self) -> &'static str {
+        match self {
+            SettingsPage::Microphone => "The microphone settings",
+            SettingsPage::Sound => "The sound settings",
+            SettingsPage::Bluetooth => "The Bluetooth settings",
+            SettingsPage::Wifi => "The Wi-Fi settings",
+            SettingsPage::Network => "The network settings",
+            SettingsPage::Display => "The display settings",
+            SettingsPage::Notifications => "The notification settings",
+            SettingsPage::Camera => "The camera settings",
+            SettingsPage::Privacy => "The privacy settings",
+            SettingsPage::Updates => "The update settings",
+            SettingsPage::Apps => "The settings for installed apps",
+            SettingsPage::Power => "The power and battery settings",
+            SettingsPage::Storage => "The storage settings",
+            SettingsPage::DateTime => "The date and time settings",
+            SettingsPage::Keyboard => "The keyboard settings",
+            SettingsPage::Mouse => "The mouse settings",
+            SettingsPage::Background => "The background settings",
+            SettingsPage::Accounts => "The account settings",
+            SettingsPage::Language => "The language settings",
+            SettingsPage::Printers => "The printer settings",
+        }
+    }
+
+    /// The page's address in Windows Settings.
+    pub fn windows(self) -> &'static str {
+        match self {
+            SettingsPage::Microphone => "ms-settings:privacy-microphone",
+            SettingsPage::Sound => "ms-settings:sound",
+            SettingsPage::Bluetooth => "ms-settings:bluetooth",
+            SettingsPage::Wifi => "ms-settings:network-wifi",
+            SettingsPage::Network => "ms-settings:network-status",
+            SettingsPage::Display => "ms-settings:display",
+            SettingsPage::Notifications => "ms-settings:notifications",
+            SettingsPage::Camera => "ms-settings:privacy-webcam",
+            SettingsPage::Privacy => "ms-settings:privacy",
+            SettingsPage::Updates => "ms-settings:windowsupdate",
+            SettingsPage::Apps => "ms-settings:appsfeatures",
+            SettingsPage::Power => "ms-settings:powersleep",
+            SettingsPage::Storage => "ms-settings:storagesense",
+            SettingsPage::DateTime => "ms-settings:dateandtime",
+            SettingsPage::Keyboard => "ms-settings:typing",
+            SettingsPage::Mouse => "ms-settings:mousetouchpad",
+            SettingsPage::Background => "ms-settings:personalization-background",
+            SettingsPage::Accounts => "ms-settings:yourinfo",
+            SettingsPage::Language => "ms-settings:regionlanguage",
+            SettingsPage::Printers => "ms-settings:printers",
+        }
+    }
+
+    /// The page's address in macOS System Settings.
+    pub fn mac(self) -> &'static str {
+        match self {
+            SettingsPage::Microphone => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+            }
+            SettingsPage::Sound => "x-apple.systempreferences:com.apple.preference.sound",
+            SettingsPage::Bluetooth => "x-apple.systempreferences:com.apple.preferences.Bluetooth",
+            SettingsPage::Wifi | SettingsPage::Network => {
+                "x-apple.systempreferences:com.apple.preference.network"
+            }
+            SettingsPage::Display => "x-apple.systempreferences:com.apple.preference.displays",
+            SettingsPage::Notifications => {
+                "x-apple.systempreferences:com.apple.preference.notifications"
+            }
+            SettingsPage::Camera => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
+            }
+            SettingsPage::Privacy => {
+                "x-apple.systempreferences:com.apple.preference.security?Privacy"
+            }
+            SettingsPage::Updates => {
+                "x-apple.systempreferences:com.apple.preferences.softwareupdate"
+            }
+            SettingsPage::Power => "x-apple.systempreferences:com.apple.preference.battery",
+            SettingsPage::DateTime => "x-apple.systempreferences:com.apple.preference.datetime",
+            SettingsPage::Keyboard => "x-apple.systempreferences:com.apple.preference.keyboard",
+            SettingsPage::Mouse => "x-apple.systempreferences:com.apple.preference.mouse",
+            SettingsPage::Background => {
+                "x-apple.systempreferences:com.apple.preference.desktopscreeneffect"
+            }
+            SettingsPage::Accounts => "x-apple.systempreferences:com.apple.preferences.users",
+            SettingsPage::Language => "x-apple.systempreferences:com.apple.Localization",
+            SettingsPage::Printers => "x-apple.systempreferences:com.apple.preference.printfax",
+            // No page of their own that is known to open: the settings themselves.
+            SettingsPage::Apps | SettingsPage::Storage => "x-apple.systempreferences:",
+        }
+    }
+}
+
+/// A key of the keyboard's volume and media row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeskKey {
+    VolumeUp,
+    VolumeDown,
+    Mute,
+    PlayPause,
+    Next,
+    Previous,
+}
+
+impl DeskKey {
+    /// What is said once it was pressed.
+    pub fn done(self) -> &'static str {
+        match self {
+            DeskKey::VolumeUp => "The volume is up.",
+            DeskKey::VolumeDown => "The volume is down.",
+            DeskKey::Mute => "Done.",
+            DeskKey::PlayPause => "Done.",
+            DeskKey::Next => "Next one.",
+            DeskKey::Previous => "Back one.",
+        }
+    }
+}
+
 /// A checked thing to do on the computer.
 #[derive(Debug, Clone, PartialEq)]
 pub enum DeskTask {
@@ -120,6 +290,19 @@ pub enum DeskTask {
     },
     App {
         app: DeskApp,
+    },
+    /// One page of the computer's own settings.
+    Page {
+        page: SettingsPage,
+    },
+    /// An installed app, looked up by `name` among those the system lists: the name is only
+    /// compared with theirs, and what is started is the system's own entry for the match.
+    Named {
+        name: String,
+    },
+    /// A press of a volume or media key.
+    Key {
+        key: DeskKey,
     },
     /// Ask an open app to close, as its close button does.
     Close {
@@ -145,6 +328,9 @@ impl DeskTask {
             }
             DeskTask::Search { .. } => "The search is open in your browser.".into(),
             DeskTask::App { app } => format!("{} is open.", app.name()),
+            DeskTask::Page { page } => format!("{} are open.", page.name()),
+            DeskTask::Named { name } => format!("{name} is opening."),
+            DeskTask::Key { key } => key.done().into(),
             DeskTask::Close { app } => format!("{} is closing.", app.name()),
             DeskTask::Command { .. } => COMMAND_DONE.into(),
         }
@@ -329,6 +515,176 @@ pub fn command(command: &str, why: &str) -> Result<(String, String), &'static st
     Ok((command.to_string(), why))
 }
 
+/// `name` in small letters and digits only.
+fn bare(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// The page of the computer's settings `name` means ("microphone settings", "the Wi-Fi
+/// settings page"). `None` when it names no settings, or the settings as a whole.
+pub fn settings_page(name: &str) -> Option<SettingsPage> {
+    let lower = name.to_lowercase();
+    if !(lower.contains("setting") || lower.contains("preference")) {
+        return None;
+    }
+    let words: Vec<String> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect();
+    let has = |any: &[&str]| words.iter().any(|w| any.contains(&w.as_str()));
+    let joined = bare(&lower);
+    Some(if has(&["microphone", "mic", "mike"]) {
+        SettingsPage::Microphone
+    } else if has(&["camera", "webcam"]) {
+        SettingsPage::Camera
+    } else if has(&["bluetooth"]) {
+        SettingsPage::Bluetooth
+    } else if joined.contains("wifi") || has(&["wireless"]) {
+        SettingsPage::Wifi
+    } else if has(&["network", "internet", "ethernet"]) {
+        SettingsPage::Network
+    } else if has(&[
+        "sound",
+        "audio",
+        "volume",
+        "speaker",
+        "speakers",
+        "headphones",
+    ]) {
+        SettingsPage::Sound
+    } else if has(&["display", "screen", "brightness", "resolution", "monitor"]) {
+        SettingsPage::Display
+    } else if has(&["notification", "notifications"]) {
+        SettingsPage::Notifications
+    } else if has(&["update", "updates"]) {
+        SettingsPage::Updates
+    } else if has(&["power", "battery", "sleep"]) {
+        SettingsPage::Power
+    } else if has(&["storage", "disk"]) {
+        SettingsPage::Storage
+    } else if has(&["date", "time", "clock", "timezone"]) {
+        SettingsPage::DateTime
+    } else if has(&["keyboard", "typing"]) {
+        SettingsPage::Keyboard
+    } else if has(&["mouse", "touchpad", "trackpad"]) {
+        SettingsPage::Mouse
+    } else if has(&[
+        "background",
+        "wallpaper",
+        "personalization",
+        "personalisation",
+        "theme",
+    ]) {
+        SettingsPage::Background
+    } else if has(&["account", "accounts"]) {
+        SettingsPage::Accounts
+    } else if has(&["language", "region"]) {
+        SettingsPage::Language
+    } else if has(&["printer", "printers"]) {
+        SettingsPage::Printers
+    } else if has(&["privacy"]) {
+        SettingsPage::Privacy
+    } else if has(&["apps", "programs"]) {
+        SettingsPage::Apps
+    } else {
+        return None;
+    })
+}
+
+/// The volume or media key `name` means ("volume up", "louder", "mute", "pause", "next").
+pub fn key(name: &str) -> Option<DeskKey> {
+    let lower = name.to_lowercase();
+    let words: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let has = |any: &[&str]| words.iter().any(|w| any.contains(w));
+    Some(if has(&["mute", "unmute", "silence"]) {
+        DeskKey::Mute
+    } else if has(&["up", "louder", "raise", "increase", "higher"]) {
+        DeskKey::VolumeUp
+    } else if has(&["down", "quieter", "lower", "decrease", "softer"]) {
+        DeskKey::VolumeDown
+    } else if has(&["next", "skip", "forward"]) {
+        DeskKey::Next
+    } else if has(&["previous", "back", "last"]) {
+        DeskKey::Previous
+    } else if has(&["play", "pause", "resume", "playpause", "stop"]) {
+        DeskKey::PlayPause
+    } else {
+        return None;
+    })
+}
+
+/// The name of an installed app to look for: letters, digits, spaces and the few marks app
+/// names carry, single spaces, at most `APP_NAME_BYTES`. `None` when nothing usable is left.
+/// It is only ever compared with the names the system lists.
+pub fn named(name: &str) -> Option<String> {
+    let kept: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || matches!(c, ' ' | '.' | '+' | '-' | '&') {
+                c
+            } else {
+                ' '
+            }
+        })
+        .collect();
+    let joined = kept.split_whitespace().collect::<Vec<_>>().join(" ");
+    let wanted = joined
+        .strip_prefix("the ")
+        .or_else(|| joined.strip_prefix("The "))
+        .unwrap_or(&joined)
+        .trim_end_matches(" app")
+        .trim();
+    (wanted.chars().any(char::is_alphanumeric) && wanted.len() <= APP_NAME_BYTES)
+        .then(|| wanted.to_string())
+}
+
+/// Which of the installed apps `wanted` means: `apps` holds each one's name as the system
+/// lists it. The same name first, then a name that holds it as a word ("chrome" finds
+/// "Google Chrome"), then one that starts with it; of several, the shortest name. Small and capital
+/// letters, spaces and marks make no difference.
+pub fn pick_app<'a>(wanted: &str, apps: &'a [String]) -> Option<&'a String> {
+    let want = bare(wanted);
+    if want.len() < 2 {
+        return None;
+    }
+    let shortest = |found: Vec<&'a String>| found.into_iter().min_by_key(|name| name.len());
+    let same: Vec<&String> = apps.iter().filter(|a| bare(a) == want).collect();
+    if !same.is_empty() {
+        return shortest(same);
+    }
+    let word: Vec<&String> = apps
+        .iter()
+        .filter(|a| {
+            a.to_lowercase()
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|w| w == want)
+        })
+        .collect();
+    if !word.is_empty() {
+        return shortest(word);
+    }
+    // Three letters at least: "on" must not find "OneNote".
+    let starts: Vec<&String> = apps
+        .iter()
+        .filter(|a| want.len() >= 3 && bare(a).starts_with(&want))
+        .collect();
+    if !starts.is_empty() {
+        return shortest(starts);
+    }
+    // Longer names only: "on" must not find "OneNote".
+    if want.len() < 4 {
+        return None;
+    }
+    shortest(apps.iter().filter(|a| bare(a).contains(&want)).collect())
+}
+
 /// The app or folder `name` means, however the model wrote it.
 pub fn app(name: &str) -> Option<DeskApp> {
     let name: String = name
@@ -348,8 +704,7 @@ pub fn app(name: &str) -> Option<DeskApp> {
         "paint" | "mspaint" => DeskApp::Paint,
         "systemsettings" | "settingsapp" | "windowssettings" | "systempreferences"
         | "computersettings" | "pcsettings" => DeskApp::SystemSettings,
-        "browser" | "webbrowser" | "chrome" | "edge" | "firefox" | "safari" | "newtab"
-        | "browsertab" => DeskApp::Browser,
+        "browser" | "webbrowser" | "newtab" | "browsertab" | "mybrowser" => DeskApp::Browser,
         "documents" | "mydocuments" | "documentsfolder" => DeskApp::Documents,
         "downloads" | "downloadsfolder" => DeskApp::Downloads,
         "desktop" | "desktopfolder" => DeskApp::Desktop,
@@ -362,6 +717,127 @@ pub fn app(name: &str) -> Option<DeskApp> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_settings_page_is_found_by_its_topic() {
+        for (name, page) in [
+            ("microphone settings", SettingsPage::Microphone),
+            ("the mic settings", SettingsPage::Microphone),
+            ("Sound Settings", SettingsPage::Sound),
+            ("volume settings", SettingsPage::Sound),
+            ("bluetooth settings", SettingsPage::Bluetooth),
+            ("wi-fi settings", SettingsPage::Wifi),
+            ("wifi settings", SettingsPage::Wifi),
+            ("network settings", SettingsPage::Network),
+            ("display settings", SettingsPage::Display),
+            ("camera settings", SettingsPage::Camera),
+            ("windows update settings", SettingsPage::Updates),
+            ("battery settings", SettingsPage::Power),
+            ("date and time settings", SettingsPage::DateTime),
+            ("wallpaper settings", SettingsPage::Background),
+            ("printer settings", SettingsPage::Printers),
+            ("privacy settings", SettingsPage::Privacy),
+            ("system preferences for sound", SettingsPage::Sound),
+        ] {
+            assert_eq!(settings_page(name), Some(page), "{name}");
+        }
+        // The settings as a whole, an app, and a topic with no settings named are no page.
+        for name in [
+            "system settings",
+            "settings",
+            "camera",
+            "microphone",
+            "notepad",
+            "",
+        ] {
+            assert_eq!(settings_page(name), None, "{name}");
+        }
+        // Every page has a name and an address on both systems, made here.
+        for page in SettingsPage::ALL {
+            assert!(page.name().starts_with("The "), "{page:?}");
+            assert!(page.windows().starts_with("ms-settings:"), "{page:?}");
+            assert!(
+                page.mac().starts_with("x-apple.systempreferences:"),
+                "{page:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_volume_or_media_key_is_found_by_what_was_asked() {
+        for (name, want) in [
+            ("volume up", DeskKey::VolumeUp),
+            ("louder", DeskKey::VolumeUp),
+            ("turn it up", DeskKey::VolumeUp),
+            ("volume down", DeskKey::VolumeDown),
+            ("quieter", DeskKey::VolumeDown),
+            ("mute", DeskKey::Mute),
+            ("unmute", DeskKey::Mute),
+            ("play pause", DeskKey::PlayPause),
+            ("pause", DeskKey::PlayPause),
+            ("next", DeskKey::Next),
+            ("skip", DeskKey::Next),
+            ("previous", DeskKey::Previous),
+        ] {
+            assert_eq!(key(name), Some(want), "{name}");
+        }
+        for name in ["", "enter", "delete everything", "f5"] {
+            assert_eq!(key(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn an_app_name_is_only_ever_a_plain_name() {
+        assert_eq!(named("Chrome").as_deref(), Some("Chrome"));
+        assert_eq!(
+            named("  the  Task   Manager app ").as_deref(),
+            Some("Task Manager")
+        );
+        assert_eq!(named("Notepad++").as_deref(), Some("Notepad++"));
+        // What is no part of a name is dropped, never passed on.
+        assert_eq!(named("calc; rm -rf /").as_deref(), Some("calc rm -rf"));
+        assert_eq!(named("a\"b`c$(d)").as_deref(), Some("a b c d"));
+        for name in ["", "   ", "\"\"", &"a".repeat(41)] {
+            assert_eq!(named(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_installed_app_meant_is_picked_by_name() {
+        let apps: Vec<String> = [
+            "Google Chrome",
+            "Chrome Remote Desktop",
+            "Word",
+            "WordPad",
+            "Task Manager",
+            "Visual Studio Code",
+            "OneNote",
+            "Outlook",
+            "Outlook (classic)",
+        ]
+        .map(String::from)
+        .to_vec();
+        for (wanted, found) in [
+            ("chrome", "Google Chrome"),
+            ("google chrome", "Google Chrome"),
+            ("word", "Word"),
+            ("WORDPAD", "WordPad"),
+            ("task manager", "Task Manager"),
+            ("taskmanager", "Task Manager"),
+            ("visual studio", "Visual Studio Code"),
+            ("code", "Visual Studio Code"),
+            ("outlook", "Outlook"),
+        ] {
+            assert_eq!(
+                pick_app(wanted, &apps).map(String::as_str),
+                Some(found),
+                "{wanted}"
+            );
+        }
+        for wanted in ["", "x", "on", "spotify", "ord"] {
+            assert_eq!(pick_app(wanted, &apps), None, "{wanted}");
+        }
+    }
 
     #[test]
     fn a_site_is_opened_at_its_front_page_only() {
@@ -482,7 +958,7 @@ mod tests {
             ("File Explorer", DeskApp::Files),
             ("command prompt", DeskApp::Terminal),
             ("system settings", DeskApp::SystemSettings),
-            ("Chrome", DeskApp::Browser),
+            ("my browser", DeskApp::Browser),
             ("browser tab", DeskApp::Browser),
             ("Downloads", DeskApp::Downloads),
             ("notes", DeskApp::Notes),
