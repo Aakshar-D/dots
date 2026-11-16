@@ -48,6 +48,12 @@ pub enum Deed {
         text: String,
         topic_root: Option<String>,
     },
+    /// One command of the system's shell, shown to the person as it is; `why` is the
+    /// model's sentence on what it does.
+    Command {
+        command: String,
+        why: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -255,6 +261,27 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
         Wish::Note { title, text, plain } => on_desk(desk::note(title, text, *plain)),
         Wish::Web { url } => on_desk(desk::web(url)),
         Wish::Search { query } => on_desk(desk::search(query)),
+        Wish::Close { name } => match desk::closable(name) {
+            Some(app) => Step::Desk(DeskTask::Close { app }),
+            None => Step::Say(desk::NO_CLOSE.into()),
+        },
+        Wish::Command { command, why } => match desk::command(command, why) {
+            Ok((command, why)) => {
+                // The model's sentence is said, then Sage's own question: what runs is the
+                // command on screen, whatever the sentence says of it.
+                let question = if why.is_empty() {
+                    RUN_COMMAND.to_string()
+                } else {
+                    format!("{} {RUN_COMMAND}", sentence(&why))
+                };
+                Step::Confirm {
+                    deed: Deed::Command { command, why },
+                    question,
+                    on_screen: false,
+                }
+            }
+            Err(why) => Step::Say(why.into()),
+        },
         Wish::Remember { note } => Step::Remember(note.clone()),
         Wish::Forget => Step::Forget,
         Wish::App { name } => match desk::app(name) {
@@ -313,6 +340,7 @@ pub(crate) const DENY_THIS: &str = "Deny this request?";
 pub(crate) const SEND_MESSAGE: &str = "Send this message?";
 pub(crate) const SEND_ANSWER: &str = "Send this answer?";
 pub(crate) const CREATE_THIS: &str = "Create this sol?";
+pub(crate) const RUN_COMMAND: &str = "It is on screen. Run this command?";
 
 /// The step for a checked task on the computer, or the sentence saying why not.
 fn on_desk(task: std::result::Result<DeskTask, &'static str>) -> Step {
@@ -561,6 +589,8 @@ pub(crate) async fn outcome(rt: &Runtime, deed: &Deed) -> Outcome {
             Ok(()) => Outcome::done(format!("Sent to {}.", name(dot_name))),
             Err(e) => Outcome::refused(send_refused(e, dot_name)),
         },
+        // A command is carried out by the mind's desk, never through the runtime.
+        Deed::Command { .. } => Outcome::refused(desk::NO_DESK),
     }
 }
 
@@ -696,7 +726,7 @@ fn number(n: usize) -> String {
 pub fn needs_confirmation(deed: &Deed) -> bool {
     matches!(
         deed,
-        Deed::Approve { .. } | Deed::Deny { .. } | Deed::Run { .. }
+        Deed::Approve { .. } | Deed::Deny { .. } | Deed::Run { .. } | Deed::Command { .. }
     )
 }
 

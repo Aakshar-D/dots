@@ -2455,6 +2455,10 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
             text: "and the tests".into(),
             topic_root: None,
         },
+        Deed::Command {
+            command: "Stop-Process -Name chrome".into(),
+            why: "This closes every Chrome window.".into(),
+        },
     ];
     let targets = [
         OpenTarget::Dot {

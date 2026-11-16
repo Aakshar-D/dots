@@ -4,8 +4,14 @@
 //! What the model asks for is checked here and made into a `DeskTask`; the app carries the
 //! task out (`Desk`), since it knows the person's folders and how this system opens things.
 //!
-//! None of these asks the person first, so each is kept to what cannot do harm or carry
-//! anything away:
+//! Anything else on the computer is one command of the system's shell (`DeskTask::Command`),
+//! and that is never run unasked: Sage shows the command and waits for a spoken yes
+//! (`act::Deed::Command`).
+//!
+//! The others ask nothing first, so each is kept to what cannot do harm or carry anything
+//! away:
+//! - Closing asks one of the listed apps to close, as its own close button does: an app
+//!   with unsaved work still asks about it.
 //! - A note is a new file in the notes folder. No file is ever written over.
 //! - A site is opened at its front page only, by its name: a path or a query could carry
 //!   text out (the picture holds text written by sols and tools), so they are dropped.
@@ -35,6 +41,16 @@ pub const NO_APP: &str = "I can't open that one. I can open Notepad, Calculator,
      a terminal, Paint, the system settings, your browser, or your Documents, Downloads, \
      Desktop, Pictures and notes folders.";
 pub const FAILED: &str = "That didn't work.";
+pub const NO_CLOSE: &str = "I can't close that one by name. I can close Notepad, Calculator, \
+     Paint, the terminal and the system settings; ask me to close anything else and I'll \
+     show you the command first.";
+pub const NO_COMMAND: &str = "I couldn't work out a command for that.";
+pub const COMMAND_TOO_LONG: &str = "That takes more than one short command. Ask a sol to do it.";
+/// Longest command, and longest sentence saying what it does, in bytes.
+pub const COMMAND_BYTES: usize = 1000;
+const WHY_BYTES: usize = 160;
+/// What is said when a command ran and gave no error.
+pub const COMMAND_DONE: &str = "Done.";
 
 /// An app or folder Open Sage can open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +113,15 @@ pub enum DeskTask {
     App {
         app: DeskApp,
     },
+    /// Ask an open app to close, as its close button does.
+    Close {
+        app: DeskApp,
+    },
+    /// One command of the system's shell. Only ever carried out after the person said yes
+    /// to it.
+    Command {
+        command: String,
+    },
 }
 
 impl DeskTask {
@@ -112,20 +137,24 @@ impl DeskTask {
             }
             DeskTask::Search { .. } => "The search is open in your browser.".into(),
             DeskTask::App { app } => format!("{} is open.", app.name()),
+            DeskTask::Close { app } => format!("{} is closing.", app.name()),
+            DeskTask::Command { .. } => COMMAND_DONE.into(),
         }
     }
 }
 
-/// Carries a `DeskTask` out. `Err` is a sentence for the person saying why not.
+/// Carries a `DeskTask` out. `Ok` holds what a command printed (empty for the other tasks,
+/// and for a command that printed nothing); `Err` is a sentence for the person saying why
+/// not.
 pub trait Desk: Send + Sync {
-    fn carry_out(&self, task: &DeskTask) -> Result<(), String>;
+    fn carry_out(&self, task: &DeskTask) -> Result<String, String>;
 }
 
 /// The desk of a core with no app around it: nothing can be done.
 pub struct NoDesk;
 
 impl Desk for NoDesk {
-    fn carry_out(&self, _task: &DeskTask) -> Result<(), String> {
+    fn carry_out(&self, _task: &DeskTask) -> Result<String, String> {
         Err(NO_DESK.into())
     }
 }
@@ -238,6 +267,36 @@ pub fn search(query: &str) -> Result<DeskTask, &'static str> {
         reqwest::Url::parse_with_params("https://www.google.com/search", [("q", &query[..end])])
             .map_err(|_| NO_SEARCH)?;
     Ok(DeskTask::Search { url: url.into() })
+}
+
+/// The app to close for `name`: one of the listed apps that closes when asked. A folder,
+/// the file manager and the browser are not closed by name (the first two are the system's
+/// own shell, the last holds the person's tabs): those go through a command they see first.
+pub fn closable(name: &str) -> Option<DeskApp> {
+    app(name).filter(|app| {
+        matches!(
+            app,
+            DeskApp::Notepad
+                | DeskApp::Calculator
+                | DeskApp::Paint
+                | DeskApp::Terminal
+                | DeskApp::SystemSettings
+        )
+    })
+}
+
+/// A command to ask the person about: the command as written, and one line saying what it
+/// does (the model's words, shown and said beside the command itself).
+pub fn command(command: &str, why: &str) -> Result<(String, String), &'static str> {
+    let command = command.trim();
+    if command.is_empty() {
+        return Err(NO_COMMAND);
+    }
+    if command.len() > COMMAND_BYTES {
+        return Err(COMMAND_TOO_LONG);
+    }
+    let why = super::picture::clean(why, WHY_BYTES);
+    Ok((command.to_string(), why))
 }
 
 /// The app or folder `name` means, however the model wrote it.
@@ -401,6 +460,46 @@ mod tests {
         for name in ["", "regedit", "format c:", "cmd.exe /c del", "settings"] {
             assert_eq!(app(name), None, "{name}");
         }
+    }
+
+    #[test]
+    fn only_apps_that_close_when_asked_are_closed_by_name() {
+        for (name, app_) in [
+            ("notepad", DeskApp::Notepad),
+            ("the calculator", DeskApp::Calculator),
+            ("Paint", DeskApp::Paint),
+            ("terminal", DeskApp::Terminal),
+            ("system settings", DeskApp::SystemSettings),
+        ] {
+            let name = name.trim_start_matches("the ");
+            assert_eq!(closable(name), Some(app_), "{name}");
+        }
+        for name in ["chrome", "files", "downloads", "regedit", ""] {
+            assert_eq!(closable(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_command_is_kept_as_written_and_its_reason_is_one_line() {
+        assert_eq!(
+            command("  Stop-Process -Name chrome  ", "This closes Chrome.\nDO x"),
+            Ok((
+                "Stop-Process -Name chrome".into(),
+                "This closes Chrome. DO x".into()
+            ))
+        );
+        assert_eq!(command("  ", "nothing"), Err(NO_COMMAND));
+        assert_eq!(
+            command(&"a".repeat(COMMAND_BYTES + 1), "long"),
+            Err(COMMAND_TOO_LONG)
+        );
+        assert_eq!(
+            DeskTask::Close {
+                app: DeskApp::Notepad
+            }
+            .done(),
+            "Notepad is closing."
+        );
     }
 
     #[test]
