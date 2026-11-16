@@ -2360,3 +2360,112 @@ async fn a_drop_after_the_checks_still_stops_the_turn_from_beginning() {
     assert!(t.mind.begin(&t.rt, now).is_some());
     t.rt.shutdown();
 }
+
+/// A desk that keeps what it was asked to do, and refuses when told to.
+#[derive(Default)]
+struct FakeDesk {
+    asked: Mutex<Vec<desk::DeskTask>>,
+    refuse: Mutex<Option<String>>,
+}
+
+impl desk::Desk for FakeDesk {
+    fn carry_out(&self, task: &desk::DeskTask) -> Result<(), String> {
+        self.asked.lock().unwrap().push(task.clone());
+        match self.refuse.lock().unwrap().clone() {
+            Some(why) => Err(why),
+            None => Ok(()),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_note_a_site_a_search_and_an_app_are_done_on_the_desk() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    t.fake.push(says(
+        "Writing that down.\nDO {\"act\":\"note\",\"title\":\"Shopping: list\",\"text\":\"milk\\neggs\",\"plain\":true}",
+    ));
+    let got = t.hear("make a note in notepad, milk and eggs").await;
+    assert_eq!(
+        said(&got),
+        "Writing that down. The note Shopping list is written and open."
+    );
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"web\",\"url\":\"https://github.com/a/b?x=1\"}",
+    ));
+    let got = t.hear("open github").await;
+    assert!(said(&got).contains("front page"), "{}", said(&got));
+    t.fake.push(says(
+        "Looking it up.\nDO {\"act\":\"search\",\"query\":\"tauri opener plugin\"}",
+    ));
+    let got = t.hear("search for the tauri opener plugin").await;
+    assert_eq!(
+        said(&got),
+        "Looking it up. The search is open in your browser."
+    );
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"app\",\"name\":\"Calculator\"}",
+    ));
+    let got = t.hear("open the calculator").await;
+    assert_eq!(said(&got), "Opening it. Calculator is open.");
+    let asked = on_desk.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 4);
+    assert_eq!(
+        asked[0],
+        desk::DeskTask::Note {
+            title: "Shopping list".into(),
+            text: "milk\neggs".into(),
+            plain: true,
+        }
+    );
+    assert_eq!(
+        asked[1],
+        desk::DeskTask::Web {
+            url: "https://github.com/".into(),
+            site: "github.com".into(),
+            front: false,
+        }
+    );
+    assert!(matches!(&asked[2], desk::DeskTask::Search { url } if url.contains("tauri")));
+    assert_eq!(
+        asked[3],
+        desk::DeskTask::App {
+            app: desk::DeskApp::Calculator
+        }
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn what_the_desk_cannot_or_must_not_do_is_said_and_not_done() {
+    let t = T::start().await;
+    // With no app around the core there is no desk.
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"app\",\"name\":\"notepad\"}",
+    ));
+    let got = t.hear("open notepad").await;
+    assert_eq!(said(&got), format!("Opening it. {}", desk::NO_DESK));
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    // An address that is not a plain site, and an app that is not on the list, never reach it.
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"web\",\"url\":\"file:///C:/Windows/System32/cmd.exe\"}",
+    ));
+    let got = t.hear("open that file").await;
+    assert_eq!(said(&got), format!("Opening it. {}", desk::NO_SITE));
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"app\",\"name\":\"regedit\"}",
+    ));
+    let got = t.hear("open the registry editor").await;
+    assert_eq!(said(&got), format!("Opening it. {}", desk::NO_APP));
+    assert!(on_desk.asked.lock().unwrap().is_empty());
+    // A desk that fails says why.
+    *on_desk.refuse.lock().unwrap() = Some("I couldn't write the note.".into());
+    t.fake.push(says(
+        "Writing it.\nDO {\"act\":\"note\",\"title\":\"A\",\"text\":\"b\"}",
+    ));
+    let got = t.hear("note this").await;
+    assert_eq!(said(&got), "Writing it. I couldn't write the note.");
+    t.rt.shutdown();
+}

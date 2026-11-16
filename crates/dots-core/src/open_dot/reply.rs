@@ -56,6 +56,25 @@ pub enum Wish {
         question: String,
         options: Vec<String>,
     },
+    /// A note file on the computer: Markdown, or plain text.
+    Note {
+        title: String,
+        text: String,
+        #[serde(default)]
+        plain: bool,
+    },
+    /// A site in the browser.
+    Web {
+        url: String,
+    },
+    /// A web search in the browser.
+    Search {
+        query: String,
+    },
+    /// An app or folder on the computer.
+    App {
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -97,6 +116,10 @@ impl Wish {
             Wish::Send { d, text, .. } => filled(d) && filled(text),
             Wish::Run { d } => filled(d),
             Wish::Open { target } => filled(target),
+            Wish::Note { text, .. } => filled(text),
+            Wish::Web { url } => filled(url),
+            Wish::Search { query } => filled(query),
+            Wish::App { name } => filled(name),
             Wish::Ask { question, options } => {
                 filled(question)
                     && options.len() <= MAX_OPTIONS
