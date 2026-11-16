@@ -49,6 +49,8 @@ const TONE_TAIL: Duration = Duration::from_millis(60);
 /// A clip open when the wait after "Hey Sage" is over, and quiet for this many frames (about
 /// 130 ms), is the end of the phrase itself and not the start of a request.
 const PAUSE_FRAMES: usize = 4;
+/// Quiet frames in a sentence (about 100 ms) at which `Pausing` is sent.
+const PAUSE_HINT_FRAMES: usize = 3;
 /// Idle frames kept for the ears (about a second): the spotter answers at most this late.
 const RECENT_FRAMES: usize = 32;
 
@@ -226,6 +228,10 @@ pub enum SessionEvent {
     },
     /// "Hey Dot" while idle.
     Woke,
+    /// The person has stopped speaking for a moment in the middle of listening: the
+    /// sentence may be over within a second. Sent once per pause, so that what answers the
+    /// sentence can get ready.
+    Pausing,
     Trouble {
         message: String,
     },
@@ -1538,6 +1544,12 @@ impl Worker {
                         break;
                     }
                     self.ear_event(event, now);
+                }
+                if self.state == State::Listening
+                    && self.in_speech
+                    && self.ears.quiet_frames() == Some(PAUSE_HINT_FRAMES)
+                {
+                    self.send(SessionEvent::Pausing);
                 }
             }
         }
@@ -2965,6 +2977,35 @@ mod tests {
         r.expect_state(State::Idle, false);
     }
 
+    /// A pause in a sentence is told once, at its third quiet frame, so that what answers
+    /// the sentence can get ready; not again while the same quiet lasts.
+    #[test]
+    fn a_pause_in_a_sentence_is_told_once() {
+        let mut r = rig(Opts {
+            ears: EarSettings {
+                end_quiet_ms: 640,
+                unfinished_quiet_ms: 640,
+                partial_every_ms: 30_000,
+                ..test_ears()
+            },
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, false);
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        r.mic.send(SPEECH, 3);
+        r.mic.send(QUIET, 2);
+        r.nothing_more();
+        r.mic.send(QUIET, 1);
+        assert_eq!(r.next(), SessionEvent::Pausing);
+        r.mic.send(QUIET, 6);
+        r.nothing_more();
+        // The person goes on and pauses again: told again.
+        r.mic.send(SPEECH, 2);
+        r.mic.send(QUIET, 3);
+        assert_eq!(r.next(), SessionEvent::Pausing);
+    }
+
     fn carrying() -> Rig {
         rig(Opts {
             carry_on: true,
@@ -3081,6 +3122,7 @@ mod tests {
         // The tail of the phrase: a clip still open, already quiet, when the wait is over.
         r.mic.send(SPEECH, 3);
         r.mic.send(QUIET, 5);
+        assert_eq!(r.next(), SessionEvent::Pausing);
         r.sync();
         r.clock.advance(300);
         r.sync();

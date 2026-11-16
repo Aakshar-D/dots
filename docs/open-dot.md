@@ -129,6 +129,8 @@ One measurement, on one computer, with the Fast model (haiku):
 - With the real model, "One moment." came about 3 seconds after you stopped talking. It is said if nothing has been said 1.5 seconds after the request starts.
 - The answer itself was first heard about 6 seconds after you stopped talking (median 5.7 seconds, range 4.5 to 7 seconds).
 
+Since then Sage starts the Claude CLI the moment you pause, about a second before it knows your sentence is over, so the CLI is ready when the sentence is. Measured on one computer with the Fast model: the first words of the answer came 1.6 to 1.7 seconds after the request with a CLI started ahead, against 2.1 to 2.9 seconds without. If you go on speaking, the CLI started for nothing is ended; no request was made, so it costs nothing.
+
 That is slower than the two-second goal. Most of the time is the Claude CLI starting and the model answering. Your own results will vary with the computer, the network and the model you pick.
 
 ## Troubleshooting
