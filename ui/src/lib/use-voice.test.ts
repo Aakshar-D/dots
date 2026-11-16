@@ -52,6 +52,10 @@ describe("useVoice", () => {
     expect(result.current.location.pathname).toBe("/inbox");
     act(() => backend.emit("voice", { kind: "open", target: { kind: "home" } }));
     expect(result.current.location.pathname).toBe("/home");
+    for (const kind of ["connectors", "apps", "library", "teams", "intents"] as const) {
+      act(() => backend.emit("voice", { kind: "open", target: { kind } }));
+      expect(result.current.location.pathname).toBe(`/${kind}`);
+    }
   });
 
   it("reports the view on mount and again when the route changes", async () => {

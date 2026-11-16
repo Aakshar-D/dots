@@ -2469,3 +2469,37 @@ async fn what_the_desk_cannot_or_must_not_do_is_said_and_not_done() {
     assert_eq!(said(&got), "Writing it. I couldn't write the note.");
     t.rt.shutdown();
 }
+
+#[tokio::test]
+async fn the_screens_of_the_app_are_opened_by_name() {
+    let t = T::start().await;
+    for (target, want, said_) in [
+        ("connectors", OpenTarget::Connectors, "Opening Connectors."),
+        ("apps", OpenTarget::Apps, "Opening Apps."),
+        ("library", OpenTarget::Library, "Opening the Library."),
+        ("teams", OpenTarget::Teams, "Opening Teams."),
+        ("intents", OpenTarget::Intents, "Opening Intents."),
+    ] {
+        t.fake.push(says(&format!(
+            "Here.\nDO {{\"act\":\"open\",\"target\":\"{target}\"}}"
+        )));
+        let got = t.hear("show me that screen").await;
+        assert!(got.contains(&MindEvent::Open { target: want }), "{target}");
+        assert_eq!(said(&got), format!("Here. {said_}"));
+    }
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn the_picture_of_a_running_core_tells_its_connectors() {
+    let t = T::start().await;
+    let picture = Picture::take(&t.rt, &home()).await.unwrap();
+    // The catalog's connectors, none connected in a new install.
+    assert!(!picture.connectors.is_empty());
+    assert!(picture
+        .connectors
+        .iter()
+        .all(|c| c.state == "not connected" && c.used_by.is_empty()));
+    assert!(picture.text().contains("Connectors: "));
+    t.rt.shutdown();
+}

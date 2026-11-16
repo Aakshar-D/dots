@@ -40,7 +40,9 @@ You do not press a button to finish. Sage notices when you stop talking: it wait
 | "Set up a sol that checks my inbox every morning." | Runs the setup agent, asks its follow-up questions aloud and shows the proposal. | Always, before it creates the sol. |
 | "Ask the research sol to compare the three vendors." | Sends a message to that sol as a new topic. Say "here" to send it into the topic you are looking at. | Not when you named the sol clearly. Then it says what it sent and to whom. If it was not sure which sol, it asks first. |
 | "Run the backup sol now." | Starts a run. | Always. |
-| "Open the research sol." or "Show settings." | Opens that screen. It can open a sol, Settings, the Inbox, Usage and Home. | No |
+| "Open the research sol." or "Show settings." | Opens that screen. It can open a sol, Settings, the Inbox, Usage, Home, Connectors, Apps, the Library, Teams and Intents. | No |
+| "Check my mail for anything from the bank." | Sage has no connector of its own. It sends the request to a sol that uses that connector (it knows which sols use which). If none does, or the connector is not connected, it says so and opens Connectors. | As for any message to a sol |
+| "Build me an app that tracks my invoices." | Apps are built by sols. Sage sends a sol the request, asking which sol when you named none, and tells you the app will show up under Apps for you to review. | As for any message to a sol |
 | "Make a note: buy milk and call the bank." or "Write that in Notepad." | Writes a new file in **Sage Notes** in your Documents folder and opens it: Markdown, or a plain text file when you ask for Notepad or a text file. It never writes over a file. | No |
 | "Open github dot com." | Opens the site's front page in your browser. | No |
 | "Search for flights to Lisbon." | Opens a web search in your browser. | No |
@@ -108,7 +110,7 @@ Sage listens for at most five follow-ups in a row. Then it rests until you use t
 - Speech is recognised and spoken on this computer. Audio is never sent anywhere.
 - **Teach Sage your voice** keeps no sound. The five takes are held in memory for the few seconds it takes to check them. What is stored is the setting it picked, how loud your voice was, and how many takes it heard.
 - No audio and no transcript is saved. What Sage heard and said is kept in memory for the conversation and dropped when you close the stage or after 10 minutes without a turn. Logs say that a turn happened and how long it took, not what was said.
-- To understand a request, Sage sends the model your words and a short picture of now: your sols, the pending approvals and the open questions. The request goes through your own Claude CLI sign-in. Nothing else is sent. Vault values are never in the picture.
+- To understand a request, Sage sends the model your words and a short picture of now: your sols, the pending approvals, the open questions, the names of your connectors with whether each is connected and which sols use it, and the names of the apps in the workspace. The request goes through your own Claude CLI sign-in. Nothing else is sent. Vault values are never in the picture.
 - A private approval is only counted ("one private approval needs you"). Its tool and target are not sent, not read aloud, and it opens on screen.
 - With **Hey Sage** on, the microphone stays open while Sage is running, so the phrase can be heard. Only the on-device phrase detector hears it until the phrase is said. Whenever the microphone is open, the rail mark shows it and the tray tooltip says "Dot is listening".
 

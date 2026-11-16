@@ -180,6 +180,16 @@ export function pathOf(target: OpenTarget): string {
       return "/usage";
     case "home":
       return "/home";
+    case "connectors":
+      return "/connectors";
+    case "apps":
+      return "/apps";
+    case "library":
+      return "/library";
+    case "teams":
+      return "/teams";
+    case "intents":
+      return "/intents";
   }
 }
 

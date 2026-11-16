@@ -9307,6 +9307,36 @@
       "target": {
         "kind": "home"
       }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "connectors"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "apps"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "library"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "teams"
+      }
+    },
+    {
+      "kind": "open",
+      "target": {
+        "kind": "intents"
+      }
     }
   ],
   "VoiceSetup": [
