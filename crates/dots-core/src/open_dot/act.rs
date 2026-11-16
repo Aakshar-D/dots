@@ -9,6 +9,7 @@
 
 use serde::Serialize;
 
+use super::desk::{self, DeskTask};
 use super::picture::{
     clean, one_line, ApprovalLine, Picture, View, CHOICE_BYTES, NAME_BYTES, QUESTION_BYTES,
 };
@@ -83,6 +84,8 @@ pub enum Step {
     Create {
         description: String,
     },
+    /// Something on the computer itself: a note, a site, a search, an app.
+    Desk(DeskTask),
 }
 
 /// What an answer to an `Ask` is for.
@@ -240,6 +243,13 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
             })
         }
         Wish::Open { target } => open(target, picture),
+        Wish::Note { title, text, plain } => on_desk(desk::note(title, text, *plain)),
+        Wish::Web { url } => on_desk(desk::web(url)),
+        Wish::Search { query } => on_desk(desk::search(query)),
+        Wish::App { name } => match desk::app(name) {
+            Some(app) => Step::Desk(DeskTask::App { app }),
+            None => Step::Say(desk::NO_APP.into()),
+        },
         Wish::Create { description } => Step::Create {
             description: description.clone(),
         },
@@ -292,6 +302,14 @@ pub(crate) const DENY_THIS: &str = "Deny this request?";
 pub(crate) const SEND_MESSAGE: &str = "Send this message?";
 pub(crate) const SEND_ANSWER: &str = "Send this answer?";
 pub(crate) const CREATE_THIS: &str = "Create this sol?";
+
+/// The step for a checked task on the computer, or the sentence saying why not.
+fn on_desk(task: std::result::Result<DeskTask, &'static str>) -> Step {
+    match task {
+        Ok(task) => Step::Desk(task),
+        Err(why) => Step::Say(why.into()),
+    }
+}
 
 /// Whether an approval has no target to say: only its tool would be heard.
 fn no_target(line: &ApprovalLine) -> bool {

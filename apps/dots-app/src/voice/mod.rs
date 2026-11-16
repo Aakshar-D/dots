@@ -6,6 +6,7 @@
 //! the global shortcut that opens it; `notices` says aloud when something needs the person.
 
 pub mod bridge;
+pub mod desk;
 pub mod download;
 pub mod events;
 pub mod hotkey;
@@ -74,6 +75,9 @@ pub fn manage(app: &AppHandle, rt: Option<Arc<Runtime>>, data_dir: Option<PathBu
                 tx,
             );
             spawn_forwarder(app.clone(), rx);
+            // Notes, sites and apps the person asks Open Sage for are done through the app.
+            rt.open_dot()
+                .set_desk(Arc::new(desk::SystemDesk::new(app.clone())));
             service.set_hotkey_port(Arc::new(hotkey::PluginHotkey::new(app.clone())));
             service.set_listener(Arc::new(tray_listener(app.clone())));
             // Spoken notices: it looks nothing up and keeps nothing while they are off.

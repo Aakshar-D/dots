@@ -41,6 +41,10 @@ You do not press a button to finish. Sage notices when you stop talking: it wait
 | "Ask the research sol to compare the three vendors." | Sends a message to that sol as a new topic. Say "here" to send it into the topic you are looking at. | Not when you named the sol clearly. Then it says what it sent and to whom. If it was not sure which sol, it asks first. |
 | "Run the backup sol now." | Starts a run. | Always. |
 | "Open the research sol." or "Show settings." | Opens that screen. It can open a sol, Settings, the Inbox, Usage and Home. | No |
+| "Make a note: buy milk and call the bank." or "Write that in Notepad." | Writes a new file in **Sage Notes** in your Documents folder and opens it: Markdown, or a plain text file when you ask for Notepad or a text file. It never writes over a file. | No |
+| "Open github dot com." | Opens the site's front page in your browser. | No |
+| "Search for flights to Lisbon." | Opens a web search in your browser. | No |
+| "Open the calculator." or "Open my Downloads." | Opens an app or folder: Notepad, Calculator, your files, a terminal, Paint, the system settings, your browser, Documents, Downloads, Desktop, Pictures or your notes folder. | No |
 | "Stop." or "Never mind." or "Cancel." | Stops speaking and drops the step it was waiting on. | No |
 | "Say that again." | Repeats its last reply. | No |
 | "Thank you." or "Goodbye." or "Close." or "Thank you, I'll call you later." | Says nothing, drops the step it was waiting on and closes the stage. | No |
@@ -48,6 +52,16 @@ You do not press a button to finish. Sage notices when you stop talking: it wait
 If Sage does not know which sol you mean, it asks and offers the closest names as numbered options. You can say the number or the name, or click one. If you ask for something it cannot do, it says so in one sentence.
 
 A private approval cannot be decided by voice. Sage only counts it and opens it on screen.
+
+### What it does on your computer, and what it does not
+
+Sage does four things outside its own window by voice: write a note, open a site, open a web search, and open one of a fixed list of apps and folders. It does them without asking first, so each is kept harmless:
+
+- A note is always a new file in **Sage Notes**. Nothing is changed or written over.
+- A site is opened at its front page, by name. If more of an address was asked for, Sage opens the front page and says so. Ask for a search to reach a page inside a site.
+- Apps are opened from a fixed list. Sage never runs a command or a program by a name the model gives.
+
+For anything else on the computer (changing files, installing, running commands) ask a sol: it works with approvals.
 
 ## Confirmations
 

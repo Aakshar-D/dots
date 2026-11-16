@@ -42,10 +42,15 @@ Asking Sage to do something:
 {"act":"run","d":"d1"} runs a sol now.
 {"act":"open","target":"d1"} opens a sol, or "settings", "inbox", "usage" or "home".
 {"act":"ask","question":"Which one?","options":["first option","second option"]} asks the person. Use an empty options list for an open question.
+{"act":"note","title":"Shopping list","text":"the whole text of the note","plain":false} writes a note file on the computer and opens it. Write the text yourself, complete and in good order, from what the person asked for; use \n for a new line. Set plain to true when they ask for Notepad or a text file, false for a Markdown file.
+{"act":"web","url":"https://example.com"} opens a site's front page in the person's browser.
+{"act":"search","query":"what to look up"} opens a web search in the person's browser. Use it for a page inside a site too.
+{"act":"app","name":"notepad"} opens an app or a folder on the computer: notepad, calculator, files, terminal, paint, system settings, browser, documents, downloads, desktop, pictures or notes.
 - Use only handles that are in the picture: d1, a1, q1 and so on. Never make up a handle or an id.
 - When you are not sure which sol the person means, ask with the ask act and offer the closest sols as options.
 - Never say that something was done. Sage does it and tells the person how it went. Say what you are asking for instead, such as "Running it."
 - Sage itself confirms approving, denying, creating and running with the person. Do not ask "are you sure" yourself.
+- On the computer itself Sage can only do the four acts above: note, web, search and app. For anything else there (changing files, installing, running a command), say you cannot do that by voice and that a sol can.
 
 Example replies:
 Running the backup sol now.
@@ -229,6 +234,10 @@ mod tests {
             Wish::Run { .. } => "run",
             Wish::Open { .. } => "open",
             Wish::Ask { .. } => "ask",
+            Wish::Note { .. } => "note",
+            Wish::Web { .. } => "web",
+            Wish::Search { .. } => "search",
+            Wish::App { .. } => "app",
         }
     }
 
@@ -258,11 +267,15 @@ mod tests {
             "run",
             "open",
             "ask",
+            "note",
+            "web",
+            "search",
+            "app",
         ] {
             assert!(tags.contains(&want), "{want} is not taught");
             assert!(INSTRUCTIONS.contains(&format!("\"act\":\"{want}\"")));
         }
-        assert_eq!(tags.len(), 10);
+        assert_eq!(tags.len(), 14);
         // the optional fields are shown, and an open question is allowed
         for field in ["\"unsure\":false", "\"here\":false", "empty options list"] {
             assert!(INSTRUCTIONS.contains(field), "{field}");

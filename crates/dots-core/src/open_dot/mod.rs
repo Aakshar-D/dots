@@ -11,6 +11,7 @@
 //! Nothing heard, said or pictured is logged; only timings and the kind of step.
 
 pub mod act;
+pub mod desk;
 pub mod picture;
 pub mod prompt;
 pub mod quick;
@@ -167,6 +168,8 @@ fn yes_no() -> Vec<String> {
 /// One spoken turn in, events out. See the module documentation.
 pub struct Mind {
     thinker: Arc<dyn Thinker>,
+    /// What carries out a task on the computer itself; the app's, once it has set it.
+    desk: Mutex<Arc<dyn desk::Desk>>,
     state: Mutex<State>,
     /// `FILLER_AFTER`; shorter in tests.
     filler_after: Duration,
@@ -497,12 +500,18 @@ impl Mind {
     pub fn new(thinker: Arc<dyn Thinker>) -> Mind {
         Mind {
             thinker,
+            desk: Mutex::new(desk::no_desk()),
             state: Mutex::new(State::default()),
             filler_after: FILLER_AFTER,
             idle_forget: IDLE_FORGET,
             pending_limit: PENDING_LIMIT,
             deeds: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// What carries out notes, sites and apps on the computer from now on.
+    pub fn set_desk(&self, desk: Arc<dyn desk::Desk>) {
+        *lock(&self.desk) = desk;
     }
 
     /// One spoken turn. Events go to `out` in the order `MindEvent` describes; returns when the
@@ -1397,6 +1406,20 @@ impl Mind {
                 let line = if o.just_said(&said) { "" } else { &said };
                 self.finish(o, heard, line, Then::FollowUp);
                 "open"
+            }
+            Step::Desk(task) => {
+                let desk = lock(&self.desk).clone();
+                let doing = task.clone();
+                // Writing a file or starting a program is not for the async threads.
+                let done = tokio::task::spawn_blocking(move || desk.carry_out(&doing))
+                    .await
+                    .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
+                let line = match done {
+                    Ok(()) => task.done(),
+                    Err(why) => why,
+                };
+                self.finish(o, heard, &line, Then::FollowUp);
+                "desk"
             }
             Step::Create { description } => {
                 o.say(SETTING_UP);
