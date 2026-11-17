@@ -453,7 +453,7 @@ impl Heard {
         self.events
             .iter()
             .filter_map(|e| match e {
-                VoiceEvent::Step { text } => Some(text.clone()),
+                VoiceEvent::Step { text } if !text.is_empty() => Some(text.clone()),
                 _ => None,
             })
             .collect()

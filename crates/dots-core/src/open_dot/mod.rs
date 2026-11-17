@@ -65,7 +65,9 @@ use think::{cap_hit, Thinker};
 /// show. It is never spoken, and it names only what a question or an outcome says aloud: a
 /// sol's cleaned name, a screen, an app, a note's title, a site; never a command, a tool's
 /// target or a message's words. A step for a deed is sent only once the deed is sure to be
-/// tried: after the checks that can still drop it.
+/// tried: after the checks that can still drop it. A `Step` with no text says the step under
+/// way is over: it is sent when the first words of the turn are streamed, when a deed was
+/// carried out (before its `Did`) and before `SayEnd`, each only while a step is under way.
 ///
 /// A turn ended by a newer turn, `lapse` or `reset` before its end sends nothing more, so it
 /// has no `SayEnd`; the newer turn's events follow. A deed already carried out is the one
@@ -111,7 +113,8 @@ pub enum MindEvent {
     Did {
         said: String,
     },
-    /// What the mind is doing now, in a few words, to show and never to say.
+    /// What the mind is doing now, in a few words, to show and never to say. No text: the
+    /// step under way is over.
     Step {
         text: String,
     },
@@ -387,6 +390,8 @@ struct Out<'a> {
     forgot: bool,
     /// `State::inputs` when this turn's call was first polled.
     inputs: u64,
+    /// A `Step` was sent and not yet said to be over.
+    stepping: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -414,6 +419,7 @@ impl<'a> Out<'a> {
     /// deed gate keeps any newer turn from beginning until they are out.
     /// `Did` goes out at once, whether or not the turn is still the current one.
     fn deed_done(&self, said: &str) {
+        self.step_over();
         self.done.store(true, Ordering::SeqCst);
         if !self.ended.load(Ordering::SeqCst) {
             let _ = self.tx.send(MindEvent::Did {
@@ -447,7 +453,10 @@ impl<'a> Out<'a> {
         let delta = delta.as_str();
         lock(&self.said).push_str(delta);
         lock(&self.words).push_str(delta);
-        self.spoke.store(true, Ordering::SeqCst);
+        // The first words: what was done to get to them is over.
+        if !self.spoke.swap(true, Ordering::SeqCst) {
+            self.step_over();
+        }
         self.send(MindEvent::Say {
             delta: delta.to_string(),
         });
@@ -500,7 +509,17 @@ impl<'a> Out<'a> {
     fn step(&self, text: &str) {
         let text = text.trim().trim_end_matches('.');
         if !text.is_empty() {
+            self.stepping.store(true, Ordering::SeqCst);
             self.send(MindEvent::Step { text: text.into() });
+        }
+    }
+
+    /// The step under way, if any, is over: the stage stops showing it as going on.
+    fn step_over(&self) {
+        if self.stepping.swap(false, Ordering::SeqCst) {
+            self.send(MindEvent::Step {
+                text: String::new(),
+            });
         }
     }
 
@@ -520,6 +539,7 @@ impl<'a> Out<'a> {
 
     /// Ends the turn: `SayEnd` once, and nothing after it.
     fn end(&self, then: Then) {
+        self.step_over();
         self.send(MindEvent::SayEnd { then });
         self.ended.store(true, Ordering::SeqCst);
     }
@@ -772,6 +792,7 @@ impl Mind {
             ended: AtomicBool::new(false),
             forgot,
             inputs,
+            stepping: AtomicBool::new(false),
         };
         if forgot {
             o.send(MindEvent::Cleared);

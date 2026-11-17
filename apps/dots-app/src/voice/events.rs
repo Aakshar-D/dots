@@ -32,6 +32,7 @@ pub enum VoiceEvent {
         text: String,
     },
     /// What Open Sage is doing now, in a few words ("Opening the Inbox"): shown, never said.
+    /// No text: the step under way is over.
     Step {
         text: String,
     },

@@ -315,7 +315,7 @@ fn steps(events: &[MindEvent]) -> Vec<String> {
     events
         .iter()
         .filter_map(|e| match e {
-            MindEvent::Step { text } => Some(text.clone()),
+            MindEvent::Step { text } if !text.is_empty() => Some(text.clone()),
             _ => None,
         })
         .collect()
@@ -339,6 +339,12 @@ async fn steps_say_what_is_being_done_and_where_it_goes() {
     let got = t.hear("hello").await;
     assert_eq!(steps(&got), vec![LOOKING, THINKING], "{got:?}");
     assert!(matches!(got.last(), Some(MindEvent::SayEnd { .. })));
+    // The thinking is over at the first words of the reply, not after them.
+    let first_words = got
+        .iter()
+        .position(|e| matches!(e, MindEvent::Say { .. }))
+        .unwrap();
+    assert_eq!(place(&got, &step("")) + 1, first_words, "{got:?}");
     // A screen opened is named, before it opens.
     t.fake
         .push(says("DO {\"act\":\"open\",\"target\":\"inbox\"}"));
@@ -388,6 +394,9 @@ async fn steps_say_what_is_being_done_and_where_it_goes() {
         said: "Approved.".into(),
     };
     assert!(place(&got, &step("Approving Research's request")) < place(&got, &did));
+    // The deed done, its step is over before the outcome, and only once.
+    assert!(place(&got, &step("")) < place(&got, &did));
+    assert_eq!(got.iter().filter(|e| **e == step("")).count(), 1, "{got:?}");
     t.rt.shutdown();
 
     // A yes to a record handled meanwhile: nothing is tried, so no step says it is.
@@ -1962,6 +1971,8 @@ async fn a_panicking_thinker_still_ends_the_turn() {
             MindEvent::Thinking,
             step("Looking at your workspace"),
             step("Thinking it over"),
+            // the step under way is over
+            step(""),
             MindEvent::SayEnd { then: Then::Rest }
         ]
     );

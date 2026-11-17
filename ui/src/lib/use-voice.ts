@@ -39,8 +39,10 @@ export type VoiceLive = {
   /// entries.
   talk: TalkLine[];
   /// What Sage is doing now, in a few words ("Opening the Inbox"): the newest step, until
-  /// the next line of the reply or the turn's end. Null when no step is under way.
+  /// the core says it is over or the turn ends. Null when no step is under way.
   step: string | null;
+  /// A sentence was heard and its turn is still worked on: steps are taken only then.
+  turn: boolean;
   /// The speech files' download, while one runs.
   download: { done: number; total: number } | null;
   /// The take a voice setup is recording now; null when none runs. The settings page that
@@ -69,6 +71,7 @@ const quiet: VoiceLive = {
   card: null,
   talk: [],
   step: null,
+  turn: false,
   download: null,
   settingUp: null,
   trouble: null,
@@ -124,13 +127,15 @@ function kept(talk: TalkLine[]): TalkLine[] {
 /// The running number of the last reply line taken, over the app's life.
 let lastLine = 0;
 
-/// The conversation with one more thing the person said.
-function withHeard(talk: TalkLine[], text: string): TalkLine[] {
+/// The conversation with one more thing the person said. `working` is whether the sentence
+/// before it is still being worked on.
+function withHeard(talk: TalkLine[], text: string, working: boolean): TalkLine[] {
   if (text.trim() === "") return talk;
   // The person went on with what they were saying: the whole of it takes its place, and the
-  // steps taken for the part heard first go with that part.
+  // steps taken for the part heard first go with that part. Steps of a turn that is over
+  // stay: the same words after it are a new sentence.
   let at = talk.length - 1;
-  while (at >= 0 && talk[at]!.who === "step") at -= 1;
+  while (working && at >= 0 && talk[at]!.who === "step") at -= 1;
   const last = talk[at];
   if (last?.who === "you" && text.startsWith(last.text)) {
     return [...talk.slice(0, at), { ...last, text }];
@@ -257,7 +262,9 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       voiceStore.set({
         state: event.state,
         micOpen: event.mic_open,
-        ...(event.state === "thinking" || event.state === "speaking" ? {} : { step: null }),
+        ...(event.state === "thinking" || event.state === "speaking"
+          ? {}
+          : { step: null, turn: false }),
         ...(event.state === "listening" ? { trouble: null, saying: "", said: [] } : {}),
       });
       {
@@ -289,25 +296,32 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
         heard: true,
         said: [],
         step: null,
-        talk: withHeard(voiceStore.get().talk, event.text),
+        turn: true,
+        talk: withHeard(voiceStore.get().talk, event.text, voiceStore.get().turn),
       });
       return;
     case "step": {
       const text = event.text.trim();
-      if (text === "") return;
-      const { said, talk } = voiceStore.get();
+      const { said, talk, turn, step } = voiceStore.get();
+      // No text: the step under way is over.
+      if (text === "") {
+        if (step !== null) voiceStore.set({ step: null });
+        return;
+      }
+      // One that comes once the turn is over (it crossed the turn's end on its way) is not
+      // shown: nothing would end it.
+      if (!turn) return;
       voiceStore.set({ step: text, talk: withStep(talk, text, said.length > 0) });
       return;
     }
     case "saying": {
       // The first line of a reply: what was heard gives way to it.
-      const { said, talk, state } = voiceStore.get();
+      const { said, talk } = voiceStore.get();
       lastLine += 1;
-      // The next line of the reply: what the step before it was for is done. A line said
-      // while it still thinks ("One moment.") is not the reply: the step goes on.
+      // A line is shown when it is spoken, some time after it was written: it says nothing
+      // about the step under way, which the core ends itself.
       voiceStore.set({
         saying: event.text,
-        ...(state === "thinking" ? {} : { step: null }),
         said: [...said, { n: lastLine, text: event.text }].slice(-SAID_KEPT),
         talk: withSaid(talk, event.text, said.length === 0),
         ...(said.length === 0 ? { hearing: "", heard: false } : {}),
