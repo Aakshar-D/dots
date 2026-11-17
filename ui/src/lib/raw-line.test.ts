@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { rawSummary, rawView, tokenCount } from "@/lib/raw-line";
+import { rawSummary, rawView, thinkingBars, tokenCount } from "@/lib/raw-line";
 
 const engine = (text: string) => ({ label: "Engine output", text, engine: true });
 const thinking = (delta: number) =>
@@ -18,6 +18,12 @@ const thinking = (delta: number) =>
 describe("rawView", () => {
   it("reads the engine's thinking progress as the tokens since its last count", () => {
     expect(rawView(thinking(333))).toEqual({ kind: "thinking", tokens: 333 });
+  });
+
+  it("counts a thinking line without a count since the last for nothing", () => {
+    const line = engine('{"type":"system","subtype":"thinking_tokens","estimated_tokens":900}');
+    expect(rawView(line)).toEqual({ kind: "thinking", tokens: 0 });
+    expect(rawSummary([rawView(line)])).toBe("Thought it through");
   });
 
   it("titles an engine line by its type and leaves its ids out", () => {
@@ -84,5 +90,14 @@ describe("tokenCount", () => {
     expect(tokenCount(383)).toBe("383");
     expect(tokenCount(1240)).toBe("1.2k");
     expect(tokenCount(2000)).toBe("2k");
+  });
+});
+
+describe("thinkingBars", () => {
+  it("draws a bar per count, and adds neighbours up past 24 counts", () => {
+    expect(thinkingBars([50, 333])).toEqual([50, 333]);
+    const bars = thinkingBars(new Array<number>(240).fill(1));
+    expect(bars).toHaveLength(24);
+    expect(bars.every((bar) => bar === 10)).toBe(true);
   });
 });

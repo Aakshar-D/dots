@@ -2,7 +2,14 @@ import { ChevronRight, Copy, Sparkles, Terminal } from "lucide-react";
 import { toast } from "sonner";
 
 import { notifyError } from "@/lib/notify";
-import { rawSummary, rawView, tokenCount, type RawLine, type RawView } from "@/lib/raw-line";
+import {
+  rawSummary,
+  rawView,
+  thinkingBars,
+  tokenCount,
+  type RawLine,
+  type RawView,
+} from "@/lib/raw-line";
 
 type Thinking = Extract<RawView, { kind: "thinking" }>;
 
@@ -10,7 +17,8 @@ type Thinking = Extract<RawView, { kind: "thinking" }>;
 /// the pace of the thinking shows.
 function ThinkingRow({ counts }: { counts: Thinking[] }) {
   const tokens = counts.reduce((sum, count) => sum + count.tokens, 0);
-  const most = Math.max(1, ...counts.map((count) => count.tokens));
+  const bars = thinkingBars(counts.map((count) => count.tokens));
+  const most = Math.max(1, ...bars);
   return (
     <div className="flex items-end justify-between gap-4 p-2.5">
       <div className="flex min-w-0 flex-col gap-0.5">
@@ -20,14 +28,14 @@ function ThinkingRow({ counts }: { counts: Thinking[] }) {
           {tokens > 0 && <>: about {tokenCount(tokens)} tokens</>}.
         </p>
       </div>
-      {counts.length > 1 && (
+      {bars.length > 1 && tokens > 0 && (
         <div aria-hidden className="flex h-7 shrink-0 items-end gap-0.5">
-          {counts.map((count, i) => (
+          {bars.map((bar, i) => (
             <span
               key={i}
-              title={`+${count.tokens} tokens`}
+              title={`+${bar} tokens`}
               className="w-1.5 rounded-sm bg-primary/60"
-              style={{ height: `${Math.max(12, (count.tokens / most) * 100)}%` }}
+              style={{ height: `${Math.max(12, (bar / most) * 100)}%` }}
             />
           ))}
         </div>
@@ -60,9 +68,9 @@ function LineRow(props: { line: RawLine; view: Exclude<RawView, Thinking>; title
         <p className="pr-8">Nothing more in this line.</p>
       ) : (
         <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 pr-8">
-          {view.fields.map((field) => (
-            <div key={field.key} className="col-span-2 grid grid-cols-subgrid">
-              <dt>{field.key}</dt>
+          {view.fields.map((field, i) => (
+            <div key={i} className="col-span-2 grid grid-cols-subgrid">
+              <dt className="max-w-40 break-words">{field.key}</dt>
               <dd className="max-h-40 overflow-auto font-mono break-words whitespace-pre-wrap text-foreground">
                 {field.value}
               </dd>

@@ -45,11 +45,10 @@ export function rawView(line: RawLine): RawView {
     return { kind: "fields", title: line.label, fields };
   }
   if (object.type === "system" && object.subtype === "thinking_tokens") {
-    const { estimated_tokens_delta: delta, estimated_tokens: total } = object;
-    return {
-      kind: "thinking",
-      tokens: typeof delta === "number" ? delta : typeof total === "number" ? total : 0,
-    };
+    // Only the count since the last line adds up over a group: the running total would be
+    // counted again with each line, so a line without the former counts for nothing.
+    const delta = object.estimated_tokens_delta;
+    return { kind: "thinking", tokens: typeof delta === "number" && delta > 0 ? delta : 0 };
   }
   const kind = [object.type, object.subtype]
     .filter((part): part is string => typeof part === "string" && part.trim() !== "")
@@ -62,6 +61,20 @@ export function rawView(line: RawLine): RawView {
       .filter(([key]) => !ENGINE_NOISE.has(key))
       .map(([key, v]) => ({ key: words(key), value: fieldValue(v) })),
   };
+}
+
+/// The most bars the thinking of a group draws.
+const MAX_BARS = 24;
+
+/// The thinking counts of a group as the heights of its bars: one per count, or, past
+/// `MAX_BARS` counts, neighbours added up so that the bars stay as many.
+export function thinkingBars(counts: number[]): number[] {
+  if (counts.length <= MAX_BARS) return counts;
+  const bars = new Array<number>(MAX_BARS).fill(0);
+  counts.forEach((count, i) => {
+    bars[Math.floor((i * MAX_BARS) / counts.length)]! += count;
+  });
+  return bars;
 }
 
 /// A token count as a person reads it: "383", "1.2k".
