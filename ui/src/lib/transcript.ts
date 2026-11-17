@@ -36,7 +36,8 @@ export type TranscriptItem =
   /// What Dots says about the run itself: an item left out, a server held.
   | { type: "note"; seq: number; text: string }
   /// Something the transcript does not render as conversation; shown collapsed.
-  | { type: "raw"; seq: number; label: string; text: string };
+  /// `engine`: the line is the engine's own output, not something the core stored.
+  | { type: "raw"; seq: number; label: string; text: string; engine: boolean };
 
 export type CheckInKind = "notify" | "ask" | "follow_up";
 
@@ -113,6 +114,7 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
         seq: record.seq,
         label: `Unknown event (${record.kind})`,
         text: JSON.stringify(record.data, null, 2) ?? "",
+        engine: false,
       });
       continue;
     }
@@ -137,14 +139,14 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
         const result = { output: event.output, isError: event.is_error };
         const call = calls.get(event.id);
         if (call) call.result = result;
-        else items.push({ type: "raw", seq: record.seq, label: "Tool result", text: event.output });
+        else items.push({ type: "raw", seq: record.seq, label: "Tool result", text: event.output, engine: false });
         break;
       }
       case "failed":
         items.push({ type: "error", seq: record.seq, text: event.error });
         break;
       case "raw":
-        items.push({ type: "raw", seq: record.seq, label: "Unparsed output", text: event.line });
+        items.push({ type: "raw", seq: record.seq, label: "Engine output", text: event.line, engine: true });
         break;
       case "notice":
         items.push({ type: "note", seq: record.seq, text: event.text });

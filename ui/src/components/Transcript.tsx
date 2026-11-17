@@ -19,6 +19,7 @@ import { AttachmentChip } from "@/components/AttachmentChip";
 import { AutoLine } from "@/components/AutoLine";
 import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
+import { RawLines } from "@/components/RawLines";
 import { RunPlan } from "@/components/RunPlan";
 import { StatusBadge } from "@/components/StatusBadge";
 import { messageAttachments } from "@/lib/attachments";
@@ -301,9 +302,11 @@ function StepsLine(props: {
 }
 
 /// What a run's section shows, in order: consecutive tool steps as one row of chips (one line in
-/// the conversation), every other item by itself.
+/// the conversation), consecutive raw lines as one line, every other item by itself.
+type RawItem = Extract<TranscriptItem, { type: "raw" }>;
 type Block =
   | { kind: "tools"; seq: number; items: ToolItem[] }
+  | { kind: "raws"; seq: number; items: RawItem[] }
   | { kind: "item"; item: TranscriptItem };
 
 function blocks(items: TranscriptItem[]): Block[] {
@@ -312,6 +315,8 @@ function blocks(items: TranscriptItem[]): Block[] {
     const last = out.at(-1);
     if (item.type === "tool" && last?.kind === "tools") last.items.push(item);
     else if (item.type === "tool") out.push({ kind: "tools", seq: item.seq, items: [item] });
+    else if (item.type === "raw" && last?.kind === "raws") last.items.push(item);
+    else if (item.type === "raw") out.push({ kind: "raws", seq: item.seq, items: [item] });
     else out.push({ kind: "item", item });
   }
   return out;
@@ -372,10 +377,7 @@ function Item(props: {
       );
     case "raw":
       return (
-        <details className="rounded-md border px-2 py-1 text-muted-foreground">
-          <summary className="cursor-pointer text-xs">{item.label}</summary>
-          <pre className="mt-1 overflow-x-auto text-xs whitespace-pre-wrap">{item.text}</pre>
-        </details>
+        <RawLines items={[item]} />
       );
     case "tool":
       return <ToolChip item={item} active={active} owners={owners} />;
@@ -543,6 +545,8 @@ export function Transcript(props: {
                       <MemoryNote key={item.seq} item={item} dotId={run.dot_id} />
                     ))}
                   </Fragment>
+                ) : block.kind === "raws" ? (
+                  <RawLines key={block.seq} items={block.items} />
                 ) : (
                   <Item
                     key={block.item.seq}

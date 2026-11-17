@@ -72,7 +72,7 @@ describe("the transcript", () => {
       ev({ kind: "assistant_text", text: 5 }),
     ]);
     expect(items.map((i) => (i.type === "raw" ? i.label : i.type))).toEqual([
-      "Unparsed output",
+      "Engine output",
       "Unknown event (from_a_newer_core)",
       "Tool result",
       "Unknown event (assistant_text)",
