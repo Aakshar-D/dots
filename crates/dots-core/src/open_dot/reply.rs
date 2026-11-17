@@ -85,6 +85,11 @@ pub enum Wish {
     Close {
         name: String,
     },
+    /// A volume or media key: "volume up", "volume down", "mute", "play pause", "next",
+    /// "previous".
+    Key {
+        name: String,
+    },
     /// Anything else on the computer: one command of the system's shell, asked about first.
     Command {
         command: String,
@@ -135,6 +140,7 @@ impl Wish {
             Wish::Web { .. } | Wish::Search { .. } => "open something on the web",
             Wish::App { .. } => "open an app or a folder",
             Wish::Close { .. } => "close an app",
+            Wish::Key { .. } => "change the volume or the music",
             Wish::Command { .. } => "do something on the computer",
             Wish::Ask { .. } | Wish::Remember { .. } | Wish::Forget => return None,
         })
@@ -159,6 +165,7 @@ impl Wish {
             Wish::Remember { note } => filled(note),
             Wish::Forget => true,
             Wish::Close { name } => filled(name),
+            Wish::Key { name } => filled(name),
             Wish::Command { command, .. } => filled(command),
             Wish::Ask { question, options } => {
                 filled(question)

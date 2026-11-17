@@ -290,9 +290,22 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
         },
         Wish::Remember { note } => Step::Remember(note.clone()),
         Wish::Forget => Step::Forget,
-        Wish::App { name } => match desk::app(name) {
-            Some(app) => Step::Desk(DeskTask::App { app }),
-            None => Step::Say(desk::NO_APP.into()),
+        // A settings page, one of the apps and folders named here, or any installed app:
+        // each opens at once. None of them runs anything the model wrote.
+        Wish::App { name } => {
+            if let Some(page) = desk::settings_page(name) {
+                Step::Desk(DeskTask::Page { page })
+            } else if let Some(app) = desk::app(name) {
+                Step::Desk(DeskTask::App { app })
+            } else if let Some(name) = desk::named(name) {
+                Step::Desk(DeskTask::Named { name })
+            } else {
+                Step::Say(desk::NO_APP.into())
+            }
+        }
+        Wish::Key { name } => match desk::key(name) {
+            Some(key) => Step::Desk(DeskTask::Key { key }),
+            None => Step::Say(desk::NO_KEY.into()),
         },
         Wish::Create { description } => Step::Create {
             description: description.clone(),

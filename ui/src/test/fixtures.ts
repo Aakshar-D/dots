@@ -270,7 +270,7 @@ export function installDefaults(): void {
   }));
   backend.on("chatgpt_account", () => ({
     configured: false, signing_in: false, account: null, expires_at: null,
-    setup_error: "ChatGPT sign-in needs a registered OpenAI client for Sage.",
+    setup_error: "Sign in with ChatGPT is not available in this version of Sage yet.",
   }));
   // Neither Microsoft Edge nor Node.js was found.
   backend.on("browser_status", () => ({ edge: null, npx: null }));

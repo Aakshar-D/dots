@@ -10,7 +10,7 @@ async fn missing_registration_is_explicit_and_never_opens_a_browser() {
     assert!(status
         .setup_error
         .unwrap()
-        .contains("registered OpenAI client"));
+        .contains("not available in this version"));
     assert!(auth
         .sign_in(|_| panic!("unconfigured login opened a browser"))
         .await

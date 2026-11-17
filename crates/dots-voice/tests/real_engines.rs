@@ -11,10 +11,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use dots_voice::{
-    calibrate, heard_times, resample, voice_level, After, Clip, EarEvent, EarSettings, Ears, Mic,
-    MicFrame, ModelPaths, Parts, Recognizer, Session, SessionEvent, SessionSettings,
-    SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake, Sink, Speaker, SpeechDetector,
-    State, Voice, WakeSpotter, WakeTuning, WakeWord, EAR_RATE, FRAME, TAKE_FRAMES,
+    calibrate, heard_times, resample, take_texts, voice_level, wake_text_matches, After, Clip,
+    EarEvent, EarSettings, Ears, Mic, MicFrame, ModelPaths, Parts, Recognizer, Session,
+    SessionEvent, SessionSettings, SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake,
+    Sink, Speaker, SpeechDetector, State, Voice, WakeSpotter, WakeText, WakeTuning, WakeWord,
+    EAR_RATE, FRAME, TAKE_FRAMES,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
@@ -223,6 +224,7 @@ fn take_at(samples: &[f32], level: f32, seed: &mut u32) -> Vec<Vec<f32>> {
 fn a_voice_setup_picks_a_tuning_that_catches_the_voice() {
     let paths = paths();
     let speaker = SherpaSpeaker::load(&paths, 2).unwrap();
+    let recognizer = SherpaRecognizer::load(&paths).unwrap();
     let mut spotters: Vec<(WakeTuning, SherpaWake)> = WakeTuning::STRICTEST_FIRST
         .into_iter()
         .map(|t| (t, SherpaWake::load_tuned(&paths, t).unwrap()))
@@ -249,6 +251,23 @@ fn a_voice_setup_picks_a_tuning_that_catches_the_voice() {
                 found.heard,
                 found.takes,
                 found.level.map(|l| (l * 32768.0).round())
+            );
+            // The same takes by their words, as the setup reads them (printed, not judged
+            // here): how many the words catch, and what the others were read as.
+            let detector = Box::new(SherpaDetector::load(&paths).unwrap());
+            let texts = take_texts(detector, &recognizer, &takes, found_level);
+            let by_words = found.clone().with_words(&texts);
+            let others: Vec<&String> = texts
+                .iter()
+                .filter(|text| !wake_text_matches(text, &by_words.phrases))
+                .collect();
+            println!(
+                "  by their words {}/{}, {} learned, with either {}/{}; not caught: {others:?}",
+                by_words.by_text,
+                by_words.takes,
+                by_words.phrases.len(),
+                by_words.heard,
+                by_words.takes
             );
             results.push((voice, level, found));
         }
@@ -527,6 +546,12 @@ impl Engines {
 
     /// A real session on the real engines, with a fake microphone and a fake speaker.
     fn session(&self, settings: SessionSettings) -> Live {
+        self.session_with(settings, true, false)
+    }
+
+    /// `session`, with the keyword spotter or without it, and with the wake phrase heard by
+    /// its words (`WakeText`, no phrases from a voice setup) or not.
+    fn session_with(&self, settings: SessionSettings, spotter: bool, by_words: bool) -> Live {
         let paths = &self.paths;
         let sink = Arc::new(FakeSink::default());
         let (voice_tx, voice_events) = unbounded_channel();
@@ -550,7 +575,13 @@ impl Engines {
             voice_events,
             sink: sink.clone(),
             open_sink: Box::new(move || Ok(reopened.clone() as Arc<dyn Sink>)),
-            wake: Some(Box::new(SherpaWake::load(paths).unwrap())),
+            wake: spotter
+                .then(|| Box::new(SherpaWake::load(paths).unwrap()) as Box<dyn WakeSpotter>),
+            wake_text: by_words.then(|| WakeText {
+                detector: Box::new(SherpaDetector::load(paths).unwrap()),
+                recognizer: self.recognizer.clone(),
+                phrases: Vec::new(),
+            }),
             open_mic: Box::new(move || {
                 let (tx, rx) = channel();
                 *opener.lock().unwrap() = Some(tx);
@@ -727,6 +758,180 @@ fn hey_dot_then_a_sentence_wakes_the_session_and_is_heard() {
     );
 }
 
+/// What a resting session reads `samples` as, when they are the first thing its microphone
+/// hears after `lead_ms` of silence: cut and read as the session does it.
+fn read_as_resting(engines: &Engines, samples: &[f32], lead_ms: u64) -> String {
+    // In frames as `Live::feed` sends them: the silence, then the words from a new frame.
+    let lead = vec![0.0f32; (u64::from(EAR_RATE) * lead_ms / 1000) as usize];
+    let take: Vec<Vec<f32>> = lead
+        .chunks(FRAME)
+        .chain(samples.chunks(FRAME))
+        .map(|chunk| {
+            let mut frame = chunk.to_vec();
+            frame.resize(FRAME, 0.0);
+            frame
+        })
+        .collect();
+    let detector = Box::new(SherpaDetector::load(&engines.paths).unwrap());
+    take_texts(detector, engines.recognizer.as_ref(), &[take], None).remove(0)
+}
+
+/// "Hey Sage" heard by its words alone: the real session with no keyword spotter, reading
+/// what is said while it rests. Prints, over the ten voices, how often "Hey Sage." and "Hey
+/// Sage, what needs me?" wake it, how long after the speaker's clip ended (it ends in a
+/// little silence of its own), how often the request is then heard without the phrase, and
+/// how long the recogniser takes over a clip of the length it is given. Sentences that are
+/// not the phrase must never wake it. "Hey Sage." must wake it at least 9 times in 10.
+/// Paced in real time.
+///
+/// Every session here is new and has heard no voice before, which is the hardest case for
+/// the gain. Two runs: "Hey Sage." woke it 10 and 9 times of 10, the sentence 10 and 9, and
+/// no other sentence ever did. With the clip made louder frame by frame, as the ears hear
+/// it, the same test gave 5 of 10: "Pace age", "Pay sage", "On pay sage".
+#[test]
+#[ignore]
+fn hey_sage_wakes_by_its_words_alone_and_near_misses_do_not() {
+    let engines = Engines::load();
+    let voices = engines.speaker.voices();
+
+    // What reading one clip costs: the longest a resting session hands over (two seconds
+    // and its lead-in), and a short one.
+    let long = engines.said("Hey Sage, what needs me today and tomorrow?", 0);
+    for (name, frames) in [("2.3 s", 72), ("1.0 s", 31)] {
+        let mut samples = long.clone();
+        samples.resize(frames * FRAME, 0.0);
+        let clip = Clip {
+            samples,
+            rate: EAR_RATE,
+        };
+        let mut took: Vec<u128> = (0..5)
+            .map(|_| {
+                let start = Instant::now();
+                engines.recognizer.transcribe(&clip).unwrap();
+                start.elapsed().as_millis()
+            })
+            .collect();
+        took.sort_unstable();
+        println!("reading a {name} clip took {took:?} ms (five runs, sorted)");
+    }
+
+    let mut lines = Vec::new();
+    let mut alone = 0;
+    let (mut with_request, mut request_heard) = (0, 0);
+    for voice in 0..voices {
+        for (said, request) in [("Hey Sage.", false), ("Hey Sage, what needs me?", true)] {
+            let samples = engines.said(said, voice);
+            let mut live = engines.session_with(session_settings(true, false), false, true);
+            assert!(
+                resting_with_the_mic_open(&mut live),
+                "voice {voice}: no mic"
+            );
+            live.feed(&[], 300);
+            live.feed(&samples, 0);
+            // Silence goes on, a frame at a time, until it wakes: the time from the end of
+            // the clip the speaker made (which ends in a little silence of its own).
+            let spoken = Instant::now();
+            let mut woke = None;
+            let mut heard = None;
+            while spoken.elapsed() < Duration::from_millis(2500) && woke.is_none() {
+                live.feed(&[0.0; FRAME], 0);
+                while let Ok(ev) = live.events.try_recv() {
+                    match ev {
+                        SessionEvent::Woke => woke = Some(spoken.elapsed()),
+                        SessionEvent::Heard { text, .. } => heard = Some(text),
+                        _ => {}
+                    }
+                }
+            }
+            let Some(after) = woke else {
+                let read = read_as_resting(&engines, &samples, 300);
+                lines.push(format!(
+                    "voice {voice}: {said:?} did not wake; read as {read:?}"
+                ));
+                continue;
+            };
+            lines.push(format!(
+                "voice {voice}: {said:?} woke {} ms after the clip ended",
+                after.as_millis()
+            ));
+            if !request {
+                alone += 1;
+                continue;
+            }
+            with_request += 1;
+            if heard.is_none() {
+                live.feed(&[], 1500);
+                heard = match live.wait(Duration::from_secs(10), |ev| {
+                    matches!(ev, SessionEvent::Heard { .. })
+                }) {
+                    Some(SessionEvent::Heard { text, .. }) => Some(text),
+                    _ => None,
+                };
+            }
+            match heard {
+                Some(text) => {
+                    let got = words(&text);
+                    let whole = words_missed("what needs me", &text) == 0;
+                    if whole && !got.contains(&"hey".to_string()) {
+                        request_heard += 1;
+                    } else {
+                        lines.push(format!("voice {voice}: the request was heard as {text:?}"));
+                    }
+                }
+                None => lines.push(format!("voice {voice}: no request was heard")),
+            }
+        }
+    }
+
+    // Sentences that are not the phrase, one after the other to one resting session.
+    let near_misses = [
+        "Hey Sam, I saved the message on that page.",
+        "Please stop the music before the dog gets a hot donut.",
+        "Hey, say that again tomorrow.",
+        "Hey, save each page of the message.",
+    ];
+    let mut false_wakes = 0;
+    for voice in 0..voices {
+        let mut live = engines.session_with(session_settings(true, false), false, true);
+        assert!(
+            resting_with_the_mic_open(&mut live),
+            "voice {voice}: no mic"
+        );
+        live.feed(&[], 300);
+        for said in near_misses {
+            let samples = engines.said(said, voice);
+            live.feed(&samples, 2500);
+            let woke = live
+                .wait(Duration::from_millis(500), |ev| *ev == SessionEvent::Woke)
+                .is_some();
+            if woke {
+                false_wakes += 1;
+                let read = read_as_resting(&engines, &samples, 300);
+                lines.push(format!("voice {voice}: {said:?} woke it; read as {read:?}"));
+                // Rest again for the next sentence.
+                live.session.close();
+                live.wait_state(Duration::from_secs(2), State::Idle);
+                live.feed(&[], 500);
+            }
+        }
+    }
+
+    println!(
+        "by its words alone: \"Hey Sage.\" woke it {alone}/{voices}; \"Hey Sage, what needs \
+         me?\" woke it {with_request}/{voices} and the request was then heard {request_heard}/\
+         {with_request}; sentences that are not the phrase woke it {false_wakes}/{}",
+        usize::from(voices) * near_misses.len()
+    );
+    for line in &lines {
+        println!("  {line}");
+    }
+    assert_eq!(false_wakes, 0, "a sentence that is not the phrase woke it");
+    assert!(
+        alone >= usize::from(voices) * 9 / 10,
+        "\"Hey Sage.\" woke it by its words {alone}/{voices}"
+    );
+}
+
 /// `samples` without the near-silence at either end (below 2% of the loudest sample).
 fn trimmed(samples: &[f32]) -> &[f32] {
     let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -734,6 +939,157 @@ fn trimmed(samples: &[f32]) -> &[f32] {
     let start = samples.iter().position(loud).unwrap_or(0);
     let end = samples.iter().rposition(loud).map_or(start, |i| i + 1);
     &samples[start..end]
+}
+
+/// The session as the app builds it, with the keyword spotter and the words both listening
+/// for "Hey Sage": whichever hears it first wakes the session, once, and what is said next
+/// is heard as before. Said with a pause before the sentence (tone off), and in one breath
+/// with the tone on, where no "How can I help?" may cut in. Prints the counts over the ten
+/// voices. After a pause each must be at least 9 of 10. In one breath a voice that misses is
+/// said once more, as in the test of the spotter alone below, and at least 9 of 10 must be
+/// heard whole by then. No voice may wake it twice. Paced in real time.
+///
+/// One breath is said two ways. As one sentence from the speaker ("Hey Sage, please read me
+/// the first message."), which is what is judged. And as the test below makes it, the
+/// phrase and the sentence each cut to their sound and put end to end with nothing between,
+/// which is only printed: when the words wake the session before the spotter does, the ears
+/// are given the phrase and the sentence as one clip, and for two voices in ten the
+/// recogniser then wrote the join as one word ("Ajalees read me the first message"). The
+/// spotter alone, which hands the ears only what follows the phrase, gave 9 and 10 of 10.
+#[test]
+#[ignore]
+fn the_spotter_and_the_words_together_wake_it_once_and_the_sentence_is_heard() {
+    let engines = Engines::load();
+    let voices = engines.speaker.voices();
+    let said = "Please read me the first message.";
+    let whole =
+        |text: &str| words_missed(said, text) == 0 && !words(text).contains(&"hey".to_string());
+    let mut lines = Vec::new();
+
+    // With a pause after the phrase.
+    let (mut woke, mut heard, mut twice) = (0, 0, 0);
+    for voice in 0..voices {
+        let mut live = engines.session_with(session_settings(true, false), true, true);
+        assert!(
+            resting_with_the_mic_open(&mut live),
+            "voice {voice}: no mic"
+        );
+        live.feed(&[], 300);
+        live.feed(&engines.said("Hey Sage.", voice), 1500);
+        live.feed(&engines.said(said, voice), 1500);
+        let mut wakes = 0;
+        let text = live.wait(Duration::from_secs(10), |ev| {
+            wakes += usize::from(*ev == SessionEvent::Woke);
+            matches!(ev, SessionEvent::Heard { .. })
+        });
+        woke += usize::from(wakes > 0);
+        twice += usize::from(wakes > 1);
+        match text {
+            Some(SessionEvent::Heard { text, .. }) if wakes > 0 && whole(&text) => heard += 1,
+            Some(SessionEvent::Heard { text, .. }) => {
+                lines.push(format!(
+                    "voice {voice}, pause: {wakes} wakes, heard {text:?}"
+                ));
+            }
+            _ => lines.push(format!(
+                "voice {voice}, pause: {wakes} wakes, nothing heard"
+            )),
+        }
+    }
+
+    // In one breath, with the tone on.
+    let mut greeted = 0;
+    let mut once = |voice: u8, joined: bool, twice: &mut usize| -> Result<(), String> {
+        let breath = if joined {
+            let mut breath = trimmed(&engines.said("Hey Sage.", voice)).to_vec();
+            breath.extend_from_slice(trimmed(&engines.said(said, voice)));
+            breath
+        } else {
+            engines.said("Hey Sage, please read me the first message.", voice)
+        };
+        let mut live = engines.session_with(
+            SessionSettings {
+                tone: true,
+                ..session_settings(true, false)
+            },
+            true,
+            true,
+        );
+        assert!(
+            resting_with_the_mic_open(&mut live),
+            "voice {voice}: no mic"
+        );
+        live.feed(&[], 300);
+        live.feed(&breath, 1500);
+        let (mut wakes, mut spoke) = (0, false);
+        let text = live.wait(Duration::from_secs(10), |ev| {
+            wakes += usize::from(*ev == SessionEvent::Woke);
+            spoke |= matches!(ev, SessionEvent::Saying { .. });
+            matches!(ev, SessionEvent::Heard { .. })
+        });
+        *twice += usize::from(wakes > 1);
+        greeted += usize::from(spoke);
+        let how = if joined {
+            "put end to end"
+        } else {
+            "one breath"
+        };
+        match text {
+            Some(SessionEvent::Heard { text, .. }) if wakes > 0 && !spoke && whole(&text) => Ok(()),
+            Some(SessionEvent::Heard { text, .. }) => Err(format!(
+                "voice {voice}, {how}: {wakes} wakes, spoke first: {spoke}, heard {text:?}"
+            )),
+            _ => Err(format!(
+                "voice {voice}, {how}: {wakes} wakes, spoke first: {spoke}, nothing heard"
+            )),
+        }
+    };
+    // (on the first try, after a second) for the sentence in one breath, then put end to end
+    let mut counts = [(0, 0), (0, 0)];
+    for (joined, (first, after)) in [false, true].into_iter().zip(&mut counts) {
+        for voice in 0..voices {
+            match once(voice, joined, &mut twice) {
+                Ok(()) => {
+                    *first += 1;
+                    *after += 1;
+                }
+                Err(miss) => {
+                    lines.push(format!("{miss} (first try)"));
+                    match once(voice, joined, &mut twice) {
+                        Ok(()) => *after += 1,
+                        Err(miss) => lines.push(format!("{miss} (second try)")),
+                    }
+                }
+            }
+        }
+    }
+    let [(first, breath_heard), (joined_first, joined_heard)] = counts;
+
+    println!(
+        "the spotter and the words together: after a pause woke {woke}/{voices} and heard the \
+         sentence {heard}/{voices}; in one breath with the tone on heard it whole \
+         {first}/{voices} on the first try, {breath_heard}/{voices} after a second; the two \
+         put end to end {joined_first}/{voices} on the first try, {joined_heard}/{voices} \
+         after a second; something was said first {greeted} times; woke twice {twice} times"
+    );
+    for line in &lines {
+        println!("  {line}");
+    }
+    let floor = usize::from(voices) * 9 / 10;
+    assert_eq!(twice, 0, "one phrase woke it twice");
+    assert_eq!(
+        greeted, 0,
+        "something was said over a request in the same breath"
+    );
+    assert!(woke >= floor, "after a pause it woke {woke}/{voices}");
+    assert!(
+        heard >= floor,
+        "after a pause the sentence was heard {heard}/{voices}"
+    );
+    assert!(
+        breath_heard >= floor,
+        "in one breath the sentence was heard whole {breath_heard}/{voices}"
+    );
 }
 
 /// "Hey Dot." and a sentence in one breath (no silence fed between them), with the listening

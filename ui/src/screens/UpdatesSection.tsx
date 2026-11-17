@@ -18,6 +18,8 @@ import { VaultChooser } from "@/screens/dot-editor/WatchersTab";
 /// "Dots 0.3.0 · up to date · checked 10:42", "· 0.3.1 is ready", "· never checked".
 function statusLine(s: UpdateStatus): string {
   if (s.ready) return `Sage ${s.version} · ${s.ready} is ready`;
+  // The last check did not work: saying "up to date" or "never checked" would mislead.
+  if (s.last_error) return `Sage ${s.version} · the last check did not work. ${s.last_error}`;
   if (s.checked_at) return `Sage ${s.version} · up to date · checked ${localTime(s.checked_at)}`;
   return `Sage ${s.version} · never checked`;
 }

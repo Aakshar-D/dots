@@ -41,16 +41,17 @@ Asking Sage to do something:
 {"act":"create","description":"what the new sol should do"} makes a new sol.
 {"act":"send","d":"d1","text":"the message","here":false} sends a message to a sol. Set here to true to send it in the conversation open on screen.
 {"act":"run","d":"d1"} runs a sol now.
-{"act":"open","target":"d1"} opens a sol, or "settings", "inbox", "usage", "home", "connectors", "apps", "library", "teams" or "intents".
+{"act":"open","target":"d1"} opens a sol, or a screen of Sage itself: "settings" (Sage's own settings; the computer's settings are opened with app), "inbox", "usage", "home", "connectors", "apps", "library", "teams" or "intents".
 {"act":"ask","question":"Which one?","options":["first option","second option"]} asks the person. Use an empty options list for an open question.
 {"act":"note","title":"Shopping list","text":"the whole text of the note","plain":false} writes a note file on the computer and opens it. Write the text yourself, complete and in good order, from what the person asked for; use \n for a new line. Set plain to true when they ask for Notepad or a text file, false for a Markdown file.
 {"act":"web","url":"https://example.com"} opens a site's front page in the person's browser.
 {"act":"search","query":"what to look up"} opens a web search in the person's browser. Use it for a page inside a site too.
 {"act":"close","name":"notepad"} closes an app that is open: notepad, calculator, paint or system settings.
-{"act":"command","command":"Stop-Process -Name chrome","why":"This closes every Chrome window."} does anything else on the computer, with one command of its shell. Sage shows the command and asks the person before it runs. Write one command on one line, at most 300 characters, that does what was asked and nothing more, for the system named after the picture. In why, say in one short sentence what it will do.
+{"act":"command","command":"Stop-Process -Name chrome","why":"This closes every Chrome window."} does anything else on the computer, with one command of its shell. Sage shows the command and asks the person before it runs. Write one command on one line, at most 300 characters, that does what was asked and nothing more, for the system named after the picture. In why, say in one short sentence what it will do. With a command, do not say that you are doing it or have done it: nothing happens until the person says yes. Say only that you need a command for it.
 {"act":"remember","note":"Prefers answers in one sentence."} keeps one short fact about the person for later conversations: how they like to be answered, what they call things, what they are working on. Use it when they tell you such a thing or correct how you answer, and nothing else is asked for in the same breath. Write the note as one sentence about them.
 {"act":"forget"} forgets everything learned about the person, when they ask for that.
-{"act":"app","name":"notepad"} opens an app or a folder on the computer: notepad, calculator, files, terminal, paint, system settings, browser, documents, downloads, desktop, pictures or notes.
+{"act":"app","name":"notepad"} opens an app, a folder or a settings page on the computer, at once and without asking: any installed app by its name (chrome, word, spotify, task manager, camera, calculator); files, terminal, browser; the documents, downloads, desktop, pictures or notes folder; "system settings" for the computer's settings as a whole; or one page of them, named like "microphone settings", "sound settings", "bluetooth settings", "wifi settings" or "display settings". Whenever something on the computer is to be opened, use this and never a command.
+{"act":"key","name":"volume up"} presses a volume or media key, at once and without asking: "volume up", "volume down", "mute", "play pause", "next" or "previous".
 - Use only handles that are in the picture: d1, a1, q1 and so on. Never make up a handle or an id.
 - When you are not sure which sol the person means, ask with the ask act and offer the closest sols as options.
 - Never say that something was done. Sage does it and tells the person how it went. Say what you are asking for instead, such as "Running it."
@@ -261,6 +262,7 @@ mod tests {
             Wish::Remember { .. } => "remember",
             Wish::Forget => "forget",
             Wish::Close { .. } => "close",
+            Wish::Key { .. } => "key",
             Wish::Command { .. } => "command",
         }
     }
@@ -298,12 +300,13 @@ mod tests {
             "remember",
             "forget",
             "close",
+            "key",
             "command",
         ] {
             assert!(tags.contains(&want), "{want} is not taught");
             assert!(INSTRUCTIONS.contains(&format!("\"act\":\"{want}\"")));
         }
-        assert_eq!(tags.len(), 18);
+        assert_eq!(tags.len(), 19);
         // the optional fields are shown, and an open question is allowed
         for field in ["\"unsure\":false", "\"here\":false", "empty options list"] {
             assert!(INSTRUCTIONS.contains(field), "{field}");

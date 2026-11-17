@@ -2465,16 +2465,16 @@ async fn what_the_desk_cannot_or_must_not_do_is_said_and_not_done() {
     assert_eq!(said(&got), format!("Opening it. {}", desk::NO_DESK));
     let on_desk = Arc::new(FakeDesk::default());
     t.mind.set_desk(on_desk.clone());
-    // An address that is not a plain site, and an app that is not on the list, never reach it.
+    // An address that is not a plain site, and an app name with no name in it, never reach it.
     t.fake.push(says(
         "Opening it.\nDO {\"act\":\"web\",\"url\":\"file:///C:/Windows/System32/cmd.exe\"}",
     ));
     let got = t.hear("open that file").await;
     assert_eq!(said(&got), format!("Opening it. {}", desk::NO_SITE));
     t.fake.push(says(
-        "Opening it.\nDO {\"act\":\"app\",\"name\":\"regedit\"}",
+        "Opening it.\nDO {\"act\":\"app\",\"name\":\"!!! ???\"}",
     ));
-    let got = t.hear("open the registry editor").await;
+    let got = t.hear("open the thing").await;
     assert_eq!(said(&got), format!("Opening it. {}", desk::NO_APP));
     assert!(on_desk.asked.lock().unwrap().is_empty());
     // A desk that fails says why.

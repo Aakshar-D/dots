@@ -6,7 +6,9 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use dots_core::open_dot::desk::{Desk, DeskApp, DeskTask, COMMAND_STOPPED, FAILED};
+use dots_core::open_dot::desk::{
+    Desk, DeskApp, DeskKey, DeskTask, SettingsPage, COMMAND_STOPPED, FAILED,
+};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -24,6 +26,8 @@ const NOT_OPEN: &str = "That one isn't open.";
 
 const NO_FOLDER: &str = "I can't find that folder on this computer.";
 const NOT_WRITTEN: &str = "I couldn't write the note.";
+const NOTE_NOT_OPENED: &str =
+    "The note is written, in your Sage Notes folder, but I couldn't open it.";
 #[cfg(not(any(windows, target_os = "macos")))]
 const NO_APPS_HERE: &str = "I can't open apps on this computer yet.";
 
@@ -97,9 +101,13 @@ impl Desk for SystemDesk {
                     NOT_WRITTEN.to_string()
                 })?;
                 self.open_path(&path)
+                    .map_err(|_| NOTE_NOT_OPENED.to_string())
             }
             DeskTask::Web { url, .. } | DeskTask::Search { url } => self.open_url(url),
             DeskTask::App { app } => self.open_app(*app),
+            DeskTask::Page { page } => open_page(*page),
+            DeskTask::Named { name } => open_named(name),
+            DeskTask::Key { key } => press(*key),
         }
         .map(|()| String::new())
     }
@@ -329,6 +337,159 @@ fn started(command: &mut Command) -> Result<(), String> {
         tracing::warn!("open sage: an app could not be started: {e}");
         FAILED.to_string()
     })
+}
+
+/// Said when no installed app has the name asked for.
+fn no_such_app(name: &str) -> String {
+    format!("I can't find an app called {name} on this computer.")
+}
+
+/// Opens one page of the computer's settings, by its address written in the core.
+#[cfg(windows)]
+fn open_page(page: SettingsPage) -> Result<(), String> {
+    started(Command::new("explorer.exe").arg(page.windows()))
+}
+
+#[cfg(target_os = "macos")]
+fn open_page(page: SettingsPage) -> Result<(), String> {
+    started(Command::new("open").arg(page.mac()))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn open_page(_page: SettingsPage) -> Result<(), String> {
+    Err(NO_APPS_HERE.to_string())
+}
+
+/// The apps the Start menu lists, as (name, id). The command is written here; the name asked
+/// for is no part of it.
+#[cfg(windows)]
+fn start_apps() -> Vec<(String, String)> {
+    let out = quiet(Command::new("powershell.exe").args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[Console]::OutputEncoding = [Text.Encoding]::UTF8; \
+         @(Get-StartApps | Select-Object Name, AppID) | ConvertTo-Json -Compress",
+    ]))
+    .stdin(Stdio::null())
+    .output();
+    let Ok(out) = out else {
+        return Vec::new();
+    };
+    let listed: serde_json::Value =
+        serde_json::from_slice(&out.stdout).unwrap_or(serde_json::Value::Null);
+    listed
+        .as_array()
+        .map(|apps| {
+            apps.iter()
+                .filter_map(|app| {
+                    Some((
+                        app.get("Name")?.as_str()?.to_string(),
+                        app.get("AppID")?.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Opens the installed app `name` means: the Start menu's own entry for it is started, by the
+/// id the system gave. The name is only compared with the names listed.
+#[cfg(windows)]
+fn open_named(name: &str) -> Result<(), String> {
+    let apps = start_apps();
+    let names: Vec<String> = apps.iter().map(|(name, _)| name.clone()).collect();
+    let found =
+        dots_core::open_dot::desk::pick_app(name, &names).ok_or_else(|| no_such_app(name))?;
+    let id = apps
+        .iter()
+        .find(|(listed, _)| listed == found)
+        .map(|(_, id)| id.clone())
+        .ok_or_else(|| no_such_app(name))?;
+    started(Command::new("explorer.exe").arg(format!("shell:AppsFolder\\{id}")))
+}
+
+#[cfg(target_os = "macos")]
+fn open_named(name: &str) -> Result<(), String> {
+    // `open -a` takes the name as one argument and looks it up among the installed apps.
+    let opened = Command::new("open")
+        .args(["-a", name])
+        .stdin(Stdio::null())
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if opened {
+        Ok(())
+    } else {
+        Err(no_such_app(name))
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn open_named(_name: &str) -> Result<(), String> {
+    Err(NO_APPS_HERE.to_string())
+}
+
+/// Presses a volume or media key, as the keyboard's own key does. The key codes and the
+/// count are written here.
+#[cfg(windows)]
+fn press(key: DeskKey) -> Result<(), String> {
+    // VK_VOLUME_UP, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_MEDIA_PLAY_PAUSE, VK_MEDIA_NEXT_TRACK,
+    // VK_MEDIA_PREV_TRACK. One press of a volume key is two parts in a hundred.
+    let (code, times) = match key {
+        DeskKey::VolumeUp => (0xAF, 5),
+        DeskKey::VolumeDown => (0xAE, 5),
+        DeskKey::Mute => (0xAD, 1),
+        DeskKey::PlayPause => (0xB3, 1),
+        DeskKey::Next => (0xB0, 1),
+        DeskKey::Previous => (0xB1, 1),
+    };
+    let script = format!(
+        "$k = Add-Type -PassThru -Namespace SageKeys -Name Press -MemberDefinition \
+         '[DllImport(\"user32.dll\")] public static extern void keybd_event(byte v, byte s, uint f, System.UIntPtr e);'; \
+         1..{times} | ForEach-Object {{ $k::keybd_event({code}, 0, 0, [UIntPtr]::Zero); \
+         $k::keybd_event({code}, 0, 2, [UIntPtr]::Zero) }}"
+    );
+    let pressed = quiet(&mut shell(&script))
+        .stdin(Stdio::null())
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if pressed {
+        Ok(())
+    } else {
+        tracing::warn!("open sage: a key could not be pressed");
+        Err(FAILED.to_string())
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn press(key: DeskKey) -> Result<(), String> {
+    let script = match key {
+        DeskKey::VolumeUp => {
+            "set volume output volume ((output volume of (get volume settings)) + 10)"
+        }
+        DeskKey::VolumeDown => {
+            "set volume output volume ((output volume of (get volume settings)) - 10)"
+        }
+        DeskKey::Mute => "set volume output muted (not (output muted of (get volume settings)))",
+        DeskKey::PlayPause | DeskKey::Next | DeskKey::Previous => {
+            return Err("I can't press the music keys on a Mac yet.".to_string())
+        }
+    };
+    let done = Command::new("osascript")
+        .args(["-e", script])
+        .stdin(Stdio::null())
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if done {
+        Ok(())
+    } else {
+        Err(FAILED.to_string())
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn press(_key: DeskKey) -> Result<(), String> {
+    Err(NO_APPS_HERE.to_string())
 }
 
 /// Starts one of the apps of the fixed list. Each is a program of the system itself, named

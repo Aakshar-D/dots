@@ -21,7 +21,7 @@ const ISSUER: &str = "https://auth.openai.com";
 pub const DEFAULT_REDIRECT_URI: &str = "http://127.0.0.1:47322/auth/openai/callback";
 const SIGN_IN_LIMIT: Duration = Duration::from_secs(5 * 60);
 const SESSION_LIMIT: Duration = Duration::from_secs(8 * 60 * 60);
-const SETUP: &str = "ChatGPT sign-in needs a registered OpenAI client for Sage.";
+const SETUP: &str = "Sign in with ChatGPT is not available in this version of Sage yet.";
 
 #[derive(Clone)]
 pub struct ChatGptConfig {

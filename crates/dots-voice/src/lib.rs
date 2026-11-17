@@ -15,7 +15,10 @@ mod tone;
 mod voice;
 
 pub use audio::{frames_from, microphones, speakers, CpalMic, CpalSink, Device, Mic, MicFrame};
-pub use calibrate::{calibrate, heard_times, voice_level, Calibration, FAINT, TAKES, TAKE_FRAMES};
+pub use calibrate::{
+    calibrate, heard_times, learn_phrases, take_texts, voice_level, Calibration, FAINT, TAKES,
+    TAKE_FRAMES,
+};
 pub use ears::{level, EarEvent, EarSettings, Ears};
 pub use engine::{
     resample, Clip, EngineError, Recognizer, Speaker, SpeechDetector, WakeSpotter, WakeWord,
@@ -26,8 +29,8 @@ pub use models::{
     install, installed, remove, Manifest, ModelError, ModelFile, ModelPaths, Progress,
 };
 pub use session::{
-    After, Clock, MicOpener, Parts, Session, SessionEvent, SessionSettings, SinkOpener, State,
-    SystemClock,
+    wake_text_matches, After, Clock, MicOpener, Parts, Session, SessionEvent, SessionSettings,
+    SinkOpener, State, SystemClock, WakeText,
 };
 pub use sherpa::{SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake, WakeTuning};
 pub use text::{speakable, trim_spoken, SentenceStream, MAX_SPOKEN_CHARS};

@@ -825,7 +825,7 @@
       "account": null,
       "configured": false,
       "expires_at": null,
-      "setup_error": "ChatGPT sign-in needs a registered OpenAI client for Sage.",
+      "setup_error": "Sign in with ChatGPT is not available in this version of Sage yet.",
       "signing_in": false
     },
     {

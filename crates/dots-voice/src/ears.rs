@@ -171,6 +171,18 @@ impl Ears {
 
     /// Feed exactly one `FRAME` of 16 kHz audio. Transcribes on the calling thread.
     pub fn push(&mut self, frame16k: &[f32]) -> Vec<EarEvent> {
+        self.take(frame16k, true)
+    }
+
+    /// `push` for a frame that was heard a while ago and is only now handed over (the start
+    /// of a sentence, kept until it was known to be for Sage): no preview is made at it.
+    /// Previews show words as they are said; one for every few of many frames given at once
+    /// would only hold up the frames being said now. The next frame pushed gets its preview.
+    pub fn push_past(&mut self, frame16k: &[f32]) -> Vec<EarEvent> {
+        self.take(frame16k, false)
+    }
+
+    fn take(&mut self, frame16k: &[f32], preview: bool) -> Vec<EarEvent> {
         debug_assert_eq!(frame16k.len(), FRAME, "ears take exactly one frame");
         if frame16k.len() != FRAME {
             return Vec::new();
@@ -214,7 +226,7 @@ impl Ears {
             || piece_frames >= self.piece_most
         {
             self.next_piece();
-        } else if speech && self.speech_since_partial >= self.partial_every {
+        } else if preview && speech && self.speech_since_partial >= self.partial_every {
             self.speech_since_partial = 0;
             if let Some(text) = self.partial() {
                 events.push(EarEvent::Partial(text));
@@ -633,6 +645,23 @@ mod tests {
         assert!(!middle.is_empty());
         assert!(middle.iter().all(|e| matches!(e, EarEvent::Partial(_))));
         assert_eq!(finals(&events).len(), 1);
+    }
+
+    /// Frames handed over late make the same clip and no previews; the first frame said
+    /// after them gets its preview at once.
+    #[test]
+    fn frames_handed_over_late_are_heard_without_previews() {
+        let mut r = rig(Mode::Count, timed());
+        let (speech, quiet) = (vec![1.0; FRAME], vec![-1.0; FRAME]);
+        let mut events: Vec<EarEvent> = (0..40).flat_map(|_| r.ears.push_past(&speech)).collect();
+        assert_eq!(events, vec![EarEvent::Started]);
+        assert!(r.recognizer.clips.lock().unwrap().is_empty());
+        assert_eq!(
+            r.ears.push(&speech),
+            vec![EarEvent::Partial("41 frames".into())]
+        );
+        events.extend((0..30).flat_map(|_| r.ears.push_past(&quiet)));
+        assert_eq!(events.last(), Some(&EarEvent::Final("63 frames".into())));
     }
 
     #[test]

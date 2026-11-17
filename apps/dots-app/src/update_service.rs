@@ -162,6 +162,21 @@ pub struct ReleaseNotes {
 
 pub const NOTHING_TO_GO_BACK: &str = "There is nothing to go back to.";
 pub const NO_INSTALLER: &str = "This version has no published installer to repair from.";
+/// The published versions have no installer for this kind of computer (Windows on ARM, say).
+pub const NO_BUILD_HERE: &str = "There is no update for this kind of computer yet.";
+pub const UNREACHABLE: &str =
+    "Sage could not reach the update server. Check your connection and try again.";
+
+/// The updater's error as a sentence for the person; its own text goes to the log.
+fn plain(error: tauri_plugin_updater::Error) -> String {
+    use tauri_plugin_updater::Error as E;
+    tracing::warn!("updates: {error}");
+    match error {
+        E::TargetNotFound(_) | E::TargetsNotFound(_) => NO_BUILD_HERE.to_string(),
+        E::Reqwest(_) | E::Network(_) | E::ReleaseNotFound => UNREACHABLE.to_string(),
+        other => other.to_string(),
+    }
+}
 
 /// Going back: the version it installs, the backup it restores, and whether there is a
 /// runtime to close first (none on the fatal page).
@@ -297,12 +312,13 @@ async fn download_version(
     let found = updater
         .check()
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| match plain(e) {
+            // This version was never published for this kind of computer.
+            sentence if sentence == NO_BUILD_HERE => NO_INSTALLER.to_string(),
+            sentence => sentence,
+        })?
         .ok_or_else(|| format!("No installer was found for Sage {version}."))?;
-    let bytes = found
-        .download(|_, _| {}, || {})
-        .await
-        .map_err(|e| e.to_string())?;
+    let bytes = found.download(|_, _| {}, || {}).await.map_err(plain)?;
     Ok(Downloaded {
         update: found,
         bytes,
@@ -1020,16 +1036,13 @@ async fn check_once(
             .ready_version()
             .map(str::to_string)
     };
-    let Some(found) = updater.check().await.map_err(|e| e.to_string())? else {
+    let Some(found) = updater.check().await.map_err(plain)? else {
         return Ok(ready());
     };
     if !updates.state.lock().unwrap().wants(&found.version) {
         return Ok(ready());
     }
-    let bytes = found
-        .download(|_, _| {}, || {})
-        .await
-        .map_err(|e| e.to_string())?;
+    let bytes = found.download(|_, _| {}, || {}).await.map_err(plain)?;
     let version = found.version.clone();
     // The offer is taken or refused under one lock: a wait may have begun during the download.
     let shown = {
