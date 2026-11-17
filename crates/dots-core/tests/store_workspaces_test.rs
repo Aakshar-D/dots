@@ -485,15 +485,25 @@ async fn a_mirror_holds_while_others_write() {
         use_rules: None,
         guardrails: None,
     }];
+    // The writer keeps writing for as long as the mirrors run, with a short rest after each
+    // write. Without the rest it holds the write lock nearly all the time, and SQLite's wait
+    // for a lock is not fair: on a slow disk a mirror could wait its whole busy timeout and
+    // never find the lock free, which is not what this test is about.
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let writer = {
         let store = store.clone();
+        let stop = stop.clone();
         tokio::spawn(async move {
-            for n in 0..400 {
+            let mut n = 0u32;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
                 store
                     .rename_workspace("personal", "default", &format!("Mine {n}"))
                     .await
                     .unwrap();
+                n += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
+            n
         })
     };
     for n in 0..200 {
@@ -502,7 +512,9 @@ async fn a_mirror_holds_while_others_write() {
             .await
             .unwrap_or_else(|e| panic!("mirror {n}: {e}"));
     }
-    writer.await.unwrap();
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let written = writer.await.unwrap();
+    assert!(written > 0, "the writer never wrote while the mirrors ran");
     assert!(store
         .workspace("acme-eng", "payments")
         .await

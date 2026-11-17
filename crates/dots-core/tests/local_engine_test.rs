@@ -334,7 +334,8 @@ async fn queued_resume(e: &Env, dot: &Dot, calls: &[(&str, Value)]) -> (Run, Vec
 /// Starts the resume run and waits for `status`.
 async fn perform(e: &Env, child: &Run, status: RunStatus) -> Run {
     assert_eq!(e.runner.dispatch_once().await.unwrap(), 1);
-    let run = wait_status(&e.store, &child.id, status, 20).await;
+    // A loaded build machine can take longer than 20 s to start the shell of a Bash call.
+    let run = wait_status(&e.store, &child.id, status, 60).await;
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     while e.runner.is_active(&child.id) {
         assert!(std::time::Instant::now() < deadline, "never released");
