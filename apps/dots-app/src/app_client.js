@@ -5,7 +5,9 @@
 // theme's colours arrive as CSS variables (`--dots-<token>`) on the root element, with
 // `data-theme` set to "light" or "dark" (`dots.onTheme(cb)` hears a change).
 // `dots.openRun(runId)` opens, in Sage, the conversation of a run the app started; it rejects
-// for any other run.
+// for any other run. The frame cannot start a download itself, so `dots.saveFile(name, base64)`
+// hands Dots the file: the person picks where in the Save dialog, and it answers true when they
+// saved it, false when they cancelled.
 (() => {
   let port = null;
   let next = 0;
@@ -81,6 +83,9 @@
     },
     openRun(runId) {
       return ask({ type: "open_run", run_id: String(runId) });
+    },
+    saveFile(name, base64) {
+      return ask({ type: "save_file", name: String(name), data: String(base64) });
     },
     onChange(cb) {
       changes.add(cb);

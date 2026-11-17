@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AppFrame } from "@/components/AppFrame";
 import { appSrc } from "@/lib/app-bridge";
 import { applyTheme } from "@/lib/theme";
+import { backend } from "@/test/backend";
 
 /// Loads the frame and returns the port its page was handed, with what arrives on it.
 function load(frame: HTMLIFrameElement) {
@@ -105,6 +106,41 @@ describe("an app's screen in its frame", () => {
         error: "this screen cannot open runs",
       }),
     );
+  });
+
+  it("saves a file the page hands over through Dots' Save dialog, and says whether it was saved", async () => {
+    let saved = true;
+    backend.on("app_save_file", () => saved);
+    render(<AppFrame src={appSrc("invoices", 3)} title="Invoices" tools={[]} call={vi.fn()} />);
+    const { port, got } = load(screen.getByTitle<HTMLIFrameElement>("Invoices"));
+    port.postMessage({ type: "save_file", id: 1, name: "INV-1 - Acme.pdf", data: "JVBERi0xLjQK" });
+    await waitFor(() =>
+      expect(got).toContainEqual({ type: "result", id: 1, ok: true, result: true }),
+    );
+    expect(backend.callsTo("app_save_file")).toEqual([
+      { name: "INV-1 - Acme.pdf", data: "JVBERi0xLjQK" },
+    ]);
+    saved = false;
+    port.postMessage({ type: "save_file", id: 2, name: "INV-1 - Acme.pdf", data: "" });
+    await waitFor(() =>
+      expect(got).toContainEqual({ type: "result", id: 2, ok: true, result: false }),
+    );
+  });
+
+  it("ignores a file to save without a name, or with data that is not text", async () => {
+    backend.on("app_save_file", () => true);
+    render(<AppFrame src={appSrc("invoices", 3)} title="Invoices" tools={[]} call={vi.fn()} />);
+    const { port, got } = load(screen.getByTitle<HTMLIFrameElement>("Invoices"));
+    port.postMessage({ type: "save_file", id: 1, name: "", data: "" });
+    port.postMessage({ type: "save_file", id: 2, name: "a.pdf", data: [1, 2] });
+    port.postMessage({ type: "save_file", id: 3, name: "a".repeat(256), data: "" });
+    port.postMessage({ type: "save_file", id: 4, name: "a.pdf", data: "" });
+    await waitFor(() =>
+      expect(got).toContainEqual({ type: "result", id: 4, ok: true, result: true }),
+    );
+    expect(backend.callsTo("app_save_file")).toHaveLength(1);
+    const answered = got.filter((m) => (m as { type: string }).type === "result");
+    expect(answered.map((m) => (m as { id: number }).id)).toEqual([4]);
   });
 
   it("ignores a run to open whose id is empty or longer than 64 characters", async () => {

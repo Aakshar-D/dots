@@ -2317,6 +2317,13 @@ pub async fn app_run_link(
     Ok(state.rt()?.apps().run_link(&name, &run_id).await?)
 }
 
+/// A file an app's screen saves (`dots.saveFile`): the person picks where in the Save dialog.
+/// False when they cancel; rejects with kind `invalid` for a bad name or data over 20 MB.
+#[tauri::command]
+pub async fn app_save_file(app: AppHandle, name: String, data: String) -> Res<bool> {
+    crate::app_save::save(&app, &name, &data)
+}
+
 /// The person's answer on the card: add (or update), ask for changes, or discard.
 #[tauri::command]
 pub async fn app_proposal_decide(

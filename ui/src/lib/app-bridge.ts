@@ -37,6 +37,15 @@ const OpenRun = z.strictObject({
   run_id: z.string().min(1).max(64),
 });
 
+/// The page hands Dots a file to save (`dots.saveFile`): its name and its bytes in base64. The
+/// core checks both again before the Save dialog opens.
+const SaveFile = z.strictObject({
+  type: z.literal("save_file"),
+  id: z.number().int().positive(),
+  name: z.string().min(1).max(255),
+  data: z.string(),
+});
+
 export type Bridge = {
   /// Sends the theme's colours, for `--dots-<token>` in the page.
   theme: (mode: ThemeName) => void;
@@ -46,14 +55,16 @@ export type Bridge = {
 };
 
 /// Hands the framed page `frame` its port and answers its calls: `tools` are those it may call
-/// (read at each call), `call` performs one as the person, and `openRun` opens a run the app
-/// started (a page without it, a preview's, is refused).
+/// (read at each call), `call` performs one as the person, `openRun` opens a run the app
+/// started (a page without it, a preview's, is refused), and `saveFile` asks the person where
+/// to save a file the page hands over (true when saved).
 export function connectFrame(
   frame: Window,
   options: {
     tools: readonly string[];
     call: (tool: string, input: unknown) => Promise<unknown>;
     openRun?: (runId: string) => Promise<void>;
+    saveFile: (name: string, data: string) => Promise<boolean>;
   },
 ): Bridge {
   const channel = new MessageChannel();
@@ -80,6 +91,12 @@ export function connectFrame(
         await options.openRun(run_id);
         return null;
       });
+      return;
+    }
+    const save = SaveFile.safeParse(event.data);
+    if (save.success) {
+      const { id, name, data } = save.data;
+      answer(id, () => options.saveFile(name, data));
       return;
     }
     const parsed = Call.safeParse(event.data);
