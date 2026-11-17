@@ -684,6 +684,9 @@ export const commands = {
     call(T.LibraryItem, "app_answer_start_prompt", { name, on }),
   /// Where a run the app started is; rejects for a run it did not start.
   appRunLink: (name: string, runId: string) => call(T.RunLink, "app_run_link", { name, runId }),
+  /// A file an app's screen saves (`dots.saveFile`): Dots asks where in the Save dialog. False
+  /// when the person cancels; rejects with kind `invalid` for a bad name or data over 20 MB.
+  appSaveFile: (name: string, data: string) => call(z.boolean(), "app_save_file", { name, data }),
   /// The person's answer on the card. Rejects with kind `conflict` when it was decided already
   /// or its app moved on, and while the dot's thread is still working.
   appProposalDecide: (id: string, decision: T.ProposalDecision) =>

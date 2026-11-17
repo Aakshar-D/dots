@@ -1,4 +1,5 @@
 pub mod app_frame;
+pub mod app_save;
 pub mod autostart;
 pub mod commands;
 pub mod confirm;
@@ -280,6 +281,7 @@ command_list![
     app_install_bundled,
     app_answer_start_prompt,
     app_run_link,
+    app_save_file,
     watchers_list,
     watcher_add,
     watcher_update,

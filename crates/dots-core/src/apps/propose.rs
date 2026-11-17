@@ -43,7 +43,9 @@ pub const DESCRIPTION: &str = "Send an app you wrote in your workspace to the pe
     description, input as a JSON Schema and writes; permissions), logic.js (an ES module \
     exporting a function per tool, fn(input, ctx), with ctx.db.query(sql, params), \
     ctx.db.exec(sql, params), ctx.now, ctx.id(), ctx.actor and ctx.dots.list()), ui/index.html \
-    (the person's screen, which calls dots.call(tool, input)), migrations/0001_<name>.sql and on, \
+    (the person's screen, which calls dots.call(tool, input); it cannot start a download, so it \
+    saves a file with dots.saveFile(name, base64), true once saved), \
+    migrations/0001_<name>.sql and on, \
     an optional sample.sql, and tests/<name>.test.js using test(name, fn), assert.equal, \
     assert.deepEqual, assert.throws and call(tool, input, { actor, now }). To change an app, \
     send its whole folder, keeping the migrations that ran and adding new ones after them; copy \

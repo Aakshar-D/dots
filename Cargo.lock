@@ -1640,6 +1640,7 @@ version = "0.5.2"
 dependencies = [
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "chrono",
  "dots-core",
  "dots-voice",
