@@ -3197,6 +3197,8 @@ export const VoiceEvent = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("hearing"), text: z.string() }),
   z.strictObject({ kind: z.literal("heard"), text: z.string() }),
   z.strictObject({ kind: z.literal("saying"), text: z.string() }),
+  // What Open Sage is doing now, in a few words: shown, never said.
+  z.strictObject({ kind: z.literal("step"), text: z.string() }),
   // `seq` names the question (1, 2, 3, ... per app run, far below 2^53): a pick sends it back.
   z.strictObject({
     kind: z.literal("ask"),

@@ -28,6 +28,8 @@ You do not press a button to finish. Sage notices when you stop talking: it wait
 
 **Enlarge** in the stage's bottom row makes it fill the window. Enlarged, it shows the whole conversation, every reply in full, in text you can select. Each reply has a copy button and **Copy all** copies the lot. The enlarged stage does not close by itself: it stays until you press Esc or **Close**, and the conversation shown goes with it. **Smaller** brings the small panel back. Sage remembers which size you chose.
 
+While Sage works on what you said, the enlarged stage lists each step under your words: what it is doing and where it is going ("Looking at your workspace", "Thinking it over", "Opening the Inbox", "Sending your message to Research"). The step under way turns; the ones done are ticked, and they stay above the reply. The small panel names the step under way in its bottom line. Steps are shown, never spoken, and **Copy all** leaves them out. A step names a sol, a screen or an app only: never a command, a tool's target or the words of a message.
+
  A list Sage showed stays 10 seconds after it rests, and goes at once when you say the next thing.
 
 ## What you can say

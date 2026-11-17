@@ -9083,6 +9083,10 @@
       "text": "One question."
     },
     {
+      "kind": "step",
+      "text": "Looking at your workspace"
+    },
+    {
       "kind": "ask",
       "options": [
         "Yes",

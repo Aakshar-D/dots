@@ -306,6 +306,91 @@ fn dids(events: &[MindEvent]) -> Vec<String> {
         .collect()
 }
 
+fn step(text: &str) -> MindEvent {
+    MindEvent::Step { text: text.into() }
+}
+
+/// What the mind said it was doing (`Step`), in order.
+fn steps(events: &[MindEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            MindEvent::Step { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Where `event` is among `events`.
+fn place(events: &[MindEvent], event: &MindEvent) -> usize {
+    events
+        .iter()
+        .position(|e| e == event)
+        .unwrap_or_else(|| panic!("{event:?} is not among {events:?}"))
+}
+
+#[tokio::test]
+async fn steps_say_what_is_being_done_and_where_it_goes() {
+    const LOOKING: &str = "Looking at your workspace";
+    const THINKING: &str = "Thinking it over";
+    // A plain answer: the picture, then the model; every step before the turn's end.
+    let t = T::start().await;
+    t.fake.push(says("Hello."));
+    let got = t.hear("hello").await;
+    assert_eq!(steps(&got), vec![LOOKING, THINKING], "{got:?}");
+    assert!(matches!(got.last(), Some(MindEvent::SayEnd { .. })));
+    // A screen opened is named, before it opens.
+    t.fake
+        .push(says("DO {\"act\":\"open\",\"target\":\"inbox\"}"));
+    let got = t.hear("show me the inbox please").await;
+    assert_eq!(
+        steps(&got),
+        vec![LOOKING, THINKING, "Opening the Inbox"],
+        "{got:?}"
+    );
+    let opened = MindEvent::Open {
+        target: OpenTarget::Inbox,
+    };
+    assert!(place(&got, &step("Opening the Inbox")) < place(&got, &opened));
+    // What needs the person.
+    t.fake
+        .push(says("Here's what needs you.\nDO {\"act\":\"needs\"}"));
+    let got = t.hear("what needs me").await;
+    assert_eq!(
+        steps(&got),
+        vec![LOOKING, THINKING, "Checking what needs you"],
+        "{got:?}"
+    );
+    // Answered without a model: no step at all.
+    assert!(steps(&t.hear("stop").await).is_empty());
+    t.rt.shutdown();
+
+    // A message sent names the sol, never the words sent.
+    let t = T::start().await;
+    t.dot("Research").await;
+    t.fake.push(says(
+        "Sending.\nDO {\"act\":\"send\",\"d\":\"d1\",\"text\":\"look at the build\"}",
+    ));
+    let got = t.hear("tell research to look at the build").await;
+    assert_eq!(
+        steps(&got),
+        vec![LOOKING, THINKING, "Sending your message to Research"],
+        "{got:?}"
+    );
+    t.rt.shutdown();
+
+    // A yes: the deed is named as it is carried out, without the tool's target.
+    let t = T::start().await;
+    asking_to_approve(&t).await;
+    let got = t.hear("yes").await;
+    assert_eq!(steps(&got), vec!["Approving Research's request"], "{got:?}");
+    let did = MindEvent::Did {
+        said: "Approved.".into(),
+    };
+    assert!(place(&got, &step("Approving Research's request")) < place(&got, &did));
+    t.rt.shutdown();
+}
+
 #[tokio::test]
 async fn did_follows_every_deed() {
     // approve and deny, each after its confirmation
@@ -1147,7 +1232,15 @@ async fn second_hear_cancels_the_first() {
     assert!(started.elapsed() < Duration::from_secs(10));
     let one = drain(&mut rx1);
     let two = drain(&mut rx2);
-    assert_eq!(one, vec![MindEvent::Thinking], "{one:?}");
+    assert_eq!(
+        one,
+        vec![
+            MindEvent::Thinking,
+            step("Looking at your workspace"),
+            step("Thinking it over")
+        ],
+        "{one:?}"
+    );
     assert_eq!(said(&two), "The second answer.");
     assert!(lock(&t.fake.cancels)[0].is_cancelled());
     t.rt.shutdown();
@@ -1854,7 +1947,12 @@ async fn a_panicking_thinker_still_ends_the_turn() {
     let got = drain(&mut rx);
     assert_eq!(
         got,
-        vec![MindEvent::Thinking, MindEvent::SayEnd { then: Then::Rest }]
+        vec![
+            MindEvent::Thinking,
+            step("Looking at your workspace"),
+            step("Thinking it over"),
+            MindEvent::SayEnd { then: Then::Rest }
+        ]
     );
     // the mind goes on
     t.fake.push(says("Hello."));

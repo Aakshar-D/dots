@@ -628,3 +628,14 @@ Run 2 shared the machine with the whole core test suite (a short sentence took 2
 - Bluetooth (and HDMI) speaker delay: whether the system reports it to the audio layer, so the ears do not reopen on the tail of Dot's own reply. The hand check has no Bluetooth case yet.
 - The person's look at The Breath in each state, in both themes, and the person's choice of voice (ten were built; none was chosen by ear).
 - Timing against the two-second target: the first sound misses it by about 0.8 s and the reply by 2.5 to 5 s with the real model. The kept CLI process (measured in step 2, about 0.5 s off each request, not built) would move it most.
+
+### Steps on the stage (2026-11-17)
+
+The person's words: "when open sage is enlarged, what it's doing where it's going should show, or else user has to sit looking at the animations".
+
+- The mind sends a new event, `MindEvent::Step { text }`: a few words on what it is doing now. It comes anywhere before `SayEnd`, any number of times, only for the current turn, and is never spoken. The app passes it on as the `step` voice event.
+- Sent: "Looking at your workspace" before the picture is taken, "Thinking it over" before the model is asked, then what the wish leads to: "Checking what needs you", "Opening the Inbox" (the open step's own sentence, before the screen opens), "Sending your message to X", "Answering X", "Approving X's request", "Denying X's request", "Starting X", "Running the command", "Creating X", "Working out the new sol", "Saving that to memory", and one per desk task ("Opening Notepad", "Searching the web", "Turning the volume up"). A turn answered without a model (stop, repeat, a no) sends none.
+- A step names a sol (its cleaned name), a screen or an app only. A command, a tool's target and the words of a message are never in it, so it shows no more than a question or an outcome says aloud.
+- The UI keeps steps in the conversation (`talk`, `who: "step"`) between what was heard and the reply. The enlarged stage draws the steps in a row as one list: the last one turns while Sage thinks and nothing came after it; the others are ticked. The small stage shows the step under way in its bottom line in place of "Thinking…". Steps are left out of **Copy all**.
+- Also for smoothness: the conversation glides to its newest entry (it jumps when less motion is asked for), a step fades in, and a `level` event that changes nothing no longer wakes the store's readers (up to 30 a second in silence).
+- Not changed: how a turn is heard, thought and spoken. The reply path already starts the CLI ahead of the request; no timing was changed here, and none was measured on a real microphone.

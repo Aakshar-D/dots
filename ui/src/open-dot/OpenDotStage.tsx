@@ -1,11 +1,11 @@
 import { cn } from "cn";
-import { Copy, Maximize2, Minimize2 } from "lucide-react";
+import { Check, Copy, LoaderCircle, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
 import { notifyError } from "@/lib/notify";
-import { useVoiceLive, useVoiceStatus, voiceStore, type VoiceLive } from "@/lib/use-voice";
+import { useVoiceLive, useVoiceStatus, voiceStore, type TalkLine, type VoiceLive } from "@/lib/use-voice";
 
 import { Breath } from "./Breath";
 import { breathStateOf } from "./breath-model";
@@ -45,9 +45,25 @@ function copy(text: string): void {
     .catch(notifyError);
 }
 
-/// The conversation as plain text, one paragraph per turn.
+/// The conversation as plain text, one paragraph per turn: what was said, not the steps
+/// Sage took on the way.
 export function talkText(talk: VoiceLive["talk"]): string {
-  return talk.map((line) => `${line.who === "you" ? "You" : "Sage"}: ${line.text}`).join("\n\n");
+  return talk
+    .filter((line) => line.who !== "step")
+    .map((line) => `${line.who === "you" ? "You" : "Sage"}: ${line.text}`)
+    .join("\n\n");
+}
+
+/// The conversation in the blocks it is drawn in: the steps Sage took in a row are one block.
+export function talkBlocks(talk: TalkLine[]): (TalkLine | TalkLine[])[] {
+  const blocks: (TalkLine | TalkLine[])[] = [];
+  for (const line of talk) {
+    const last = blocks[blocks.length - 1];
+    if (line.who !== "step") blocks.push(line);
+    else if (Array.isArray(last)) last.push(line);
+    else blocks.push([line]);
+  }
+  return blocks;
 }
 
 /// Whether the person asked for less motion, following the setting as it changes.
@@ -86,12 +102,14 @@ function micLine(live: {
   showing: boolean;
   options: boolean;
   shortcut: boolean;
+  step: string | null;
 }): string | null {
   if (live.micOpen) return null;
   if (live.trouble) return live.trouble;
   switch (live.state) {
     case "thinking":
-      return "Thinking…";
+      // What it is doing now, when it has said so.
+      return live.step ? `${live.step}…` : "Thinking…";
     case "speaking":
       return live.shortcut
         ? "Speaking. Click the mark or press the shortcut to interrupt."
@@ -167,19 +185,59 @@ function Words({ question }: { question: string | null }) {
   );
 }
 
+/// The steps Sage took in a row, oldest first: what it did and where it went on the way to its
+/// reply. The one under way turns; the ones before it are ticked.
+function Steps({ steps, now }: { steps: TalkLine[]; now: number | null }) {
+  return (
+    <ul data-steps="" aria-label="What Sage is doing" className="flex flex-col gap-1.5 border-l-2 pl-3">
+      {steps.map((step) => {
+        const current = step.n === now;
+        return (
+          <li
+            key={step.n}
+            data-step={current ? "now" : "done"}
+            aria-current={current ? "step" : undefined}
+            className={cn(
+              "flex items-center gap-2 text-sm motion-safe:animate-in motion-safe:duration-200 motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1",
+              current ? "text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {current ? (
+              <LoaderCircle aria-hidden className="size-3.5 shrink-0 text-primary motion-safe:animate-spin" />
+            ) : (
+              <Check aria-hidden className="size-3.5 shrink-0" />
+            )}
+            <span className="min-w-0 wrap-anywhere">{step.text}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /// The enlarged stage's words: the whole conversation, every reply in full, in text that can
-/// be selected and copied. The newest is kept in view. Words still coming show below it.
-function Talk() {
+/// be selected and copied, with the steps Sage took between what was asked and what it
+/// answered. The newest is kept in view. Words still coming show below it.
+function Talk({ reduced }: { reduced: boolean }) {
   const talk = useVoiceLive((live) => live.talk);
   const hearing = useVoiceLive((live) => live.hearing);
   const heard = useVoiceLive((live) => live.heard);
+  const thinking = useVoiceLive((live) => live.state === "thinking");
   const end = useRef<HTMLDivElement>(null);
   const newest = talk[talk.length - 1];
   const tail = `${newest?.n ?? 0}:${newest?.text.length ?? 0}:${heard ? "" : hearing}`;
+  // The first time it only arrives at the end; after that it glides there.
+  const moved = useRef(false);
   useEffect(() => {
-    end.current?.scrollIntoView?.({ block: "end" });
-  }, [tail]);
+    end.current?.scrollIntoView?.({
+      block: "end",
+      behavior: moved.current && !reduced ? "smooth" : "auto",
+    });
+    moved.current = true;
+  }, [tail, reduced]);
   const coming = hearing !== "" && !heard;
+  // A step is under way only while Sage thinks and nothing came after it.
+  const now = thinking && newest?.who === "step" ? newest.n : null;
   return (
     <div
       data-talk=""
@@ -191,31 +249,35 @@ function Talk() {
       {talk.length === 0 && !coming && (
         <p className="m-auto text-sm text-muted-foreground">What you say and what Sage answers shows here.</p>
       )}
-      {talk.map((line) => (
-        <div key={line.n} data-who={line.who} className="group flex flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">{line.who === "you" ? "You" : "Sage"}</span>
-            {line.who === "sage" && (
-              <button
-                type="button"
-                aria-label="Copy this reply"
-                onClick={() => copy(line.text)}
-                className="inline-flex items-center rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                <Copy aria-hidden className="size-3.5" />
-              </button>
-            )}
+      {talkBlocks(talk).map((line) =>
+        Array.isArray(line) ? (
+          <Steps key={line[0]!.n} steps={line} now={now} />
+        ) : (
+          <div key={line.n} data-who={line.who} className="group flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">{line.who === "you" ? "You" : "Sage"}</span>
+              {line.who === "sage" && (
+                <button
+                  type="button"
+                  aria-label="Copy this reply"
+                  onClick={() => copy(line.text)}
+                  className="inline-flex items-center rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <Copy aria-hidden className="size-3.5" />
+                </button>
+              )}
+            </div>
+            <p
+              className={cn(
+                "text-base leading-relaxed whitespace-pre-wrap wrap-anywhere",
+                line.who === "you" ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {line.text}
+            </p>
           </div>
-          <p
-            className={cn(
-              "text-base leading-relaxed whitespace-pre-wrap wrap-anywhere",
-              line.who === "you" ? "text-muted-foreground" : "text-foreground",
-            )}
-          >
-            {line.text}
-          </p>
-        </div>
-      ))}
+        ),
+      )}
       {coming && (
         <p aria-live="off" className="text-base leading-relaxed text-muted-foreground/70 wrap-anywhere">
           {hearing}
@@ -337,7 +399,8 @@ function Panel(props: {
   resize: () => void;
 }) {
   const { act, close, justFinished, leaving, large, resize } = props;
-  const spoken = useVoiceLive((live) => live.talk.length > 0);
+  const spoken = useVoiceLive((live) => live.talk.some((line) => line.who !== "step"));
+  const step = useVoiceLive((live) => live.step);
   const state = useVoiceLive((live) => live.state);
   const micOpen = useVoiceLive((live) => live.micOpen);
   const trouble = useVoiceLive((live) => live.trouble);
@@ -414,6 +477,7 @@ function Panel(props: {
     showing: ask !== null || card !== null,
     options,
     shortcut: hotkey !== "",
+    step,
   });
 
   return (
@@ -449,7 +513,7 @@ function Panel(props: {
             }}
           />
         </div>
-        {large ? <Talk /> : <Words question={ask?.question ?? null} />}
+        {large ? <Talk reduced={reduced} /> : <Words question={ask?.question ?? null} />}
         {ask !== null && <Question ask={ask} />}
         {options && <Options ask={ask} picked={picked} pick={pick} />}
         {card !== null && (

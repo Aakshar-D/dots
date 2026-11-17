@@ -2497,6 +2497,9 @@ fn voice_samples(samples: &mut Value, proposal: SetupProposal) {
         VoiceEvent::Saying {
             text: "One question.".into(),
         },
+        VoiceEvent::Step {
+            text: "Looking at your workspace".into(),
+        },
         VoiceEvent::Ask {
             question: "Approve it?".into(),
             options: vec!["Yes".into(), "No".into()],

@@ -200,6 +200,55 @@ describe("useVoice", () => {
     expect(new Set(numbers).size).toBe(numbers.length);
   });
 
+  it("keeps the steps Sage takes between what was heard and its reply", async () => {
+    mount("/home");
+    await hear({ kind: "heard", text: "Open the inbox." }, () =>
+      expect(voiceStore.get().talk.length).toBeGreaterThan(0),
+    );
+    act(() => voiceStore.set({ talk: voiceStore.get().talk.slice(-1) }));
+    act(() => backend.emit("voice", { kind: "state", state: "thinking", mic_open: false }));
+    expect(voiceStore.get().step).toBeNull();
+    act(() => backend.emit("voice", { kind: "step", text: "Looking at your workspace" }));
+    expect(voiceStore.get().step).toBe("Looking at your workspace");
+    // The same step again is one step; an empty one is none.
+    act(() => backend.emit("voice", { kind: "step", text: "Looking at your workspace" }));
+    act(() => backend.emit("voice", { kind: "step", text: "  " }));
+    act(() => backend.emit("voice", { kind: "step", text: "Opening the Inbox" }));
+    expect(voiceStore.get().step).toBe("Opening the Inbox");
+    // The reply begins: no step is under way, and the steps stay in the conversation.
+    act(() => backend.emit("voice", { kind: "state", state: "speaking", mic_open: false }));
+    expect(voiceStore.get().step).toBeNull();
+    act(() => backend.emit("voice", { kind: "saying", text: "The Inbox is open." }));
+    expect(voiceStore.get().talk.map((line) => [line.who, line.text])).toEqual([
+      ["you", "Open the inbox."],
+      ["step", "Looking at your workspace"],
+      ["step", "Opening the Inbox"],
+      ["sage", "The Inbox is open."],
+    ]);
+    // The next sentence heard, and a step that was dropped, leave none under way.
+    act(() => backend.emit("voice", { kind: "state", state: "thinking", mic_open: false }));
+    act(() => backend.emit("voice", { kind: "step", text: "Thinking it over" }));
+    act(() => backend.emit("voice", { kind: "heard", text: "And usage." }));
+    expect(voiceStore.get().step).toBeNull();
+    act(() => backend.emit("voice", { kind: "step", text: "Thinking it over" }));
+    act(() => backend.emit("voice", { kind: "cleared" }));
+    expect(voiceStore.get().step).toBeNull();
+  });
+
+  it("wakes no reader for a level that changes nothing", async () => {
+    mount("/home");
+    await hear({ kind: "level", mic: 0.5, voice: 0 }, () =>
+      expect(voiceStore.get().level.mic).toBe(0.5),
+    );
+    let woken = 0;
+    const stop = voiceStore.subscribe(() => (woken += 1));
+    act(() => backend.emit("voice", { kind: "level", mic: 0.5, voice: 0 }));
+    expect(woken).toBe(0);
+    act(() => backend.emit("voice", { kind: "level", mic: 0.25, voice: 0 }));
+    expect(woken).toBe(1);
+    stop();
+  });
+
   it("keeps the last three lines of a reply, and starts afresh on what is heard next", async () => {
     mount("/home");
     await hear({ kind: "hearing", text: "what is" }, () =>

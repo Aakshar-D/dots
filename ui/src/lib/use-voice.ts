@@ -33,10 +33,14 @@ export type VoiceLive = {
   /// `seq` names the question: a pick on its options sends it back.
   ask: { question: string; options: string[]; seq: number } | null;
   card: OpenDotCard | null;
-  /// The conversation so far, oldest first: what the person said and what Sage said back, a
-  /// whole reply in one entry. The enlarged stage shows it and drops it when it goes away.
-  /// Kept in memory only, the last `TALK_KEPT` entries.
+  /// The conversation so far, oldest first: what the person said, what Sage did about it (one
+  /// entry per step) and what Sage said back, a whole reply in one entry. The enlarged stage
+  /// shows it and drops it when it goes away. Kept in memory only, the last `TALK_KEPT`
+  /// entries.
   talk: TalkLine[];
+  /// What Sage is doing now, in a few words ("Opening the Inbox"); null before a turn's first
+  /// step and once the turn is over.
+  step: string | null;
   /// The speech files' download, while one runs.
   download: { done: number; total: number } | null;
   /// The take a voice setup is recording now; null when none runs. The settings page that
@@ -50,7 +54,8 @@ export type VoiceLive = {
 
 export type SaidLine = { n: number; text: string };
 
-export type TalkLine = { n: number; who: "you" | "sage"; text: string };
+/// `step` is something Sage did on the way to its reply: shown, never said.
+export type TalkLine = { n: number; who: "you" | "sage" | "step"; text: string };
 
 const quiet: VoiceLive = {
   state: "off",
@@ -63,6 +68,7 @@ const quiet: VoiceLive = {
   ask: null,
   card: null,
   talk: [],
+  step: null,
   download: null,
   settingUp: null,
   trouble: null,
@@ -129,6 +135,14 @@ function withSaid(talk: TalkLine[], text: string, first: boolean): TalkLine[] {
   }
   lastLine += 1;
   return [...talk, { n: lastLine, who: "sage" as const, text }].slice(-TALK_KEPT);
+}
+
+/// The conversation with one more thing Sage did. The same step twice in a row is one.
+function withStep(talk: TalkLine[], text: string): TalkLine[] {
+  const last = talk[talk.length - 1];
+  if (last?.who === "step" && last.text === text) return talk;
+  lastLine += 1;
+  return [...talk, { n: lastLine, who: "step" as const, text }].slice(-TALK_KEPT);
 }
 
 /// How many times the voice status was set from something newer than a read (an event, or a
@@ -221,9 +235,11 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
     case "state":
       // Listening again means whatever was wrong is not, and the reply before it is over: its
       // lines do not come back when the listening ends in silence.
+      // Only while it thinks is there a step under way: any other state ends it.
       voiceStore.set({
         state: event.state,
         micOpen: event.mic_open,
+        ...(event.state === "thinking" ? {} : { step: null }),
         ...(event.state === "listening" ? { trouble: null, saying: "", said: [] } : {}),
       });
       {
@@ -238,9 +254,13 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
         }
       }
       return;
-    case "level":
+    case "level": {
+      // Up to 30 a second: one that changes nothing (silence) wakes no reader.
+      const { level } = voiceStore.get();
+      if (level.mic === event.mic && level.voice === event.voice) return;
       voiceStore.set({ level: { mic: event.mic, voice: event.voice } });
       return;
+    }
     case "hearing":
       voiceStore.set({ hearing: event.text, heard: false });
       return;
@@ -250,9 +270,16 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
         hearing: event.text,
         heard: true,
         said: [],
+        step: null,
         talk: withHeard(voiceStore.get().talk, event.text),
       });
       return;
+    case "step": {
+      const text = event.text.trim();
+      if (text === "") return;
+      voiceStore.set({ step: text, talk: withStep(voiceStore.get().talk, text) });
+      return;
+    }
     case "saying": {
       // The first line of a reply: what was heard gives way to it.
       const { said, talk } = voiceStore.get();
@@ -277,7 +304,15 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       open(pathOf(event.target));
       return;
     case "cleared":
-      voiceStore.set({ hearing: "", heard: false, saying: "", said: [], ask: null, card: null });
+      voiceStore.set({
+        hearing: "",
+        heard: false,
+        saying: "",
+        said: [],
+        ask: null,
+        card: null,
+        step: null,
+      });
       return;
     case "woke":
       return;

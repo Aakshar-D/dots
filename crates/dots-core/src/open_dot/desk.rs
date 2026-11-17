@@ -316,6 +316,29 @@ pub enum DeskTask {
 }
 
 impl DeskTask {
+    /// What carrying it out is, in a few words, for the stage to show while it is done.
+    pub fn doing(&self) -> String {
+        match self {
+            DeskTask::Note { title, .. } => format!("Writing the note {title}"),
+            DeskTask::Web { site, .. } => format!("Opening {site} in your browser"),
+            DeskTask::Search { .. } => "Searching the web".into(),
+            DeskTask::App { app } => format!("Opening {}", app.name()),
+            DeskTask::Page { page } => format!("Opening {}", page.name()),
+            DeskTask::Named { name } => format!("Opening {name}"),
+            DeskTask::Key { key } => match key {
+                DeskKey::VolumeUp => "Turning the volume up",
+                DeskKey::VolumeDown => "Turning the volume down",
+                DeskKey::Mute => "Muting the sound",
+                DeskKey::PlayPause => "Pressing play or pause",
+                DeskKey::Next => "Skipping to the next one",
+                DeskKey::Previous => "Going back one",
+            }
+            .into(),
+            DeskTask::Close { app } => format!("Closing {}", app.name()),
+            DeskTask::Command { .. } => "Running the command".into(),
+        }
+    }
+
     /// What is said once the task was carried out.
     pub fn done(&self) -> String {
         match self {

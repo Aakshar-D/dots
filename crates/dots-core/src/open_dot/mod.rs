@@ -52,6 +52,11 @@ use think::{cap_hit, Thinker};
 /// 1. `Cleared` (a step that waited was dropped: the idle period passed, it went stale, the
 ///    view moved to another account or workspace, or this turn answers or drops it);
 /// 2. `Thinking` (a model request or a setup round starts);
+///
+/// `Step` comes anywhere before `SayEnd`, any number of times: a few plain words on what the
+/// mind is doing now ("Looking at your workspace", "Opening the Inbox"), for the stage to
+/// show. It is never spoken, and it names only what a question or an outcome would say aloud:
+/// a sol's cleaned name, a screen, an app; never a command, a target or a message's words.
 /// 3. `Filler` (at most once, before any `Say`, when nothing was said by `FILLER_AFTER`);
 /// 4. `Say` deltas, interleaved with `Card` and `Open` as the step needs them (a confirmation
 ///    sends its `Card` and, when the target is on screen, its `Open` before its `Ask`; a dot
@@ -104,6 +109,10 @@ pub enum MindEvent {
     Did {
         said: String,
     },
+    /// What the mind is doing now, in a few words, to show and never to say.
+    Step {
+        text: String,
+    },
 }
 
 /// What the stage does after a turn's words.
@@ -128,6 +137,13 @@ pub enum Card {
     Confirm { deed: Deed },
     List { title: String, lines: Vec<String> },
 }
+
+/// The steps shown while a turn is worked on (`MindEvent::Step`).
+const STEP_LOOKING: &str = "Looking at your workspace";
+const STEP_THINKING: &str = "Thinking it over";
+const STEP_NEEDS: &str = "Checking what needs you";
+const STEP_SETUP: &str = "Working out the new sol";
+const STEP_REMEMBER: &str = "Saving that to memory";
 
 /// Turns and what waits are forgotten after this long without a turn.
 pub const IDLE_FORGET: Duration = Duration::from_secs(600);
@@ -476,6 +492,14 @@ impl<'a> Out<'a> {
         } else {
             sentence.to_string()
         });
+    }
+
+    /// What the mind is doing now, for the stage to show: a few words with no full stop.
+    fn step(&self, text: &str) {
+        let text = text.trim().trim_end_matches('.');
+        if !text.is_empty() {
+            self.send(MindEvent::Step { text: text.into() });
+        }
     }
 
     fn ask(&self, question: &str, options: Vec<String>) {
@@ -876,9 +900,11 @@ impl Mind {
                     if !rt.settings().await.open_dot_commands {
                         Outcome::refused(desk::COMMANDS_OFF)
                     } else {
+                        o.step(&deed.doing());
                         self.run_command(o, command, cancel).await
                     }
                 } else {
+                    o.step(&deed.doing());
                     let Some(done) = confirmed(rt, &deed, view, &may_act).await else {
                         o.end(Then::Rest);
                         return "ended before the deed";
@@ -899,6 +925,7 @@ impl Mind {
                     o.end(Then::Rest);
                     return "ended before the deed";
                 }
+                o.step(&format!("Creating {}", spoken_name(&proposal.name)));
                 let (said, opened, then) = create(rt, proposal, view).await;
                 o.deed_done(&said);
                 o.say(&said);
@@ -1225,6 +1252,7 @@ impl Mind {
                 let mut rounds = rounds;
                 rounds.push(SetupRound { questions, answers });
                 o.send(MindEvent::Thinking);
+                o.step(STEP_SETUP);
                 let req = SetupRequest {
                     description,
                     rounds,
@@ -1261,6 +1289,7 @@ impl Mind {
             return "cap";
         }
         o.send(MindEvent::Thinking);
+        o.step(STEP_LOOKING);
         let picture = match Picture::take(rt, view).await {
             Ok(p) => p,
             Err(_) => {
@@ -1269,6 +1298,7 @@ impl Mind {
                 return "picture failed";
             }
         };
+        o.step(STEP_THINKING);
         let turns = lock(&self.state).turns.clone();
         // What was learned about the person comes first, so the answer is theirs.
         let asking = format!("{}{}", self.memory.text(), prompt(&picture, &turns, heard));
@@ -1350,6 +1380,7 @@ impl Mind {
             return "words";
         };
         if wish == Wish::Needs {
+            o.step(STEP_NEEDS);
             return self.needs(&picture, heard, o);
         }
         if let Wish::ReadQuestion { q } = &wish {
@@ -1445,6 +1476,7 @@ impl Mind {
                     o.end(Then::Rest);
                     return "ended before the deed";
                 }
+                o.step(&deed.doing());
                 let done = outcome(rt, &deed).await;
                 o.deed_done(&done.said);
                 let then = if done.done {
@@ -1491,6 +1523,8 @@ impl Mind {
                 "ask"
             }
             Step::Open(target, said) => {
+                // Where it goes: the outcome's own words ("Opening the Inbox").
+                o.step(&said);
                 o.send(MindEvent::Open { target });
                 // The model often says the same thing first ("Opening the inbox."): once is
                 // enough.
@@ -1499,6 +1533,7 @@ impl Mind {
                 "open"
             }
             Step::Remember(note) => {
+                o.step(STEP_REMEMBER);
                 // What is kept is said, so the person hears what Sage took from it.
                 let line = match self.memory.remember(&note) {
                     memory::REMEMBERED => format!(
@@ -1521,6 +1556,7 @@ impl Mind {
                 "forget"
             }
             Step::Desk(task) => {
+                o.step(&task.doing());
                 let desk = lock(&self.desk).clone();
                 let doing = task.clone();
                 // Writing a file or starting a program is not for the async threads.
@@ -1537,6 +1573,7 @@ impl Mind {
                 "desk"
             }
             Step::Create { description } => {
+                o.step(STEP_SETUP);
                 o.say(SETTING_UP);
                 let req = SetupRequest {
                     description,
@@ -1592,6 +1629,7 @@ impl Mind {
         o: &Out<'_>,
         cancel: &CancellationToken,
     ) -> &'static str {
+        o.step(STEP_LOOKING);
         let picture = match Picture::take(rt, view).await {
             Ok(p) => p,
             Err(_) => {

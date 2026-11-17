@@ -31,6 +31,10 @@ pub enum VoiceEvent {
     Saying {
         text: String,
     },
+    /// What Open Sage is doing now, in a few words ("Opening the Inbox"): shown, never said.
+    Step {
+        text: String,
+    },
     /// A question that waits on the person, with its options (none for an open question).
     /// `seq` names this question: a pick carries it back, and one for any other question is
     /// ignored. It starts at 1 per process and grows by one per question, so it stays far
@@ -195,6 +199,13 @@ mod tests {
         assert_eq!(
             serde_json::to_value(VoiceEvent::Cleared).unwrap(),
             json!({"kind": "cleared"})
+        );
+        assert_eq!(
+            serde_json::to_value(VoiceEvent::Step {
+                text: "Opening the Inbox".into()
+            })
+            .unwrap(),
+            json!({"kind": "step", "text": "Opening the Inbox"})
         );
         let ev = VoiceEvent::Open {
             target: OpenTarget::Inbox,
