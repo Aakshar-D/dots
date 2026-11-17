@@ -135,6 +135,8 @@ mod tests {
             heard,
             tuning: WakeTuning::Standard,
             level,
+            by_text: 0,
+            phrases: Vec::new(),
         };
         let good = VoiceSetup::of(&found(5, Some(0.05)));
         assert_eq!(
@@ -153,7 +155,20 @@ mod tests {
         let few = VoiceSetup::of(&found(2, Some(0.05)));
         assert_eq!(
             few.message,
-            "Sage heard you only 2 times out of 5. It is set as keen as it safely can be."
+            "Sage heard you only 2 times out of 5. Try again a little closer to the microphone, \
+             saying it the same way each time."
+        );
+        // The words Sage learned for the phrase are not part of what the page is given.
+        let learned = Calibration {
+            by_text: 4,
+            phrases: vec!["hate sage".into()],
+            ..found(4, Some(0.05))
+        };
+        let shown = serde_json::to_string(&VoiceSetup::of(&learned)).unwrap();
+        assert!(!shown.contains("hate"), "{shown}");
+        assert_eq!(
+            VoiceSetup::of(&learned).message,
+            "Sage heard you 4 times out of 5 and is set up for your voice."
         );
         let none = VoiceSetup::of(&found(0, None));
         assert_eq!(

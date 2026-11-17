@@ -212,6 +212,8 @@ struct FakeFactory {
     let_go: std::sync::Condvar,
     /// Builds that found they were no longer wanted, and started no session.
     unwanted: AtomicUsize,
+    /// What a voice setup finds; none can be done while unset.
+    found: Mutex<Option<Calibration>>,
 }
 
 impl FakeFactory {
@@ -259,6 +261,13 @@ impl SessionFactory for Arc<FakeFactory> {
         });
         self.sessions.lock().unwrap().push(session.clone());
         Ok(Some(Built { session, events }))
+    }
+    fn setup(&self, _spec: &BuildSpec, on_take: &dyn Fn(u8)) -> Result<Calibration, String> {
+        let found = self.found.lock().unwrap().clone();
+        let found = found.ok_or_else(|| MODELS_BROKEN.to_string())?;
+        (1..=found.takes).for_each(on_take);
+        on_take(0);
+        Ok(found)
     }
     fn microphones(&self) -> Vec<VoiceDevice> {
         vec![VoiceDevice {
@@ -1594,6 +1603,93 @@ async fn a_resume_cancelled_by_the_person_stores_voice_off() {
     assert!(!status.enabled, "{status:?}");
     assert_eq!(status.trouble, None);
     assert!(!r.stored().voice_enabled, "stored off");
+}
+
+fn found(heard: u8, by_text: u8, phrases: &[&str]) -> Calibration {
+    Calibration {
+        takes: 5,
+        heard,
+        tuning: dots_voice::WakeTuning::Sensitive,
+        level: Some(0.02),
+        by_text,
+        phrases: phrases.iter().map(|p| p.to_string()).collect(),
+    }
+}
+
+/// A voice setup is saved with the words it learned for the phrase, and the session is built
+/// again with them. The page is told the counts and a sentence, never the words.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_voice_setup_is_saved_and_the_session_is_built_again_with_what_it_learned() {
+    let mut r = rig(Mode::Normal).await;
+    r.svc.enable(true).await.unwrap();
+    session_in(&r, State::Idle).await;
+    assert!(r.factory.specs.lock().unwrap()[0].phrases.is_empty());
+    assert!(r.svc.setup().is_none());
+
+    *r.factory.found.lock().unwrap() = Some(found(4, 4, &["hate sage"]));
+    let told = r.svc.set_up().await.unwrap();
+    assert_eq!((told.heard, told.takes), (4, 5));
+    assert_eq!(
+        told.message,
+        "Sage heard you 4 times out of 5 and is set up for your voice."
+    );
+    assert!(!serde_json::to_string(&told).unwrap().contains("hate"));
+    let events = r.ui();
+    assert!(events.contains(&VoiceEvent::SettingUp { take: 1, of: 5 }));
+    assert!(events.contains(&VoiceEvent::SettingUp { take: 0, of: 5 }));
+    // The old session let go of the microphone, and a new one knows the words.
+    assert!(r
+        .factory
+        .session(0)
+        .calls()
+        .contains(&"shutdown".to_string()));
+    assert_eq!(r.factory.builds(), 2);
+    let spec = r.factory.specs.lock().unwrap()[1].clone();
+    assert_eq!(spec.phrases, ["hate sage"]);
+    assert_eq!(spec.tuning, dots_voice::WakeTuning::Sensitive);
+    assert_eq!(spec.level, Some(0.02));
+    assert_eq!(r.svc.setup().map(|s| s.heard), Some(4));
+    // Kept beside the folder of the speech files, and read back whole.
+    let kept = Service::read_setup(&r.root).unwrap();
+    assert_eq!(kept, found(4, 4, &["hate sage"]));
+
+    // A setup that heard nothing changes nothing: the words learned before stay.
+    *r.factory.found.lock().unwrap() = Some(found(0, 0, &[]));
+    let told = r.svc.set_up().await.unwrap();
+    assert_eq!(told.heard, 0);
+    assert_eq!(r.factory.builds(), 3);
+    assert_eq!(r.factory.specs.lock().unwrap()[2].phrases, ["hate sage"]);
+    assert_eq!(Service::read_setup(&r.root).unwrap().phrases, ["hate sage"]);
+}
+
+/// A setup saved before the takes' words were read has no words in it: it is still used,
+/// for its tuning and its level.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_voice_setup_saved_by_an_older_sage_is_still_used() {
+    let r = rig(Mode::Normal).await;
+    std::fs::create_dir_all(r.root.parent().unwrap()).unwrap();
+    std::fs::write(
+        Service::setup_path(&r.root),
+        r#"{"takes":5,"heard":3,"tuning":"sensitive","level":0.019}"#,
+    )
+    .unwrap();
+    let kept = Service::read_setup(&r.root).unwrap();
+    assert_eq!((kept.heard, kept.by_text), (3, 0));
+    let spec = r.svc.spec_of(&on(), Some(&kept));
+    assert_eq!(spec.tuning, dots_voice::WakeTuning::Sensitive);
+    assert_eq!(spec.level, Some(0.019));
+    assert!(spec.phrases.is_empty());
+    // Other words learned are another session: one built for the old setup does not serve.
+    let learned = r.svc.spec_of(&on(), Some(&found(4, 4, &["hate sage"])));
+    assert!(same_devices(&spec, &spec.clone()));
+    assert!(!same_devices(
+        &spec,
+        &BuildSpec {
+            tuning: spec.tuning,
+            level: spec.level,
+            ..learned
+        }
+    ));
 }
 
 /// The wake phrase's model is loaded only when the spotter is first fed, which the session

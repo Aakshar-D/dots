@@ -15,7 +15,9 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use crate::audio::{Mic, MicFrame};
 use crate::ears::{level, EarEvent, Ears};
-use crate::engine::{EngineError, WakeSpotter, WakeWord, FRAME};
+use crate::engine::{
+    Clip, EngineError, Recognizer, SpeechDetector, WakeSpotter, WakeWord, EAR_RATE, FRAME,
+};
 use crate::gain::Gain;
 use crate::tone::{listen_tone, TONE_RATE};
 use crate::voice::{Sink, Voice, VoiceEvent};
@@ -64,6 +66,20 @@ const CARRY_NOISE_QUIET: usize = 6;
 const SPEAKING_NOW_FRAMES: usize = 3;
 /// Idle frames kept for the ears (about a second): the spotter answers at most this late.
 const RECENT_FRAMES: usize = 32;
+/// Idle frames kept from before speech begins (about 320 ms), for the clip whose words are
+/// read for the wake phrase: the detector answers a little after the first word starts.
+const WAKE_TEXT_LEAD: usize = 10;
+/// Quiet frames (about 320 ms) that end such a clip, and that must pass before the next one
+/// begins: the wake phrase is looked for only at the start of what a person says.
+pub(crate) const WAKE_TEXT_QUIET: usize = 10;
+/// Such a clip is read at this length (about two seconds) though the person is still
+/// speaking: "Hey Sage" is over long before, and the answer must not wait for a long sentence.
+const WAKE_TEXT_FRAMES: usize = 62;
+/// A clip with fewer speech frames than this (about 250 ms) is a click or a cough: not read.
+const WAKE_TEXT_MIN_SPEECH: usize = 8;
+/// The most idle frames kept while a clip is being read (about five seconds): when its words
+/// are the wake phrase, everything said since it began goes to the ears.
+const IDLE_CLIP_FRAMES: usize = 156;
 
 /// When the speaker cannot tell how long its sound takes to leave the device, the ears wait
 /// this much longer after it goes quiet, on top of `reopen_after_ms` (best effort: a speaker
@@ -97,6 +113,99 @@ const DIDNT_CATCH: &str = "Sorry, I didn't catch that.";
 const GREETING: &str = "How can I help?";
 const QUESTION_CUT: &str = "The question could not be said in full, so nothing was done.";
 
+/// A word as it is compared: its letters and digits, lower case.
+fn plain_word(word: &str) -> String {
+    word.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// "Sage" as the recogniser writes the name itself.
+fn sage_name(word: &str) -> bool {
+    matches!(word, "sage" | "sages" | "saige" | "sayge")
+}
+
+/// Every word seen for "Sage" after "hey": the name, and what it was misheard as. ("Say"
+/// and "save" were seen too, and are left out: "Hey, say that again" is not the phrase.)
+pub(crate) fn sage_like(word: &str) -> bool {
+    sage_name(word)
+        || matches!(
+            word,
+            "seige" | "siege" | "stage" | "sedge" | "saj" | "sej" | "sayj" | "cage" | "sate"
+        )
+}
+
+/// The whole phrase written as one word, as the recogniser does for a faint voice. No such
+/// word is ever said for anything else.
+fn phrase_in_one(word: &str) -> bool {
+    word == "asage"
+}
+
+/// The words of `text` as they are compared (`plain_word`); a mark standing alone is no word.
+pub(crate) fn plain_words(text: &str) -> Vec<String> {
+    text.split_whitespace()
+        .map(plain_word)
+        .filter(|word| !word.is_empty())
+        .collect()
+}
+
+/// How many words the phrase of `phrases` that `words` begin with has; 0 when they begin
+/// with none. A phrase of one word is never taken: it would be said by chance all day.
+fn personal_phrase_len(words: &[String], phrases: &[String]) -> usize {
+    phrases
+        .iter()
+        .map(|phrase| phrase.split(' ').filter(|w| !w.is_empty()).collect())
+        .find(|phrase: &Vec<&str>| {
+            phrase.len() >= 2
+                && words.len() >= phrase.len()
+                && words.iter().zip(phrase).all(|(word, part)| word == part)
+        })
+        .map_or(0, |phrase| phrase.len())
+}
+
+/// Whether `text`, as the recogniser wrote what was said, begins with the wake phrase: "hey"
+/// and then a word that sounds like "Sage", or one of `phrases` (what a voice setup heard
+/// this person's phrase as: lower-case words with one space between).
+///
+/// "A" and then the name itself ("A sage") is the phrase too. Stricter than
+/// `without_wake_phrase`, which also takes "hi" or "he" before the name and "a" before a
+/// word only like it: this wakes the session, and "A stage is set" or "He's sage" must not.
+pub fn wake_text_matches(text: &str, phrases: &[String]) -> bool {
+    wake_phrase_len(&plain_words(text), phrases) > 0
+}
+
+/// How many of `words`, from the first, are the wake phrase (see `wake_text_matches`); 0
+/// when they do not begin with it.
+fn wake_phrase_len(words: &[String], phrases: &[String]) -> usize {
+    // "A sage" is what the recogniser most often writes for the phrase when it loses the
+    // "h" (17 of 33 misreadings measured): taken only with the name itself after it.
+    let built_in = words.len() >= 2
+        && ((matches!(words[0].as_str(), "hey" | "hay") && sage_like(&words[1]))
+            || (words[0] == "a" && sage_name(&words[1])));
+    if built_in {
+        2
+    } else if words.first().is_some_and(|word| phrase_in_one(word)) {
+        1
+    } else {
+        personal_phrase_len(words, phrases)
+    }
+}
+
+/// `text` after its first `count` words; a mark standing alone is no word.
+fn after_words(text: &str, count: usize) -> &str {
+    let mut rest = text.trim_start();
+    let mut left = count;
+    while left > 0 && !rest.is_empty() {
+        let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+        if !plain_word(&rest[..end]).is_empty() {
+            left -= 1;
+        }
+        rest = rest[end..].trim_start();
+    }
+    rest
+}
+
 /// How many times in a row a word, or a group of two or three, must come for `babble`.
 /// `text` without "Hey Dot" at its start, as the recogniser writes the phrase or the end of
 /// it: "Hey Dot,", "Hey dad,", "Hey, doc," and "Hey dots" were all seen for it, and a lone "Dot." when the
@@ -109,20 +218,7 @@ const QUESTION_CUT: &str = "The question could not be said in full, so nothing w
 /// sounds like it is it. Later only a second word written as the name itself counts after a
 /// loose first one: "A sage" is the phrase said again, "A stage name" is a request.
 fn without_wake_phrase(text: &str, after_wake: bool) -> &str {
-    let word = |s: &str| -> String {
-        s.chars()
-            .filter(|c| c.is_alphanumeric())
-            .flat_map(char::to_lowercase)
-            .collect()
-    };
-    let name = |w: &str| matches!(w, "sage" | "sages" | "saige" | "sayge");
-    let sage = |w: &str| {
-        name(w)
-            || matches!(
-                w,
-                "seige" | "siege" | "stage" | "sedge" | "saj" | "sej" | "sayj" | "cage"
-            )
-    };
+    let (word, name, sage) = (plain_word, sage_name, sage_like);
     let mut rest = text.trim_start();
     let mut words = rest.split_whitespace();
     let first = words.next().map(word).unwrap_or_default();
@@ -139,7 +235,7 @@ fn without_wake_phrase(text: &str, after_wake: bool) -> &str {
             });
     let skip = if phrase {
         2
-    } else if first == "sage" {
+    } else if first == "sage" || phrase_in_one(&first) {
         1
     } else {
         0
@@ -328,10 +424,272 @@ pub struct Parts {
     pub sink: Arc<dyn Sink>,
     /// Called before speaking when `sink` has failed; the new sink replaces it in `voice`.
     pub open_sink: SinkOpener,
-    /// `None` makes the wake phrase setting do nothing.
+    /// `None` makes the wake phrase setting do nothing (unless `wake_text` is there).
     pub wake: Option<Box<dyn WakeSpotter>>,
+    /// A second way to hear the wake phrase; `None` leaves the spotter as the only one.
+    pub wake_text: Option<WakeText>,
     /// Called when a stream is needed; the `Mic` is dropped when it no longer is.
     pub open_mic: MicOpener,
+}
+
+/// Hears the wake phrase by reading what was said, while the session rests: the recogniser
+/// that writes sentences knows many more ways of saying "Hey Sage" than the small spotter
+/// does. Either one waking the session is enough. What is said while resting is cut into
+/// short clips by `detector`; each is read by `recognizer` on a thread of its own, compared
+/// (`wake_text_matches`) and forgotten.
+pub struct WakeText {
+    /// Its own detector: the ears' detectors follow other sound.
+    pub detector: Box<dyn SpeechDetector>,
+    pub recognizer: Arc<dyn Recognizer>,
+    /// What a voice setup heard this person's wake phrase as, when not as "Hey Sage":
+    /// lower-case words with one space between.
+    pub phrases: Vec<String>,
+}
+
+/// What woke the session.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WokenBy {
+    /// The keyword spotter named the phrase, a moment after it was said.
+    Spotter,
+    /// What was said was read and began with the phrase; `request` when more words came
+    /// after it in what was read. That is known only once the person has paused or has
+    /// spoken for two seconds, so a request said in the same breath is already there.
+    Words { request: bool },
+}
+
+/// Where the cutting of idle sound into clips stands.
+enum IdleCut {
+    /// No clip is open: the next speech after enough quiet begins one.
+    Quiet,
+    /// A clip is open: how many of its frames (the lead-in not counted) were speech, how
+    /// many it has, and how many quiet ones it ends in.
+    Speech {
+        speech: usize,
+        frames: usize,
+        quiet: usize,
+    },
+    /// The clip is being read; the frames after it are kept until its words are known.
+    Sent,
+}
+
+/// Cuts what is said while resting into the clips that are read for the wake phrase. A clip
+/// begins at speech that follows quiet, with a short lead-in from before it, and is ready
+/// to be read once the person has been quiet for a moment or it is two seconds long.
+///
+/// Where speech is, is judged on the frames as the session hears them, made louder by the
+/// gain. The clip itself is kept as the microphone gave it, and made louder as a whole
+/// when it is read (`clip`): a gain that has not heard this voice before finds its level
+/// during the first words and bends them, and the recogniser then misreads the phrase.
+/// Measured on 20 clips of "Hey Sage" at a level of 0.02 with a fresh gain: read as the
+/// phrase 3 times when made louder frame by frame, 18 times made louder as a whole.
+pub(crate) struct IdleCutter {
+    detector: Box<dyn SpeechDetector>,
+    cut: IdleCut,
+    /// Quiet frames in a row up to now.
+    quiet_run: usize,
+    /// The last quiet frames, newest last: the lead-in of the next clip.
+    lead: VecDeque<Vec<f32>>,
+    /// The clip from its lead-in on, and once it is being read every frame since.
+    clip: VecDeque<Vec<f32>>,
+}
+
+/// `frame` made `by` times louder; samples stay within -1..1.
+fn louder(frame: &[f32], by: f32) -> Vec<f32> {
+    if by == 1.0 {
+        return frame.to_vec();
+    }
+    frame.iter().map(|s| (s * by).clamp(-1.0, 1.0)).collect()
+}
+
+impl IdleCutter {
+    pub(crate) fn new(detector: Box<dyn SpeechDetector>) -> Self {
+        Self {
+            detector,
+            cut: IdleCut::Quiet,
+            quiet_run: WAKE_TEXT_QUIET,
+            lead: VecDeque::new(),
+            clip: VecDeque::new(),
+        }
+    }
+
+    /// Nothing heard so far matters any more: the clip in progress is let go.
+    pub(crate) fn forget(&mut self) {
+        self.cut = IdleCut::Quiet;
+        self.quiet_run = WAKE_TEXT_QUIET;
+        self.lead.clear();
+        self.clip.clear();
+        self.detector.reset();
+    }
+
+    /// The clip is let go (it was not the wake phrase, or cannot be read now), and its last
+    /// frames are the lead-in of the next.
+    fn rest(&mut self) {
+        self.cut = IdleCut::Quiet;
+        let from = self.clip.len().saturating_sub(WAKE_TEXT_LEAD);
+        self.lead = self.clip.drain(from..).collect();
+        self.clip.clear();
+    }
+
+    /// The clip was handed over to be read: the frames after it are kept with it.
+    fn sent(&mut self) {
+        self.cut = IdleCut::Sent;
+    }
+
+    /// One frame heard while resting: `heard` as the session hears it, `frame` as the
+    /// microphone gave it. True when the clip so far is ready to be read (`clip`): the
+    /// caller then says whether it was `sent` or is let `rest`.
+    pub(crate) fn hear(&mut self, heard: &[f32], frame: &[f32]) -> bool {
+        let speech = self.detector.is_speech(heard);
+        let quiet_before = self.quiet_run;
+        self.quiet_run = if speech { 0 } else { self.quiet_run + 1 };
+        match &mut self.cut {
+            IdleCut::Quiet => {
+                // Speech that goes on from a clip already read is not the start of anything.
+                if speech && quiet_before >= WAKE_TEXT_QUIET {
+                    self.clip = std::mem::take(&mut self.lead);
+                    self.clip.push_back(frame.to_vec());
+                    self.cut = IdleCut::Speech {
+                        speech: 1,
+                        frames: 1,
+                        quiet: 0,
+                    };
+                } else {
+                    if self.lead.len() >= WAKE_TEXT_LEAD {
+                        self.lead.pop_front();
+                    }
+                    self.lead.push_back(frame.to_vec());
+                }
+                false
+            }
+            IdleCut::Speech {
+                speech: spoken,
+                frames,
+                quiet,
+            } => {
+                self.clip.push_back(frame.to_vec());
+                *frames += 1;
+                if speech {
+                    *spoken += 1;
+                    *quiet = 0;
+                } else {
+                    *quiet += 1;
+                }
+                if *quiet < WAKE_TEXT_QUIET && *frames < WAKE_TEXT_FRAMES {
+                    return false;
+                }
+                let worth = *spoken >= WAKE_TEXT_MIN_SPEECH;
+                if !worth {
+                    self.rest();
+                }
+                worth
+            }
+            IdleCut::Sent => {
+                if self.clip.len() >= IDLE_CLIP_FRAMES {
+                    self.clip.pop_front();
+                }
+                self.clip.push_back(frame.to_vec());
+                false
+            }
+        }
+    }
+
+    /// The clip so far, all of it made `by` times louder (the gain's factor now that it
+    /// has heard the clip), as the recogniser takes it.
+    pub(crate) fn clip(&self, by: f32) -> Clip {
+        Clip {
+            samples: self
+                .clip
+                .iter()
+                .flat_map(|frame| louder(frame, by))
+                .collect(),
+            rate: EAR_RATE,
+        }
+    }
+}
+
+/// `WakeText` at work on the session's thread.
+struct TextWake {
+    cutter: IdleCutter,
+    phrases: Vec<String>,
+    /// To the thread that reads clips, and back from it. Each clip goes with the
+    /// `generation` it was cut in.
+    clips: Sender<(u64, Clip)>,
+    texts: Receiver<(u64, String)>,
+    /// Counts up each time what was heard so far stops mattering (the session left `Idle`,
+    /// woke, opened a fresh microphone): words read for an earlier count are dropped.
+    generation: u64,
+    /// A clip is at the reader and its words have not come back. One at a time: a clip
+    /// ready meanwhile is dropped, never queued.
+    reading: bool,
+}
+
+/// Reads the clips handed over, one at a time, until the session is gone. Off the session's
+/// thread: reading a clip takes a few hundred milliseconds, and the spotter and the timers
+/// do not wait for it. A recogniser that fails, or panics, has heard nothing.
+fn read_idle_clips(
+    recognizer: &dyn Recognizer,
+    clips: &Receiver<(u64, Clip)>,
+    texts: &Sender<(u64, String)>,
+) {
+    for (generation, clip) in clips {
+        let text = catch_unwind(AssertUnwindSafe(|| recognizer.transcribe(&clip)))
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default();
+        if texts.send((generation, text)).is_err() {
+            return;
+        }
+    }
+}
+
+impl TextWake {
+    /// Starts the reading thread. `None` when it will not start: the spotter is then the
+    /// only way to wake, as without a `WakeText`.
+    fn start(parts: WakeText) -> Option<Self> {
+        let (clips, to_read) = channel();
+        let (read, texts) = channel();
+        let recognizer = parts.recognizer;
+        std::thread::Builder::new()
+            .name("dots-voice-wake-text".into())
+            .spawn(move || read_idle_clips(recognizer.as_ref(), &to_read, &read))
+            .ok()?;
+        Some(Self {
+            cutter: IdleCutter::new(parts.detector),
+            phrases: parts.phrases,
+            clips,
+            texts,
+            generation: 0,
+            reading: false,
+        })
+    }
+
+    /// Nothing heard so far matters any more: the clip in progress is let go, and words
+    /// still being read are dropped when they come.
+    fn forget(&mut self) {
+        self.generation += 1;
+        self.cutter.forget();
+    }
+
+    /// One frame heard while resting: `heard` as the session hears it, `frame` as the
+    /// microphone gave it, and `by` what the gain makes sound louder by now. A clip that is
+    /// ready goes to the reader, unless the reader is busy (or gone): then it is dropped.
+    fn hear(&mut self, heard: &[f32], frame: &[f32], by: f32) {
+        if !self.cutter.hear(heard, frame) {
+            return;
+        }
+        let free = !self.reading;
+        if free
+            && self
+                .clips
+                .send((self.generation, self.cutter.clip(by)))
+                .is_ok()
+        {
+            self.reading = true;
+            self.cutter.sent();
+        } else {
+            self.cutter.rest();
+        }
+    }
 }
 
 enum Command {
@@ -383,6 +741,10 @@ struct Probe {
     state: State,
     /// Speaking, the reply has been spoken and the sink is quiet: the tail is being waited out.
     speech_done: bool,
+    /// Microphone frames were still waiting when this pass ended.
+    frames_left: bool,
+    /// A clip of idle sound is being read for the wake phrase.
+    reading: bool,
 }
 
 struct Shared {
@@ -638,6 +1000,8 @@ struct Worker {
     sink: Arc<dyn Sink>,
     open_sink: SinkOpener,
     wake: Option<Box<dyn WakeSpotter>>,
+    /// Reads what is said while resting for the wake phrase; `None` without a `WakeText`.
+    wake_text: Option<TextWake>,
     open_mic: MicOpener,
     settings: SessionSettings,
     events: UnboundedSender<SessionEvent>,
@@ -682,6 +1046,9 @@ struct Worker {
     carry_until: Option<Instant>,
     /// The clip being heard began at "Hey Dot": it may still hold the end of the phrase.
     after_wake: bool,
+    /// That wake was by the words read (`WokenBy::Words`): the clip holds the whole phrase,
+    /// from its first word. Means nothing once `after_wake` is over.
+    wake_read: bool,
     /// Idle with the wake phrase on: the last frames the spotter heard, newest last, so the
     /// words said after "Hey Dot" but before the spotter answered reach the ears.
     recent: VecDeque<Vec<f32>>,
@@ -759,6 +1126,7 @@ impl Worker {
             sink: parts.sink,
             open_sink: parts.open_sink,
             wake: parts.wake,
+            wake_text: parts.wake_text.and_then(TextWake::start),
             open_mic: parts.open_mic,
             settings,
             events,
@@ -782,6 +1150,7 @@ impl Worker {
             carry: None,
             carry_until: None,
             after_wake: false,
+            wake_read: false,
             recent: VecDeque::new(),
             halt_frames: false,
             gain: Gain::new(),
@@ -844,6 +1213,7 @@ impl Worker {
                 };
             }
             self.voice_events();
+            self.wake_texts();
             self.mic_frames();
             self.timers();
             #[cfg(test)]
@@ -851,6 +1221,8 @@ impl Worker {
                 let _ = reply.send(Probe {
                     state: self.state,
                     speech_done: self.state == State::Speaking && self.reopen_at.is_some(),
+                    frames_left: self.frames_left,
+                    reading: self.wake_text.as_ref().is_some_and(|text| text.reading),
                 });
             }
         }
@@ -983,6 +1355,9 @@ impl Worker {
                 }
             }
             Command::Settings(settings) => {
+                if settings.wake_phrase != self.settings.wake_phrase {
+                    self.forget_idle_speech();
+                }
                 self.settings = settings;
                 self.mic_broken = false;
                 self.refresh();
@@ -1143,7 +1518,17 @@ impl Worker {
     /// it sounds only if no speech has started `TONE_WAIT` after the wake.
     fn woke(&mut self) {
         let after = self.wake.as_ref().map_or(0, |spotter| spotter.after_word());
-        let recent = std::mem::take(&mut self.recent);
+        let mut recent = std::mem::take(&mut self.recent);
+        // The spotter answers a little after the word ends: what was said in between is
+        // given to the ears first, so the sentence starts where the wake phrase ended.
+        let keep = after.div_ceil(FRAME).min(recent.len());
+        let said_since = recent.split_off(recent.len() - keep);
+        self.woke_with(WokenBy::Spotter, &said_since);
+    }
+
+    /// The session wakes, by the spotter or by what was read: `Woke` is sent, the ears open,
+    /// and `said_since` (idle frames, oldest first) is the first thing they hear.
+    fn woke_with(&mut self, by: WokenBy, said_since: &VecDeque<Vec<f32>>) {
         self.send(SessionEvent::Woke);
         self.follow_ups = 0;
         self.listen(LISTEN_AFTER_OPEN);
@@ -1153,7 +1538,10 @@ impl Worker {
         self.may_retry = true;
         self.from_rest = true;
         self.after_wake = true;
-        if self.settings.tone {
+        self.wake_read = matches!(by, WokenBy::Words { .. });
+        // A request already read with the phrase is not answered "How can I help?": the
+        // quiet after it is the end of the request, not a person waiting to be answered.
+        if self.settings.tone && by != (WokenBy::Words { request: true }) {
             self.tone_due = Some(self.clock.now() + TONE_WAIT);
             self.greet_owed = true;
         }
@@ -1161,17 +1549,64 @@ impl Worker {
         // are given a moment of silence first, as their pre-roll would have held, without
         // which the recogniser returns nothing for about one such sentence in ten.
         self.ears.lead_in_silence();
-        // The spotter answers a little after the word ends: what was said in between is
-        // given to the ears first, so the sentence starts where the wake phrase ended.
-        let keep = after.div_ceil(FRAME).min(recent.len());
         let now = self.clock.now();
-        for frame in recent.range(recent.len() - keep..) {
-            for event in self.ears.push(frame) {
+        for frame in said_since {
+            // What was read may be seconds of sound, given all at once: no previews of it.
+            let events = match by {
+                WokenBy::Spotter => self.ears.push(frame),
+                WokenBy::Words { .. } => self.ears.push_past(frame),
+            };
+            for event in events {
                 if !self.state.hears() {
                     return;
                 }
                 self.ear_event(event, now);
             }
+        }
+    }
+
+    /// The words of a clip of idle sound have been read. When they are the wake phrase and
+    /// nothing has happened since the clip was cut, the session wakes as by the spotter, and
+    /// the ears are given everything from the start of that clip: the phrase is taken off
+    /// what they make of it, and a request said in the same breath is heard whole. The words
+    /// themselves are compared and dropped: they are never kept, shown or logged.
+    fn wake_texts(&mut self) {
+        let Some(text) = &mut self.wake_text else {
+            return;
+        };
+        let Ok((generation, heard)) = text.texts.try_recv() else {
+            return;
+        };
+        text.reading = false;
+        if generation != text.generation {
+            return; // cut before the session last left its rest, or woke
+        }
+        let words = plain_words(&heard);
+        drop(heard);
+        let phrase = wake_phrase_len(&words, &text.phrases);
+        if phrase == 0 || self.state != State::Idle || !self.settings.wake_phrase {
+            text.cutter.rest();
+            return;
+        }
+        let request = words.len() > phrase;
+        drop(words);
+        // The ears are given what was read, made louder the same way.
+        let by = self.gain.factor();
+        let said_since: VecDeque<Vec<f32>> = std::mem::take(&mut text.cutter.clip)
+            .iter()
+            .map(|frame| louder(frame, by))
+            .collect();
+        // The spotter may be about to name the same phrase: it starts afresh.
+        if let Some(spotter) = &mut self.wake {
+            spotter.reset();
+        }
+        self.woke_with(WokenBy::Words { request }, &said_since);
+    }
+
+    /// What was heard while resting no longer counts towards the wake phrase by its words.
+    fn forget_idle_speech(&mut self) {
+        if let Some(text) = &mut self.wake_text {
+            text.forget();
         }
     }
 
@@ -1247,6 +1682,7 @@ impl Worker {
                 self.carry = None;
             }
             self.recent.clear();
+            self.forget_idle_speech();
             if !new.hears() {
                 self.ears.reset();
                 self.short_ears.reset();
@@ -1295,7 +1731,7 @@ impl Worker {
     }
 
     fn wants_mic(&self) -> bool {
-        let wake = self.settings.wake_phrase && self.wake.is_some();
+        let wake = self.settings.wake_phrase && (self.wake.is_some() || self.wake_text.is_some());
         match self.state {
             State::Off => false,
             State::Listening | State::Asking => true,
@@ -1334,6 +1770,7 @@ impl Worker {
         if let Some(spotter) = &mut self.wake {
             spotter.reset();
         }
+        self.forget_idle_speech();
         self.ears.reset();
         self.short_ears.reset();
         self.in_speech = false;
@@ -1443,6 +1880,7 @@ impl Worker {
     /// Otherwise it is reported now and the session rests. True when it rested.
     fn mic_lost(&mut self) -> bool {
         self.mic = None;
+        self.forget_idle_speech();
         self.mic_broken = true;
         self.mic_retry_at = self.clock.now() + MIC_RETRY;
         if matches!(self.state, State::Thinking | State::Speaking) {
@@ -1473,7 +1911,7 @@ impl Worker {
         word
     }
 
-    fn frame(&mut self, frame: &[f32]) {
+    fn frame(&mut self, raw: &[f32]) {
         let now = self.clock.now();
         // A faint microphone is made louder before anything hears it. The level followed is
         // the person's: while the session's own sound is in the microphone (its voice, a
@@ -1484,10 +1922,10 @@ impl Worker {
             || self.tone_until.is_some();
         let louder;
         let frame = if own_sound {
-            self.gain.pass(frame);
-            frame
+            self.gain.pass(raw);
+            raw
         } else {
-            louder = self.gain.apply(frame);
+            louder = self.gain.apply(raw);
             &louder[..]
         };
         // The spotter hears every frame, the listening tone's too. Nothing is done about the
@@ -1506,6 +1944,11 @@ impl Worker {
                 }
                 if word == Some(WakeWord::HeyDot) {
                     self.woke();
+                } else if own_sound || !self.settings.wake_phrase {
+                    // The session's own sound is never read for the wake phrase.
+                    self.forget_idle_speech();
+                } else if let Some(text) = &mut self.wake_text {
+                    text.hear(frame, raw, self.gain.factor());
                 }
             }
             State::Thinking => {
@@ -1735,7 +2178,29 @@ impl Worker {
     /// the listen only the whole phrase is taken off: a person who was not answered at once
     /// says "Hey Sage" again, and that is not what they want to ask.
     fn without_wake(&self, text: String) -> String {
+        // Straight after the wake, what this person's phrase is heard as is the phrase too.
+        let personal = match &self.wake_text {
+            Some(wake) if self.after_wake => {
+                personal_phrase_len(&plain_words(&text), &wake.phrases)
+            }
+            _ => 0,
+        };
+        let text = if personal > 0 {
+            after_words(&text, personal).to_string()
+        } else {
+            text
+        };
         let rest = without_wake_phrase(&text, self.after_wake);
+        // Woken by the words read, the clip begins at the phrase. The ears read it again
+        // with the request, and now and then lose the name: the "Hey" left at the start is
+        // still the phrase's, not the request's ("Hey, please read me the first message").
+        let unchanged = personal == 0 && rest.len() == text.trim_start().len();
+        let rest = match rest.split_whitespace().next().map(plain_word).as_deref() {
+            Some("hey" | "hay") if self.after_wake && self.wake_read && unchanged => {
+                after_words(rest, 1)
+            }
+            _ => rest,
+        };
         let lone_sage = text
             .split_whitespace()
             .next()
@@ -2106,6 +2571,25 @@ mod tests {
         }
     }
 
+    /// The smallest sample above zero and the largest of each clip a recogniser was given.
+    type Shapes = Arc<Mutex<Vec<(f32, f32)>>>;
+
+    /// A recogniser that notes the shape of each clip before `inner` reads it.
+    struct Watched {
+        inner: Arc<FakeRecognizer>,
+        shapes: Shapes,
+    }
+
+    impl Recognizer for Watched {
+        fn transcribe(&self, clip: &Clip) -> Result<String, EngineError> {
+            let above = clip.samples.iter().copied().filter(|s| *s > 0.0);
+            let soft = above.clone().fold(f32::MAX, f32::min);
+            let loud = above.fold(0.0, f32::max);
+            self.shapes.lock().unwrap().push((soft, loud));
+            self.inner.transcribe(clip)
+        }
+    }
+
     #[derive(Default)]
     struct FakeSpeaker {
         said: Mutex<Vec<String>>,
@@ -2333,6 +2817,13 @@ mod tests {
         detector_gate: Option<Gate>,
         /// The person may go on with a sentence for two and a half seconds.
         carry_on: bool,
+        /// Idle sound is read for the wake phrase too: what its recogniser writes for every
+        /// clip, and the phrases of a voice setup.
+        wake_text: Option<(&'static str, Vec<String>)>,
+        /// Holds that recogniser's first call.
+        wake_text_gate: Option<Gate>,
+        /// Without the keyword spotter.
+        no_spotter: bool,
     }
 
     impl Default for Opts {
@@ -2345,6 +2836,9 @@ mod tests {
                 recognizer: None,
                 detector_gate: None,
                 carry_on: false,
+                wake_text: None,
+                wake_text_gate: None,
+                no_spotter: false,
             }
         }
     }
@@ -2363,6 +2857,14 @@ mod tests {
         reopened: Arc<Mutex<Vec<Arc<FakeSink>>>>,
         sink_fails: Arc<AtomicBool>,
         wake: bool,
+        /// The recogniser that reads idle sound, when `Opts::wake_text` asked for one, and
+        /// how many frames its detector was given.
+        wake_recognizer: Option<Arc<FakeRecognizer>>,
+        wake_seen: Arc<AtomicUsize>,
+        /// The clips the sentence ears' recogniser was given, and the one that reads idle
+        /// sound.
+        ear_shapes: Shapes,
+        wake_shapes: Shapes,
     }
 
     fn rig(opts: Opts) -> Rig {
@@ -2374,12 +2876,16 @@ mod tests {
         let recognizer = opts
             .recognizer
             .unwrap_or_else(|| FakeRecognizer::new("hello"));
+        let (ear_shapes, wake_shapes) = (Shapes::default(), Shapes::default());
         let ears = Ears::new(
             Box::new(Detector {
                 seen: seen.clone(),
                 gate: opts.detector_gate,
             }),
-            recognizer.clone(),
+            Arc::new(Watched {
+                inner: recognizer.clone(),
+                shapes: ear_shapes.clone(),
+            }),
             opts.ears,
         );
         let short_ears = Ears::new(
@@ -2399,6 +2905,31 @@ mod tests {
         let reopened: Arc<Mutex<Vec<Arc<FakeSink>>>> = Arc::default();
         let sink_fails = Arc::new(AtomicBool::new(false));
         let (opened, fails) = (reopened.clone(), sink_fails.clone());
+        let wake_seen = Arc::new(AtomicUsize::new(0));
+        let mut wake_recognizer = None;
+        let wake_text = opts.wake_text.map(|(text, phrases)| {
+            let recognizer = Arc::new(FakeRecognizer {
+                gate: opts.wake_text_gate,
+                ..Arc::into_inner(FakeRecognizer::new(text)).unwrap()
+            });
+            wake_recognizer = Some(recognizer.clone());
+            WakeText {
+                detector: Box::new(Detector {
+                    seen: wake_seen.clone(),
+                    gate: None,
+                }),
+                recognizer: Arc::new(Watched {
+                    inner: recognizer,
+                    shapes: wake_shapes.clone(),
+                }),
+                phrases,
+            }
+        });
+        let spotter: Option<Box<dyn WakeSpotter>> = if opts.no_spotter {
+            None
+        } else {
+            Some(Box::new(Spotter { after: 0 }))
+        };
         let parts = Parts {
             ears,
             short_ears,
@@ -2413,7 +2944,8 @@ mod tests {
                 opened.lock().unwrap().push(fresh.clone());
                 Ok(fresh as Arc<dyn Sink>)
             }),
-            wake: Some(Box::new(Spotter { after: 0 })),
+            wake: spotter,
+            wake_text,
             open_mic: Box::new(move || feed.open_mic()),
         };
         let settings = SessionSettings {
@@ -2442,6 +2974,10 @@ mod tests {
             reopened,
             sink_fails,
             wake: opts.wake,
+            wake_recognizer,
+            wake_seen,
+            ear_shapes,
+            wake_shapes,
         }
     }
 
@@ -2582,6 +3118,33 @@ mod tests {
 
         fn seen(&self) -> usize {
             self.seen.load(Ordering::SeqCst)
+        }
+
+        /// Waits until every frame fed so far was handled and no idle clip is being read:
+        /// what was said while resting has been read, and has woken the session or not.
+        fn settled(&self) {
+            self.fed();
+            let deadline = Instant::now() + WAIT;
+            while self.sync().reading {
+                assert!(Instant::now() < deadline, "the idle clip was never read");
+                std::thread::yield_now();
+            }
+        }
+
+        /// Waits until every frame fed so far was handled.
+        fn fed(&self) {
+            let deadline = Instant::now() + WAIT;
+            while self.sync().frames_left {
+                assert!(Instant::now() < deadline, "the frames were never handled");
+                std::thread::yield_now();
+            }
+        }
+
+        /// The length, in frames, of every idle clip given to be read for the wake phrase.
+        fn idle_clips(&self) -> Vec<usize> {
+            let recognizer = self.wake_recognizer.as_ref().expect("no wake text");
+            let lens = recognizer.lens.lock().unwrap();
+            lens.iter().map(|len| len / FRAME).collect()
         }
     }
 
@@ -4905,5 +5468,525 @@ mod tests {
             }
         );
         r.expect_state(State::Idle, false);
+    }
+
+    // ---- the wake phrase by its words --------------------------------------------------------
+
+    /// The wake phrase on, and idle sound read as `text` (by the ears too).
+    fn reads(text: &'static str, phrases: &[&str]) -> Opts {
+        Opts {
+            wake: true,
+            recognizer: Some(FakeRecognizer::new(text)),
+            wake_text: Some((text, phrases.iter().map(|p| p.to_string()).collect())),
+            ..Opts::default()
+        }
+    }
+
+    /// Resting on a rig of `reads`.
+    fn reading(text: &'static str, phrases: &[&str]) -> Rig {
+        let mut r = rig(reads(text, phrases));
+        r.expect_state(State::Idle, true);
+        r
+    }
+
+    /// Something said while resting, with quiet before and after it.
+    fn say_idle(r: &Rig) {
+        r.mic.send(QUIET, 4);
+        r.mic.send(SPEECH, 10);
+        r.mic.send(QUIET, 10);
+    }
+
+    #[test]
+    fn idle_speech_read_as_the_wake_phrase_wakes_though_the_spotter_heard_nothing() {
+        let mut r = reading("Hey Sage.", &[]);
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        // One clip was read: the quiet before the words, the words, and the quiet that
+        // ended them.
+        assert_eq!(r.idle_clips(), [24]);
+        // Only the phrase was said: nothing is taken for a request.
+        r.settled();
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Listening);
+        assert_eq!(r.mic.opens(), 1, "the same stream is kept");
+    }
+
+    /// A faint voice the gain has not heard before. Frame by frame the gain makes the soft
+    /// start of the first word as loud as the rest of it (and the real recogniser then reads
+    /// "Hey" as "Pay"). The clip that is read, and what the ears are given of it, is the
+    /// microphone's sound made louder as a whole: the soft start stays soft.
+    #[test]
+    fn a_faint_clip_is_made_louder_as_a_whole_and_keeps_its_shape() {
+        let mut r = reading("Hey Sage.", &[]);
+        r.mic.send(-0.000_1, 4);
+        r.mic.send(0.000_6, 2);
+        r.mic.send(0.003, 10);
+        r.mic.send(-0.000_1, 10);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        r.settled();
+        assert_eq!(r.idle_clips(), [26]);
+        for (who, shapes) in [("the reader", &r.wake_shapes), ("the ears", &r.ear_shapes)] {
+            let shapes = shapes.lock().unwrap().clone();
+            assert_eq!(shapes.len(), 1, "{who}: {shapes:?}");
+            let (soft, loud) = shapes[0];
+            // Ten times louder: the voice at the level the gain brings a voice to.
+            assert!((loud - 0.03).abs() < 0.001, "{who}: {shapes:?}");
+            // And all of it by the same: the start is still a fifth of the rest.
+            assert!((loud / soft - 5.0).abs() < 0.01, "{who}: {shapes:?}");
+        }
+    }
+
+    #[test]
+    fn it_wakes_by_the_words_with_no_spotter_at_all() {
+        let mut r = rig(Opts {
+            wake: true,
+            no_spotter: true,
+            recognizer: Some(FakeRecognizer::new("Hey Sage.")),
+            wake_text: Some(("Hey Sage.", Vec::new())),
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+    }
+
+    /// "Hey Sage, what needs me?" in one breath: the ears are given the clip from its start,
+    /// so the request is heard whole, and the phrase is taken off it.
+    #[test]
+    fn a_request_said_with_the_phrase_read_is_heard_whole_without_it() {
+        let mut r = reading("Hey Saige, what needs me?", &[]);
+        r.mic.send(QUIET, 4);
+        r.mic.send(SPEECH, 12);
+        r.mic.send(QUIET, 10);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        // The sentence was over when it was read: it is heard at once, with no preview.
+        let said = "what needs me?".to_string();
+        assert!(matches!(r.next(), SessionEvent::Heard { text, .. } if text == said));
+        r.expect_state(State::Thinking, true);
+        // Every speech frame reached the ears, and the two quiet ones that ended the sentence.
+        let lens = r.recognizer.lens.lock().unwrap().clone();
+        assert_eq!(lens, [14 * FRAME], "the ears read it once");
+    }
+
+    /// The person goes straight on past the two seconds a clip is read at: what they say
+    /// while it is read, and after, joins what the ears were given.
+    #[test]
+    fn a_long_request_read_while_it_is_still_being_said_is_heard_whole() {
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let mut r = rig(Opts {
+            wake_text_gate: Some((entered.clone(), release.clone())),
+            ..reads("Hey Sage, what needs me?", &[])
+        });
+        r.expect_state(State::Idle, true);
+        r.mic.send(QUIET, 4);
+        r.mic.send(SPEECH, 70);
+        // The clip is read at 62 frames (and its lead-in), not at the end of the sentence.
+        entered.wait();
+        r.fed();
+        release.wait();
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        assert_eq!(r.idle_clips(), [66]);
+        r.mic.send(SPEECH, 10);
+        r.mic.send(QUIET, 2);
+        let said = "what needs me?".to_string();
+        assert_eq!(r.next(), SessionEvent::Hearing { text: said.clone() });
+        assert!(matches!(r.next(), SessionEvent::Heard { text, .. } if text == said));
+        let lens = r.recognizer.lens.lock().unwrap().clone();
+        assert_eq!(lens.last().copied(), Some(82 * FRAME), "clips: {lens:?}");
+    }
+
+    /// The ears read the whole clip again, with the request, and can lose the name the
+    /// reader found: a "Hey" left at the start is taken off. After the spotter, where the
+    /// clip begins after the phrase, the same words stay as they are.
+    #[test]
+    fn a_hey_left_of_the_phrase_that_was_read_is_not_part_of_the_request() {
+        let heard = |by_words: bool| {
+            let mut r = rig(Opts {
+                wake: true,
+                recognizer: Some(FakeRecognizer::new("Hey, please read.")),
+                wake_text: Some(("Hey Sage, please read.", Vec::new())),
+                ..Opts::default()
+            });
+            r.expect_state(State::Idle, true);
+            if by_words {
+                say_idle(&r);
+            } else {
+                r.mic.send(HEY_DOT, 1);
+                r.mic.send(SPEECH, 3);
+                r.mic.send(QUIET, 2);
+            }
+            assert_eq!(r.next(), SessionEvent::Woke);
+            r.expect_state(State::Listening, true);
+            loop {
+                match r.next() {
+                    SessionEvent::Heard { text, .. } => return text,
+                    SessionEvent::Hearing { .. } => {}
+                    other => panic!("expected Heard, got {other:?}"),
+                }
+            }
+        };
+        assert_eq!(heard(true), "please read.");
+        assert_eq!(heard(false), "Hey, please read.");
+    }
+
+    /// The ears as the app sets them, in so far as it matters here: a sentence ends after
+    /// 1100 ms of quiet, long after the 320 ms that end the clip read for the wake phrase.
+    fn patient_ears() -> EarSettings {
+        EarSettings {
+            end_quiet_ms: 1100,
+            unfinished_quiet_ms: 1100,
+            ..test_ears()
+        }
+    }
+
+    /// With the tone on, a person who says the phrase and waits is answered aloud, as when
+    /// the spotter hears it.
+    #[test]
+    fn the_phrase_alone_read_is_answered_aloud() {
+        let mut r = rig(Opts {
+            tone: true,
+            ears: patient_ears(),
+            ..reads("Hey Sage.", &[])
+        });
+        r.expect_state(State::Idle, true);
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        r.settled();
+        r.clock.advance(299);
+        r.nothing_more();
+        r.clock.advance(1);
+        r.expect_state(State::Speaking, true);
+        r.expect_saying(GREETING);
+        assert_eq!(r.sink.tones(), 0);
+    }
+
+    /// The request was said with the phrase, and was over by the time it was read: the quiet
+    /// after it is not a person waiting. No greeting; the request is heard when the ears'
+    /// own quiet has passed.
+    #[test]
+    fn a_request_read_with_the_phrase_is_not_answered_with_the_greeting() {
+        let mut r = rig(Opts {
+            tone: true,
+            ears: patient_ears(),
+            ..reads("Hey Sage, what needs me?", &[])
+        });
+        r.expect_state(State::Idle, true);
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        r.settled();
+        r.clock.advance(1_000);
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Listening);
+        // 35 frames of quiet end the sentence: the ten that ended the clip, and these.
+        r.mic.send(QUIET, 24);
+        r.nothing_more();
+        r.mic.send(QUIET, 1);
+        let said = "what needs me?".to_string();
+        assert!(matches!(r.next(), SessionEvent::Heard { text, .. } if text == said));
+        r.expect_state(State::Thinking, true);
+        assert!(r.speaker.said().is_empty(), "something was said");
+        assert_eq!(r.sink.tones(), 0);
+    }
+
+    /// What a voice setup heard this person's phrase as wakes the session, and is taken off
+    /// the request like the phrase itself. The same words wake nobody else's.
+    #[test]
+    fn the_words_a_voice_setup_learned_wake_it_and_only_then() {
+        let learned = ["hey said", "hate sage"];
+        for text in ["Hey said.", "Hate sage."] {
+            let mut r = reading(text, &learned);
+            say_idle(&r);
+            assert_eq!(r.next(), SessionEvent::Woke, "{text:?}");
+            r.expect_state(State::Listening, true);
+            r.settled();
+            r.nothing_more();
+
+            let mut r = reading(text, &[]);
+            say_idle(&r);
+            r.settled();
+            assert_eq!(r.idle_clips(), [24], "{text:?}");
+            r.nothing_more();
+            assert_eq!(r.sync().state, State::Idle, "{text:?}");
+        }
+        let mut r = reading("Hate sage, what needs me?", &learned);
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        let said = "what needs me?".to_string();
+        assert!(matches!(r.next(), SessionEvent::Heard { text, .. } if text == said));
+    }
+
+    #[test]
+    fn what_is_said_while_resting_and_is_not_the_phrase_wakes_nothing() {
+        for text in [
+            "What time is the meeting?",
+            "A stage is set.",
+            "He's sage.",
+            "Hey, say that again tomorrow.",
+            "",
+        ] {
+            let mut r = reading(text, &["hate sage"]);
+            say_idle(&r);
+            r.settled();
+            assert_eq!(r.idle_clips(), [24], "{text:?}");
+            r.nothing_more();
+            assert_eq!(r.sync().state, State::Idle, "{text:?}");
+            assert_eq!(r.seen(), 0, "idle frames reached the ears");
+        }
+    }
+
+    /// A click or a cough is not read; neither is speech that only goes on from a clip
+    /// already read. The words that follow the next quiet are.
+    #[test]
+    fn a_short_sound_is_not_read_and_speech_is_read_once() {
+        let mut r = reading("Hey Sage.", &[]);
+        r.mic.send(QUIET, 4);
+        r.mic.send(SPEECH, WAKE_TEXT_MIN_SPEECH - 1);
+        r.mic.send(QUIET, 10);
+        r.settled();
+        assert!(r.idle_clips().is_empty(), "a click was read");
+        r.nothing_more();
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+
+        let mut r = reading("What time is the meeting?", &[]);
+        r.mic.send(SPEECH, 200);
+        r.settled();
+        // Six seconds of talk without a pause: its first two are read, the rest is not.
+        assert_eq!(r.idle_clips(), [62]);
+        r.mic.send(QUIET, 10);
+        r.mic.send(SPEECH, 10);
+        r.mic.send(QUIET, 10);
+        r.settled();
+        assert_eq!(r.idle_clips(), [62, 30]);
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Idle);
+    }
+
+    #[test]
+    fn nothing_is_read_for_the_phrase_unless_resting() {
+        let mut r = rig(Opts {
+            wake: true,
+            wake_text: Some(("Hey Sage.", Vec::new())),
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        // Listening: the ears hear it, nothing else does.
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        r.mic.send(SPEECH, 10);
+        r.mic.send(QUIET, 10);
+        let turn = r.hear_sentence_already_said();
+        // Thinking.
+        say_idle(&r);
+        r.settled();
+        // Speaking, and the tail after the reply: the session's own sound.
+        r.sink.sounding(true);
+        r.session.say(turn, "Hey Sage.", After::Rest);
+        r.expect_state(State::Speaking, true);
+        r.expect_saying("Hey Sage.");
+        say_idle(&r);
+        r.settled();
+        r.sink.sounding(false);
+        r.until_speech_done();
+        say_idle(&r);
+        r.settled();
+        assert_eq!(r.wake_seen.load(Ordering::SeqCst), 0);
+        assert!(r.idle_clips().is_empty());
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Speaking);
+        // Resting again, it is read.
+        r.clock.advance(250);
+        r.expect_state(State::Idle, true);
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+    }
+
+    #[test]
+    fn turning_the_wake_phrase_off_lets_go_of_what_was_being_heard() {
+        let mut r = reading("Hey Sage.", &[]);
+        r.mic.send(SPEECH, 10);
+        r.fed();
+        let off = SessionSettings {
+            tone: false,
+            ..SessionSettings::default()
+        };
+        r.session.settings(off);
+        r.expect_state(State::Idle, false);
+        r.session.settings(SessionSettings {
+            wake_phrase: true,
+            ..off
+        });
+        r.expect_state(State::Idle, true);
+        // The quiet that would have ended the words said before.
+        r.mic.send(QUIET, 10);
+        r.settled();
+        assert!(r.idle_clips().is_empty());
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Idle);
+    }
+
+    /// A rig whose idle clip is being read: the reader waits at `release`.
+    fn being_read() -> (Rig, Arc<Barrier>) {
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let mut r = rig(Opts {
+            wake: true,
+            recognizer: Some(FakeRecognizer::new("Hey Sage.")),
+            wake_text: Some(("Hey Sage.", Vec::new())),
+            wake_text_gate: Some((entered.clone(), release.clone())),
+            ..Opts::default()
+        });
+        r.expect_state(State::Idle, true);
+        say_idle(&r);
+        entered.wait();
+        (r, release)
+    }
+
+    /// The spotter names the phrase while its words are still being read: one wake, not two.
+    #[test]
+    fn words_read_after_the_spotter_woke_it_do_not_wake_it_again() {
+        let (mut r, release) = being_read();
+        r.mic.send(HEY_DOT, 1);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+        release.wait();
+        r.settled();
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Listening);
+    }
+
+    #[test]
+    fn words_read_after_the_session_was_opened_or_rested_again_are_dropped() {
+        // Opened by the hotkey meanwhile.
+        let (mut r, release) = being_read();
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        release.wait();
+        r.settled();
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Listening);
+
+        // Opened and closed again: resting as before, but the words are of an earlier rest.
+        let (mut r, release) = being_read();
+        r.session.open();
+        r.expect_state(State::Listening, true);
+        r.session.close();
+        r.expect_state(State::Idle, true);
+        // Said while the reader is still busy: dropped, not kept waiting for it.
+        say_idle(&r);
+        r.fed();
+        release.wait();
+        r.settled();
+        assert_eq!(r.idle_clips(), [24]);
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Idle);
+        // The reader is free again.
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+    }
+
+    #[test]
+    fn a_recogniser_that_breaks_reading_idle_sound_leaves_the_session_running() {
+        let mut r = reading("Hey Sage.", &[]);
+        let reader = r.wake_recognizer.clone().unwrap();
+        reader.panics.store(true, Ordering::SeqCst);
+        say_idle(&r);
+        r.settled();
+        r.nothing_more();
+        assert_eq!(r.sync().state, State::Idle);
+        reader.panics.store(false, Ordering::SeqCst);
+        say_idle(&r);
+        assert_eq!(r.next(), SessionEvent::Woke);
+        r.expect_state(State::Listening, true);
+    }
+
+    #[test]
+    fn the_thread_that_reads_idle_sound_ends_with_the_session() {
+        let mut r = reading("What time is the meeting?", &[]);
+        say_idle(&r);
+        r.settled();
+        let reader = r.wake_recognizer.take().unwrap();
+        assert!(Arc::strong_count(&reader) > 1);
+        r.session.shutdown();
+        assert!(ends(&r.runtime, &mut r.events), "the worker did not end");
+        let deadline = Instant::now() + WAIT;
+        while Arc::strong_count(&reader) > 1 {
+            assert!(Instant::now() < deadline, "the reading thread did not end");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn the_wake_phrase_as_read_is_hey_and_a_word_like_sage() {
+        for text in [
+            "Hey Sage.",
+            "hey sage",
+            "Hey, Sage!",
+            "Hay Saige, what needs me?",
+            "Hey sedge",
+            "Hey siege. Read me the first message.",
+            "  Hey   stage",
+            "Hey, sate.",
+            "Asage",
+            "Asage, what needs me?",
+            "A sage.",
+            "A sage, what needs me?",
+        ] {
+            assert!(wake_text_matches(text, &[]), "{text:?}");
+            // What wakes it is taken off what was asked.
+            let rest = without_wake_phrase(text, true);
+            assert!(
+                plain_words(rest).len() < plain_words(text).len(),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            without_wake_phrase("Asage, what needs me?", false),
+            "what needs me?"
+        );
+        for text in [
+            "",
+            "Hey.",
+            "Sage.",
+            "Hey, say that again tomorrow.",
+            "Hey, save each page of the message.",
+            "Hey Sam, I saved the message on that page.",
+            "A stage is set.",
+            "A message for you.",
+            "He's sage.",
+            "He sage.",
+            "Hi Sage.",
+            "What time is the meeting?",
+            "Please say hey sage.",
+            "Hate sage.",
+        ] {
+            assert!(!wake_text_matches(text, &[]), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_learned_phrase_matches_whole_words_at_the_start_only() {
+        let phrases = vec!["hate sage".to_string(), "sage".to_string()];
+        assert!(wake_text_matches("Hate sage.", &phrases));
+        assert!(wake_text_matches("Hate, Sage, what needs me?", &phrases));
+        // The phrase itself still counts.
+        assert!(wake_text_matches("Hey Sage.", &phrases));
+        assert!(!wake_text_matches("Hate sages.", &phrases));
+        assert!(!wake_text_matches("I hate sage.", &phrases));
+        assert!(!wake_text_matches("Hate.", &phrases));
+        // A phrase of one word is never used.
+        assert!(!wake_text_matches("Sage.", &phrases));
+        assert!(!wake_text_matches("Sage, stop.", &phrases));
+        assert_eq!(after_words("Hate - sage, what now?", 2), "what now?");
+        assert_eq!(after_words("Hate sage.", 2), "");
     }
 }

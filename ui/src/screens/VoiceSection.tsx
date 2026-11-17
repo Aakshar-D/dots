@@ -227,6 +227,11 @@ function VoiceSetupBlock({ ready, wake }: { ready: boolean; wake: boolean }) {
             : "Not saved. The setup before this one, if any, still holds."}
         </p>
       )}
+      {!run.isPending && !run.data && saved.data && (
+        <p data-voice-setup-saved="" className="text-sm font-medium">
+          Your voice setup is saved and in use.
+        </p>
+      )}
       {!run.isPending && found && (
         <p data-voice-setup="" className="text-xs text-muted-foreground">
           {found.message}
