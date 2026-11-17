@@ -88,7 +88,45 @@ describe("the run view", () => {
     expect(call).toHaveAttribute("open");
     expect(within(call).getByText("test result: ok")).toBeInTheDocument();
     expect(screen.queryByText("hidden")).toBeNull();
-    expect(screen.getByText("Unparsed output").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Engine output").closest("details")).not.toHaveAttribute("open");
+  });
+
+  it("shows the engine's thinking counts as one line that opens to how much it thought", async () => {
+    const count = (total: number, delta: number) =>
+      ev({
+        kind: "raw",
+        line: JSON.stringify({
+          type: "system",
+          subtype: "thinking_tokens",
+          estimated_tokens: total,
+          estimated_tokens_delta: delta,
+          session_id: "s",
+          uuid: "u",
+        }),
+      });
+    thread([run], [count(50, 50), count(383, 333), ev({ kind: "assistant_text", text: "Done." })]);
+    const { user } = renderApp(`/runs/${run.id}`);
+    const line = await screen.findByText("Thought it through · about 383 tokens");
+    const group = line.closest("details")!;
+    expect(group).not.toHaveAttribute("open");
+    expect(screen.queryByText(/session_id/)).toBeNull();
+    await user.click(line);
+    expect(group).toHaveAttribute("open");
+    expect(
+      within(group).getByText("The model thought before it answered: about 383 tokens."),
+    ).toBeVisible();
+  });
+
+  it("shows an engine line it does not know as its fields, with a button that copies it", async () => {
+    const raw = JSON.stringify({ type: "system", subtype: "hook_started", hook_name: "PreToolUse", uuid: "u" });
+    thread([run], [ev({ kind: "raw", line: raw })]);
+    const { user } = renderApp(`/runs/${run.id}`);
+    const line = await screen.findByText("System · hook started");
+    await user.click(line);
+    const group = line.closest("details")!;
+    expect(within(group).getByText("hook name").nextElementSibling).toHaveTextContent("PreToolUse");
+    expect(within(group).queryByText("uuid")).toBeNull();
+    expect(within(group).getByRole("button", { name: "Copy the line" })).toBeVisible();
   });
 
   it("shows a chat run's tool steps as chips, with its header and the sol's name label", async () => {
