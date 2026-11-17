@@ -1,14 +1,7 @@
-<!-- dots:notes 0.5.0 -->
-- Dots is now Sage, and its agents are sols. Your data, sols and settings stay as they are; the update turns an installed Dots into Sage in place (#90, #91, #92, #94)
-- Open Sage, a voice assistant: turn it on in Settings, Voice, then talk to Sage and hear it answer. It tells you what needs you, reads and answers a sol's question, approves or denies on a clear yes, messages or runs a sol, sets up a new one and opens screens. Speech is recognised and spoken on your computer (#85, #87, #95)
-- "Hey Sage": start by voice, with Teach Sage your voice to set it up for how you sound, a boost for a faint microphone, and "How can I help?" when you pause (#96, #97)
-- It listens to the end: messages of up to three minutes, a pause to think, and going on after a pause are taken as one message; a breath or a noise no longer takes the answer back (#96, #99, #104)
-- Enlarge the Open Sage stage to read the whole conversation, select it and copy a reply or all of it (#98)
-- Faster answers: Sage gets the model ready the moment you pause (#100)
-- By voice on your computer: write a note, open a site or a web search, open or close Notepad, Calculator, Paint and your folders. For anything else Sage writes one command, shows it, reads it to you and runs it only on a clear yes; say stop to end it, or turn commands off in Settings, Voice (#101, #105, #106, #107)
-- Inside Sage by voice: open Connectors, Apps, the Library, Teams and Intents; work that needs a connector goes to a sol that uses it, and a new app is asked of a sol (#102)
-- Sage learns how you talk and what you ask for most, and keeps short notes you can see, remove or turn off in Settings, Voice (#103)
-- Usage tab: all your Claude use in one place, read from Claude Code's own records (#80)
-- Context meter: see how full a session is, and compact it or start fresh (#81)
-- Project graph: sols ask a graph of your code instead of reading the repository again (#82)
-- Workspace guardrails: an organisation's Admins protect paths, git actions and commands, so a Member's sols need an Admin for them (#83, #84). Update every copy to this version before turning guardrails on: Dots 0.4.0 and older reject a member list that carries them
+<!-- dots:notes 0.5.1 -->
+- "Hey Sage" is heard more reliably: Sage now also reads the first words of what you say while it rests, so the phrase wakes it even when the small wake detector misses it. What it reads is compared and dropped on your computer (#109)
+- Teach Sage your voice learns how your "Hey Sage" is heard and lets those words wake it too. It says when it is working and when it is done, and the voice page shows a saved setup after you open it again. Run it once more after this update (#109)
+- By voice, at once and without a yes: open a Windows settings page ("open microphone settings"), open any installed app by its name, and turn the volume up or down, mute, pause or skip (#109)
+- When something needs a command, Sage says so instead of saying it is opening it (#109)
+- Update errors are told in plain words (#109)
+- Sign in with ChatGPT says plainly that it is not available in this version yet (#109)
