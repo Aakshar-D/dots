@@ -155,9 +155,70 @@ jobs:
           path: mac-release/
           if-no-files-found: error
 
+  # The Windows installer for computers with an ARM64 processor, built on one, and signed with
+  # the updater key as the x64 installer is. A failure here never holds back the release: it
+  # is published without the ARM64 installer.
+  windows-arm:
+    needs: test
+    runs-on: windows-11-arm
+    # The static C runtime, as in the test job.
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check the tag against the version fields
+        shell: bash
+        run: node tools/release/release.mjs check "$GITHUB_REF_NAME"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install the UI's packages
+        run: bun install --frozen-lockfile
+
+      - name: Fetch and unpack the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs unpack --target aarch64-pc-windows-msvc --out "$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
+
+      # The `ring` crate is built with clang on ARM64 Windows.
+      - name: Put clang on the path
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (Test-Path $llvm) { Add-Content -Path $env:GITHUB_PATH -Value $llvm }
+
+      - name: Build the installer
+        shell: bash
+        run: bun run tauri build -- --locked
+
+      - name: Sign the installer
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir arm-release
+          cp "target/release/bundle/nsis/Sage_${version}_arm64-setup.exe" arm-release/
+          bun run tauri signer sign --app-version "$version" "arm-release/Sage_${version}_arm64-setup.exe"
+          test -s "arm-release/Sage_${version}_arm64-setup.exe.sig"
+          ls -l arm-release
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: arm-release
+          path: arm-release/
+          if-no-files-found: error
+
   release:
-    needs: [test, macos]
-    # Runs when the tests passed, whether or not the macOS build did.
+    needs: [test, macos, windows-arm]
+    # Runs when the tests passed, whether or not the macOS and ARM64 builds did.
     if: ${{ !cancelled() && needs.test.result == 'success' }}
     runs-on: windows-latest
     # The static C runtime, as in the test job.
@@ -243,12 +304,20 @@ jobs:
           name: mac-release
           path: mac-release
 
+      - name: Fetch the ARM64 installer
+        if: ${{ needs.windows-arm.result == 'success' }}
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: arm-release
+          path: arm-release
+
       - name: Publish the release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
           MAC_RESULT: ${{ needs.macos.result }}
+          ARM_RESULT: ${{ needs.windows-arm.result }}
         run: |
           version="${GITHUB_REF_NAME#v}"
           installer="target/release/bundle/nsis/Sage_${version}_x64-setup.exe"
@@ -264,7 +333,16 @@ jobs:
           # The notes the Releases page wrote for this version, when the tag has them; else
           # GitHub's own. Notes left on master by an earlier version are never used.
           node tools/release/release.mjs notes "$GITHUB_REF_NAME" release-notes.md release-notes.out.md
-          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json release-notes.out.md $mac_archive
+          # The ARM64 installer, when its build succeeded; the manifest then offers it.
+          arm_installer=""
+          arm_files=()
+          if [ "$ARM_RESULT" = "success" ]; then
+            arm_installer="arm-release/Sage_${version}_arm64-setup.exe"
+            arm_files=("$arm_installer" "$arm_installer.sig")
+          else
+            echo "release: the ARM64 build gave '$ARM_RESULT'; publishing without the ARM64 installer"
+          fi
+          node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json release-notes.out.md "${mac_archive:--}" "${arm_installer:--}"
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
           if [ -s release-notes.out.md ]; then
@@ -273,4 +351,4 @@ jobs:
             flags+=(--generate-notes)
           fi
           gh release create "$GITHUB_REF_NAME" --title "Sage $version" \
-            "${flags[@]}" "$installer" "$installer.sig" latest.json "${mac_files[@]}"
+            "${flags[@]}" "$installer" "$installer.sig" latest.json "${mac_files[@]}" "${arm_files[@]}"

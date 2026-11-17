@@ -65,6 +65,46 @@ jobs:
           ls -l target/release/bundle/nsis/
           test -n "$(find target/release/bundle/nsis -name 'Sage_*_x64-setup.exe' -size +1M)"
 
+  # The installer for ARM64 Windows, built on an ARM64 runner as the release builds it.
+  windows-arm:
+    runs-on: windows-11-arm
+    env:
+      RUSTFLAGS: "-C target-feature=+crt-static"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.13
+
+      - uses: dtolnay/rust-toolchain@035fceb3c12fb0c6a9461b52775e16473133e591 # 1.95.0
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+
+      - name: Install the UI's packages
+        run: bun install --frozen-lockfile
+
+      - name: Fetch and unpack the verified sherpa-onnx library
+        shell: bash
+        run: node tools/voice/sherpa-lib.mjs unpack --target aarch64-pc-windows-msvc --out "$RUNNER_TEMP/sherpa-onnx" >> "$GITHUB_ENV"
+
+      # The `ring` crate is built with clang on ARM64 Windows.
+      - name: Put clang on the path
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (Test-Path $llvm) { Add-Content -Path $env:GITHUB_PATH -Value $llvm }
+
+      - name: Build the installer
+        shell: bash
+        run: bun run tauri build -- --locked
+
+      - name: Check that the installer was made
+        shell: bash
+        run: |
+          ls -l target/release/bundle/nsis/
+          test -n "$(find target/release/bundle/nsis -name 'Sage_*_arm64-setup.exe' -size +1M)"
+
   macos:
     runs-on: macos-latest
     steps:
