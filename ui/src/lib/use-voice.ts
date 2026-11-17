@@ -33,10 +33,16 @@ export type VoiceLive = {
   /// `seq` names the question: a pick on its options sends it back.
   ask: { question: string; options: string[]; seq: number } | null;
   card: OpenDotCard | null;
-  /// The conversation so far, oldest first: what the person said and what Sage said back, a
-  /// whole reply in one entry. The enlarged stage shows it and drops it when it goes away.
-  /// Kept in memory only, the last `TALK_KEPT` entries.
+  /// The conversation so far, oldest first: what the person said, what Sage did about it (one
+  /// entry per step) and what Sage said back, a whole reply in one entry. The enlarged stage
+  /// shows it and drops it when it goes away. Kept in memory only, the last `TALK_KEPT`
+  /// entries.
   talk: TalkLine[];
+  /// What Sage is doing now, in a few words ("Opening the Inbox"): the newest step, until
+  /// the core says it is over or the turn ends. Null when no step is under way.
+  step: string | null;
+  /// A sentence was heard and its turn is still worked on: steps are taken only then.
+  turn: boolean;
   /// The speech files' download, while one runs.
   download: { done: number; total: number } | null;
   /// The take a voice setup is recording now; null when none runs. The settings page that
@@ -50,7 +56,8 @@ export type VoiceLive = {
 
 export type SaidLine = { n: number; text: string };
 
-export type TalkLine = { n: number; who: "you" | "sage"; text: string };
+/// `step` is something Sage did on the way to its reply: shown, never said.
+export type TalkLine = { n: number; who: "you" | "sage" | "step"; text: string };
 
 const quiet: VoiceLive = {
   state: "off",
@@ -63,6 +70,8 @@ const quiet: VoiceLive = {
   ask: null,
   card: null,
   talk: [],
+  step: null,
+  turn: false,
   download: null,
   settingUp: null,
   trouble: null,
@@ -101,22 +110,38 @@ export function useVoiceLive<T>(select: (live: VoiceLive) => T): T {
 /// How many lines of a reply the store keeps.
 const SAID_KEPT = 3;
 
-/// How many entries of the conversation the store keeps.
+/// How many entries of the conversation the store keeps, not counting the steps between them.
 const TALK_KEPT = 60;
+
+/// The newest `TALK_KEPT` things said, with the steps that belong to them.
+function kept(talk: TalkLine[]): TalkLine[] {
+  let said = 0;
+  for (let i = talk.length - 1; i >= 0; i -= 1) {
+    if (talk[i]!.who === "step") continue;
+    said += 1;
+    if (said === TALK_KEPT) return i === 0 ? talk : talk.slice(i);
+  }
+  return talk;
+}
 
 /// The running number of the last reply line taken, over the app's life.
 let lastLine = 0;
 
-/// The conversation with one more thing the person said.
-function withHeard(talk: TalkLine[], text: string): TalkLine[] {
+/// The conversation with one more thing the person said. `working` is whether the sentence
+/// before it is still being worked on.
+function withHeard(talk: TalkLine[], text: string, working: boolean): TalkLine[] {
   if (text.trim() === "") return talk;
-  // The person went on with what they were saying: the whole of it takes its place.
-  const last = talk[talk.length - 1];
+  // The person went on with what they were saying: the whole of it takes its place, and the
+  // steps taken for the part heard first go with that part. Steps of a turn that is over
+  // stay: the same words after it are a new sentence.
+  let at = talk.length - 1;
+  while (working && at >= 0 && talk[at]!.who === "step") at -= 1;
+  const last = talk[at];
   if (last?.who === "you" && text.startsWith(last.text)) {
-    return [...talk.slice(0, -1), { ...last, text }];
+    return [...talk.slice(0, at), { ...last, text }];
   }
   lastLine += 1;
-  return [...talk, { n: lastLine, who: "you" as const, text }].slice(-TALK_KEPT);
+  return kept([...talk, { n: lastLine, who: "you" as const, text }]);
 }
 
 /// The conversation with one more line of Sage's reply: a reply's lines are one entry, so the
@@ -128,7 +153,18 @@ function withSaid(talk: TalkLine[], text: string, first: boolean): TalkLine[] {
     return [...talk.slice(0, -1), { ...last, text: `${last.text} ${text}` }];
   }
   lastLine += 1;
-  return [...talk, { n: lastLine, who: "sage" as const, text }].slice(-TALK_KEPT);
+  return kept([...talk, { n: lastLine, who: "sage" as const, text }]);
+}
+
+/// The conversation with one more thing Sage did. The same step twice in a row is one. A
+/// turn's steps stay together above its reply: one that comes once the reply has begun
+/// (`replying`) goes in before the reply, so the reply stays one entry.
+function withStep(talk: TalkLine[], text: string, replying: boolean): TalkLine[] {
+  const reply = replying && talk[talk.length - 1]?.who === "sage" ? talk.length - 1 : talk.length;
+  const before = talk[reply - 1];
+  if (before?.who === "step" && before.text === text) return talk;
+  lastLine += 1;
+  return [...talk.slice(0, reply), { n: lastLine, who: "step" as const, text }, ...talk.slice(reply)];
 }
 
 /// How many times the voice status was set from something newer than a read (an event, or a
@@ -221,9 +257,14 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
     case "state":
       // Listening again means whatever was wrong is not, and the reply before it is over: its
       // lines do not come back when the listening ends in silence.
+      // A step is under way only while Sage thinks or speaks (it speaks from the reply's
+      // first words, with the deed still to come): any other state is the turn's end.
       voiceStore.set({
         state: event.state,
         micOpen: event.mic_open,
+        ...(event.state === "thinking" || event.state === "speaking"
+          ? {}
+          : { step: null, turn: false }),
         ...(event.state === "listening" ? { trouble: null, saying: "", said: [] } : {}),
       });
       {
@@ -238,9 +279,13 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
         }
       }
       return;
-    case "level":
+    case "level": {
+      // Up to 30 a second: one that changes nothing (silence) wakes no reader.
+      const { level } = voiceStore.get();
+      if (level.mic === event.mic && level.voice === event.voice) return;
       voiceStore.set({ level: { mic: event.mic, voice: event.voice } });
       return;
+    }
     case "hearing":
       voiceStore.set({ hearing: event.text, heard: false });
       return;
@@ -250,13 +295,31 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
         hearing: event.text,
         heard: true,
         said: [],
-        talk: withHeard(voiceStore.get().talk, event.text),
+        step: null,
+        turn: true,
+        talk: withHeard(voiceStore.get().talk, event.text, voiceStore.get().turn),
       });
       return;
+    case "step": {
+      const text = event.text.trim();
+      const { said, talk, turn, step } = voiceStore.get();
+      // No text: the step under way is over.
+      if (text === "") {
+        if (step !== null) voiceStore.set({ step: null });
+        return;
+      }
+      // One that comes once the turn is over (it crossed the turn's end on its way) is not
+      // shown: nothing would end it.
+      if (!turn) return;
+      voiceStore.set({ step: text, talk: withStep(talk, text, said.length > 0) });
+      return;
+    }
     case "saying": {
       // The first line of a reply: what was heard gives way to it.
       const { said, talk } = voiceStore.get();
       lastLine += 1;
+      // A line is shown when it is spoken, some time after it was written: it says nothing
+      // about the step under way, which the core ends itself.
       voiceStore.set({
         saying: event.text,
         said: [...said, { n: lastLine, text: event.text }].slice(-SAID_KEPT),
@@ -277,7 +340,15 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
       open(pathOf(event.target));
       return;
     case "cleared":
-      voiceStore.set({ hearing: "", heard: false, saying: "", said: [], ask: null, card: null });
+      voiceStore.set({
+        hearing: "",
+        heard: false,
+        saying: "",
+        said: [],
+        ask: null,
+        card: null,
+        step: null,
+      });
       return;
     case "woke":
       return;

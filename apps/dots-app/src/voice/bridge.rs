@@ -531,6 +531,7 @@ impl Bridge {
                 self.send(VoiceEvent::Card { card });
             }
             MindEvent::Open { target } => self.send(VoiceEvent::Open { target }),
+            MindEvent::Step { text } => self.send(VoiceEvent::Step { text }),
             MindEvent::Cleared => {
                 s.forget();
                 self.send(VoiceEvent::Cleared);

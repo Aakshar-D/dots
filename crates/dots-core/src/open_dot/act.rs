@@ -56,6 +56,21 @@ pub enum Deed {
     },
 }
 
+impl Deed {
+    /// What carrying it out is, in a few words, for the stage to show while it is done. It
+    /// names the sol only: never the tool's target, a command or a message's words.
+    pub fn doing(&self) -> String {
+        match self {
+            Deed::Approve { dot_name, .. } => format!("Approving {}'s request", name(dot_name)),
+            Deed::Deny { dot_name, .. } => format!("Denying {}'s request", name(dot_name)),
+            Deed::Run { dot_name, .. } => format!("Starting {}", name(dot_name)),
+            Deed::Answer { dot_name, .. } => format!("Answering {}", name(dot_name)),
+            Deed::Send { dot_name, .. } => format!("Sending your message to {}", name(dot_name)),
+            Deed::Command { .. } => "Running the command".into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OpenTarget {

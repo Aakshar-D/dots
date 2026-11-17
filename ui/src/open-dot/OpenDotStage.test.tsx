@@ -664,6 +664,70 @@ describe("the Open Sage stage", () => {
       ]);
     });
 
+    it("shows what Sage is doing between what was asked and its reply", () => {
+      window.localStorage.setItem("open-sage-large", "1");
+      render(<OpenDotStage />);
+      // A stage that comes up starts a new conversation: it is up before anything is said.
+      show({ state: "listening", micOpen: true });
+      show({
+        state: "thinking",
+        micOpen: false,
+        step: "Opening the Inbox",
+        talk: [
+          { n: ++line, who: "you", text: "Open the inbox." },
+          { n: ++line, who: "step", text: "Looking at your workspace" },
+          { n: ++line, who: "step", text: "Opening the Inbox" },
+        ],
+      });
+      const log = screen.getByRole("log", { name: "Conversation" });
+      // The steps in a row are one list, between the person's words and the reply.
+      expect(log.querySelectorAll("[data-steps]")).toHaveLength(1);
+      const steps = () => [...log.querySelectorAll<HTMLElement>("[data-step]")];
+      expect(steps().map((s) => [s.textContent, s.dataset.step])).toEqual([
+        ["Looking at your workspace", "done"],
+        ["Opening the Inbox", "now"],
+      ]);
+      expect(steps()[1]!.getAttribute("aria-current")).toBe("step");
+      // Shown, never said: the list is kept out of what the log reads out.
+      expect(log.querySelector("[data-steps]")!.getAttribute("aria-live")).toBe("off");
+      // The footer names the step under way.
+      expect(stage()!.querySelector("[data-footer-line]")!.textContent).toBe("Opening the Inbox…");
+      // It speaks from the first words of the reply, the screen still to open: under way.
+      show({ state: "speaking" });
+      expect(steps().map((s) => s.dataset.step)).toEqual(["done", "now"]);
+      expect(stage()!.querySelector("[data-footer-line]")!.textContent).toBe("Opening the Inbox…");
+      // The reply goes on: every step is done, and stays above it.
+      show({
+        state: "speaking",
+        step: null,
+        talk: [...voiceStore.get().talk, { n: ++line, who: "sage", text: "The Inbox is open." }],
+      });
+      expect(steps().map((s) => s.dataset.step)).toEqual(["done", "done"]);
+      expect(log.textContent).toMatch(/Open the inbox\..*Opening the Inbox.*The Inbox is open\./);
+    });
+
+    it("leaves the steps out of what is copied", async () => {
+      const user = userEvent.setup();
+      const written: string[] = [];
+      vi.spyOn(navigator.clipboard, "writeText").mockImplementation((text) => {
+        written.push(text);
+        return Promise.resolve();
+      });
+      window.localStorage.setItem("open-sage-large", "1");
+      render(<OpenDotStage />);
+      show({ state: "listening", micOpen: true });
+      show({
+        state: "speaking",
+        talk: [
+          { n: ++line, who: "you", text: "Open the inbox." },
+          { n: ++line, who: "step", text: "Opening the Inbox" },
+          { n: ++line, who: "sage", text: "The Inbox is open." },
+        ],
+      });
+      await user.click(screen.getByRole("button", { name: "Copy all" }));
+      expect(written).toEqual(["You: Open the inbox.\n\nSage: The Inbox is open."]);
+    });
+
     it("stays until it is closed, and the conversation goes with it", () => {
       vi.useFakeTimers();
       window.localStorage.setItem("open-sage-large", "1");
@@ -678,6 +742,15 @@ describe("the Open Sage stage", () => {
       expect(stage()).toBeNull();
       expect(voiceStore.get().talk).toEqual([]);
     });
+  });
+
+  it("names the step under way in the footer of the small stage too", () => {
+    render(<OpenDotStage />);
+    show({ state: "thinking", micOpen: false });
+    const footer = () => stage()!.querySelector("[data-footer-line]")!.textContent;
+    expect(footer()).toBe("Thinking…");
+    show({ step: "Looking at your workspace" });
+    expect(footer()).toBe("Looking at your workspace…");
   });
 
   it("is reached by Tab in order: The Breath, the options, Enlarge, then Close", async () => {

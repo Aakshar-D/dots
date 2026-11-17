@@ -448,6 +448,17 @@ impl Heard {
         })
     }
 
+    /// What the stage was told Sage was doing (`step` events), in order.
+    fn steps(&self) -> Vec<String> {
+        self.events
+            .iter()
+            .filter_map(|e| match e {
+                VoiceEvent::Step { text } if !text.is_empty() => Some(text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     fn opened(&self) -> Option<&OpenTarget> {
         self.events.iter().find_map(|e| match e {
             VoiceEvent::Open { target } => Some(target),
@@ -1078,6 +1089,15 @@ fn ask_a_dot() {
         json!({"act": "send", "d": d, "text": "Compare the three vendors."}),
     ));
     let r = h.turn("Ask the research sol to compare the three vendors.");
+    // The stage is told each step on the way, the deed last, without the words sent.
+    assert_eq!(
+        r.steps(),
+        vec![
+            "Looking at your workspace",
+            "Thinking it over",
+            "Sending your message to Research"
+        ]
+    );
     // "Sent" is heard as "send" in Dot's voice now and then.
     r.says(&["sent|send", "research"]);
     let run = h.wait_run(&w.research.id, |r| {
@@ -1102,6 +1122,8 @@ fn run_a_dot() {
     assert!(h.runs(&w.backup.id).is_empty());
     let r = h.turn("Yes.");
     r.says(&["backup|back", "running"]);
+    // A yes asks no model: the one step is the deed.
+    assert_eq!(r.steps(), vec!["Starting Backup"]);
     h.wait_run(&w.backup.id, |_| true);
 }
 
@@ -1175,6 +1197,10 @@ fn open_a_dot() {
     let d = h.handle("Research");
     h.model_says(&reply("", json!({"act": "open", "target": d})));
     let r = h.turn("Open the research sol.");
+    assert_eq!(
+        r.steps().last().map(String::as_str),
+        Some("Opening Research")
+    );
     assert_eq!(
         r.opened(),
         Some(&OpenTarget::Dot {
