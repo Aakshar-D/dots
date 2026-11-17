@@ -11,9 +11,9 @@ export type RawView =
   | { kind: "fields"; title: string; fields: { key: string; value: string }[] }
   | { kind: "text"; title: string; text: string };
 
-/// The fields of an engine line that say nothing to a person: its kind is in the title, and the
-/// ids name the session and the line.
-const ENGINE_NOISE = new Set(["type", "subtype", "session_id", "uuid"]);
+/// The fields of an engine line that say nothing to a person: the ids of the session and of the
+/// line.
+const ENGINE_IDS = new Set(["session_id", "uuid"]);
 
 /// `hook_started` as "hook started".
 function words(name: string): string {
@@ -50,15 +50,19 @@ export function rawView(line: RawLine): RawView {
     const delta = object.estimated_tokens_delta;
     return { kind: "thinking", tokens: typeof delta === "number" && delta > 0 ? delta : 0 };
   }
-  const kind = [object.type, object.subtype]
-    .filter((part): part is string => typeof part === "string" && part.trim() !== "")
-    .map(words)
-    .join(" · ");
+  // The type and the subtype go into the title when they are words; one that is not stays
+  // among the fields, so that nothing of the line is lost.
+  const named = (["type", "subtype"] as const).filter((key) => {
+    const part = object[key];
+    return typeof part === "string" && part.trim() !== "";
+  });
+  const kind = named.map((key) => words(object[key] as string)).join(" · ");
+  const titled: ReadonlySet<string> = new Set(named);
   return {
     kind: "fields",
     title: kind === "" ? line.label : kind.charAt(0).toUpperCase() + kind.slice(1),
     fields: Object.entries(object)
-      .filter(([key]) => !ENGINE_NOISE.has(key))
+      .filter(([key]) => !ENGINE_IDS.has(key) && !titled.has(key))
       .map(([key, v]) => ({ key: words(key), value: fieldValue(v) })),
   };
 }
@@ -97,7 +101,7 @@ export function rawSummary(views: RawView[]): string {
   if (rest.length === 1) parts.push(rest[0]!.title);
   else if (rest.length > 1) {
     const same = rest.every((view) => view.title === rest[0]!.title);
-    parts.push(same ? `${rest[0]!.title} × ${rest.length}` : `${rest.length} engine lines`);
+    parts.push(same ? `${rest[0]!.title} × ${rest.length}` : `${rest.length} raw lines`);
   }
   return parts.join(" · ");
 }

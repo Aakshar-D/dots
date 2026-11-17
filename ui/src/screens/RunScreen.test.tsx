@@ -109,9 +109,9 @@ describe("the run view", () => {
     const line = await screen.findByText("Thought it through · about 383 tokens");
     const group = line.closest("details")!;
     expect(group).not.toHaveAttribute("open");
-    expect(screen.queryByText(/session_id/)).toBeNull();
     await user.click(line);
     expect(group).toHaveAttribute("open");
+    expect(within(group).queryByText(/session_id|uuid/)).toBeNull();
     expect(
       within(group).getByText("The model thought before it answered: about 383 tokens."),
     ).toBeVisible();
@@ -126,7 +126,8 @@ describe("the run view", () => {
     const group = line.closest("details")!;
     expect(within(group).getByText("hook name").nextElementSibling).toHaveTextContent("PreToolUse");
     expect(within(group).queryByText("uuid")).toBeNull();
-    expect(within(group).getByRole("button", { name: "Copy the line" })).toBeVisible();
+    await user.click(within(group).getByRole("button", { name: "Copy the line: System · hook started" }));
+    expect(await navigator.clipboard.readText()).toBe(raw);
   });
 
   it("shows a chat run's tool steps as chips, with its header and the sol's name label", async () => {

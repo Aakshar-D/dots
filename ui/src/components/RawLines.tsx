@@ -53,16 +53,18 @@ function LineRow(props: { line: RawLine; view: Exclude<RawView, Thinking>; title
       {titled && <p className="pr-8 font-medium text-foreground">{view.title}</p>}
       <button
         type="button"
-        aria-label="Copy the line"
+        aria-label={"Copy the line: " + view.title}
         title="Copy the line"
-        className="absolute top-1.5 right-1.5 rounded-md p-1 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+        className="absolute top-1 right-1 rounded-md p-1.5 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
         onClick={() =>
           navigator.clipboard.writeText(line.text).then(() => toast.success("Copied"), notifyError)
         }
       >
         <Copy aria-hidden className="size-3.5" />
       </button>
-      {view.kind === "text" ? (
+      {view.kind === "text" && view.text === "" ? (
+        <p className="pr-8">This line is empty.</p>
+      ) : view.kind === "text" ? (
         <pre className="max-h-60 overflow-auto pr-8 font-mono whitespace-pre-wrap">{view.text}</pre>
       ) : view.fields.length === 0 ? (
         <p className="pr-8">Nothing more in this line.</p>
@@ -90,6 +92,7 @@ export function RawLines({ items }: { items: (RawLine & { seq: number })[] }) {
   const thinking = rows.map((row) => row.view).filter((view) => view.kind === "thinking");
   const rest = rows.filter((row) => row.view.kind !== "thinking");
   const Icon = rest.length === 0 ? Sparkles : Terminal;
+  const summary = rawSummary(rows.map((row) => row.view));
   return (
     <details data-slot="raw" className="group/raw">
       <summary className="flex cursor-pointer list-none items-center gap-1 text-xs text-muted-foreground [&::-webkit-details-marker]:hidden">
@@ -98,7 +101,9 @@ export function RawLines({ items }: { items: (RawLine & { seq: number })[] }) {
           className="size-3.5 shrink-0 transition-transform group-open/raw:rotate-90 motion-reduce:transition-none"
         />
         <Icon aria-hidden className="size-3.5 shrink-0" />
-        <span className="min-w-0 truncate">{rawSummary(rows.map((row) => row.view))}</span>
+        <span className="min-w-0 truncate" title={summary}>
+          {summary}
+        </span>
       </summary>
       <div className="mt-1.5 flex flex-col divide-y rounded-lg border text-xs text-muted-foreground">
         {thinking.length > 0 && <ThinkingRow counts={thinking} />}

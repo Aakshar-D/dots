@@ -47,6 +47,20 @@ describe("rawView", () => {
     });
   });
 
+  it("keeps a type that is not a word among the fields, and reads odd values", () => {
+    const line = engine('{"type":5,"subtype":"later","gone":null,"list":[1,"a"]}');
+    expect(rawView(line)).toEqual({
+      kind: "fields",
+      title: "Later",
+      fields: [
+        { key: "type", value: "5" },
+        { key: "gone", value: "null" },
+        { key: "list", value: JSON.stringify([1, "a"], null, 2) },
+      ],
+    });
+    expect(rawView(engine("{}"))).toEqual({ kind: "fields", title: "Engine output", fields: [] });
+  });
+
   it("keeps text that is not a JSON object as text", () => {
     expect(rawView(engine("garbled"))).toEqual({
       kind: "text",
@@ -81,7 +95,7 @@ describe("rawSummary", () => {
       "Thought it through · about 50 tokens · System · hook started",
     );
     expect(rawSummary([hook, hook].map(rawView))).toBe("System · hook started × 2");
-    expect(rawSummary([hook, engine("garbled")].map(rawView))).toBe("2 engine lines");
+    expect(rawSummary([hook, engine("garbled")].map(rawView))).toBe("2 raw lines");
   });
 });
 
