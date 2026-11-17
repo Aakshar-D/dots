@@ -111,6 +111,8 @@ function micLine(live: {
       // What it is doing now, when it has said so.
       return live.step ? `${live.step}…` : "Thinking…";
     case "speaking":
+      // A step taken once the reply has begun shows until the reply goes on.
+      if (live.step) return `${live.step}…`;
       return live.shortcut
         ? "Speaking. Click the mark or press the shortcut to interrupt."
         : "Speaking. Click the mark to interrupt.";
@@ -189,7 +191,13 @@ function Words({ question }: { question: string | null }) {
 /// reply. The one under way turns; the ones before it are ticked.
 function Steps({ steps, now }: { steps: TalkLine[]; now: number | null }) {
   return (
-    <ul data-steps="" aria-label="What Sage is doing" className="flex flex-col gap-1.5 border-l-2 pl-3">
+    // Shown, never said: the conversation around it is read out as it grows, the steps are not.
+    <ul
+      data-steps=""
+      aria-label="What Sage did"
+      aria-live="off"
+      className="flex flex-col gap-1.5 border-l-2 pl-3"
+    >
       {steps.map((step) => {
         const current = step.n === now;
         return (
@@ -222,10 +230,11 @@ function Talk({ reduced }: { reduced: boolean }) {
   const talk = useVoiceLive((live) => live.talk);
   const hearing = useVoiceLive((live) => live.hearing);
   const heard = useVoiceLive((live) => live.heard);
-  const thinking = useVoiceLive((live) => live.state === "thinking");
+  const step = useVoiceLive((live) => live.step);
   const end = useRef<HTMLDivElement>(null);
   const newest = talk[talk.length - 1];
-  const tail = `${newest?.n ?? 0}:${newest?.text.length ?? 0}:${heard ? "" : hearing}`;
+  // The newest step can sit above the reply it belongs to: it moves the view too.
+  const tail = `${newest?.n ?? 0}:${newest?.text.length ?? 0}:${talk.length}:${heard ? "" : hearing}`;
   // The first time it only arrives at the end; after that it glides there.
   const moved = useRef(false);
   useEffect(() => {
@@ -236,8 +245,9 @@ function Talk({ reduced }: { reduced: boolean }) {
     moved.current = true;
   }, [tail, reduced]);
   const coming = hearing !== "" && !heard;
-  // A step is under way only while Sage thinks and nothing came after it.
-  const now = thinking && newest?.who === "step" ? newest.n : null;
+  // The step under way is the newest one, while the store says one is.
+  const newestStep = step === null ? undefined : talk.filter((line) => line.who === "step").pop();
+  const now = newestStep?.text === step ? newestStep.n : null;
   return (
     <div
       data-talk=""

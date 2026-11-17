@@ -38,8 +38,8 @@ export type VoiceLive = {
   /// shows it and drops it when it goes away. Kept in memory only, the last `TALK_KEPT`
   /// entries.
   talk: TalkLine[];
-  /// What Sage is doing now, in a few words ("Opening the Inbox"); null before a turn's first
-  /// step and once the turn is over.
+  /// What Sage is doing now, in a few words ("Opening the Inbox"): the newest step, until
+  /// the next line of the reply or the turn's end. Null when no step is under way.
   step: string | null;
   /// The speech files' download, while one runs.
   download: { done: number; total: number } | null;
@@ -107,8 +107,19 @@ export function useVoiceLive<T>(select: (live: VoiceLive) => T): T {
 /// How many lines of a reply the store keeps.
 const SAID_KEPT = 3;
 
-/// How many entries of the conversation the store keeps.
+/// How many entries of the conversation the store keeps, not counting the steps between them.
 const TALK_KEPT = 60;
+
+/// The newest `TALK_KEPT` things said, with the steps that belong to them.
+function kept(talk: TalkLine[]): TalkLine[] {
+  let said = 0;
+  for (let i = talk.length - 1; i >= 0; i -= 1) {
+    if (talk[i]!.who === "step") continue;
+    said += 1;
+    if (said === TALK_KEPT) return i === 0 ? talk : talk.slice(i);
+  }
+  return talk;
+}
 
 /// The running number of the last reply line taken, over the app's life.
 let lastLine = 0;
@@ -116,13 +127,16 @@ let lastLine = 0;
 /// The conversation with one more thing the person said.
 function withHeard(talk: TalkLine[], text: string): TalkLine[] {
   if (text.trim() === "") return talk;
-  // The person went on with what they were saying: the whole of it takes its place.
-  const last = talk[talk.length - 1];
+  // The person went on with what they were saying: the whole of it takes its place, and the
+  // steps taken for the part heard first go with that part.
+  let at = talk.length - 1;
+  while (at >= 0 && talk[at]!.who === "step") at -= 1;
+  const last = talk[at];
   if (last?.who === "you" && text.startsWith(last.text)) {
-    return [...talk.slice(0, -1), { ...last, text }];
+    return [...talk.slice(0, at), { ...last, text }];
   }
   lastLine += 1;
-  return [...talk, { n: lastLine, who: "you" as const, text }].slice(-TALK_KEPT);
+  return kept([...talk, { n: lastLine, who: "you" as const, text }]);
 }
 
 /// The conversation with one more line of Sage's reply: a reply's lines are one entry, so the
@@ -134,15 +148,18 @@ function withSaid(talk: TalkLine[], text: string, first: boolean): TalkLine[] {
     return [...talk.slice(0, -1), { ...last, text: `${last.text} ${text}` }];
   }
   lastLine += 1;
-  return [...talk, { n: lastLine, who: "sage" as const, text }].slice(-TALK_KEPT);
+  return kept([...talk, { n: lastLine, who: "sage" as const, text }]);
 }
 
-/// The conversation with one more thing Sage did. The same step twice in a row is one.
-function withStep(talk: TalkLine[], text: string): TalkLine[] {
-  const last = talk[talk.length - 1];
-  if (last?.who === "step" && last.text === text) return talk;
+/// The conversation with one more thing Sage did. The same step twice in a row is one. A
+/// turn's steps stay together above its reply: one that comes once the reply has begun
+/// (`replying`) goes in before the reply, so the reply stays one entry.
+function withStep(talk: TalkLine[], text: string, replying: boolean): TalkLine[] {
+  const reply = replying && talk[talk.length - 1]?.who === "sage" ? talk.length - 1 : talk.length;
+  const before = talk[reply - 1];
+  if (before?.who === "step" && before.text === text) return talk;
   lastLine += 1;
-  return [...talk, { n: lastLine, who: "step" as const, text }].slice(-TALK_KEPT);
+  return [...talk.slice(0, reply), { n: lastLine, who: "step" as const, text }, ...talk.slice(reply)];
 }
 
 /// How many times the voice status was set from something newer than a read (an event, or a
@@ -235,11 +252,12 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
     case "state":
       // Listening again means whatever was wrong is not, and the reply before it is over: its
       // lines do not come back when the listening ends in silence.
-      // Only while it thinks is there a step under way: any other state ends it.
+      // A step is under way only while Sage thinks or speaks (it speaks from the reply's
+      // first words, with the deed still to come): any other state is the turn's end.
       voiceStore.set({
         state: event.state,
         micOpen: event.mic_open,
-        ...(event.state === "thinking" ? {} : { step: null }),
+        ...(event.state === "thinking" || event.state === "speaking" ? {} : { step: null }),
         ...(event.state === "listening" ? { trouble: null, saying: "", said: [] } : {}),
       });
       {
@@ -277,15 +295,19 @@ function take(qc: QueryClient, event: VoiceEvent, open: (path: string) => void):
     case "step": {
       const text = event.text.trim();
       if (text === "") return;
-      voiceStore.set({ step: text, talk: withStep(voiceStore.get().talk, text) });
+      const { said, talk } = voiceStore.get();
+      voiceStore.set({ step: text, talk: withStep(talk, text, said.length > 0) });
       return;
     }
     case "saying": {
       // The first line of a reply: what was heard gives way to it.
-      const { said, talk } = voiceStore.get();
+      const { said, talk, state } = voiceStore.get();
       lastLine += 1;
+      // The next line of the reply: what the step before it was for is done. A line said
+      // while it still thinks ("One moment.") is not the reply: the step goes on.
       voiceStore.set({
         saying: event.text,
+        ...(state === "thinking" ? {} : { step: null }),
         said: [...said, { n: lastLine, text: event.text }].slice(-SAID_KEPT),
         talk: withSaid(talk, event.text, said.length === 0),
         ...(said.length === 0 ? { hearing: "", heard: false } : {}),

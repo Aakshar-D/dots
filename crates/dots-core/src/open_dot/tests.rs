@@ -389,6 +389,17 @@ async fn steps_say_what_is_being_done_and_where_it_goes() {
     };
     assert!(place(&got, &step("Approving Research's request")) < place(&got, &did));
     t.rt.shutdown();
+
+    // A yes to a record handled meanwhile: nothing is tried, so no step says it is.
+    let t = T::start().await;
+    let approval = asking_to_approve(&t).await;
+    t.rt.decide_approval(&approval.id, false, None, None)
+        .await
+        .unwrap();
+    let got = t.hear("yes").await;
+    assert!(steps(&got).is_empty(), "{got:?}");
+    assert_eq!(said(&got), "That one is already handled.");
+    t.rt.shutdown();
 }
 
 #[tokio::test]

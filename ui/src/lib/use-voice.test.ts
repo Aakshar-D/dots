@@ -215,10 +215,12 @@ describe("useVoice", () => {
     act(() => backend.emit("voice", { kind: "step", text: "  " }));
     act(() => backend.emit("voice", { kind: "step", text: "Opening the Inbox" }));
     expect(voiceStore.get().step).toBe("Opening the Inbox");
-    // The reply begins: no step is under way, and the steps stay in the conversation.
+    // It speaks from the first words of the reply: the step goes on until the next line of
+    // the reply, and the steps stay in the conversation.
     act(() => backend.emit("voice", { kind: "state", state: "speaking", mic_open: false }));
-    expect(voiceStore.get().step).toBeNull();
+    expect(voiceStore.get().step).toBe("Opening the Inbox");
     act(() => backend.emit("voice", { kind: "saying", text: "The Inbox is open." }));
+    expect(voiceStore.get().step).toBeNull();
     expect(voiceStore.get().talk.map((line) => [line.who, line.text])).toEqual([
       ["you", "Open the inbox."],
       ["step", "Looking at your workspace"],
@@ -233,6 +235,68 @@ describe("useVoice", () => {
     act(() => backend.emit("voice", { kind: "step", text: "Thinking it over" }));
     act(() => backend.emit("voice", { kind: "cleared" }));
     expect(voiceStore.get().step).toBeNull();
+  });
+
+  it("keeps the steps of a turn together above its reply, and the reply in one entry", async () => {
+    mount("/home");
+    await hear({ kind: "heard", text: "Tell research hello." }, () =>
+      expect(voiceStore.get().talk.length).toBeGreaterThan(0),
+    );
+    const talk = () => voiceStore.get().talk.map((line) => [line.who, line.text]);
+    act(() => backend.emit("voice", { kind: "state", state: "thinking", mic_open: false }));
+    act(() => backend.emit("voice", { kind: "step", text: "Thinking it over" }));
+    // A line said while it still thinks is not the reply: the step goes on.
+    act(() => backend.emit("voice", { kind: "saying", text: "One moment." }));
+    expect(voiceStore.get().step).toBe("Thinking it over");
+    // The reply has begun when the deed is named: the step is under way while it speaks.
+    act(() => backend.emit("voice", { kind: "state", state: "speaking", mic_open: false }));
+    act(() => backend.emit("voice", { kind: "saying", text: "Sending." }));
+    act(() => backend.emit("voice", { kind: "step", text: "Sending your message to Research" }));
+    expect(voiceStore.get().step).toBe("Sending your message to Research");
+    act(() => backend.emit("voice", { kind: "saying", text: "Sent to Research." }));
+    expect(voiceStore.get().step).toBeNull();
+    expect(talk()).toEqual([
+      ["you", "Tell research hello."],
+      ["step", "Thinking it over"],
+      ["step", "Sending your message to Research"],
+      ["sage", "One moment. Sending. Sent to Research."],
+    ]);
+    // The turn ends with a step still shown: none is under way.
+    act(() => backend.emit("voice", { kind: "step", text: "Opening Research" }));
+    act(() => backend.emit("voice", { kind: "state", state: "listening", mic_open: true }));
+    expect(voiceStore.get().step).toBeNull();
+  });
+
+  it("drops the steps taken for the first part of a sentence the person went on with", async () => {
+    mount("/home");
+    await hear({ kind: "heard", text: "Open the" }, () =>
+      expect(voiceStore.get().talk.length).toBeGreaterThan(0),
+    );
+    act(() => backend.emit("voice", { kind: "state", state: "thinking", mic_open: false }));
+    act(() => backend.emit("voice", { kind: "step", text: "Looking at your workspace" }));
+    act(() => backend.emit("voice", { kind: "step", text: "Thinking it over" }));
+    act(() => backend.emit("voice", { kind: "heard", text: "Open the inbox." }));
+    expect(voiceStore.get().talk.map((line) => [line.who, line.text])).toEqual([
+      ["you", "Open the inbox."],
+    ]);
+  });
+
+  it("keeps the last sixty things said, however many steps lie between them", async () => {
+    mount("/home");
+    await hear({ kind: "heard", text: "Sentence 0." }, () =>
+      expect(voiceStore.get().talk.length).toBeGreaterThan(0),
+    );
+    for (let i = 1; i <= 70; i += 1) {
+      act(() => backend.emit("voice", { kind: "step", text: `Step ${i} a` }));
+      act(() => backend.emit("voice", { kind: "step", text: `Step ${i} b` }));
+      act(() => backend.emit("voice", { kind: "heard", text: `Sentence ${i}.` }));
+    }
+    const talk = voiceStore.get().talk;
+    const said = talk.filter((line) => line.who !== "step");
+    expect(said).toHaveLength(60);
+    expect(said[0]!.text).toBe("Sentence 11.");
+    expect(talk[0]!.text).toBe("Sentence 11.");
+    expect(talk.filter((line) => line.who === "step")).toHaveLength(118);
   });
 
   it("wakes no reader for a level that changes nothing", async () => {

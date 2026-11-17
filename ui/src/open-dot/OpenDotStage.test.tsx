@@ -688,9 +688,15 @@ describe("the Open Sage stage", () => {
         ["Opening the Inbox", "now"],
       ]);
       expect(steps()[1]!.getAttribute("aria-current")).toBe("step");
+      // Shown, never said: the list is kept out of what the log reads out.
+      expect(log.querySelector("[data-steps]")!.getAttribute("aria-live")).toBe("off");
       // The footer names the step under way.
       expect(stage()!.querySelector("[data-footer-line]")!.textContent).toBe("Opening the Inbox…");
-      // The reply comes: every step is done, and stays above it.
+      // It speaks from the first words of the reply, the screen still to open: under way.
+      show({ state: "speaking" });
+      expect(steps().map((s) => s.dataset.step)).toEqual(["done", "now"]);
+      expect(stage()!.querySelector("[data-footer-line]")!.textContent).toBe("Opening the Inbox…");
+      // The reply goes on: every step is done, and stays above it.
       show({
         state: "speaking",
         step: null,

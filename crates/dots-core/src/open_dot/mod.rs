@@ -52,11 +52,6 @@ use think::{cap_hit, Thinker};
 /// 1. `Cleared` (a step that waited was dropped: the idle period passed, it went stale, the
 ///    view moved to another account or workspace, or this turn answers or drops it);
 /// 2. `Thinking` (a model request or a setup round starts);
-///
-/// `Step` comes anywhere before `SayEnd`, any number of times: a few plain words on what the
-/// mind is doing now ("Looking at your workspace", "Opening the Inbox"), for the stage to
-/// show. It is never spoken, and it names only what a question or an outcome would say aloud:
-/// a sol's cleaned name, a screen, an app; never a command, a target or a message's words.
 /// 3. `Filler` (at most once, before any `Say`, when nothing was said by `FILLER_AFTER`);
 /// 4. `Say` deltas, interleaved with `Card` and `Open` as the step needs them (a confirmation
 ///    sends its `Card` and, when the target is on screen, its `Open` before its `Ask`; a dot
@@ -64,6 +59,13 @@ use think::{cap_hit, Thinker};
 /// 5. `Ask` (at most one: the question that now waits);
 /// 6. `SayEnd`, exactly once, last. It is sent also when the turn fails or its thinker panics
 ///    (`Rest`). Nothing of the turn is sent after it.
+///
+/// `Step` comes anywhere before `SayEnd`, any number of times: a few plain words on what the
+/// mind is about to do ("Looking at your workspace", "Opening the Inbox"), for the stage to
+/// show. It is never spoken, and it names only what a question or an outcome says aloud: a
+/// sol's cleaned name, a screen, an app, a note's title, a site; never a command, a tool's
+/// target or a message's words. A step for a deed is sent only once the deed is sure to be
+/// tried: after the checks that can still drop it.
 ///
 /// A turn ended by a newer turn, `lapse` or `reset` before its end sends nothing more, so it
 /// has no `SayEnd`; the newer turn's events follow. A deed already carried out is the one
@@ -904,8 +906,8 @@ impl Mind {
                         self.run_command(o, command, cancel).await
                     }
                 } else {
-                    o.step(&deed.doing());
-                    let Some(done) = confirmed(rt, &deed, view, &may_act).await else {
+                    let going = || o.step(&deed.doing());
+                    let Some(done) = confirmed(rt, &deed, view, &may_act, &going).await else {
                         o.end(Then::Rest);
                         return "ended before the deed";
                     };
@@ -925,7 +927,12 @@ impl Mind {
                     o.end(Then::Rest);
                     return "ended before the deed";
                 }
-                o.step(&format!("Creating {}", spoken_name(&proposal.name)));
+                let named = spoken_name(&proposal.name);
+                o.step(&if named.is_empty() {
+                    "Creating the sol".to_string()
+                } else {
+                    format!("Creating {named}")
+                });
                 let (said, opened, then) = create(rt, proposal, view).await;
                 o.deed_done(&said);
                 o.say(&said);
@@ -1252,7 +1259,6 @@ impl Mind {
                 let mut rounds = rounds;
                 rounds.push(SetupRound { questions, answers });
                 o.send(MindEvent::Thinking);
-                o.step(STEP_SETUP);
                 let req = SetupRequest {
                     description,
                     rounds,
@@ -1573,7 +1579,6 @@ impl Mind {
                 "desk"
             }
             Step::Create { description } => {
-                o.step(STEP_SETUP);
                 o.say(SETTING_UP);
                 let req = SetupRequest {
                     description,
@@ -1682,6 +1687,7 @@ impl Mind {
             self.finish(o, heard, &said, Then::Rest);
             return "cap";
         }
+        o.step(STEP_SETUP);
         let (asked, usage) = {
             let request = rt.setup_ask_with_usage(&id, req.clone());
             tokio::pin!(request);
@@ -1791,6 +1797,7 @@ async fn confirmed(
     deed: &Deed,
     view: &View,
     may_act: &(dyn Fn() -> bool + Sync),
+    going: &(dyn Fn() + Sync),
 ) -> Option<Outcome> {
     let Ok(picture) = Picture::take(rt, view).await else {
         return Some(Outcome::refused(WENT_WRONG));
@@ -1815,6 +1822,8 @@ async fn confirmed(
             _ => HANDLED,
         }));
     }
+    // The record is there and the turn still stands: the deed is tried now.
+    going();
     Some(outcome(rt, deed).await)
 }
 
