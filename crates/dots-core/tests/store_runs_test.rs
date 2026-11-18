@@ -375,6 +375,103 @@ async fn ended_runs_outside_a_topic_latest_end_first() {
 }
 
 #[tokio::test]
+async fn runs_ended_between_two_times_latest_end_first_without_the_stopped() {
+    let (_d, store) = temp_store().await;
+    let dot = store.create_dot(&spec("a"), None, "default").await.unwrap();
+    let other = store.create_dot(&spec("b"), None, "default").await.unwrap();
+    let ended = |dot_id: String, ended_at: &'static str, status| {
+        let store = store.clone();
+        async move {
+            let run = store
+                .create_run(&NewRun::new(&dot_id, TriggerKind::Manual))
+                .await
+                .unwrap();
+            store
+                .finish_run(&run.id, status, Some("s"), None)
+                .await
+                .unwrap();
+            store
+                .set_run_times(&run.id, "2026-10-27T07:00:00.000Z", Some(ended_at))
+                .await
+                .unwrap();
+            run.id
+        }
+    };
+    let early = ended(
+        dot.id.clone(),
+        "2026-10-27T08:00:00.000Z",
+        RunStatus::Succeeded,
+    )
+    .await;
+    let failed = ended(
+        dot.id.clone(),
+        "2026-10-27T09:00:00.000Z",
+        RunStatus::Failed,
+    )
+    .await;
+    let theirs = ended(
+        other.id.clone(),
+        "2026-10-27T10:00:00.000Z",
+        RunStatus::Succeeded,
+    )
+    .await;
+    // A run the person stopped, one that ended later than asked for, and one still waiting.
+    ended(
+        dot.id.clone(),
+        "2026-10-27T09:30:00.000Z",
+        RunStatus::Cancelled,
+    )
+    .await;
+    ended(
+        dot.id.clone(),
+        "2026-10-27T11:00:00.000Z",
+        RunStatus::Succeeded,
+    )
+    .await;
+    store
+        .create_run(&NewRun::new(&dot.id, TriggerKind::Schedule))
+        .await
+        .unwrap();
+
+    let between = |from: &'static str, before: &'static str, limit| {
+        let store = store.clone();
+        async move {
+            store
+                .runs_ended_between(from, before, limit)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>()
+        }
+    };
+    // From the first time, with it, up to the second, without it.
+    assert_eq!(
+        between("2026-10-27T08:00:00.000Z", "2026-10-27T10:00:00.000Z", 10).await,
+        vec![failed.clone(), early.clone()]
+    );
+    // Asked again from there, the run that ended at that very time comes, once.
+    assert_eq!(
+        between("2026-10-27T10:00:00.000Z", "2026-10-27T10:30:00.000Z", 10).await,
+        vec![theirs.clone()]
+    );
+    assert_eq!(
+        between("2026-10-27T07:00:00.000Z", "2026-10-27T10:30:00.000Z", 10).await,
+        vec![theirs.clone(), failed, early]
+    );
+    // Only the newest are kept.
+    assert_eq!(
+        between("2026-10-27T07:00:00.000Z", "2026-10-27T10:30:00.000Z", 1).await,
+        vec![theirs]
+    );
+    assert!(
+        between("2026-10-27T11:30:00.000Z", "2026-10-27T12:00:00.000Z", 10)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn cancel_if_inactive_only_touches_queued_or_awaiting() {
     let (_dir, store) = temp_store().await;
     let dot = store.create_dot(&spec("c"), None, "default").await.unwrap();
