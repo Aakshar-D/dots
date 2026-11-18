@@ -50,7 +50,11 @@ describe("a maker's request for a new sol", () => {
     show(make);
     const card = article(make);
     expect(card).toHaveTextContent("Researcher wants to make a sol with more than it has");
-    expect(card).toHaveTextContent("Blog Watcher · Reads the feeds");
+    expect(card).toHaveTextContent("The new sol: Blog Watcher");
+    // The purpose is the maker's words too: it is not in Sage's own lines.
+    const purpose = within(card).getByRole("figure", { name: "What it is for" });
+    expect(purpose).toHaveTextContent("written by Researcher, not by Sage");
+    expect(purpose).toHaveTextContent("Reads the feeds");
     const beyond = within(card).getByRole("region", { name: "Beyond what Researcher has" });
     expect(within(beyond).getAllByRole("listitem").map((li) => li.textContent)).toEqual([
       "The browser",
@@ -187,6 +191,10 @@ describe("text a sol wrote on the card", () => {
       "<a href='javascript:alert(6)'>m</a>",
     );
     expect(card).toHaveTextContent("The MCP server [x](javascript:alert(3))");
+    // A purpose that imitates Sage is in a box that says who wrote it.
+    const purpose = within(card).getByRole("figure", { name: "What it is for" });
+    expect(purpose).toHaveTextContent("written by Researcher, not by Sage");
+    expect(purpose).toHaveTextContent("<b>bold</b> [p](https://evil.example)");
   });
 
   it("names no button", () => {
@@ -224,7 +232,8 @@ describe("a card that changed before the answer", () => {
     // The card as it is now, with the core's words for why.
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("What this request would give changed since the card was shown");
-    expect(alert).toHaveTextContent("Read the card again before you answer.");
+    // The core's sentence says to look again; the card does not say it a second time.
+    expect(alert.textContent).toBe(conflict.message);
     expect(backend.callsTo("make_request_card")).toEqual([{ id: make.request.id }]);
     expect(await screen.findByText("The MCP server 'github'")).toBeVisible();
     // Nothing was sent again by itself.

@@ -215,8 +215,10 @@ export function MakeRequestCard({ card: given }: { card: Card }) {
         <div className="flex min-w-0 flex-1 flex-col">
           <p className={cn("font-semibold", open && "text-needs")}>{card.title}</p>
           <p className="text-sm break-words">
+            <span className="text-xs text-muted-foreground">
+              {request.kind === "make" ? "The new sol" : "The sol"}:{" "}
+            </span>
             <span className="font-medium">{card.name}</span>
-            {request.purpose !== "" && <> · {request.purpose}</>}
           </p>
           <p className="text-xs text-muted-foreground">
             Asked by{" "}
@@ -229,9 +231,16 @@ export function MakeRequestCard({ card: given }: { card: Card }) {
       </header>
       {moved && (
         <p role="alert" className="rounded-md border border-needs-border p-2 text-sm">
-          {changed ?? "This request changed since you first saw it."} Read the card again before
-          you answer.
+          {/* The core's sentence already asks to look at the card again. */}
+          {changed ??
+            "This request changed since you first saw it. Read the card again before you answer."}
         </p>
+      )}
+      {/* A sol wrote the purpose: it stands apart like the rest of what it wrote. */}
+      {request.purpose !== "" && (
+        <Written label="What it is for" by={card.maker_name}>
+          {request.purpose}
+        </Written>
       )}
       <Lines
         label={
