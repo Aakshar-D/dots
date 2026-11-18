@@ -4,6 +4,7 @@ import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
+import { DoneNotices } from "@/api/types";
 import type { Settings, VoiceDevice, VoiceMemory, VoiceSetup, VoiceStatus } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Field } from "@/components/Field";
@@ -35,6 +36,13 @@ const MODELS = [
   { id: "sonnet", label: "Balanced" },
   { id: "opus", label: "Most capable" },
 ] as const;
+
+/// Which runs Sage tells of aloud when they end (`voice_done_notices`).
+const DONE_NOTICES: readonly { value: DoneNotices; label: string }[] = [
+  { value: "off", label: "Off" },
+  { value: "mine", label: "What I started" },
+  { value: "all", label: "Everything" },
+];
 
 const MIN_SPEED = 0.8;
 const MAX_SPEED = 1.4;
@@ -493,6 +501,24 @@ export function VoiceSection({
           />
           <Label htmlFor="settings-voice-notices">Tell me aloud when something needs me</Label>
         </div>
+        <Field
+          label="Tell me aloud when a sol finishes"
+          htmlFor="settings-voice-done-notices"
+          hint="Sage always tells you when a sol finishes what you asked for by voice."
+        >
+          <NativeSelect
+            id="settings-voice-done-notices"
+            className="w-64"
+            value={draft.voice_done_notices}
+            onChange={(e) => set({ voice_done_notices: DoneNotices.parse(e.target.value) })}
+          >
+            {DONE_NOTICES.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </NativeSelect>
+        </Field>
       </Section>
 
       <Section title="Listening">

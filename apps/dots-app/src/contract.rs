@@ -1732,6 +1732,7 @@ pub fn samples() -> Value {
     });
     samples["Enums"]["Delivery"] = to(Delivery::ALL);
     samples["Enums"]["WaitReason"] = to(WaitReason::ALL);
+    samples["Enums"]["DoneNotices"] = to(dots_core::settings::DoneNotices::ALL);
     samples["ContextDocuments"] = to(context_documents());
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());

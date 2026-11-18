@@ -1,16 +1,19 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { cn } from "cn";
 import { Download, Plus } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
-import { Link } from "react-router";
+import { Link, useNavigate } from "react-router";
+import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
 import type { DotOverview } from "@/api/types";
+import { ConfirmButton } from "@/components/ConfirmButton";
 import { Button } from "@/components/ui/button";
 import { useScopeRefusal } from "@/lib/access";
 import { orgRemoved, orgRemovedText, useOrgList } from "@/lib/dot-org";
 import { dotStatus, lastLine, nextLine } from "@/lib/dot-status";
-import { keys } from "@/lib/query";
+import { errorMessage } from "@/lib/notify";
+import { invalidateDots, keys } from "@/lib/query";
 import { ImportAgentsDialog } from "@/screens/home/ImportAgentsDialog";
 import { DotAvatar } from "@/components/DotAvatar";
 import { StatusMark } from "@/screens/home/StatusMark";
@@ -42,6 +45,47 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
   const [importing, setImporting] = useState(false);
   // New dot opens the setup view in a dialog; the form stays at /dots/new.
   const [creating, setCreating] = useState(false);
+  // Select turns the list into one of check boxes, to delete several sols at once: the ids
+  // picked so far, or null while the list is the usual one of links.
+  const [picked, setPicked] = useState<ReadonlySet<string> | null>(null);
+  // Only the sols still in the list count: one deleted elsewhere meanwhile is not asked for.
+  const chosen = picked === null ? [] : rows.filter((row) => picked.has(row.dot.id));
+  const qc = useQueryClient();
+  const navigate = useNavigate();
+  // One sol after the other, each on its own: one that cannot be deleted does not keep the
+  // others, and stays picked with its reason shown.
+  const remove = useMutation({
+    mutationFn: async (dots: { id: string; name: string }[]) => {
+      const deleted: string[] = [];
+      const failed: { id: string; name: string; reason: string }[] = [];
+      for (const dot of dots) {
+        try {
+          await commands.deleteDot(dot.id);
+          // Removed first: a deleted sol must not be loaded again.
+          qc.removeQueries({ queryKey: keys.dot(dot.id) });
+          deleted.push(dot.id);
+        } catch (e) {
+          failed.push({ ...dot, reason: errorMessage(e) });
+        }
+      }
+      return { deleted, failed };
+    },
+    onSuccess: ({ deleted, failed }) => {
+      invalidateDots(qc);
+      if (deleted.length > 0) {
+        toast.success(deleted.length === 1 ? "1 sol deleted" : `${deleted.length} sols deleted`);
+      }
+      for (const dot of failed) toast.error(`${dot.name} was not deleted: ${dot.reason}`);
+      setPicked(failed.length > 0 ? new Set(failed.map((dot) => dot.id)) : null);
+      if (openId !== undefined && deleted.includes(openId)) void navigate("/home");
+    },
+  });
+  function toggle(id: string) {
+    const next = new Set(picked);
+    if (!next.delete(id)) next.add(id);
+    setPicked(next);
+  }
+  const everyPicked = rows.length > 0 && chosen.length === rows.length;
   // With no dot in view the home already shows the setup view: New dot goes there rather than
   // opening a second one.
   function newDot() {
@@ -116,11 +160,60 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
         )}
         {importing && <ImportAgentsDialog onClose={() => setImporting(false)} />}
       </div>
-      <h2 className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">Sols</h2>
+      <div className="flex items-center gap-1 pt-3 pr-2 pb-1 pl-4">
+        <h2 className="flex-1 text-xs font-medium text-muted-foreground">
+          {picked === null ? "Sols" : `${chosen.length} selected`}
+        </h2>
+        {/* Deleting sols is refused with making them, so Select goes with New sol. */}
+        {!refusal && rows.length > 0 && picked === null && (
+          <Button type="button" variant="ghost" size="xs" onClick={() => setPicked(new Set())}>
+            Select
+          </Button>
+        )}
+        {picked !== null && (
+          <>
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() =>
+                setPicked(new Set(everyPicked ? [] : rows.map((row) => row.dot.id)))
+              }
+            >
+              {everyPicked ? "None" : "All"}
+            </Button>
+            <Button type="button" variant="ghost" size="xs" onClick={() => setPicked(null)}>
+              Done
+            </Button>
+          </>
+        )}
+      </div>
       <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2" onKeyDown={onKeyDown}>
         {rows.map((row) => {
           const open = row.dot.id === openId;
           const next = nextLine(row, followUps);
+          if (picked !== null) {
+            return (
+              <li key={row.dot.id} aria-label={row.dot.name}>
+                <label
+                  className={cn(
+                    "flex cursor-pointer items-center gap-2 rounded-[10px] p-2.5 hover:bg-sidebar-accent/60",
+                    picked.has(row.dot.id) && "bg-sidebar-accent hover:bg-sidebar-accent",
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    className="size-4 shrink-0 accent-primary"
+                    aria-label={`Select ${row.dot.name}`}
+                    checked={picked.has(row.dot.id)}
+                    onChange={() => toggle(row.dot.id)}
+                  />
+                  <DotAvatar seed={row.dot.id} />
+                  <span className="truncate font-medium">{row.dot.name}</span>
+                </label>
+              </li>
+            );
+          }
           return (
             <li key={row.dot.id} aria-label={row.dot.name}>
               <Link
@@ -155,6 +248,35 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
           );
         })}
       </ul>
+      {picked !== null && (
+        <div className="flex flex-col border-t p-2">
+          <ConfirmButton
+            variant="destructive"
+            disabled={chosen.length === 0 || remove.isPending}
+            title={chosen.length === 1 ? "Delete 1 sol?" : `Delete ${chosen.length} sols?`}
+            description={
+              <>
+                <span className="block">{chosen.map((row) => row.dot.name).join(", ")}</span>
+                <span className="mt-2 block">
+                  Each sol, its runs, their transcripts and its memories are deleted. Worktrees
+                  and branches its runs left behind stay in your repository. This cannot be
+                  undone.
+                </span>
+              </>
+            }
+            confirmLabel="Delete"
+            onConfirm={() =>
+              remove.mutate(chosen.map((row) => ({ id: row.dot.id, name: row.dot.name })))
+            }
+          >
+            {remove.isPending
+              ? "Deleting…"
+              : chosen.length === 1
+                ? "Delete 1 sol"
+                : `Delete ${chosen.length} sols`}
+          </ConfirmButton>
+        </div>
+      )}
     </nav>
   );
 }

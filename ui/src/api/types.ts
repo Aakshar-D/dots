@@ -1118,6 +1118,10 @@ export const ModelOption = z.strictObject({
 });
 export type ModelOption = z.infer<typeof ModelOption>;
 
+// Which runs Open Sage tells of aloud when they end: none, those the person started, or all.
+// A run handed over by voice is told of whatever this says.
+export const DoneNotices = z.enum(["off", "mine", "all"]);
+export type DoneNotices = z.infer<typeof DoneNotices>;
 export const Settings = z.strictObject({
   port: z.number().int(),
   max_concurrent_runs: z.number().int(),
@@ -1181,6 +1185,7 @@ export const Settings = z.strictObject({
   voice_speaker: nullable(z.string()),
   // Notices are said aloud while Open Dot is idle.
   voice_notices: z.boolean(),
+  voice_done_notices: DoneNotices,
   // When sessions are compacted or started fresh, unless a dot has its own rules.
   context_rules: ContextRules,
 });

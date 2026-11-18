@@ -1,7 +1,8 @@
 mod common;
 
 use common::temp_store;
-use dots_core::settings::{self, Settings, TESTED_CLAUDE_VERSION};
+use dots_core::model::TriggerKind;
+use dots_core::settings::{self, DoneNotices, Settings, TESTED_CLAUDE_VERSION};
 use dots_core::store::Store;
 use dots_core::Config;
 
@@ -37,6 +38,8 @@ async fn an_empty_table_gives_the_defaults() {
     assert_eq!(s.voice_mic, None);
     assert_eq!(s.voice_speaker, None);
     assert!(!s.voice_notices);
+    // A run the person started is told of when it ends (once voice is on).
+    assert_eq!(s.voice_done_notices, DoneNotices::Mine);
 }
 
 #[tokio::test]
@@ -77,6 +80,7 @@ async fn settings_round_trip() {
         voice_mic: Some("{0.0.1.00000000}.{mic-id}".into()),
         voice_speaker: Some("{0.0.0.00000000}.{speaker-id}".into()),
         voice_notices: true,
+        voice_done_notices: DoneNotices::All,
         spend_daily_usd: Some(12.5),
         spend_daily_tokens: Some(500_000),
         spend_monthly_usd: Some(100.0),
@@ -617,6 +621,7 @@ fn voice_settings_need_no_restart() {
         voice_mic: Some("mic".into()),
         voice_speaker: Some("speaker".into()),
         voice_notices: true,
+        voice_done_notices: DoneNotices::Off,
         ..base.clone()
     };
     assert!(!base.restart_required(&s));
@@ -654,4 +659,44 @@ fn auto_install_updates_is_off_by_default_and_reads_from_old_settings() {
     assert!(!Settings::default().auto_install_updates);
     let old: Settings = serde_json::from_str(r#"{"port": 47321}"#).unwrap();
     assert!(!old.auto_install_updates);
+}
+
+#[test]
+fn done_notices_settings_are_a_word_and_old_settings_tell_of_the_persons_runs() {
+    // Settings written before the choice existed: the person's own runs are told of.
+    let old: Settings = serde_json::from_str(r#"{"port": 47321, "voice_notices": true}"#).unwrap();
+    assert_eq!(old.voice_done_notices, DoneNotices::Mine);
+    // Each choice is stored as its word, and read back from it.
+    for (mode, word) in [
+        (DoneNotices::Off, "off"),
+        (DoneNotices::Mine, "mine"),
+        (DoneNotices::All, "all"),
+    ] {
+        let s = Settings {
+            voice_done_notices: mode,
+            ..Settings::default()
+        };
+        s.validate().unwrap();
+        let json = serde_json::to_value(&s).unwrap();
+        assert_eq!(json["voice_done_notices"], word);
+        let back: Settings = serde_json::from_value(json).unwrap();
+        assert_eq!(back.voice_done_notices, mode);
+    }
+    // A word that is no choice is refused, not read as one.
+    assert!(serde_json::from_str::<Settings>(r#"{"voice_done_notices": "some"}"#).is_err());
+}
+
+#[test]
+fn done_notices_settings_say_which_runs_are_told_of() {
+    use TriggerKind::*;
+    for trigger in TriggerKind::ALL {
+        assert!(!DoneNotices::Off.tells(*trigger), "{trigger:?}");
+        assert!(DoneNotices::All.tells(*trigger), "{trigger:?}");
+        // What the person started: a chat message, Run now, a run going on after an approval.
+        assert_eq!(
+            DoneNotices::Mine.tells(*trigger),
+            matches!(trigger, Chat | Manual | Resume),
+            "{trigger:?}"
+        );
+    }
 }

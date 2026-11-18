@@ -143,6 +143,34 @@ describe("Settings > Voice", () => {
     expect(saved.voice_tone).toBe(false);
   });
 
+  it("picks which finished sols Sage tells of aloud", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true });
+    const { user } = renderApp("/settings/voice");
+    const done = await screen.findByLabelText("Tell me aloud when a sol finishes");
+    // What the person started, until they pick another.
+    expect(done).toHaveValue("mine");
+    expect(within(done).getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Off",
+      "What I started",
+      "Everything",
+    ]);
+    expect(
+      screen.getByText("Sage always tells you when a sol finishes what you asked for by voice."),
+    ).toBeVisible();
+    await user.selectOptions(done, "Everything");
+    expect(done).toHaveValue("all");
+    expect(screen.getByText("Unsaved changes")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.callsTo("update_settings")).toHaveLength(1));
+    const saved = backend.callsTo("update_settings")[0].settings as Settings;
+    expect(saved.voice_done_notices).toBe("all");
+    // Off is a choice too, and it is kept as its word.
+    await user.selectOptions(done, "Off");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(backend.callsTo("update_settings")).toHaveLength(2));
+    expect((backend.callsTo("update_settings")[1].settings as Settings).voice_done_notices).toBe("off");
+  });
+
   it("shows the controls when ready, and plays a voice at the chosen speed", async () => {
     voice(ready, { ...sample.settings, voice_enabled: true });
     const { user } = renderApp("/settings/voice");
