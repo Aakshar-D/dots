@@ -995,9 +995,11 @@ impl Makers {
         Ok(false)
     }
 
-    /// Ends the open `job` of the made dot named `dot_name` as `how` and stores the wake that
-    /// tells the maker `said`, then writes the `job_ended` entry of the log. `false` when
-    /// another pass had ended it.
+    /// Ends the open `job` of the made dot named `dot_name` as `how`, with the wake that tells
+    /// the maker `said` and the `job_ended` entry of the log, all in one transaction
+    /// (`Store::end_making_job`), then publishes `MakingUpdated`: a topic that reads its cards
+    /// on that event, or on seeing the job ended, finds the entry. `false` when another pass
+    /// had ended it.
     async fn end_job(
         &self,
         job: &MakingJob,
@@ -1006,23 +1008,11 @@ impl Makers {
         said: &str,
     ) -> Result<bool> {
         let store = &self.parts.store;
-        let Some(ended) = store.end_making_job(&job.id, how, said).await? else {
+        let Some(ended) = store.end_making_job(&job.id, how, said, dot_name).await? else {
             return Ok(false);
         };
         tracing::info!(job = %job.id, how = how.as_str(), "a job ended");
-        let detail = json!({
-            "job_id": ended.id,
-            "run_id": ended.last_run_id,
-            "how": how.as_str(),
-        });
-        self.log_job(
-            &ended,
-            MakingEventKind::JobEnded,
-            Some(&ended.dot_id),
-            dot_name,
-            detail,
-        )
-        .await;
+        self.updated(&ended.maker_dot_id, &ended.maker_root_run_id);
         Ok(true)
     }
 

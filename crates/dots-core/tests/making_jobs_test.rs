@@ -1938,7 +1938,12 @@ async fn a_job_is_not_ended_while_a_run_sends_its_message_again() {
     // A pass that read the job before the new run was stored ends it now: refused.
     let ended =
         t.rt.store()
-            .end_making_job(&job.id, JobEnd::Failed, "\"Blog Watcher\" failed.")
+            .end_making_job(
+                &job.id,
+                JobEnd::Failed,
+                "\"Blog Watcher\" failed.",
+                "Blog Watcher",
+            )
             .await
             .unwrap();
 

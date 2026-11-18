@@ -599,7 +599,10 @@ impl Store {
 
     /// Ends the open job `id` as `how` and stores the wake that tells its maker, `message`
     /// for the maker's topic the job was given in, in one transaction: a job that has ended
-    /// has exactly one wake. The guarded update goes first, so of two that end one job the
+    /// has exactly one wake. The `job_ended` entry of the makers' log, for the made dot named
+    /// `dot_name`, is written in that transaction too: whoever sees the job ended, or its wake,
+    /// finds the topic's card for it, and no reader sees a card that still says "working" for
+    /// a job that has ended. The guarded update goes first, so of two that end one job the
     /// second finds it ended. `None`, with nothing written, when the job had ended or is gone,
     /// and when a run goes on with the work of the job's run (`run_continued_by`), as one the
     /// person sent again since that run was read: the next pass moves the job to it.
@@ -608,6 +611,7 @@ impl Store {
         id: &str,
         how: JobEnd,
         message: &str,
+        dot_name: &str,
     ) -> Result<Option<MakingJob>> {
         let ended_at = now();
         let wake_id = new_id();
@@ -634,6 +638,17 @@ impl Store {
         )
         .bind(&wake_id)
         .bind(message)
+        .bind(&ended_at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        // The entry is the run's that gave the job, in the topic it was given in.
+        sqlx::query(&format!(
+            "INSERT INTO making_events ({COLUMNS})              SELECT ?, maker_dot_id, maker_run_id, maker_root_run_id, ?, dot_id, ?,              json_object('job_id', id, 'run_id', last_run_id, 'how', ended_how), ?              FROM making_jobs WHERE id = ?"
+        ))
+        .bind(new_id())
+        .bind(MakingEventKind::JobEnded.as_str())
+        .bind(dot_name)
         .bind(&ended_at)
         .bind(id)
         .execute(&mut *tx)
