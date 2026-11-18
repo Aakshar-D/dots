@@ -82,7 +82,7 @@ pub fn classify(tool: &str, input: &Value) -> Option<Guarded> {
         let dot = crate::making::tools::deletes(input)?;
         return Some(Guarded {
             kind: GuardKind::Delete,
-            summary: format!("delete the dot \"{dot}\" and its history"),
+            summary: format!("delete the sol \"{dot}\" and its history"),
         });
     }
     let rest = tool.strip_prefix("mcp__")?;

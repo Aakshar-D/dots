@@ -109,8 +109,8 @@ async fn making_round_trips() {
 
 #[tokio::test]
 async fn making_out_of_range_is_refused() {
-    assert_eq!(MAKE_PER_RUN_RULE, "A dot may make 1 to 10 dots in one run.");
-    assert_eq!(MAKE_TOTAL_RULE, "A dot may keep 1 to 50 made dots.");
+    assert_eq!(MAKE_PER_RUN_RULE, "A sol may make 1 to 10 sols in one run.");
+    assert_eq!(MAKE_TOTAL_RULE, "A sol may keep 1 to 50 made sols.");
     let (_dir, store) = temp_store().await;
     let cases = [
         (0, 10, MAKE_PER_RUN_RULE),

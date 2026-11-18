@@ -44,11 +44,11 @@ pub const MODEL_CHARS: &str = "The model is plain text: no line breaks, control 
     or marks that change the direction of text.";
 /// What a workflow step's run is told by every tool for making dots (design section 5).
 pub const NOT_IN_A_STEP: &str =
-    "A run that is a workflow step cannot use the tools for making dots.";
+    "A run that is a workflow step cannot use the tools for making sols.";
 /// The shortest wait the wakes' loop takes before it tries a waiting wake again.
 const MIN_WAKE_RETRY: std::time::Duration = std::time::Duration::from_millis(50);
 /// What a run that has ended is told by every tool for making dots.
-pub const RUN_ENDED: &str = "This run has ended, so it cannot use the tools for making dots.";
+pub const RUN_ENDED: &str = "This run has ended, so it cannot use the tools for making sols.";
 
 /// What a maker's run asks for with `make_dot` (design section 7.1). In JSON it is one flat
 /// object: `purpose`, `first_job` and the fields of `Wanted`. A field none of them has is
@@ -117,7 +117,7 @@ impl MakeOutcome {
         match self {
             Self::Made { dot, first_job } => {
                 let mut text = format!(
-                    "Made the dot \"{}\". It is on and ready; give it a job with give_job.",
+                    "Made the sol \"{}\". It is on and ready; give it a job with give_job.",
                     dot.spec.name
                 );
                 if dot.spec.schedule.is_some() {
@@ -187,10 +187,10 @@ impl OverLimit {
     pub fn line(&self) -> String {
         match self {
             Self::PerRun { nth, limit } => {
-                format!("{} dot in this run; the limit is {limit}", ordinal(*nth))
+                format!("{} sol in this run; the limit is {limit}", ordinal(*nth))
             }
             Self::Total { nth, limit } => {
-                format!("{} made dot kept; the limit is {limit}", ordinal(*nth))
+                format!("{} made sol kept; the limit is {limit}", ordinal(*nth))
             }
         }
     }
@@ -605,7 +605,7 @@ impl Makers {
             if let Consumer::Mcp(server) = Consumer::parse(key)? {
                 if !used.contains(&server) {
                     return Err(Error::Invalid(format!(
-                        "The dot would not use an MCP server named '{server}', so it cannot be \
+                        "The sol would not use an MCP server named '{server}', so it cannot be \
                          given variables for it. Name the server in uses, or leave those \
                          variables out."
                     )));
@@ -632,7 +632,7 @@ impl Makers {
     pub(crate) async fn check_name_free(&self, name: &str) -> Result<()> {
         if self.parts.store.dot_name_taken(name.trim()).await? {
             return Err(Error::Conflict(format!(
-                "A dot named {:?} already exists. Choose another name.",
+                "A sol named {:?} already exists. Choose another name.",
                 name.trim()
             )));
         }
@@ -753,7 +753,7 @@ impl Makers {
             })
             .await;
         if let Err(e) = logged {
-            tracing::error!(dot = %dot.id, run = %run_id, "the made dot was not logged: {e}");
+            tracing::error!(dot = %dot.id, run = %run_id, "the made sol was not logged: {e}");
         }
         self.updated(&maker.id, root_run_id);
         Ok(dot)
@@ -772,7 +772,7 @@ impl Makers {
 /// ("made", "changed").
 pub(super) fn moved_folder(folder: &Path, done: &str) -> String {
     format!(
-        "The folder {} leads somewhere else now that it exists, so the dot was not {done}.",
+        "The folder {} leads somewhere else now that it exists, so the sol was not {done}.",
         folder.display()
     )
 }
@@ -784,7 +784,7 @@ pub(super) fn moved_folder(folder: &Path, done: &str) -> String {
 pub(crate) fn may_make(maker: &Dot, run: &Run) -> Result<()> {
     if !maker.spec.making.on {
         return Err(Error::Invalid(format!(
-            "{} may not make dots. The person turns that on in the dot's settings.",
+            "{} may not make sols. The person turns that on in the sol's settings.",
             maker.spec.name
         )));
     }

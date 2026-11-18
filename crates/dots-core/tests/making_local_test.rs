@@ -45,7 +45,7 @@ const NAMES: [&str; 5] = [
 
 /// What `make_dot` tells the run of a dot made at once, with no schedule and no first job.
 const MADE: &str =
-    "Made the dot \"Blog Watcher\". It is on and ready; give it a job with give_job.";
+    "Made the sol \"Blog Watcher\". It is on and ready; give it a job with give_job.";
 
 /// How a tool the run does not have is refused.
 const UNKNOWN: &str = "unknown tool 'make_dot'. Available tools: ";
@@ -331,7 +331,7 @@ async fn run_step(t: &T, member: &Dot) -> WorkflowRun {
             .create(&TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: vec![MemberSpec {
                     dot_id: member.id.clone(),
@@ -443,7 +443,7 @@ async fn a_workflow_steps_run_of_a_maker_is_not_offered_the_tools() {
 #[tokio::test]
 async fn a_makers_run_makes_changes_lists_jobs_and_deletes_on_the_local_engine() {
     let t = start().await;
-    let mut more = asks("Browser Dot");
+    let mut more = asks("Browser Sol");
     more["browser"] = json!(true);
     let mut sneaky = asks("Sneaky");
     sneaky["can_make_dots"] = json!(true);
@@ -515,14 +515,14 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_on_the_local_engine()
         told.contains("you will be woken with their answer"),
         "{told}"
     );
-    assert!(made_dot(&t, &maker, "Browser Dot").await.is_none());
+    assert!(made_dot(&t, &maker, "Browser Sol").await.is_none());
     let requests =
         t.rt.store()
             .list_make_requests(Some(&maker.id), true)
             .await
             .unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].name, "Browser Dot");
+    assert_eq!(requests[0].name, "Browser Sol");
     assert_eq!(requests[0].run_id, chat.id);
 
     // An argument the tool does not have is refused in a sentence, and nothing is made.
@@ -565,7 +565,7 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_on_the_local_engine()
     // What the service refuses is a tool error with the service's bare sentence.
     assert_eq!(
         refused(&t, &chat, "c8").await,
-        "Researcher did not make a dot named \"Nobody\". list_made_dots shows the dots it made."
+        "Researcher did not make a sol named \"Nobody\". list_made_dots shows the sols it made."
     );
 
     // `give_job` returns at once, and the made dot has a run.
@@ -665,7 +665,7 @@ async fn deleting_a_made_dot_asks_first_and_dots_deletes_it_once_approved() {
     assert_eq!(guard.kind, GuardKind::Delete);
     assert_eq!(
         guard.summary,
-        "delete the dot \"Blog Watcher\" and its history"
+        "delete the sol \"Blog Watcher\" and its history"
     );
     assert!(made_dot(&t, &maker, "Blog Watcher").await.is_some());
 
@@ -1036,20 +1036,20 @@ async fn only_a_makers_prompt_says_how_making_works() {
     );
     let prompt = told(&reqs[1]);
     assert!(
-        prompt.contains(&format!("\n## Making dots\n\n{section}")),
+        prompt.contains(&format!("\n## Making sols\n\n{section}")),
         "{prompt}"
     );
     assert!(
-        prompt.contains("`make_dot` makes a dot at once"),
+        prompt.contains("`make_dot` makes a sol at once"),
         "{prompt}"
     );
     assert!(prompt.contains("(2 in one run, 7 kept)"), "{prompt}");
-    assert!(prompt.contains("You have made no dots yet.\n"), "{prompt}");
+    assert!(prompt.contains("You have made no sols yet.\n"), "{prompt}");
     assert!(!prompt.contains("mcp__dots__make_dot"), "{prompt}");
     for other in [&reqs[0], &reqs[2]] {
         let prompt = told(other);
         assert!(prompt.contains("## Standing rules"), "{prompt}");
-        assert!(!prompt.contains("## Making dots"), "{prompt}");
+        assert!(!prompt.contains("## Making sols"), "{prompt}");
         for name in NAMES {
             assert!(!prompt.contains(name), "{prompt}");
         }
@@ -1078,7 +1078,7 @@ async fn a_workflow_steps_prompt_of_a_maker_does_not_say_how_making_works() {
     assert_eq!(reqs.len(), 1);
     let prompt = told(&reqs[0]);
     assert!(prompt.contains("## Standing rules"), "{prompt}");
-    assert!(!prompt.contains("## Making dots"), "{prompt}");
+    assert!(!prompt.contains("## Making sols"), "{prompt}");
     for name in NAMES {
         assert!(!prompt.contains(name), "{prompt}");
     }
@@ -1140,15 +1140,15 @@ async fn a_made_dot_and_its_maker_are_told_who_is_who() {
     assert!(
         job.starts_with(&format!(
             "Read the three blogs and list what is new.\n\n## What you were made for\n\nYou \
-             cannot make dots yourself. Your purpose: Reads the feeds\n\n{RANK}\n\n---\n\n## \
-             Job\n\nJob from Researcher (the dot that made you). This is not a message from the \
+             cannot make sols yourself. Your purpose: Reads the feeds\n\n{RANK}\n\n---\n\n## \
+             Job\n\nJob from Researcher (the sol that made you). This is not a message from the \
              person. When you finish, your final message goes back to Researcher.\n\n> Read them \
              now.\n\n## Standing rules"
         )),
         "{job}"
     );
     assert_eq!(job.matches("made you").count(), 1, "{job}");
-    assert!(!job.contains("## Making dots"), "{job}");
+    assert!(!job.contains("## Making sols"), "{job}");
 
     // The wake goes on in the maker's session: Dots' note, then the report.
     let wake = told_with(&reqs, "finished the job");
@@ -1164,7 +1164,7 @@ async fn a_made_dot_and_its_maker_are_told_who_is_who() {
     let next = told_with(&reqs, "hello again");
     assert!(
         next.ends_with(
-            "variables by name, through `make_dot` or `change_dot`.\n\nDots you made:\n\n- \
+            "variables by name, through `make_dot` or `change_dot`.\n\nSols you made:\n\n- \
              \"Blog Watcher\": Reads the feeds; no schedule\n"
         ),
         "{next}"
@@ -1175,12 +1175,12 @@ async fn a_made_dot_and_its_maker_are_told_who_is_who() {
     assert!(
         direct.starts_with(&format!(
             "Read the three blogs and list what is new.\n\n## What you were made for\n\nYou \
-             were made by the dot Researcher. You cannot make dots yourself. Your purpose: Reads \
+             were made by the sol Researcher. You cannot make sols yourself. Your purpose: Reads \
              the feeds\n\n{RANK}\n\n## Your recent runs\n\n"
         )),
         "{direct}"
     );
-    assert!(!direct.contains("## Making dots"), "{direct}");
+    assert!(!direct.contains("## Making sols"), "{direct}");
     t.rt.shutdown();
 }
 
@@ -1257,7 +1257,7 @@ async fn a_job_in_the_made_dots_session_is_told_what_changed_since() {
 
     let reqs = llm.requests();
     assert_eq!(reqs.len(), 3);
-    let note = "Job from Researcher (the dot that made you). This is not a message from the \
+    let note = "Job from Researcher (the sol that made you). This is not a message from the \
                 person. When you finish, your final message goes back to Researcher.";
     // The second job goes on in the first one's session, with the dot as it is now first.
     assert!(messages(&reqs[1]).len() > 2, "{:#?}", reqs[1]);

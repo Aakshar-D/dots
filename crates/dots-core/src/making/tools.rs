@@ -20,7 +20,7 @@ pub const POLICY_NAME: &str = crate::policy::MAKE_DOTS_TOOL;
 
 /// What the model is told when a call failed for a reason it cannot act on, such as the
 /// database or the disk; the detail goes to the log.
-pub const COULD_NOT: &str = "Dots could not do that just now.";
+pub const COULD_NOT: &str = "Sage could not do that just now.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
@@ -81,33 +81,33 @@ impl Tool {
     pub fn description(self, limits: &Making) -> String {
         match self {
             Tool::MakeDot => format!(
-                "Make a new dot that works for you. Look at list_made_dots first and reuse a \
-                 dot before making another. Give it only what its work needs. A dot within your \
+                "Make a new sol that works for you. Look at list_made_dots first and reuse a \
+                 sol before making another. Give it only what its work needs. A sol within your \
                  reach is made at once and can run at once: your folder or one below it (or no \
                  folder, for a new one of its own), your permissions or a weaker preset, Library \
                  items and variables you have yourself, limits no higher than yours. If you ask \
-                 for more than you have, or pass your limit of dots ({} in one run, {} kept), \
+                 for more than you have, or pass your limit of sols ({} in one run, {} kept), \
                  nothing is made yet: the request waits for the person. Do not wait for it: \
-                 carry on or end your turn, and you are woken with their answer. The new dot \
-                 cannot make dots itself.",
+                 carry on or end your turn, and you are woken with their answer. The new sol \
+                 cannot make sols itself.",
                 limits.per_run, limits.total
             ),
-            Tool::ChangeDot => "Change a dot you made. Only the settings you name change; the \
+            Tool::ChangeDot => "Change a sol you made. Only the settings you name change; the \
                  rest stay as they are. What you name is checked against what you have now: \
-                 giving the dot more than you have waits for the person, as with make_dot, and \
+                 giving the sol more than you have waits for the person, as with make_dot, and \
                  taking something away never needs the person's say-so for reach."
                 .to_string(),
-            Tool::DeleteDot => "Delete a dot you made, with its whole history. It cannot be \
-                 undone. Refused while the dot has a run going or queued."
+            Tool::DeleteDot => "Delete a sol you made, with its whole history. It cannot be \
+                 undone. Refused while the sol has a run going or queued."
                 .to_string(),
             Tool::GiveJob => format!(
-                "Give a job to a dot you made: a message that starts a run of it. It returns \
+                "Give a job to a sol you made: a message that starts a run of it. It returns \
                  at once. Do not wait for the job: carry on or end your turn, and you are woken \
-                 in this conversation with how the job ended and the dot's final text. At most \
-                 {MAX_JOBS_BETWEEN_TYPED} jobs between two messages of the person. A job for a dot \
+                 in this conversation with how the job ended and the sol's final text. At most \
+                 {MAX_JOBS_BETWEEN_TYPED} jobs between two messages of the person. A job for a sol \
                  that has more than you have waits for the person's say-so first."
             ),
-            Tool::ListMadeDots => "List the dots you made: each with its purpose, its schedule, \
+            Tool::ListMadeDots => "List the sols you made: each with its purpose, its schedule, \
                  whether it is running and how its last run ended, and your requests that wait \
                  for the person."
                 .to_string(),
@@ -123,30 +123,30 @@ impl Tool {
                 let mut properties = wanted_properties(false);
                 properties.insert(
                     "purpose".into(),
-                    s("One line on what the dot is for, up to 200 characters; the person sees it"),
+                    s("One line on what the sol is for, up to 200 characters; the person sees it"),
                 );
                 properties.insert(
                     "first_job".into(),
                     s(
-                        "A first job for the new dot, up to 4,000 characters: it starts when the \
-                       dot is made, and you are woken with its result as with give_job",
+                        "A first job for the new sol, up to 4,000 characters: it starts when the \
+                       sol is made, and you are woken with its result as with give_job",
                     ),
                 );
                 Value::Object(properties)
             }
             Tool::ChangeDot => {
                 let mut properties = wanted_properties(true);
-                properties.insert("dot".into(), s("The made dot's name, as it is now"));
+                properties.insert("dot".into(), s("The made sol's name, as it is now"));
                 properties.insert(
                     "purpose".into(),
                     s("A new one-line purpose, up to 200 characters"),
                 );
                 Value::Object(properties)
             }
-            Tool::DeleteDot => json!({ "dot": s("The made dot's name") }),
+            Tool::DeleteDot => json!({ "dot": s("The made sol's name") }),
             Tool::GiveJob => json!({
-                "dot": s("The made dot's name"),
-                "message": s("The job, 1 to 4,000 characters: what to do, written so the dot \
+                "dot": s("The made sol's name"),
+                "message": s("The job, 1 to 4,000 characters: what to do, written so the sol \
                               can act on it without asking again")
             }),
             Tool::ListMadeDots => json!({}),
@@ -297,7 +297,7 @@ pub fn check_arguments(tool: Tool, arguments: &Value) -> std::result::Result<(),
 /// What the model is told of a call that names a made dot but was not checked with one
 /// (`checked_input`): nothing is done.
 pub const NOT_CHECKED: &str =
-    "Dots did not check which dot this call is for, so nothing was done. Call the tool again.";
+    "Sage did not check which sol this call is for, so nothing was done. Call the tool again.";
 
 /// A service error as the sentence the model gets. An error it cannot act on, of the database
 /// or the disk, is `COULD_NOT`, and its detail goes to the log.
@@ -305,7 +305,7 @@ fn sentence(tool: Tool, e: Error) -> String {
     match e {
         Error::Invalid(m) | Error::Conflict(m) | Error::NotFound(m) | Error::NotAllowed(m) => m,
         other => {
-            tracing::warn!(tool = tool.name(), "a tool for making dots failed: {other}");
+            tracing::warn!(tool = tool.name(), "a tool for making sols failed: {other}");
             COULD_NOT.to_string()
         }
     }
@@ -323,7 +323,7 @@ pub async fn call(
     checked: &Value,
 ) -> std::result::Result<String, String> {
     let Some(tool) = Tool::for_input(checked) else {
-        return Err("this is not a tool for making dots".to_string());
+        return Err("this is not a tool for making sols".to_string());
     };
     let arguments = checked.get("input").cloned().unwrap_or_else(|| json!({}));
     let bound = || {
@@ -385,13 +385,13 @@ fn wanted_properties(change: bool) -> serde_json::Map<String, Value> {
     ];
     let properties = json!({
         "name": s(if change {
-            "A new name for the dot: 1 to 64 letters, digits, spaces, '-', '_' or '.', that no \
-             other dot has"
+            "A new name for the sol: 1 to 64 letters, digits, spaces, '-', '_' or '.', that no \
+             other sol has"
         } else {
-            "The dot's name: 1 to 64 letters, digits, spaces, '-', '_' or '.', that no other \
-             dot has"
+            "The sol's name: 1 to 64 letters, digits, spaces, '-', '_' or '.', that no other \
+             sol has"
         }),
-        "instructions": s("The dot's whole instructions: what it does on every run, written \
+        "instructions": s("The sol's whole instructions: what it does on every run, written \
                            for it"),
         "model": s(&format!(
             "A model of your own engine.{}",
@@ -399,7 +399,7 @@ fn wanted_properties(change: bool) -> serde_json::Map<String, Value> {
         )),
         "folder": s(&format!(
             "The folder it works in: your own folder, or one below it (a relative path starts \
-             at your folder; Dots makes it if it is missing). Any other folder waits for the \
+             at your folder; Sage makes it if it is missing). Any other folder waits for the \
              person.{}",
             left_out(" Left out, it gets a new empty folder of its own.")
         )),
@@ -485,7 +485,7 @@ fn wanted_properties(change: bool) -> serde_json::Map<String, Value> {
                         },
                         "catch_up": {
                             "type": "boolean",
-                            "description": "One run for the most recent missed time when Dots \
+                            "description": "One run for the most recent missed time when Sage \
                                             comes back; true when left out"
                         },
                         "until": {

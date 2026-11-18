@@ -282,7 +282,7 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
 
     // Newest first, each with what the Inbox sorts, links and titles it by.
     let inbox = t.rt.inbox().await.unwrap();
-    let limit = "2nd dot in this run; the limit is 1";
+    let limit = "2nd sol in this run; the limit is 1";
     let item = |request: &MakeRequest, title: &str, lines: &[&str]| PendingMakeRequest {
         id: request.id.clone(),
         dot_id: maker.id.clone(),
@@ -311,10 +311,10 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
             ),
             item(
                 &watcher,
-                "Researcher wants to make a dot with more than it has",
+                "Researcher wants to make a sol with more than it has",
                 &["The browser", limit]
             ),
-            item(&two, "Researcher wants to make one more dot", &[limit]),
+            item(&two, "Researcher wants to make one more sol", &[limit]),
         ]
     );
     assert_eq!(change.kind, RequestKind::Change);
@@ -328,7 +328,7 @@ async fn waiting_requests_are_in_the_inbox_and_its_count_until_each_is_answered(
             "kind": "make",
             "name": "Two",
             "purpose": "Reads the feeds",
-            "title": "Researcher wants to make one more dot",
+            "title": "Researcher wants to make one more sol",
             "lines": [limit],
             "shown": null,
             "status": "waiting",
@@ -397,7 +397,7 @@ async fn a_request_is_snoozed_and_marked_done_as_a_proposal_is() {
     let run = live_run(&t, &maker).await;
     let request = request(&t, &run, ask_browser("Blog Watcher")).await;
     let key = InboxKey::new(InboxKind::MakeRequest, request.id.clone());
-    let title = "Researcher wants to make a dot with more than it has";
+    let title = "Researcher wants to make a sol with more than it has";
 
     t.rt.inbox_snooze(std::slice::from_ref(&key), Utc::now() + TimeDelta::hours(1))
         .await
@@ -517,7 +517,7 @@ async fn a_viewer_sees_the_card_and_why_it_cannot_allow() {
     a.become_(2, "viewer").await;
 
     // The request is in the Inbox for a Viewer too, and its card says why Allow is off.
-    let why = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+    let why = "Acme Engineering: a Viewer can't create or change sols. Ask an Admin or Owner.";
     assert_eq!(t.rt.inbox().await.unwrap().make_requests.len(), 1);
     assert_eq!(t.rt.inbox_count().await.unwrap(), 1);
     let card = t.rt.make_request_card(&request.id).await.unwrap();
@@ -1228,7 +1228,7 @@ async fn an_ask_is_always_announced_and_a_made_dot_says_whether_the_person_typed
             "request_id": asked.id,
             "dot_id": maker.id,
             "root_run_id": typed.root_run_id,
-            "title": "Researcher wants to make a dot with more than it has",
+            "title": "Researcher wants to make a sol with more than it has",
             "name": "Blog Watcher",
             "purpose": "Reads the feeds",
         })]

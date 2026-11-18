@@ -204,7 +204,7 @@ pub fn schedule_words(schedule: &Schedule) -> String {
 pub fn made_dots_text(maker: &str, lines: &[MadeDotLine], waiting_makes: &[MakeRequest]) -> String {
     let mut text: Vec<String> = Vec::new();
     if lines.is_empty() {
-        text.push(format!("{maker} has made no dots yet."));
+        text.push(format!("{maker} has made no sols yet."));
     }
     for line in lines {
         let mut parts = vec![line.purpose.clone()];
@@ -564,7 +564,7 @@ pub(super) enum Stands {
 /// dot has the name or the dot is the person's or another maker's: other dots are not revealed.
 fn not_made(maker: &Dot, name: &str) -> Error {
     Error::Invalid(format!(
-        "{} did not make a dot named \"{}\". list_made_dots shows the dots it made.",
+        "{} did not make a sol named \"{}\". list_made_dots shows the sols it made.",
         maker.spec.name,
         name.trim()
     ))
@@ -575,7 +575,7 @@ fn not_made(maker: &Dot, name: &str) -> Error {
 /// sections 9 and 12): a dot was renamed or deleted in between, so the name may find another.
 pub fn not_the_same_dot(name: &str) -> String {
     format!(
-        "\"{}\" is no longer the dot this call was for: a dot was renamed or deleted since. \
+        "\"{}\" is no longer the sol this call was for: a sol was renamed or deleted since. \
          Nothing was done.",
         name.trim()
     )
@@ -979,7 +979,7 @@ impl Makers {
                 .await?
         {
             return Err(Error::Conflict(format!(
-                "A dot named {:?} already exists. Choose another name.",
+                "A sol named {:?} already exists. Choose another name.",
                 name.trim()
             )));
         }
@@ -1100,7 +1100,7 @@ impl Makers {
         let new_name = reach.spec.name.trim();
         if new_name != dot.spec.name && store.dot_name_taken_by_another(new_name, &dot.id).await? {
             return Ok(Stands::Gone(format!(
-                "A dot named {new_name:?} exists now."
+                "A sol named {new_name:?} exists now."
             )));
         }
         if let Some(reason) = self.gone_in(maker, &reach.spec).await? {
@@ -1177,7 +1177,7 @@ impl Makers {
         // After the service's lock is released: closing its Edge and telling its teams can
         // take a while, and delivering the wakes takes the thread lock.
         drop(one_at_a_time);
-        let said = format!("Deleted the dot \"{name}\" and its history.");
+        let said = format!("Deleted the sol \"{name}\" and its history.");
         finished(finish).await;
         Ok(said)
     }
@@ -1249,7 +1249,7 @@ impl Makers {
             match self.settle_job(job, &mut Vec::new()).await {
                 Ok(woke) => settled |= woke,
                 Err(e) => {
-                    tracing::warn!(job = %id, "settling a job before its dot's delete failed: {e}")
+                    tracing::warn!(job = %id, "settling a job before its sol's delete failed: {e}")
                 }
             }
         }
@@ -1392,7 +1392,7 @@ impl Makers {
 /// logged, since the dot is gone either way.
 async fn finished(finish: JoinHandle<()>) {
     if let Err(e) = finish.await {
-        tracing::error!("finishing a dot's delete failed: {e}");
+        tracing::error!("finishing a sol's delete failed: {e}");
     }
 }
 

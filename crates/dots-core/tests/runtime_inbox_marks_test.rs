@@ -386,7 +386,7 @@ async fn every_kind_has_its_key_and_title() {
         ),
         (
             key(InboxKind::MakeRequest, &make_request),
-            "courier wants to make a dot with more than it has".to_string(),
+            "courier wants to make a sol with more than it has".to_string(),
         ),
     ];
     // The note and the question were made in order, but maybe in the same millisecond: compare

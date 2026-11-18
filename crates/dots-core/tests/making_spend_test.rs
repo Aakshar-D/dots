@@ -169,7 +169,7 @@ async fn a_made_dots_spend_reaches_its_makers_cap_for_all_of_them() {
         Some("Researcher reached its $2.00 daily cap")
     );
     // A made dot's run names the maker, whose cap it is: the one that spent, and its sibling.
-    let theirs = "Researcher reached its $2.00 daily cap, shared with the dots it made";
+    let theirs = "Researcher reached its $2.00 daily cap, shared with the sols it made";
     assert_eq!(hit(&store, &one, now).await.as_deref(), Some(theirs));
     assert_eq!(hit(&store, &two, now).await.as_deref(), Some(theirs));
     assert_eq!(
@@ -241,7 +241,7 @@ async fn spend_counts_up_the_whole_chain() {
     // B's cap is reached by what C spent; A's is not yet.
     assert_eq!(
         hit(&store, &c, now).await.as_deref(),
-        Some("B reached its $3.00 daily cap, shared with the dots it made")
+        Some("B reached its $3.00 daily cap, shared with the sols it made")
     );
     assert_eq!(
         hit(&store, &b, now).await.as_deref(),
@@ -258,13 +258,13 @@ async fn spend_counts_up_the_whole_chain() {
     // The nearest maker's cap is named first.
     assert_eq!(
         hit(&store, &c, now).await.as_deref(),
-        Some("B reached its $3.00 daily cap, shared with the dots it made")
+        Some("B reached its $3.00 daily cap, shared with the sols it made")
     );
     // Without B's cap, C and B are held by A's, two makers up for C.
     let mut s = b.spec.clone();
     s.spend_cap = DotCaps::default();
     store.update_dot(&b.id, &s).await.unwrap();
-    let of_a = "A reached its $5.00 daily cap, shared with the dots it made";
+    let of_a = "A reached its $5.00 daily cap, shared with the sols it made";
     assert_eq!(hit(&store, &c, now).await.as_deref(), Some(of_a));
     assert_eq!(hit(&store, &b, now).await.as_deref(), Some(of_a));
 }
@@ -288,7 +288,7 @@ async fn the_token_cap_is_shared_as_the_cost_cap_is() {
     );
     assert_eq!(
         hit(&store, &one, now).await.as_deref(),
-        Some("Researcher reached its 1,000-token daily cap, shared with the dots it made")
+        Some("Researcher reached its 1,000-token daily cap, shared with the sols it made")
     );
 }
 
@@ -375,7 +375,7 @@ async fn a_deleted_made_dots_spend_still_counts_for_the_day() {
     );
     assert_eq!(
         hit(&store, &two, now).await.as_deref(),
-        Some("Researcher reached its $2.00 daily cap, shared with the dots it made")
+        Some("Researcher reached its $2.00 daily cap, shared with the sols it made")
     );
     // The next day it counts no more.
     assert_eq!(shared(&store, &maker, next_day(now)).await, NONE);
@@ -459,7 +459,7 @@ async fn deleting_a_maker_keeps_what_the_dots_below_it_spend_under_the_cap_above
     run_at(&store, &d, now, 0.5, 50).await;
     assert_eq!(shared(&store, &a, now).await, spent(3.0, 260));
     assert_eq!(shared(&store, &c, now).await, spent(2.5, 250));
-    let of_a = "A reached its $3.00 daily cap, shared with the dots it made";
+    let of_a = "A reached its $3.00 daily cap, shared with the sols it made";
     assert_eq!(hit(&store, &c, now).await.as_deref(), Some(of_a));
     assert_eq!(hit(&store, &d, now).await.as_deref(), Some(of_a));
 
@@ -536,14 +536,14 @@ async fn a_deleted_made_dots_spend_still_counts_for_every_dot_together() {
     assert_eq!((after.today, after.month), (before.today, before.month));
     assert_eq!(
         hit(&store, &other, now).await.as_deref(),
-        Some("All dots reached the $2.00 daily cap")
+        Some("All sols reached the $2.00 daily cap")
     );
     // The next day the daily cap is free; the monthly one is not, until the month ends.
     let tomorrow = next_day(now);
     if tomorrow < next_month(now) {
         assert_eq!(
             hit(&store, &other, tomorrow).await.as_deref(),
-            Some("All dots reached the $2.00 monthly cap")
+            Some("All sols reached the $2.00 monthly cap")
         );
         let then = dots_core::spend::today(&store, tomorrow).await.unwrap();
         assert_eq!((then.today, then.month), (NONE, spent(2.0, 100)));
@@ -727,7 +727,7 @@ async fn runs_of_the_maker_and_its_made_dots_wait_at_the_shared_cap() {
             Some("Researcher reached its $2.00 daily cap".into())
         )
     );
-    let theirs = "Researcher reached its $2.00 daily cap, shared with the dots it made";
+    let theirs = "Researcher reached its $2.00 daily cap, shared with the sols it made";
     for id in [&of_one, &of_two] {
         assert_eq!(
             e.waits_for(id).await,
@@ -784,7 +784,7 @@ async fn a_made_dots_run_is_stopped_when_the_shared_cap_is_crossed() {
     let run = wait_status(&e.store, &id, RunStatus::Failed, 20).await;
     assert_eq!(
         run.error.as_deref(),
-        Some("stopped: Researcher reached its $1.00 daily cap, shared with the dots it made")
+        Some("stopped: Researcher reached its $1.00 daily cap, shared with the sols it made")
     );
     assert!((run.cost_usd.unwrap() - 1.2).abs() < 1e-9);
     // The maker's next run waits, and so does the made dot's.
@@ -901,7 +901,7 @@ async fn the_persons_delete_of_a_made_dot_does_not_lower_the_shared_total() {
     );
     assert_eq!(
         hit(store, &two, now).await.as_deref(),
-        Some("Researcher reached its $2.00 daily cap, shared with the dots it made")
+        Some("Researcher reached its $2.00 daily cap, shared with the sols it made")
     );
     let today = t.rt.spend_today().await.unwrap();
     assert_eq!(row(&today.dots, &maker).shared_today, Some(before));
@@ -937,7 +937,7 @@ async fn a_maker_cannot_clear_its_cap_by_deleting_the_dot_it_made() {
     let two = make(&t, &run, "Feed Reader").await;
     assert_eq!(
         hit(store, &two, now).await.as_deref(),
-        Some("Researcher reached its $2.00 daily cap, shared with the dots it made")
+        Some("Researcher reached its $2.00 daily cap, shared with the sols it made")
     );
     assert_eq!(hit(store, &maker, next_day(now)).await, None);
 }

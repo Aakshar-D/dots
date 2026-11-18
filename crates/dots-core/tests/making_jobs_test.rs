@@ -339,7 +339,7 @@ async fn a_job_starts_a_run_of_the_made_dot_that_says_who_sent_it() {
     let prompt = prompt(&made, &its);
     assert!(
         prompt.contains(
-            "## Job\n\nJob from Researcher (the dot that made you). This is not a message from \
+            "## Job\n\nJob from Researcher (the sol that made you). This is not a message from \
              the person. When you finish, your final message goes back to Researcher.\n\n> Read \
              the blogs now.\n\n"
         ),
@@ -565,7 +565,7 @@ async fn jobs_from_one_conversation_go_to_one_topic_of_the_made_dot() {
     // A run that goes on in a session sends only its message, which still says who sent it.
     assert_eq!(
         prompt(&made, &its),
-        "Job from Researcher (the dot that made you). This is not a message from the person. \
+        "Job from Researcher (the sol that made you). This is not a message from the person. \
          When you finish, your final message goes back to Researcher.\n\n> Now sum them up."
     );
     let thread = t.rt.store().list_thread(&its.root_run_id).await.unwrap();
@@ -1262,7 +1262,7 @@ async fn a_first_job_starts_when_the_dot_is_made() {
 
     assert_eq!(
         outcome.tool_text(),
-        "Made the dot \"Blog Watcher\". It is on and ready; give it a job with give_job. Its \
+        "Made the sol \"Blog Watcher\". It is on and ready; give it a job with give_job. Its \
          first job has started; you will be woken with the result."
     );
     let MakeOutcome::Made { dot, first_job } = outcome else {
@@ -1289,7 +1289,7 @@ async fn a_first_job_starts_when_the_dot_is_made() {
     let outcome = outcome.unwrap();
     assert_eq!(
         outcome.tool_text(),
-        "Made the dot \"Feed Reader\". It is on and ready; give it a job with give_job."
+        "Made the sol \"Feed Reader\". It is on and ready; give it a job with give_job."
     );
     assert!(matches!(
         outcome,
@@ -1326,7 +1326,7 @@ async fn a_first_job_starts_when_the_person_allows_the_request() {
             .await
             .unwrap();
 
-    let dot_id = request.made_dot_id.clone().expect("the dot was made");
+    let dot_id = request.made_dot_id.clone().expect("the sol was made");
     let all = jobs(&t, &run).await;
     assert_eq!(all.len(), 1, "{all:#?}");
     let job = &all[0];
@@ -1341,7 +1341,7 @@ async fn a_first_job_starts_when_the_person_allows_the_request() {
     assert_eq!(
         wakes(&t).await,
         [
-            "The person allowed it: the dot \"Blog Watcher\" was made as you asked. Its first job \
+            "The person allowed it: the sol \"Blog Watcher\" was made as you asked. Its first job \
           has started; you will be woken with the result."
         ]
     );
@@ -1371,7 +1371,7 @@ async fn a_first_job_past_the_guard_leaves_the_dot_made() {
     assert_eq!(
         outcome.tool_text(),
         format!(
-            "Made the dot \"Feed Reader\". It is on and ready; give it a job with give_job. Its \
+            "Made the sol \"Feed Reader\". It is on and ready; give it a job with give_job. Its \
              first job was not started: {GUARD}"
         )
     );
@@ -1414,7 +1414,7 @@ async fn a_first_job_past_the_guard_leaves_the_dot_made() {
     assert_eq!(
         said.last().unwrap(),
         &format!(
-            "The person allowed it: the dot \"Mail Reader\" was made as you asked. Its first \
+            "The person allowed it: the sol \"Mail Reader\" was made as you asked. Its first \
              job was not started: {GUARD}"
         )
     );
@@ -1438,7 +1438,7 @@ async fn only_its_own_made_dots_take_jobs() {
         assert_eq!(
             invalid(refused.await),
             format!(
-                "Researcher did not make a dot named \"{name}\". list_made_dots shows the dots it \
+                "Researcher did not make a sol named \"{name}\". list_made_dots shows the sols it \
                  made."
             )
         );
@@ -1526,7 +1526,7 @@ async fn a_dot_that_may_not_make_dots_a_step_run_and_an_ended_run_give_no_job() 
     let refused = t.rt.makers().give_job(&run.id, "Blog Watcher", "Read.");
     assert_eq!(
         invalid(refused.await),
-        "Researcher may not make dots. The person turns that on in the dot's settings."
+        "Researcher may not make sols. The person turns that on in the sol's settings."
     );
     assert!(jobs(&t, &run).await.is_empty());
 }
@@ -2489,7 +2489,7 @@ async fn a_made_dot_the_person_lets_make_dots_takes_jobs_only_with_their_say_so(
 
     let text =
         t.rt.makers()
-            .give_job(&run.id, "Blog Watcher", "Make two dots.");
+            .give_job(&run.id, "Blog Watcher", "Make two sols.");
 
     assert!(text.await.unwrap().starts_with("Not started yet"));
     let request = the_waiting_request(&t, &maker).await;
@@ -2497,7 +2497,7 @@ async fn a_made_dot_the_person_lets_make_dots_takes_jobs_only_with_their_say_so(
     assert_eq!(
         card.lines,
         [
-            "Can make dots itself (3 in one run, 10 kept)",
+            "Can make sols itself (3 in one run, 10 kept)",
             "Its final message goes back to Researcher."
         ]
     );
@@ -2922,8 +2922,8 @@ async fn a_first_job_the_store_could_not_start_tells_the_model_a_plain_sentence(
 
     assert_eq!(
         outcome.tool_text(),
-        "Made the dot \"Blog Watcher\". It is on and ready; give it a job with give_job. Its \
-         first job was not started: Dots could not do that just now. Give it the job with \
+        "Made the sol \"Blog Watcher\". It is on and ready; give it a job with give_job. Its \
+         first job was not started: Sage could not do that just now. Give it the job with \
          give_job."
     );
 }
@@ -3046,7 +3046,7 @@ async fn a_job_whose_dots_values_cannot_be_read_ends_with_its_result_left_out() 
     // After the wake that told the maker the person allowed the job.
     assert_eq!(
         wakes(&t).await.last().unwrap(),
-        "\"Blog Watcher\" failed.\n\nIts final message and error text were left out: Dots could \
-         not check them for the values this dot holds beyond yours."
+        "\"Blog Watcher\" failed.\n\nIts final message and error text were left out: Sage could \
+         not check them for the values this sol holds beyond yours."
     );
 }

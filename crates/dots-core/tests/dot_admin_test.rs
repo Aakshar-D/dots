@@ -521,7 +521,7 @@ async fn the_admin_applies_the_role_checks() {
     assert_eq!(dot.org_id.as_deref(), Some(ACME));
 
     a.become_(2, "viewer").await;
-    let edit = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+    let edit = "Acme Engineering: a Viewer can't create or change sols. Ask an Admin or Owner.";
     // The made create is refused in the words the person's create is, and makes no folder.
     assert_eq!(
         refused(
@@ -587,7 +587,7 @@ async fn the_admin_applies_the_role_checks() {
 fn changed_while_saving(name: &str) -> String {
     format!(
         "\"{name}\" was changed while this change was being saved, so nothing was saved. Try \
-         again: it is judged against the dot as it is now."
+         again: it is judged against the sol as it is now."
     )
 }
 

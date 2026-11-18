@@ -20,7 +20,7 @@ use crate::making::tools::{checked_input, policy_input, Tool, POLICY_NAME};
 use crate::model::Making;
 
 /// What a call is answered when the run cannot perform the tools for making dots.
-const NOT_AVAILABLE: &str = "the tools for making dots are not available in this run";
+const NOT_AVAILABLE: &str = "the tools for making sols are not available in this run";
 
 /// The function definitions of the tools for making dots, for a maker with `limits`.
 pub(super) fn schemas(limits: &Making) -> Vec<Value> {

@@ -77,7 +77,7 @@ fn shown_of(maker: &str, extras: &[Extra]) -> Option<String> {
 /// What changing a dot without the extras is told when the dot itself holds more than its maker
 /// has: the change would steer that, so no part of it is saved alone.
 pub const NOTHING_WITHOUT_HELD: &str =
-    "This dot has more than its maker has, so the change cannot be saved without that. Allow \
+    "This sol has more than its maker has, so the change cannot be saved without that. Allow \
      it, or don't change it.";
 
 /// What Allow is told, and the card says, of a request that would now give something its card
@@ -141,7 +141,7 @@ fn open_job_line(dot: &str, earlier: Option<&MakingJob>) -> Option<String> {
 fn limit_reached(over: &OverLimit) -> String {
     format!(
         "A limit was reached since the card was shown: it would be the {}. Look at the card \
-         again, and answer again if you still want this dot.",
+         again, and answer again if you still want this sol.",
         over.line()
     )
 }
@@ -149,9 +149,9 @@ fn limit_reached(over: &OverLimit) -> String {
 /// The ask card's title for a new dot (design section 7.2), by what is beyond reach.
 fn make_title(maker: &str, extras: &[Extra]) -> String {
     if extras.is_empty() {
-        format!("{maker} wants to make one more dot")
+        format!("{maker} wants to make one more sol")
     } else {
-        format!("{maker} wants to make a dot with more than it has")
+        format!("{maker} wants to make a sol with more than it has")
     }
 }
 
@@ -459,7 +459,7 @@ pub fn answer_message(answer: &Answer, decision: MakeDecision) -> String {
     let name = &request.name;
     let mut message = match decision {
         MakeDecision::Allow => {
-            format!("The person allowed it: the dot \"{name}\" was made as you asked.")
+            format!("The person allowed it: the sol \"{name}\" was made as you asked.")
         }
         MakeDecision::Without => {
             let extras: Vec<String> = answer.left_out.iter().map(|e| e.line(maker)).collect();
@@ -1465,7 +1465,7 @@ impl Makers {
     async fn gone_since(&self, maker: &Dot, request: &MakeRequest) -> Result<Option<String>> {
         if self.parts.store.dot_name_taken(request.name.trim()).await? {
             return Ok(Some(format!(
-                "A dot named {:?} exists now.",
+                "A sol named {:?} exists now.",
                 request.name.trim()
             )));
         }
@@ -1505,7 +1505,7 @@ impl Makers {
                 if let Ok(Consumer::Mcp(server)) = Consumer::parse(key) {
                     if !used.iter().any(|s| s.name == server) {
                         return Ok(Some(format!(
-                            "The MCP server '{server}' is no longer one the dot would use."
+                            "The MCP server '{server}' is no longer one the sol would use."
                         )));
                     }
                 }

@@ -204,18 +204,18 @@ fn a_new_dot_needs_a_name_and_instructions_and_must_be_a_valid_dot() {
     w.name = None;
     assert_eq!(
         invalid(reach_new(&maker, &w, &place.worktrees)),
-        "A new dot needs a name."
+        "A new sol needs a name."
     );
     w.name = Some("  ".into());
     assert_eq!(
         invalid(reach_new(&maker, &w, &place.worktrees)),
-        "A new dot needs a name."
+        "A new sol needs a name."
     );
     let mut w = wanted();
     w.instructions = Some(String::new());
     assert_eq!(
         invalid(reach_new(&maker, &w, &place.worktrees)),
-        "A new dot needs instructions."
+        "A new sol needs instructions."
     );
     // Today's rules for any dot (design section 6, notes).
     let mut w = wanted();
@@ -1828,7 +1828,7 @@ fn a_made_dot_that_may_make_dots_holds_more_than_its_maker() {
     );
     assert_eq!(
         held[0].line("Researcher"),
-        "Can make dots itself (9 in one run, 50 kept)"
+        "Can make sols itself (9 in one run, 50 kept)"
     );
     let json = serde_json::to_value(&held[0]).unwrap();
     assert_eq!(

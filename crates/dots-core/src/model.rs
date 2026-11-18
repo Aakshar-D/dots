@@ -163,9 +163,9 @@ pub const MAKE_TOTAL_DEFAULT: u32 = 10;
 /// The most made dots a dot's settings may allow it to keep.
 pub const MAKE_TOTAL_MAX: u32 = 50;
 /// What `Making::validate` says of a `per_run` out of its range.
-pub const MAKE_PER_RUN_RULE: &str = "A dot may make 1 to 10 dots in one run.";
+pub const MAKE_PER_RUN_RULE: &str = "A sol may make 1 to 10 sols in one run.";
 /// What `Making::validate` says of a `total` out of its range.
-pub const MAKE_TOTAL_RULE: &str = "A dot may keep 1 to 50 made dots.";
+pub const MAKE_TOTAL_RULE: &str = "A sol may keep 1 to 50 made sols.";
 
 /// Whether the dot may make dots, and how many (dots-make-dots design section 5). A part
 /// that is missing reads as its default.

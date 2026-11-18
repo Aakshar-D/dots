@@ -42,7 +42,7 @@ pub const BACKGROUND_WAITS: &str =
 /// What follows the words of a maker's reached cap when it holds or stops the run of a dot
 /// below the maker (dots-make-dots design section 6, Spend): "Researcher reached its $2.00
 /// daily cap, shared with the dots it made".
-pub const SHARED_WITH_MADE: &str = ", shared with the dots it made";
+pub const SHARED_WITH_MADE: &str = ", shared with the sols it made";
 /// How far a chain of makers is followed, up from a dot and down from a maker. A chain cannot
 /// loop (a dot's maker exists before it); this bounds the walk all the same.
 pub const MAKER_DEPTH: i64 = 32;

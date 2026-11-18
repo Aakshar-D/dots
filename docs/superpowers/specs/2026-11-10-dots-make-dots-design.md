@@ -62,6 +62,8 @@ Success: the person switches "Can make dots" on for a dot named Researcher and a
 - **Job**: a message a maker gives to a dot it made, which starts a run of that dot.
 - **Wake**: a new run of the maker, in the maker's same chat topic, that carries a job's result or the person's answer to a make request.
 
+**Since the rename (Sage 0.5.0).** This document was written before Dots became Sage and a dot a sol. Every word the person reads or hears, and every word in a prompt or tool description that the model may repeat to them, now says "sol", "sols" and "Sage": "Can make sols", "Making sols", "made sol", "Researcher made a sol: Blog Watcher", "Report from Sage". Names in code are unchanged: the module `making`, the tools `make_dot`, `change_dot`, `delete_dot`, `give_job` and `list_made_dots`, the policy name `MakeDots`, tables, columns, JSON fields and events. The sections below keep the old words; read "dot" as "sol" and "Dots" as "Sage" wherever they quote what the person sees.
+
 ## 4. What this overrides
 
 Earlier designs say the opposite of this one in places. For makers, and only for makers, this design wins:

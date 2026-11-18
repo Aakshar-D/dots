@@ -582,7 +582,7 @@ pub fn notice_text(notice: &Notice, dot_name: &str) -> (String, String) {
             purpose,
             ..
         } => (
-            format!("{maker_name} made a dot: {name}"),
+            format!("{maker_name} made a sol: {name}"),
             first_line(Some(purpose.as_str()), "It is ready."),
         ),
     }
@@ -2386,7 +2386,7 @@ mod tests {
             request_id: "q1".into(),
             dot_id: "d".into(),
             root_run_id: "root".into(),
-            title: "Researcher wants to make a dot with more than it has".into(),
+            title: "Researcher wants to make a sol with more than it has".into(),
             name: "Blog Watcher".into(),
             purpose: "Reads the feeds\nand more".into(),
         };
@@ -2396,16 +2396,16 @@ mod tests {
             Notice::MakeAsked {
                 dot_id: "d".into(),
                 root_run_id: "root".into(),
-                title: "Researcher wants to make a dot with more than it has".into(),
+                title: "Researcher wants to make a sol with more than it has".into(),
                 name: "Blog Watcher".into(),
                 purpose: "Reads the feeds\nand more".into(),
             }
         );
         // The title is the card's own, whatever name the dot is looked up by.
         assert_eq!(
-            notice_text(&notice, "A dot"),
+            notice_text(&notice, "A sol"),
             (
-                "Researcher wants to make a dot with more than it has".into(),
+                "Researcher wants to make a sol with more than it has".into(),
                 "Blog Watcher: Reads the feeds".into()
             )
         );
@@ -2433,7 +2433,7 @@ mod tests {
     fn a_made_dot_notifies_only_when_the_person_did_not_type_and_notes_notify() {
         let mut n = Notifier::default();
         assert_eq!(n.decide(&dot_made(true)), None);
-        let notice = n.decide(&dot_made(false)).expect("an untyped run's dot");
+        let notice = n.decide(&dot_made(false)).expect("an untyped run's sol");
         assert_eq!(
             notice,
             Notice::DotMade {
@@ -2445,9 +2445,9 @@ mod tests {
             }
         );
         assert_eq!(
-            notice_text(&notice, "A dot"),
+            notice_text(&notice, "A sol"),
             (
-                "Researcher made a dot: Blog Watcher".into(),
+                "Researcher made a sol: Blog Watcher".into(),
                 "Reads the feeds".into()
             )
         );

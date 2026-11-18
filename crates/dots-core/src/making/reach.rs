@@ -288,9 +288,9 @@ impl Extra {
                 time_label(*makers_secs)
             ),
             Self::Making { per_run, total } => {
-                format!("Can make dots itself ({per_run} in one run, {total} kept)")
+                format!("Can make sols itself ({per_run} in one run, {total} kept)")
             }
-            Self::Undoes { what } => format!("{what}, which undoes your change to this dot"),
+            Self::Undoes { what } => format!("{what}, which undoes your change to this sol"),
         }
     }
 }
@@ -1076,10 +1076,10 @@ fn check(maker: &Dot, base: &DotSpec, wanted: &Wanted, worktrees_root: &Path) ->
 pub fn reach_new(maker: &Dot, wanted: &Wanted, worktrees_root: &Path) -> Result<Reach> {
     let named = |text: &Option<String>| text.as_deref().is_some_and(|t| !t.trim().is_empty());
     if !named(&wanted.name) {
-        return Err(Error::Invalid("A new dot needs a name.".into()));
+        return Err(Error::Invalid("A new sol needs a name.".into()));
     }
     if !named(&wanted.instructions) {
-        return Err(Error::Invalid("A new dot needs instructions.".into()));
+        return Err(Error::Invalid("A new sol needs instructions.".into()));
     }
     let m = &maker.spec;
     let base = DotSpec {

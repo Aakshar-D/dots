@@ -389,7 +389,7 @@ async fn a_limit_alone_stores_a_request_that_only_allow_or_refuse_can_answer() {
     assert_eq!(
         outcome.tool_text(),
         format!(
-            "Not made yet: \"Four\" needs the person's say-so, because it would be the 4th dot \
+            "Not made yet: \"Four\" needs the person's say-so, because it would be the 4th sol \
              in this run; the limit is 3. {WAITING_TAIL}"
         )
     );
@@ -401,8 +401,8 @@ async fn a_limit_alone_stores_a_request_that_only_allow_or_refuse_can_answer() {
     assert_eq!(request.spec, request.without);
 
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
-    assert_eq!(card.title, "Researcher wants to make one more dot");
-    assert_eq!(card.lines, ["4th dot in this run; the limit is 3"]);
+    assert_eq!(card.title, "Researcher wants to make one more sol");
+    assert_eq!(card.lines, ["4th sol in this run; the limit is 3"]);
     assert!(card.can_allow);
     assert!(!card.can_without);
     assert_eq!(card.blocked, None);
@@ -434,7 +434,7 @@ async fn a_limit_alone_stores_a_request_that_only_allow_or_refuse_can_answer() {
     );
     assert_eq!(
         wakes(&t).await,
-        ["The person allowed it: the dot \"Four\" was made as you asked."]
+        ["The person allowed it: the sol \"Four\" was made as you asked."]
     );
 }
 
@@ -465,7 +465,7 @@ async fn allow_makes_the_dot_as_asked_and_the_extras_are_that_dots_alone() {
 
     assert_eq!(after.status, RequestStatus::Allowed);
     assert!(after.decided_at.is_some());
-    let dot_id = after.made_dot_id.clone().expect("the made dot");
+    let dot_id = after.made_dot_id.clone().expect("the made sol");
     assert_eq!(stored(&t, &request).await, after);
     // The dot holds what was asked, extras included.
     let dot = t.rt.store().get_dot(&dot_id).await.unwrap();
@@ -476,7 +476,7 @@ async fn allow_makes_the_dot_as_asked_and_the_extras_are_that_dots_alone() {
     assert!(dot.spec.enabled);
     assert!(!dot.spec.making.on);
     // Made by the maker, in the run that asked.
-    let made = dot.made.clone().expect("a made dot");
+    let made = dot.made.clone().expect("a made sol");
     assert_eq!(made.by_dot_id.as_deref(), Some(maker.id.as_str()));
     assert_eq!(made.run_id, run.id);
     assert_eq!(made.purpose, "Reads the feeds");
@@ -515,7 +515,7 @@ async fn allow_makes_the_dot_as_asked_and_the_extras_are_that_dots_alone() {
     assert_eq!(thread.len(), 2, "{thread:#?}");
     assert_eq!(
         thread[1].payload.as_ref().unwrap()["message"],
-        "The person allowed it: the dot \"Blog Watcher\" was made as you asked. Its first job \
+        "The person allowed it: the sol \"Blog Watcher\" was made as you asked. Its first job \
          has started; you will be woken with the result."
     );
 }
@@ -559,7 +559,7 @@ async fn without_makes_the_dot_minus_the_extras() {
 
     assert_eq!(after.status, RequestStatus::MadeWithout);
     assert!(after.decided_at.is_some());
-    let dot_id = after.made_dot_id.clone().expect("the made dot");
+    let dot_id = after.made_dot_id.clone().expect("the made sol");
     let dot = t.rt.store().get_dot(&dot_id).await.unwrap();
     // Items and variables dropped, the preset and the limits the maker's, a new folder of its
     // own, no browser and no user settings.
@@ -906,7 +906,7 @@ async fn a_name_taken_since_leaves_only_dont_make_it() {
     theirs.workspace_mode = WorkspaceMode::Folder;
     t.rt.create_dot(theirs, None, None).await.unwrap();
 
-    let gone = "A dot named \"Blog Watcher\" exists now.";
+    let gone = "A sol named \"Blog Watcher\" exists now.";
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
     assert!(!card.can_allow);
     assert!(!card.can_without);
@@ -942,7 +942,7 @@ async fn the_card_says_what_is_asked_in_plain_words() {
         format!(
             "Not made yet: \"Blog Watcher\" needs the person's say-so, because it asks for more \
              than you have (The browser; A turn limit of 50 (Researcher has 40)) and it would \
-             be the 2nd dot in this run; the limit is 1. {WAITING_TAIL}"
+             be the 2nd sol in this run; the limit is 1. {WAITING_TAIL}"
         )
     );
     let MakeOutcome::Waiting { request, .. } = outcome else {
@@ -952,14 +952,14 @@ async fn the_card_says_what_is_asked_in_plain_words() {
     assert_eq!(card.maker_name, "Researcher");
     assert_eq!(
         card.title,
-        "Researcher wants to make a dot with more than it has"
+        "Researcher wants to make a sol with more than it has"
     );
     assert_eq!(
         card.lines,
         [
             "The browser",
             "A turn limit of 50 (Researcher has 40)",
-            "2nd dot in this run; the limit is 1"
+            "2nd sol in this run; the limit is 1"
         ]
     );
     assert!(card.can_allow);
@@ -1000,14 +1000,14 @@ async fn a_made_dot_says_so_to_the_tool() {
             .unwrap();
     assert_eq!(
         outcome.tool_text(),
-        "Made the dot \"Blog Watcher\". It is on and ready; give it a job with give_job."
+        "Made the sol \"Blog Watcher\". It is on and ready; give it a job with give_job."
     );
     let mut wanted = ask("Feed Reader");
     wanted.wanted.schedule = Some(Some(every(60)));
     let outcome = t.rt.makers().make_dot(&run.id, wanted).await.unwrap();
     assert_eq!(
         outcome.tool_text(),
-        "Made the dot \"Feed Reader\". It is on and ready; give it a job with give_job. It will \
+        "Made the sol \"Feed Reader\". It is on and ready; give it a job with give_job. It will \
          also run on its schedule."
     );
 }
@@ -1312,7 +1312,7 @@ async fn a_person_without_the_rights_cannot_allow() {
     assert_eq!(card.blocked, None);
 
     a.become_(2, "viewer").await;
-    let why = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+    let why = "Acme Engineering: a Viewer can't create or change sols. Ask an Admin or Owner.";
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
     assert!(!card.can_allow);
     assert!(!card.can_without);
@@ -1455,9 +1455,9 @@ async fn a_limit_reached_while_a_request_waits_is_shown_before_allow() {
     let mut rx = t.rt.subscribe();
 
     // The person answers the card they saw, which had no limit line.
-    let reached = "A limit was reached since the card was shown: it would be the 2nd made dot \
+    let reached = "A limit was reached since the card was shown: it would be the 2nd made sol \
                    kept; the limit is 1. Look at the card again, and answer again if you still \
-                   want this dot.";
+                   want this sol.";
     assert_eq!(
         conflict(
             t.rt.makers()
@@ -1472,11 +1472,11 @@ async fn a_limit_reached_while_a_request_waits_is_shown_before_allow() {
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
     assert_eq!(
         card.lines,
-        ["The browser", "2nd made dot kept; the limit is 1"]
+        ["The browser", "2nd made sol kept; the limit is 1"]
     );
     assert_eq!(
         card.limit.as_deref(),
-        Some("2nd made dot kept; the limit is 1")
+        Some("2nd made sol kept; the limit is 1")
     );
     // Reading the card wrote nothing: the request keeps the limit it was stored with.
     assert_eq!(stored(&t, &request).await.over, None);
@@ -1494,8 +1494,8 @@ async fn a_limit_raised_while_a_request_waits_leaves_the_card() {
     make(&t, &run, "One").await;
     let request = request(&t, &run, ask("Two")).await;
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
-    assert_eq!(card.title, "Researcher wants to make one more dot");
-    assert_eq!(card.lines, ["2nd dot in this run; the limit is 1"]);
+    assert_eq!(card.title, "Researcher wants to make one more sol");
+    assert_eq!(card.lines, ["2nd sol in this run; the limit is 1"]);
     // The person raises the run's limit: the card no longer shows one.
     let mut raised = maker.spec.clone();
     raised.making.per_run = 5;
@@ -1561,7 +1561,7 @@ async fn an_answer_that_races_the_makers_delete_says_what_it_did() {
     assert_eq!(after.id, request.id);
     assert_eq!(after.status, RequestStatus::Allowed);
     assert!(after.decided_at.is_some());
-    let made = after.made_dot_id.as_deref().expect("the made dot");
+    let made = after.made_dot_id.as_deref().expect("the made sol");
     assert_eq!(
         t.rt.store().get_dot(made).await.unwrap().spec.name,
         "Blog Watcher"
@@ -1631,9 +1631,9 @@ async fn allow_on_an_open_card_after_another_reader_computed_a_new_limit_is_refu
     assert_eq!(stored(&t, &request).await.over, None);
 
     // Allow on the card still open is refused: it did not show the limit.
-    let reached = "A limit was reached since the card was shown: it would be the 2nd made dot \
+    let reached = "A limit was reached since the card was shown: it would be the 2nd made sol \
                    kept; the limit is 1. Look at the card again, and answer again if you still \
-                   want this dot.";
+                   want this sol.";
     let answer = t.rt.makers().decide_request(
         &request.id,
         MakeDecision::Allow,
@@ -1646,7 +1646,7 @@ async fn allow_on_an_open_card_after_another_reader_computed_a_new_limit_is_refu
     let again = t.rt.makers().request_card(&request.id).await.unwrap();
     assert_eq!(
         again.limit.as_deref(),
-        Some("2nd made dot kept; the limit is 1")
+        Some("2nd made sol kept; the limit is 1")
     );
     let after =
         t.rt.makers()

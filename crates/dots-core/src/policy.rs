@@ -125,7 +125,7 @@ pub const MAKE_DOTS_TOOL: &str = "MakeDots";
 
 /// The refusal of a rule `MakeDots(...)`.
 pub const MAKE_DOTS_RULE: &str =
-    "a MakeDots rule takes no argument: the rule MakeDots covers every tool for making dots";
+    "a MakeDots rule takes no argument: the rule MakeDots covers every tool for making sols";
 
 /// A tool whose ask rule wins over an allow rule: the check-in tools, `Memory`, `Workflow`,
 /// the app tools, `Instructions` and `MakeDots`.

@@ -3802,14 +3802,14 @@
         "kind": "make",
         "lines": [
           "The browser",
-          "4th dot in this run; the limit is 3"
+          "4th sol in this run; the limit is 3"
         ],
         "name": "Blog Watcher",
         "purpose": "Reads the feeds",
         "root_run_id": "01J0RUN",
         "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
         "status": "waiting",
-        "title": "Researcher wants to make a dot with more than it has"
+        "title": "Researcher wants to make a sol with more than it has"
       }
     ],
     "not_delivered": [
@@ -7174,7 +7174,7 @@
       "purpose": "Reads the feeds",
       "request_id": "01J0MAKEREQ",
       "root_run_id": "01J0RUN",
-      "title": "Researcher wants to make a dot with more than it has",
+      "title": "Researcher wants to make a sol with more than it has",
       "type": "make_requested"
     },
     {

@@ -229,7 +229,7 @@ async fn a_dot_within_reach_is_made_at_once() {
     assert_eq!(dot.spec.making, Making::default());
     assert!(!dot.spec.making.on);
     // Who made it, in which run, and what for.
-    let made = dot.made.clone().expect("a made dot");
+    let made = dot.made.clone().expect("a made sol");
     assert_eq!(made.by_dot_id.as_deref(), Some(maker.id.as_str()));
     assert_eq!(made.by_name, "Researcher");
     assert_eq!(made.run_id, run.id);
@@ -369,7 +369,7 @@ async fn a_maker_with_the_switch_off_is_refused() {
     let run = live_run(&t, &dot).await;
     assert_eq!(
         refused(&t, &run, ask("Blog Watcher")).await,
-        "Researcher may not make dots. The person turns that on in the dot's settings."
+        "Researcher may not make sols. The person turns that on in the sol's settings."
     );
     assert_eq!(dot_names(&t).await, ["Researcher"]);
     assert!(log(&t, &run).await.is_empty());
@@ -395,7 +395,7 @@ async fn a_workflow_step_run_is_refused() {
     drop(conn);
     assert_eq!(
         refused(&t, &run, ask("Blog Watcher")).await,
-        "A run that is a workflow step cannot use the tools for making dots."
+        "A run that is a workflow step cannot use the tools for making sols."
     );
     assert_eq!(dot_names(&t).await, ["Researcher"]);
 }
@@ -411,7 +411,7 @@ async fn a_finished_run_is_refused() {
         .unwrap();
     assert_eq!(
         refused(&t, &run, ask("Blog Watcher")).await,
-        "This run has ended, so it cannot use the tools for making dots."
+        "This run has ended, so it cannot use the tools for making sols."
     );
     // A run that does not exist is no run of a maker either.
     let err =
@@ -430,7 +430,7 @@ async fn a_dot_that_is_not_valid_is_a_plain_error() {
     let run = live_run(&t, &maker).await;
     let mut nameless = ask("x");
     nameless.wanted.name = None;
-    assert_eq!(refused(&t, &run, nameless).await, "A new dot needs a name.");
+    assert_eq!(refused(&t, &run, nameless).await, "A new sol needs a name.");
     for purpose in [
         "".to_string(),
         "  ".to_string(),
@@ -479,7 +479,7 @@ async fn a_name_in_use_is_a_plain_error() {
         match err {
             Error::Conflict(text) => assert_eq!(
                 text,
-                format!("A dot named {name:?} already exists. Choose another name.")
+                format!("A sol named {name:?} already exists. Choose another name.")
             ),
             other => panic!("{other:?}"),
         }
@@ -525,7 +525,7 @@ async fn a_variable_or_consumer_that_does_not_exist_is_a_plain_error() {
         assert_eq!(
             refused(&t, &run, asked).await,
             format!(
-                "The dot would not use an MCP server named '{server}', so it cannot be given \
+                "The sol would not use an MCP server named '{server}', so it cannot be given \
                  variables for it. Name the server in uses, or leave those variables out."
             )
         );
@@ -755,7 +755,7 @@ async fn a_made_dot_is_never_moved_from_worktree_copies_to_the_folder_itself() {
     let said = refused(&t, &run, asked).await;
     assert_eq!(
         said,
-        "The new dot would work in copies of that folder, as its maker does, but the folder is \
+        "The new sol would work in copies of that folder, as its maker does, but the folder is \
          not the top of a git repository with a commit. Leave the folder blank for a new one."
     );
     assert_eq!(dot_names(&t).await, ["Researcher"]);
@@ -832,17 +832,17 @@ fn a_tool_calls_json_reads_as_an_ask() {
 fn a_passed_limit_says_itself_in_one_line() {
     assert_eq!(
         OverLimit::PerRun { nth: 4, limit: 3 }.line(),
-        "4th dot in this run; the limit is 3"
+        "4th sol in this run; the limit is 3"
     );
     assert_eq!(
         OverLimit::Total { nth: 11, limit: 10 }.line(),
-        "11th made dot kept; the limit is 10"
+        "11th made sol kept; the limit is 10"
     );
     let nth = |nth| OverLimit::PerRun { nth, limit: 1 }.line();
-    assert!(nth(2).starts_with("2nd dot"));
-    assert!(nth(3).starts_with("3rd dot"));
-    assert!(nth(12).starts_with("12th dot"));
-    assert!(nth(21).starts_with("21st dot"));
+    assert!(nth(2).starts_with("2nd sol"));
+    assert!(nth(3).starts_with("3rd sol"));
+    assert!(nth(12).starts_with("12th sol"));
+    assert!(nth(21).starts_with("21st sol"));
     // As it is stored with a make request.
     assert_eq!(
         serde_json::to_value(OverLimit::PerRun { nth: 4, limit: 3 }).unwrap(),
@@ -941,7 +941,7 @@ async fn a_made_dots_name_is_stored_without_the_spaces_around_it() {
     // So " Blog Watcher" is the same name, not a second dot beside it.
     assert_eq!(
         refused(&t, &run, ask(" Blog Watcher")).await,
-        "A dot named \"Blog Watcher\" already exists. Choose another name."
+        "A sol named \"Blog Watcher\" already exists. Choose another name."
     );
 }
 
@@ -1003,7 +1003,7 @@ async fn a_folder_that_leads_outside_once_made_is_removed_and_nothing_is_made() 
             .unwrap_err();
     match err {
         Error::Invalid(text) => assert!(
-            text.contains("leads somewhere else now that it exists, so the dot was not made"),
+            text.contains("leads somewhere else now that it exists, so the sol was not made"),
             "{text}"
         ),
         other => panic!("{other:?}"),
@@ -1052,7 +1052,7 @@ async fn the_switch_turned_off_between_two_calls_of_one_run_refuses_the_second()
     t.rt.update_dot(&maker.id, off).await.unwrap();
     assert_eq!(
         refused(&t, &run, ask("Two")).await,
-        "Researcher may not make dots. The person turns that on in the dot's settings."
+        "Researcher may not make sols. The person turns that on in the sol's settings."
     );
     assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
 }
@@ -1093,7 +1093,7 @@ async fn a_claude_folder_the_person_allowed_is_made_and_stays() {
             .await
             .unwrap();
 
-    let made = after.made_dot_id.as_deref().expect("the dot was made");
+    let made = after.made_dot_id.as_deref().expect("the sol was made");
     let dot = t.rt.store().get_dot(made).await.unwrap();
     assert_eq!(dot.spec.workdir, path);
     assert!(folder.is_dir());

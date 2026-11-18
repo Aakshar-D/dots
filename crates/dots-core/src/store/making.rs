@@ -883,7 +883,7 @@ impl Store {
             .execute(&self.pool)
             .await?;
         if res.rows_affected() == 0 {
-            return Err(Error::NotFound(format!("dot {dot_id}")));
+            return Err(Error::NotFound(format!("sol {dot_id}")));
         }
         Ok(())
     }
@@ -899,7 +899,7 @@ impl Store {
                 .fetch_optional(&self.pool)
                 .await?;
         match kept {
-            None => Err(Error::NotFound(format!("dot {dot_id}"))),
+            None => Err(Error::NotFound(format!("sol {dot_id}"))),
             Some(None) => Ok(Vec::new()),
             Some(Some(text)) => match serde_json::from_str(&text) {
                 Ok(kept) => Ok(kept),
@@ -929,7 +929,7 @@ impl Store {
             .execute(&self.pool)
             .await?;
         if res.rows_affected() == 0 {
-            return Err(Error::NotFound(format!("dot {dot_id}")));
+            return Err(Error::NotFound(format!("sol {dot_id}")));
         }
         Ok(())
     }

@@ -183,7 +183,7 @@ pub async fn handle(State(s): State<ServerState>, headers: HeaderMap, body: Byte
                     call_app(&s, &run_id, &req, n).await
                 }
                 (Some(n), None) if MakingTool::from_name(n).is_some() => {
-                    let tool = MakingTool::from_name(n).expect("a tool for making dots");
+                    let tool = MakingTool::from_name(n).expect("a tool for making sols");
                     call_making(&s, &run_id, &req, tool).await
                 }
                 _ => call_approve(&s, &run_id, &req).await,

@@ -182,8 +182,8 @@ fn hide(text: &str, values: &[String]) -> String {
 /// What a wake says in place of the job's result when the values the made dot holds beyond its
 /// maker's reach cannot be read (`Makers::values_to_hide`): nothing could be hidden, so nothing
 /// of the made dot's text goes back.
-pub const WITHHELD: &str = "Its final message and error text were left out: Dots could not check \
-                            them for the values this dot holds beyond yours.";
+pub const WITHHELD: &str = "Its final message and error text were left out: Sage could not check \
+                            them for the values this sol holds beyond yours.";
 
 /// What the maker is woken with when a job of the dot `dot` ended as `how` and its result is
 /// left out (`WITHHELD`).
@@ -812,7 +812,7 @@ impl Makers {
             Err(e) => {
                 tracing::warn!(
                     job = %job.id,
-                    "the dot's own values could not be read, so the wake leaves its result out: {e}"
+                    "the sol's own values could not be read, so the wake leaves its result out: {e}"
                 );
                 None
             }

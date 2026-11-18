@@ -294,12 +294,12 @@ async fn person_edits(t: &T, dot: &Dot, edit: impl FnOnce(&mut DotSpec)) -> Dot 
 /// The sentence for a dot named `name` that Researcher did not make.
 fn not_made(name: &str) -> String {
     format!(
-        "Researcher did not make a dot named \"{name}\". list_made_dots shows the dots it made."
+        "Researcher did not make a sol named \"{name}\". list_made_dots shows the sols it made."
     )
 }
 
 const SWITCH_OFF: &str =
-    "Researcher may not make dots. The person turns that on in the dot's settings.";
+    "Researcher may not make sols. The person turns that on in the sol's settings.";
 const BUSY: &str = "\"One\" has a run going or queued. Wait for it to end, then delete it.";
 
 // ---- list_made_dots
@@ -425,7 +425,7 @@ async fn a_maker_with_no_dots_is_told_so() {
     assert!(lines.is_empty());
     assert_eq!(
         made_dots_text("Researcher", &lines, &[]),
-        "Researcher has made no dots yet."
+        "Researcher has made no sols yet."
     );
     // A request that waits is still named.
     let mut two = ask("Two");
@@ -438,7 +438,7 @@ async fn a_maker_with_no_dots_is_told_so() {
             .unwrap();
     assert_eq!(
         made_dots_text("Researcher", &lines, &waiting),
-        "Researcher has made no dots yet.\nWaiting for the person: \"Two\""
+        "Researcher has made no sols yet.\nWaiting for the person: \"Two\""
     );
 }
 
@@ -560,7 +560,7 @@ async fn a_rename_shows_in_the_list_and_keeps_who_made_it() {
                 .change_dot(&run.id, rename("UNO", "researcher"))
                 .await
         ),
-        "A dot named \"researcher\" already exists. Choose another name."
+        "A sol named \"researcher\" already exists. Choose another name."
     );
     assert_eq!(dot_names(&t).await, ["Researcher", "UNO"]);
 }
@@ -577,7 +577,7 @@ async fn the_purpose_changes() {
     let (dot, what) = changed(&t, &run, asked.clone()).await;
 
     assert_eq!(what, ["purpose"]);
-    let made = dot.made.clone().expect("a made dot");
+    let made = dot.made.clone().expect("a made sol");
     assert_eq!(made.purpose, "Watches the three blogs");
     // Who made it, and in which run, stays.
     let was = one.made.clone().unwrap();
@@ -846,7 +846,7 @@ async fn a_dot_of_another_maker_or_of_the_person_is_not_found() {
                 .change_dot(&writers_run.id, new_instructions("One"))
                 .await
         ),
-        "Writer did not make a dot named \"One\". list_made_dots shows the dots it made."
+        "Writer did not make a sol named \"One\". list_made_dots shows the sols it made."
     );
 }
 
@@ -870,7 +870,7 @@ async fn a_folder_change_while_it_runs_is_refused() {
     // The store's rule for any dot, passed on as it is.
     assert_eq!(
         conflict(t.rt.makers().change_dot(&run.id, move_it()).await),
-        "workdir and workspace_mode cannot change while the dot has queued, running or awaiting \
+        "workdir and workspace_mode cannot change while the sol has queued, running or awaiting \
          runs"
     );
     assert_eq!(stored(&t, &one).await, one);
@@ -1369,7 +1369,7 @@ async fn a_maker_deletes_a_dot_it_made() {
     // Named in any letter case.
     let text = t.rt.makers().delete_dot(&run.id, " one ").await.unwrap();
 
-    assert_eq!(text, "Deleted the dot \"One\" and its history.");
+    assert_eq!(text, "Deleted the sol \"One\" and its history.");
     let store = t.rt.store();
     assert!(matches!(
         store.get_dot(&one.id).await,
@@ -1513,7 +1513,7 @@ async fn a_makers_made_dots_survive_their_makers_delete_by_the_grand_maker() {
 
     // C stays, and still says who made it, by the name B had.
     assert_eq!(dot_names(&t).await, ["C", "Researcher"]);
-    let made = stored(&t, &c).await.made.expect("a made dot");
+    let made = stored(&t, &c).await.made.expect("a made sol");
     assert_eq!(made.by_dot_id, None);
     assert_eq!(made.by_name, "B");
     assert_eq!(made.run_id, b_run.id);
@@ -1550,7 +1550,7 @@ async fn a_maker_with_the_switch_off_can_do_none_of_the_three() {
     end(&t, &run, RunStatus::Succeeded).await;
     assert_eq!(
         refusals(&t, &run).await,
-        ["This run has ended, so it cannot use the tools for making dots."; 3]
+        ["This run has ended, so it cannot use the tools for making sols."; 3]
     );
     assert_eq!(stored(&t, &one).await, one);
 }
@@ -1577,7 +1577,7 @@ async fn a_workflow_step_run_can_do_none_of_the_three() {
 
     assert_eq!(
         refusals(&t, &run).await,
-        ["A run that is a workflow step cannot use the tools for making dots."; 3]
+        ["A run that is a workflow step cannot use the tools for making sols."; 3]
     );
 
     assert_eq!(stored(&t, &one).await, one);
@@ -1593,7 +1593,7 @@ async fn a_failed_or_cancelled_run_can_do_none_of_the_three() {
         make(&t, &run, &format!("{status:?}")).await;
         end(&t, &run, status).await;
         let makers = t.rt.makers();
-        let ended = "This run has ended, so it cannot use the tools for making dots.";
+        let ended = "This run has ended, so it cannot use the tools for making sols.";
         let name = format!("{status:?}");
         assert_eq!(invalid(makers.list_made_dots(&run.id).await), ended);
         assert_eq!(
@@ -1654,7 +1654,7 @@ async fn a_dot_holding_more_than_its_maker_asks_for_any_change_that_is_not_narro
                 .decide_request(&request.id, MakeDecision::Without, None, None)
                 .await
         ),
-        "This dot has more than its maker has, so the change cannot be saved without that. \
+        "This sol has more than its maker has, so the change cannot be saved without that. \
          Allow it, or don't change it."
     );
     let after = decide(&t, &request, MakeDecision::Allow).await;
@@ -2024,7 +2024,7 @@ async fn a_change_that_undoes_the_persons_narrowing_asks() {
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
     assert_eq!(
         card.lines,
-        ["The browser, which undoes your change to this dot"]
+        ["The browser, which undoes your change to this sol"]
     );
     assert!(card.can_allow, "{card:#?}");
     // A change that does not undo it is saved at once, and leaves the browser off.
@@ -2067,7 +2067,7 @@ async fn a_change_that_drops_the_persons_deny_rule_asks() {
     assert_eq!(
         card.lines,
         ["The preset Sandboxed (you set narrower permissions), which undoes your change to this \
-          dot"]
+          sol"]
     );
     // The person allows it: the rule goes, as they said.
     decide(&t, &request, MakeDecision::Allow).await;
@@ -2118,7 +2118,7 @@ async fn a_narrower_preset_stays_kept_when_the_person_moves_on_to_custom() {
     assert_eq!(
         card.lines,
         [
-            "The preset Trusted (you set Sandboxed), which undoes your change to this dot",
+            "The preset Trusted (you set Sandboxed), which undoes your change to this sol",
             "The preset Custom (Researcher has Trusted)"
         ]
     );
@@ -2159,6 +2159,6 @@ async fn a_narrowing_record_that_cannot_be_read_blocks_no_edit_and_still_asks() 
     let card = t.rt.makers().request_card(&request.id).await.unwrap();
     assert_eq!(
         card.lines,
-        ["The browser, which undoes your change to this dot"]
+        ["The browser, which undoes your change to this sol"]
     );
 }

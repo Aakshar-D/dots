@@ -51,7 +51,7 @@ const CLI_NAMES: [&str; 5] = [
 
 /// What `make_dot` tells the run of a dot made at once, with no schedule and no first job.
 const MADE: &str =
-    "Made the dot \"Blog Watcher\". It is on and ready; give it a job with give_job.";
+    "Made the sol \"Blog Watcher\". It is on and ready; give it a job with give_job.";
 
 struct T {
     dir: TempDir,
@@ -466,7 +466,7 @@ async fn run_step(t: &T, member: &Dot) -> WorkflowRun {
             .create(&TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: vec![MemberSpec {
                     dot_id: member.id.clone(),
@@ -627,7 +627,7 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_through_dots_own_serv
     assert_eq!(by.purpose, "Reads the feeds");
 
     // Beyond reach: nothing is made, the request waits, and the run is told to carry on.
-    let mut more = asks("Browser Dot");
+    let mut more = asks("Browser Sol");
     more["browser"] = json!(true);
     let waiting = call(&cli, "make_dot", more).await;
     let told = done(&waiting);
@@ -640,14 +640,14 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_through_dots_own_serv
         told.contains("you will be woken with their answer"),
         "{told}"
     );
-    assert!(made_dot(&t, &maker, "Browser Dot").await.is_none());
+    assert!(made_dot(&t, &maker, "Browser Sol").await.is_none());
     let requests =
         t.rt.store()
             .list_make_requests(Some(&maker.id), true)
             .await
             .unwrap();
     assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].name, "Browser Dot");
+    assert_eq!(requests[0].name, "Browser Sol");
     assert_eq!(requests[0].run_id, chat.id);
 
     // An argument the tool does not have is refused in a sentence, and nothing is made.
@@ -695,7 +695,7 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_through_dots_own_serv
         made_dots_text("Researcher", &lines, &requests)
     );
     assert!(done(&listed).contains("Blog Watcher"), "{listed}");
-    assert!(done(&listed).contains("Browser Dot"), "{listed}");
+    assert!(done(&listed).contains("Browser Sol"), "{listed}");
 
     // `change_dot` changes what it names.
     let changed = call(
@@ -748,12 +748,12 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_through_dots_own_serv
     t.rt.update_dot(&maker.id, narrowed).await.unwrap();
     let denied = call(&cli, "list_made_dots", json!({})).await;
     assert!(
-        refused(&denied).contains("Denied by the policy of dot 'Researcher'"),
+        refused(&denied).contains("Denied by the policy of sol 'Researcher'"),
         "{denied}"
     );
     let denied = call(&cli, "make_dot", asks("Third")).await;
     assert!(
-        refused(&denied).contains("Denied by the policy of dot 'Researcher'"),
+        refused(&denied).contains("Denied by the policy of sol 'Researcher'"),
         "{denied}"
     );
     assert!(made_dot(&t, &maker, "Third").await.is_none());
@@ -912,7 +912,7 @@ async fn deleting_a_made_dot_asks_first_while_the_maker_always_asks_before_delet
     assert_eq!(guard.kind, GuardKind::Delete);
     assert_eq!(
         guard.summary,
-        "delete the dot \"Blog Watcher\" and its history"
+        "delete the sol \"Blog Watcher\" and its history"
     );
     assert!(guard.always_asks);
     assert!(made_dot(&t, &maker, "Blog Watcher").await.is_some());
@@ -1001,7 +1001,7 @@ async fn an_approved_delete_called_again_after_a_rename_deletes_no_other_dot() {
             .await
             .unwrap()
             .expect("a guarded call");
-    assert_eq!(guard.summary, "delete the dot \"Archive\" and its history");
+    assert_eq!(guard.summary, "delete the sol \"Archive\" and its history");
 
     // Before the person says yes, "Archive" comes to name the other dot.
     swap_names(&t, &archive, &precious).await;
@@ -1170,11 +1170,11 @@ async fn only_a_makers_prompt_says_how_making_works() {
         },
     );
     assert!(
-        maker_prompt.contains(&format!("\n## Making dots\n\n{section}")),
+        maker_prompt.contains(&format!("\n## Making sols\n\n{section}")),
         "{maker_prompt}"
     );
     assert!(
-        maker_prompt.contains("`mcp__dots__make_dot` makes a dot at once"),
+        maker_prompt.contains("`mcp__dots__make_dot` makes a sol at once"),
         "{maker_prompt}"
     );
     assert!(
@@ -1186,7 +1186,7 @@ async fn only_a_makers_prompt_says_how_making_works() {
     }
     for prompt in [&plain_prompt, &denied_prompt] {
         assert!(prompt.contains("## Standing rules"), "{prompt}");
-        assert!(!prompt.contains("## Making dots"), "{prompt}");
+        assert!(!prompt.contains("## Making sols"), "{prompt}");
         for name in NAMES {
             assert!(!prompt.contains(name), "{prompt}");
         }
@@ -1214,7 +1214,7 @@ async fn a_workflow_steps_prompt_of_a_maker_does_not_say_how_making_works() {
         serde_json::from_str(&std::fs::read_to_string(&t.args_out).unwrap()).unwrap();
     let prompt = recorded["prompt"].as_str().unwrap();
     assert!(prompt.contains("## Standing rules"), "{prompt}");
-    assert!(!prompt.contains("## Making dots"), "{prompt}");
+    assert!(!prompt.contains("## Making sols"), "{prompt}");
     for name in NAMES {
         assert!(!prompt.contains(name), "{prompt}");
     }

@@ -24,7 +24,7 @@ use crate::{Error, Result};
 /// Why a made dot that is to work in copies of a folder, as its maker does, is not made when
 /// the folder is not ready for them: it would work in the folder itself, which its maker never
 /// does.
-pub const MADE_NOT_A_REPO: &str = "The new dot would work in copies of that folder, as its \
+pub const MADE_NOT_A_REPO: &str = "The new sol would work in copies of that folder, as its \
     maker does, but the folder is not the top of a git repository with a commit. Leave the \
     folder blank for a new one.";
 
@@ -34,7 +34,7 @@ pub const MADE_NOT_A_REPO: &str = "The new dot would work in copies of that fold
 pub fn changed_while_saving(name: &str) -> String {
     format!(
         "\"{name}\" was changed while this change was being saved, so nothing was saved. Try \
-         again: it is judged against the dot as it is now."
+         again: it is judged against the sol as it is now."
     )
 }
 
