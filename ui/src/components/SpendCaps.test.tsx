@@ -59,6 +59,26 @@ describe("a sol's spending caps in its editor", () => {
     expect(screen.getByLabelText("Daily cost cap (USD)")).toHaveValue("2");
   });
 
+  it("show a maker's shared total, which is what its cap counts", async () => {
+    stored();
+    const [own] = sample.spend.dots;
+    backend.on("spend_today", () => ({
+      ...sample.spend,
+      dots: [
+        {
+          ...own,
+          dot_id: sample.dot.id,
+          today: { cost_usd: 0, tokens: 8 },
+          shared_today: { cost_usd: 1.6, tokens: 4008 },
+        },
+      ],
+    }));
+    renderApp(`/dots/${sample.dot.id}`);
+    const line = await screen.findByText(/^Today, with the sols it made: \$1\.60 of \$2\.00/);
+    expect(line).toHaveTextContent("4,008 tokens");
+    expect(screen.queryByText(/^Today: /)).toBeNull();
+  });
+
   it("save a token cap, and refuse one out of bounds", async () => {
     stored();
     const { user } = renderApp(`/dots/${sample.dot.id}`);
@@ -79,5 +99,21 @@ describe("a sol's spending caps in its editor", () => {
         },
       ]),
     );
+  });
+});
+
+describe("the Usage screen's spending lines", () => {
+  it("count a maker's cap against what it and the sols it made spent", async () => {
+    const [own] = sample.spend.dots;
+    backend.on("spend_today", () => ({
+      ...sample.spend,
+      dots: [{ ...own, today: { cost_usd: 0, tokens: 8 }, shared_today: { cost_usd: 1.6, tokens: 4008 } }],
+    }));
+    renderApp("/usage");
+    expect(
+      await screen.findByText(
+        new RegExp(`^Today, ${own.dot_name} and the sols it made: \\$1\\.60 of \\$2\\.00`),
+      ),
+    ).toBeVisible();
   });
 });

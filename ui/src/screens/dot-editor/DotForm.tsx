@@ -176,10 +176,10 @@ function SpendingCaps(props: {
 }) {
   const caps = props.spec.spend_cap;
   const spend = useSpendToday().data;
-  const today = spend?.dots.find((d) => d.dot_id === props.dotId)?.today ?? {
-    cost_usd: 0,
-    tokens: 0,
-  };
+  const mine = spend?.dots.find((d) => d.dot_id === props.dotId);
+  // A maker shares its caps with the sols it made: what counts toward them is the shared total.
+  const shared = mine?.shared_today ?? null;
+  const today = shared ?? mine?.today ?? { cost_usd: 0, tokens: 0 };
   return (
     <>
       <p className="text-xs text-muted-foreground">
@@ -189,7 +189,7 @@ function SpendingCaps(props: {
       </p>
       {props.dotId !== null && spend && (
         <SpendLine
-          label="Today"
+          label={shared !== null ? "Today, with the sols it made" : "Today"}
           spend={today}
           usdCap={caps.daily_usd}
           tokenCap={caps.daily_tokens}
