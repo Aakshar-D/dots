@@ -626,7 +626,9 @@ describe("commands", () => {
     reply = async () => {
       throw { kind: "cancelled", message: "the Claude program was not changed" };
     };
-    expect((await failure(commands.updateSettings(fixture.Settings))).kind).toBe("cancelled");
+    expect((await failure(commands.updateSettings(T.Settings.parse(fixture.Settings)))).kind).toBe(
+      "cancelled",
+    );
   });
 
   it("treats anything else as an internal error and keeps its message", () => {

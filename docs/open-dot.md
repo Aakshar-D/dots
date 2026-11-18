@@ -65,6 +65,16 @@ If Sage does not know which sol you mean, it asks and offers the closest names a
 
 A private approval cannot be decided by voice. Sage only counts it and opens it on screen.
 
+### Sage tells you when a sol is done
+
+When a sol's run ends, Sage says one short line by itself: "Research finished." or "Backup failed." You do not have to ask. When several end close together, it counts them in one line: "Three sols finished." or "Two sols finished and one failed."
+
+When you gave the work by voice ("Ask the research sol to compare the three vendors.", "Run the backup sol now."), Sage follows up on it: "Research finished what you asked." or "Research could not finish what you asked." When the sol wrote a result, Sage adds one sentence of it: "Research finished what you asked: I compared the three vendors." It says this whatever the setting is, and also when you are looking at that sol.
+
+The rules are the same as for what needs you. Sage says at most one line in 30 seconds, and only while it is resting: not while you speak, while it thinks or speaks, or while a question or a card is showing. What needs you is said first. Sage does not tell you about a run you cancelled, or about a run of the sol you are looking at while the Sage window is in front. A sol's name is said only when it is short and plain; otherwise Sage says "A sol". A run that stops to wait for your approval is not done: Sage tells you when the work that goes on after your answer ends.
+
+**Tell me aloud when a sol finishes** in Settings, Voice picks which runs: **Off**, **What I started** (the default) or **Everything**. See Settings below.
+
 ### What it does on your computer, and what it does not
 
 Sage writes notes, opens sites and web searches, and opens and closes a fixed list of apps and folders without asking first. Each of those is kept harmless:
@@ -140,6 +150,7 @@ Sage listens for at most five follow-ups in a row. Then it rests until you use t
 - No audio and no transcript is saved. What Sage heard and said is kept in memory for the conversation and dropped when you close the stage or after 10 minutes without a turn. Logs say that a turn happened and how long it took, not what was said.
 - To understand a request, Sage sends the model your words and a short picture of now: your sols (for each one: whether it is running and for how long, the tool of its latest step and what that step touches, why a run has not started, how its last run ended with one line of its result or error, and when it runs next), the pending approvals, the open questions, the names of your connectors with whether each is connected and which sols use it, and the names of the apps in the workspace. The request goes through your own Claude CLI sign-in. Nothing else is sent. Vault values are never in the picture. A step or a result line that names a private folder is left out of it.
 - A private approval is only counted ("one private approval needs you"). Its tool and target are not sent, not read aloud, and it opens on screen.
+- When Sage tells you a sol finished what you asked by voice, it may add one sentence of the sol's result. That sentence is the sol's own writing, so Sage treats it as text only: it takes the first sentence, cuts it to 160 characters, removes hidden characters, and leaves it out when a vault value shows in it or when it sounds like "Hey Sage" or "Sage, stop". Sage says it and never acts on it. It is not sent to the model and not logged. No other line about a finished run carries anything a sol wrote.
 - With **Hey Sage** on, the microphone stays open while Sage is running, so the phrase can be heard. Until the phrase is said, what the microphone picks up is heard only on this computer: by the phrase detector, and by the speech recogniser, which reads the first two seconds of anything said near it to see whether it begins with "Hey Sage". What it reads is compared and dropped at once: it is not shown, saved, logged or sent anywhere. Whenever the microphone is open, the rail mark shows it and the tray tooltip says "Dot is listening".
 
 Each request to the model is recorded in the Usage tab under "Open Sage" and counts against your spending caps. At a cap Sage says so and stops asking the model. Stop, cancel, yes, no and picking an option still work.
@@ -154,6 +165,7 @@ All in Settings, Voice.
 | **Voice** | Ten voices, Voice 1 to Voice 10, each with a play button. The play buttons work once Open Sage is ready. |
 | **Speaking speed** | A slider from 0.8 to 1.4. The default is 1.0. |
 | **Tell me aloud when something needs me** | Off by default. Sage says a short line when an approval or a question needs you. It never says more than one line in 30 seconds. It speaks only while Sage is resting, and does not announce the sol you are looking at. |
+| **Tell me aloud when a sol finishes** | **What I started** by default. Sage says a short line when a sol's run ends. **Off**: none. **What I started**: runs from a message you sent, from **Run now**, and runs that go on after you answered an approval. **Everything**: every run, scheduled ones too. With any choice, Sage tells you when a sol finishes what you asked for by voice. The same limits apply: one line in 30 seconds, only while Sage is resting, and not the sol you are looking at. |
 | **Hotkey** | Default Ctrl+Shift+Space (Cmd+Shift+Space on a Mac). Write names like Ctrl, Shift, Alt and a key, joined with +. **Clear** removes it. |
 | **Hey Sage** | Off by default. Lets you start by saying "Hey Sage". The microphone stays on while Sage runs. |
 | **Teach Sage your voice** | Under **Hey Sage**. You say "Hey Sage" five times, about three seconds apart, from where you usually sit. Sage sets the phrase up for how you sound at your microphone, starts its microphone boost at your level, and tells you how many of the five it heard. It takes about 20 seconds. No recording is kept: only the setting, your voice level, the count and any words Sage learned for the phrase, in `voice-setup.json` beside the speech files. Do it again whenever you move or change microphone. |
