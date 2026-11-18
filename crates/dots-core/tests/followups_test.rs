@@ -290,7 +290,7 @@ async fn a_follow_up_of_a_disabled_dot_is_skipped_with_a_note() {
     assert_eq!(
         notes[0].text,
         format!(
-            "A follow-up was skipped because the dot is off. It was due {}: check CI",
+            "A follow-up was skipped because the sol is off. It was due {}: check CI",
             local_label(after(600))
         )
     );

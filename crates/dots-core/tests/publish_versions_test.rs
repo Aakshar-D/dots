@@ -78,12 +78,12 @@ fn notes_are_drafted_from_pull_titles() {
         },
         MergedPull {
             number: 25,
-            title: "Watchers: dots that start on their own".into(),
+            title: "Watchers: sols that start on their own".into(),
         },
     ];
     assert_eq!(
         draft_notes(&pulls),
-        "- The rail's Claude usage bars (#26)\n- Run times (#27)\n- Watchers: dots that start on their own (#25)\n"
+        "- The rail's Claude usage bars (#26)\n- Run times (#27)\n- Watchers: sols that start on their own (#25)\n"
     );
     assert_eq!(draft_notes(&[]), "");
 }

@@ -104,7 +104,7 @@ export function AccountHistory({ org }: { org: OrgSummary }) {
               <th className="font-normal">When</th>
               <th className="font-normal">What</th>
               <th className="font-normal">Variable</th>
-              <th className="font-normal">Dot</th>
+              <th className="font-normal">Sol</th>
               <th className="font-normal">For</th>
               <th className="font-normal">Why</th>
               <th className="font-normal">Sent</th>

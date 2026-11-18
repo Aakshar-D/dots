@@ -12,7 +12,7 @@ const asked: Message = { ...open, run_id: "a", created_at: "2026-10-09T10:02:00.
 const a = chat("a", "10:00");
 
 describe("check-ins in the conversation", () => {
-  it("shows the dot's notes and questions after the run that posted them", async () => {
+  it("shows the sol's notes and questions after the run that posted them", async () => {
     const note: Message = {
       ...sample.messages[3],
       id: "n1",
@@ -24,15 +24,15 @@ describe("check-ins in the conversation", () => {
     backend.on("messages_list", () => [asked, note]);
     renderApp(`/home/${dot.id}`);
     const view = await screen.findByRole("region", { name: "Conversation" });
-    await within(view).findByRole("group", { name: "Note from the dot" });
+    await within(view).findByRole("group", { name: "Note from the sol" });
     const [first, second] = within(view).getAllByRole("region", { name: /^Chat message,/ });
-    expect(within(first).getByRole("group", { name: "Note from the dot" })).toHaveTextContent(
+    expect(within(first).getByRole("group", { name: "Note from the sol" })).toHaveTextContent(
       "Half the tests pass.",
     );
-    const question = within(first).getByRole("group", { name: "Question from the dot" });
+    const question = within(first).getByRole("group", { name: "Question from the sol" });
     expect(question).toHaveTextContent(asked.text);
     expect(question).toHaveTextContent("Question · waiting for your answer");
-    expect(within(second).queryByRole("group", { name: /from the dot/ })).toBeNull();
+    expect(within(second).queryByRole("group", { name: /from the sol/ })).toBeNull();
   });
 
   it("replies to the open question from the bar above the composer", async () => {

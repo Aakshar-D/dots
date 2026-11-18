@@ -12,13 +12,13 @@ const row = (org_id: string | null, needs_you: number): DotOverview => ({
 });
 
 describe("inScope", () => {
-  it("matches Personal to the dots with no org", () => {
+  it("matches Personal to the sols with no org", () => {
     const scope = { account: "personal", workspace: "default" };
     expect(inScope({ org_id: null }, scope)).toBe(true);
     expect(inScope({ org_id: "acme-eng" }, scope)).toBe(false);
   });
 
-  it("matches an org to its own dots", () => {
+  it("matches an org to its own sols", () => {
     const scope = { account: "acme-eng", workspace: "default" };
     expect(inScope({ org_id: "acme-eng" }, scope)).toBe(true);
     expect(inScope({ org_id: "design" }, scope)).toBe(false);
@@ -37,7 +37,7 @@ describe("inScope, workspace", () => {
   });
 });
 
-describe("a dot whose account was removed", () => {
+describe("a sol whose account was removed", () => {
   const joined = [{ ...sample.orgs[0], id: "acme-eng" }];
 
   it("belongs to Personal once the joined accounts are known", () => {

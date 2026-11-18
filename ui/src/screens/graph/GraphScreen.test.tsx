@@ -77,7 +77,7 @@ async function open() {
 }
 
 describe("the Graph screen", () => {
-  it("is reached from the dot's header", async () => {
+  it("is reached from the sol's header", async () => {
     holding(ready);
     const { user } = renderApp(`/home/${dot.id}`);
     await user.click(await screen.findByRole("link", { name: "Graph" }));
@@ -191,10 +191,10 @@ describe("the Graph screen", () => {
     expect(screen.getByRole("button", { name: "Rebuild" })).toBeEnabled();
   });
 
-  it("points to the dot's settings when the graph is off", async () => {
+  it("points to the sol's settings when the graph is off", async () => {
     holding(ready, whole, false);
     await open();
-    expect(await screen.findByText(/The project graph is off for this dot/)).toBeVisible();
+    expect(await screen.findByText(/The project graph is off for this sol/)).toBeVisible();
     expect(screen.getByRole("link", { name: "its settings" })).toHaveAttribute(
       "href",
       `/dots/${dot.id}`,
@@ -240,7 +240,7 @@ describe("the Graph screen", () => {
   it("names its controls for assistive technology", async () => {
     holding(ready);
     await open();
-    expect(await screen.findByRole("link", { name: "Back to the dot" })).toBeVisible();
+    expect(await screen.findByRole("link", { name: "Back to the sol" })).toBeVisible();
     expect(await screen.findByRole("searchbox", { name: "Search the graph" })).toBeVisible();
     // The signature scrolls sideways, so it can be focused and is named.
     await userEventClick("node Runner.start");

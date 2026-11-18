@@ -192,7 +192,7 @@ async fn scheduling_validates_and_lists() {
         .schedule_message(&dot.id, "Ship it", Some(&foreign.id), &at(hour()))
         .await
         .unwrap_err();
-    assert!(invalid(e).contains("belongs to a different dot"));
+    assert!(invalid(e).contains("belongs to a different sol"));
     assert!(updates(&mut rx).is_empty());
 
     let message = schedule(&rt, &dot, None, hour()).await;
@@ -573,7 +573,7 @@ async fn a_refused_dot_fails_with_its_reason() {
     assert_eq!(failed.status, ScheduledStatus::Failed);
     assert_eq!(
         failed.error.as_deref(),
-        Some("dot 'triage': its org 'acme' was removed")
+        Some("sol 'triage': its org 'acme' was removed")
     );
     assert_eq!(runs_of(&rt, &dot).await, 0);
     rt.shutdown();
@@ -995,7 +995,7 @@ async fn the_sender_sends_once_after_a_restart() {
     // The first pass, with no move of the clock.
     let sent = sent_within(&mut rx, &message.id, Duration::from_secs(10))
         .await
-        .expect("the first pass sent the message that came due while Dots was closed");
+        .expect("the first pass sent the message that came due while Sage was closed");
     let r = rt.get_run(sent.run_id.as_deref().unwrap()).await.unwrap();
     assert_eq!(r.parent_run_id.as_deref(), Some(p.id.as_str()));
     assert_eq!(note(&r)["late"], true);

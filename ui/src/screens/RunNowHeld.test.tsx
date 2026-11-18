@@ -8,15 +8,15 @@ import { dot, home, overview } from "@/test/home";
 import { renderApp } from "@/test/render";
 
 const heldText =
-  "Acme Engineering: this dot's tool policy is past what a Member may use in the Platform workspace (it is Trusted). Change the policy, or ask an Admin.";
+  "Acme Engineering: this sol's tool policy is past what a Member may use in the Platform workspace (it is Trusted). Change the policy, or ask an Admin.";
 
 /// The core holds the dot's runs: its policy is past the workspace's ceiling.
 function heldByCeiling() {
   backend.on("dot_ceiling", () => ({ ...noCeiling, applies_as: "member", held: heldText }));
 }
 
-describe("Run now on a dot whose runs are held", () => {
-  it("is off in the dot's editor, with the hold text", async () => {
+describe("Run now on a sol whose runs are held", () => {
+  it("is off in the sol's editor, with the hold text", async () => {
     heldByCeiling();
     backend.on("get_dot", () => sample.dot);
     renderApp(`/dots/${sample.dot.id}`);
@@ -27,7 +27,7 @@ describe("Run now on a dot whose runs are held", () => {
   });
 
   it("is off in the editor with the role's refusal when the core refuses running it", async () => {
-    const refusal = "Acme Engineering: a Viewer can't run dots. Ask an Admin or Owner.";
+    const refusal = "Acme Engineering: a Viewer can't run sols. Ask an Admin or Owner.";
     backend.on("get_dot", () => sample.dot);
     backend.on("dot_access", () => ({ ...allowed, run: refusal }));
     renderApp(`/dots/${sample.dot.id}`);
@@ -36,7 +36,7 @@ describe("Run now on a dot whose runs are held", () => {
     expect(run).toBeDisabled();
   });
 
-  it("is off in the dot's menu, with the hold text", async () => {
+  it("is off in the sol's menu, with the hold text", async () => {
     heldByCeiling();
     home([]);
     backend.on("dot_overview", () => [overview]);
@@ -80,7 +80,7 @@ describe("Run now on a dot whose runs are held", () => {
     expect(run).toHaveAttribute("title", heldText);
   });
 
-  it("stays on where nothing holds the dot", async () => {
+  it("stays on where nothing holds the sol", async () => {
     backend.on("get_dot", () => sample.dot);
     renderApp(`/dots/${sample.dot.id}`);
     const run = await screen.findByRole("button", { name: "Run now" });

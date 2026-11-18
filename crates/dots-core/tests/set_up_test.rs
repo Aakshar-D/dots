@@ -240,7 +240,7 @@ async fn ask_times_out() {
     })
     .await;
     let err = message(t.rt.setup_ask("s1", req("x")).await.unwrap_err());
-    assert_eq!(err, "Claude took too long to set up the dot.");
+    assert_eq!(err, "Claude took too long to set up the sol.");
 }
 
 #[tokio::test]
@@ -252,7 +252,7 @@ async fn ask_fails_with_the_cli_error() {
     let t = start(failed).await;
     let err = message(t.rt.setup_ask("s1", req("x")).await.unwrap_err());
     assert!(
-        err.starts_with("Claude could not set up the dot: "),
+        err.starts_with("Claude could not set up the sol: "),
         "{err}"
     );
     assert!(err.contains("Invalid API key"), "{err}");
@@ -519,7 +519,7 @@ async fn apply_returns_the_notes_of_its_own_check() {
     let applied = t.rt.setup_apply(p, None, None).await.unwrap();
     assert_eq!(
         applied.notes,
-        "Left out the extra telepathy: Dots does not know it."
+        "Left out the extra telepathy: Sage does not know it."
     );
     let clean =
         t.rt.setup_apply(proposal("Other digest"), None, None)

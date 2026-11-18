@@ -20,7 +20,7 @@ impl PhoneHandle {
     pub fn get(&self) -> Result<&Phone, CmdError> {
         self.0
             .as_ref()
-            .ok_or_else(|| CmdError::internal("Dots did not start; see the startup error"))
+            .ok_or_else(|| CmdError::internal("Sage did not start; see the startup error"))
     }
 }
 

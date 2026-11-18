@@ -25,7 +25,7 @@ const API_KEY: &str = "org-secret-member-key-5b81d2";
 /// A policy issued after `ISSUED`, for the account's switch to a member list.
 const LATER: &str = "2026-10-22T08:30:00Z";
 const WAITING_TEXT: &str =
-    "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.";
+    "Acme Engineering: you aren't on its member list yet. Send your Sage ID to an Admin.";
 
 fn entries() -> Value {
     json!({"API_KEY": API_KEY})
@@ -216,7 +216,7 @@ async fn missing_identity_while_active_stays_active() {
     assert!(summary
         .roster_error
         .as_deref()
-        .is_some_and(|e| e.starts_with("this PC's Dots ID can't be read")));
+        .is_some_and(|e| e.starts_with("this PC's Sage ID can't be read")));
     assert_eq!(h.orgs.lookup(ACME, "API_KEY").await, value());
     assert!(h.copy_path(ACME).exists(), "nothing is wiped");
 
@@ -654,7 +654,7 @@ async fn regenerated_identity_waits_for_the_new_id_nothing_wiped() {
 
     // The same list: the old ID is on it, the new one is not.
     let summary = h.orgs.refresh(ACME).await.unwrap();
-    let changed = "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin.";
+    let changed = "Acme Engineering: this PC's Sage ID changed. Send the new one to an Admin.";
     assert_eq!(summary.membership, Membership::Waiting);
     assert_eq!(summary.status_text, changed);
     assert_eq!(summary.not_member_text.as_deref(), Some(changed));
@@ -823,7 +823,7 @@ async fn denied_while_waiting_stays_waiting() {
     assert_eq!(summary.membership, Membership::Waiting);
     assert_ne!(summary.status, OrgStatus::Revoked);
     assert!(summary.status_text.starts_with(
-        "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin. ("
+        "Acme Engineering: this PC's Sage ID changed. Send the new one to an Admin. ("
     ));
     assert!(!h.copy_path(ACME).exists(), "the copy is wiped");
     let restarted = h.service();

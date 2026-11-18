@@ -725,7 +725,7 @@ async fn a_server_error_or_rate_limiting_is_unreachable_and_a_refusal_is_denied(
 
     fake.fail_next(429, 1);
     let why = unreachable(source.fetch(&mine()).await.unwrap_err());
-    assert_eq!(why, format!("{shown} is rate limiting Dots (HTTP 429)"));
+    assert_eq!(why, format!("{shown} is rate limiting Sage (HTTP 429)"));
 
     fake.fail_next(403, 1);
     let why = denied(source.fetch(&mine()).await.unwrap_err());

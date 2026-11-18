@@ -136,7 +136,7 @@ impl Manifest {
             }
             if seen.contains(f.as_str()) {
                 return invalid(format!(
-                    "app.json: on_run_end {f:?} is also a tool; Dots alone calls it"
+                    "app.json: on_run_end {f:?} is also a tool; Sage alone calls it"
                 ));
             }
         }

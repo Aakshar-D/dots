@@ -8,8 +8,8 @@ import { renderApp } from "@/test/render";
 
 const switcher = () => screen.findByRole("combobox", { name: "Model for the next reply" });
 
-describe("the model switch above a dot's conversation", () => {
-  it("shows the dot's model and saves a new one through update_dot for the next reply", async () => {
+describe("the model switch above a sol's conversation", () => {
+  it("shows the sol's model and saves a new one through update_dot for the next reply", async () => {
     home([]);
     backend.on("get_dot", () => dot);
     backend.on("update_dot", (args) => ({ ...dot, ...(args.spec as object) }));
@@ -29,7 +29,7 @@ describe("the model switch above a dot's conversation", () => {
     expect(await screen.findByText(`${dot.name} will use Opus from its next reply.`)).toBeVisible();
   });
 
-  it("switches a Claude dot to Auto", async () => {
+  it("switches a Claude sol to Auto", async () => {
     home([]);
     backend.on("get_dot", () => dot);
     backend.on("update_dot", (args) => ({ ...dot, ...(args.spec as object) }));
@@ -60,16 +60,16 @@ describe("the model switch above a dot's conversation", () => {
     );
   });
 
-  it("shows a refusal and keeps the dot's model", async () => {
+  it("shows a refusal and keeps the sol's model", async () => {
     home([]);
     backend.on("get_dot", () => dot);
     backend.on("update_dot", () => {
-      throw { kind: "not_allowed", message: "A Viewer can't change dots." };
+      throw { kind: "not_allowed", message: "A Viewer can't change sols." };
     });
     const { user } = renderApp(`/home/${dot.id}`);
     const select = await switcher();
     await user.selectOptions(select, await within(select).findByRole("option", { name: "Haiku" }));
-    expect(await screen.findByText("A Viewer can't change dots.")).toBeVisible();
+    expect(await screen.findByText("A Viewer can't change sols.")).toBeVisible();
     await waitFor(() => expect(select).toHaveValue("sonnet"));
   });
 
@@ -77,7 +77,7 @@ describe("the model switch above a dot's conversation", () => {
     home([]);
     backend.on("get_dot", () => dot);
     backend.on("update_dot", () => {
-      throw { kind: "not_allowed", message: "A Viewer can't change dots." };
+      throw { kind: "not_allowed", message: "A Viewer can't change sols." };
     });
     const { user } = renderApp(`/home/${dot.id}`);
     const select = await switcher();
@@ -88,14 +88,14 @@ describe("the model switch above a dot's conversation", () => {
     await user.clear(box);
     await user.type(box, "claude-opus-4-1");
     await user.click(screen.getByRole("button", { name: "Use" }));
-    expect(await screen.findByText("A Viewer can't change dots.")).toBeVisible();
+    expect(await screen.findByText("A Viewer can't change sols.")).toBeVisible();
     await waitFor(() =>
       expect(screen.queryByRole("textbox", { name: "Custom model ID" })).toBeNull(),
     );
     expect(await switcher()).toHaveValue("sonnet");
   });
 
-  it("is off until it is known whether the person may edit the dot", async () => {
+  it("is off until it is known whether the person may edit the sol", async () => {
     home([]);
     const access = later<typeof allowed>();
     backend.on("dot_access", () => access.answer);
@@ -106,12 +106,12 @@ describe("the model switch above a dot's conversation", () => {
     await waitFor(() => expect(select).toBeEnabled());
   });
 
-  it("is off with the reason when the person may not edit the dot", async () => {
+  it("is off with the reason when the person may not edit the sol", async () => {
     home([]);
-    backend.on("dot_access", () => ({ ...allowed, edit: "A Viewer can't change dots." }));
+    backend.on("dot_access", () => ({ ...allowed, edit: "A Viewer can't change sols." }));
     renderApp(`/home/${dot.id}`);
     const select = await switcher();
     await waitFor(() => expect(select).toBeDisabled());
-    expect(select.closest("[title]")).toHaveAttribute("title", "A Viewer can't change dots.");
+    expect(select.closest("[title]")).toHaveAttribute("title", "A Viewer can't change sols.");
   });
 });

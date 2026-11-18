@@ -90,7 +90,7 @@ describe("Settings, Accounts, API keys", () => {
     await user.type(within(dialog).getByLabelText("Name"), "Deploy");
     await user.click(within(dialog).getByRole("button", { name: "Create" }));
     expect(await within(dialog).findByDisplayValue(SECRET)).toHaveAttribute("readonly");
-    expect(dialog).toHaveTextContent("Copy it now. Dots won't show it again.");
+    expect(dialog).toHaveTextContent("Copy it now. Sage won't show it again.");
     expect(dialog).toHaveTextContent("http://127.0.0.1:4455");
     expect(dialog).toHaveTextContent(
       `curl -H "Authorization: Bearer ${SECRET}" http://127.0.0.1:4455/dots`,

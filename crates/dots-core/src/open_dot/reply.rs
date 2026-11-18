@@ -8,7 +8,8 @@
 
 use serde::Deserialize;
 
-pub const MAX_SPOKEN_BYTES: usize = 600;
+/// The most of a reply that is spoken: about eight sentences.
+pub const MAX_SPOKEN_BYTES: usize = 1600;
 
 /// Most options a question may offer, and the longest one.
 const MAX_OPTIONS: usize = 6;
@@ -55,6 +56,46 @@ pub enum Wish {
         question: String,
         options: Vec<String>,
     },
+    /// A note file on the computer: Markdown, or plain text.
+    Note {
+        title: String,
+        text: String,
+        #[serde(default)]
+        plain: bool,
+    },
+    /// A site in the browser.
+    Web {
+        url: String,
+    },
+    /// A web search in the browser.
+    Search {
+        query: String,
+    },
+    /// An app or folder on the computer.
+    App {
+        name: String,
+    },
+    /// One sentence about the person to keep for later conversations.
+    Remember {
+        note: String,
+    },
+    /// Forget everything learned about the person.
+    Forget,
+    /// Ask an open app to close.
+    Close {
+        name: String,
+    },
+    /// A volume or media key: "volume up", "volume down", "mute", "play pause", "next",
+    /// "previous".
+    Key {
+        name: String,
+    },
+    /// Anything else on the computer: one command of the system's shell, asked about first.
+    Command {
+        command: String,
+        #[serde(default)]
+        why: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +125,27 @@ pub fn read_reply(text: &str) -> (Reply, bool) {
 }
 
 impl Wish {
+    /// What the person asked for, in a few plain words, for the tally of what they ask for
+    /// most (`memory`). None for what says nothing about their needs.
+    pub fn habit(&self) -> Option<&'static str> {
+        Some(match self {
+            Wish::Needs => "see what needs them",
+            Wish::ReadQuestion { .. } | Wish::Answer { .. } => "answer a sol's question",
+            Wish::Approve { .. } | Wish::Deny { .. } => "decide an approval",
+            Wish::Create { .. } => "set up a new sol",
+            Wish::Send { .. } => "message a sol",
+            Wish::Run { .. } => "run a sol",
+            Wish::Open { .. } => "open a screen",
+            Wish::Note { .. } => "write a note",
+            Wish::Web { .. } | Wish::Search { .. } => "open something on the web",
+            Wish::App { .. } => "open an app or a folder",
+            Wish::Close { .. } => "close an app",
+            Wish::Key { .. } => "change the volume or the music",
+            Wish::Command { .. } => "do something on the computer",
+            Wish::Ask { .. } | Wish::Remember { .. } | Wish::Forget => return None,
+        })
+    }
+
     /// Whether every value is usable. Blank ids, texts and options are not.
     fn is_usable(&self) -> bool {
         let filled = |s: &str| !s.trim().is_empty();
@@ -96,6 +158,15 @@ impl Wish {
             Wish::Send { d, text, .. } => filled(d) && filled(text),
             Wish::Run { d } => filled(d),
             Wish::Open { target } => filled(target),
+            Wish::Note { text, .. } => filled(text),
+            Wish::Web { url } => filled(url),
+            Wish::Search { query } => filled(query),
+            Wish::App { name } => filled(name),
+            Wish::Remember { note } => filled(note),
+            Wish::Forget => true,
+            Wish::Close { name } => filled(name),
+            Wish::Key { name } => filled(name),
+            Wish::Command { command, .. } => filled(command),
             Wish::Ask { question, options } => {
                 filled(question)
                     && options.len() <= MAX_OPTIONS
@@ -326,6 +397,7 @@ impl Wish {
                 | Wish::Send { .. }
                 | Wish::Answer { .. }
                 | Wish::Create { .. }
+                | Wish::Command { .. }
         )
     }
 }
@@ -641,17 +713,21 @@ mod tests {
     #[test]
     fn over_long_words_trimmed_on_sentence() {
         let sentence = "This is a sentence of some length. ";
-        let text = sentence.repeat(30);
+        let text = sentence.repeat(80);
         assert!(text.len() > MAX_SPOKEN_BYTES);
         let (r, _) = read(&text);
         assert!(r.words.len() <= MAX_SPOKEN_BYTES);
         assert!(r.words.ends_with("length."));
         assert!(r.words.len() > MAX_SPOKEN_BYTES - sentence.len());
         // no sentence end: cut on a char boundary at the limit
-        let (r, _) = read(&"word ".repeat(200));
+        let (r, _) = read(&"word ".repeat(500));
         assert!(r.words.len() <= MAX_SPOKEN_BYTES && r.words.len() >= MAX_SPOKEN_BYTES - 1);
         // a dot inside a number is not a sentence end
-        let text = format!("{} 3.14159 {}", "a".repeat(595), "b".repeat(50));
+        let text = format!(
+            "{} 3.14159 {}",
+            "a".repeat(MAX_SPOKEN_BYTES - 5),
+            "b".repeat(50)
+        );
         let (r, _) = read(&text);
         assert!(r.words.len() <= MAX_SPOKEN_BYTES);
         // exactly at the limit is untouched
@@ -670,7 +746,7 @@ mod tests {
         assert!(r.words.len() <= MAX_SPOKEN_BYTES);
         assert!(r.words.len() >= MAX_SPOKEN_BYTES - 3);
         assert!(text.starts_with(&r.words));
-        let text = "é".repeat(400);
+        let text = "é".repeat(1000);
         let (r, _) = read(&text);
         assert!(r.words.len() <= MAX_SPOKEN_BYTES);
         assert_eq!(r.words.chars().count(), r.words.len() / 2);
@@ -727,7 +803,7 @@ mod tests {
             "日本語の文章です。\nDO {\"act\":\"needs\"}".to_string(),
             format!("{long}\nDO {{\"act\":\"needs\"}}"),
             "word ".repeat(200),
-            format!("{} 3.14159 {}", "a".repeat(595), "b".repeat(50)),
+            format!("{} 3.14159 {}", "a".repeat(MAX_SPOKEN_BYTES - 5), "b".repeat(50)),
             // CRLF line ends
             "Two things need you.\r\nDO {\"act\":\"needs\"}\r\n".to_string(),
             "Opening it.\r\n```\r\nDO {\"act\":\"open\",\"target\":\"usage\"}\r\n```\r\n".to_string(),
@@ -811,7 +887,7 @@ Third, still going!"
 
     #[test]
     fn gate_releases_a_line_starting_with_do_that_is_not_a_block() {
-        let text = "Sure.\nDo you want me to run it?\nDOT is ready.\nDONE.\n";
+        let text = "Sure.\nDo you want me to run it?\nSOL is ready.\nDONE.\n";
         let mut gate = SpeechGate::new();
         let mut live = String::new();
         // a char at a time: the held "D", "DO" and "DOT" are let go once they fail to match
@@ -819,7 +895,7 @@ Third, still going!"
             live.push_str(&gate.push(&text[i..i + c.len_utf8()]));
         }
         assert!(live.contains("Do you want me to run it?"), "{live:?}");
-        assert!(live.contains("DOT is ready."), "{live:?}");
+        assert!(live.contains("SOL is ready."), "{live:?}");
         let tail = gate.finish();
         assert_eq!(squash(&format!("{live}{tail}")), squash(text));
     }

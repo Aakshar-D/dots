@@ -19,15 +19,15 @@ const cron = (expr: string, catch_up = false) =>
   ({ rule: { kind: "cron", expr }, catch_up, until: null }) satisfies Schedule;
 const never = "this schedule would never run";
 
-describe("the dot editor, new dot", () => {
-  it("creates a dot from the core's defaults and what was typed", async () => {
+describe("the sol editor, new sol", () => {
+  it("creates a sol from the core's defaults and what was typed", async () => {
     backend.on("create_dot", (args) => ({ ...dot, ...(args.spec as object), id: "dot-new" }));
     backend.on("get_dot", () => ({ ...dot, id: "dot-new", name: "nightly" }));
     const { user, router } = renderApp("/dots/new");
     await user.type(await screen.findByLabelText("Name"), "nightly");
     await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
     await user.type(screen.getByLabelText("Folder"), "C:/dev/app");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
@@ -36,7 +36,7 @@ describe("the dot editor, new dot", () => {
         orgId: null, workspaceId: null,
       },
     ]);
-    expect(await screen.findByText("Dot created")).toBeVisible();
+    expect(await screen.findByText("Sol created")).toBeVisible();
   });
 
   it("saves with a blank folder", async () => {
@@ -45,12 +45,12 @@ describe("the dot editor, new dot", () => {
     const { user, router } = renderApp("/dots/new");
     await user.type(await screen.findByLabelText("Name"), "nightly");
     await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toHaveLength(1);
   });
 
-  it("says so when the core made a worktree dot run in the folder itself", async () => {
+  it("says so when the core made a worktree sol run in the folder itself", async () => {
     backend.on("create_dot", (args) => ({
       ...dot,
       ...(args.spec as object),
@@ -61,10 +61,10 @@ describe("the dot editor, new dot", () => {
     const { user } = renderApp("/dots/new");
     await user.type(await screen.findByLabelText("Name"), "nightly");
     await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     expect(
       await screen.findByText(
-        "Dot created. Runs in the folder itself, because it is not a git repository.",
+        "Sol created. Runs in the folder itself, because it is not a git repository.",
       ),
     ).toBeVisible();
   });
@@ -72,14 +72,14 @@ describe("the dot editor, new dot", () => {
   it("marks what is missing instead of saving, and only after a save was tried", async () => {
     const { user } = renderApp("/dots/new");
     await screen.findByLabelText("Name");
-    expect(screen.queryByText("Say what the dot should do.")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    expect(screen.queryByText("Say what the sol should do.")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Fix the marked fields");
     expect(screen.getByText("Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.")).toBeVisible();
-    expect(screen.getByText("Say what the dot should do.")).toBeVisible();
+    expect(screen.getByText("Say what the sol should do.")).toBeVisible();
     // A new dot may leave the folder blank.
-    expect(screen.queryByText("Choose the folder the dot works in.")).toBeNull();
-    expect(screen.getByText("Leave blank and Dots makes a new folder for this dot.")).toBeVisible();
+    expect(screen.queryByText("Choose the folder the sol works in.")).toBeNull();
+    expect(screen.getByText("Leave blank and Sage makes a new folder for this sol.")).toBeVisible();
     expect(backend.callsTo("create_dot")).toEqual([]);
 
     // The marks follow the typing.
@@ -91,22 +91,22 @@ describe("the dot editor, new dot", () => {
     const { user } = renderApp("/dots/new");
     const rule = "Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.";
     await screen.findByLabelText("Name");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
-    await user.type(screen.getByLabelText("Name"), "Test dot");
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
+    await user.type(screen.getByLabelText("Name"), "Test sol");
     expect(screen.queryByText(rule)).toBeNull();
     await user.type(screen.getByLabelText("Name"), "  two");
     expect(screen.getByText(rule)).toBeVisible();
   });
 
-  it("asks a local dot for its endpoint and hides what only Claude dots have", async () => {
+  it("asks a local sol for its endpoint and hides what only Claude sols have", async () => {
     const { user } = renderApp("/dots/new");
     expect(await screen.findByLabelText("Load my Claude Code user settings")).toBeVisible();
     expect(screen.queryByLabelText("Endpoint")).toBeNull();
 
     await user.selectOptions(screen.getByLabelText("Engine"), "local");
     expect(screen.queryByLabelText("Load my Claude Code user settings")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
-    expect(screen.getByText("A local dot needs its endpoint, starting with http://.")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
+    expect(screen.getByText("A local sol needs its endpoint, starting with http://.")).toBeVisible();
     // Endpoints from Settings are offered.
     const endpoint = screen.getByLabelText("Endpoint");
     const offered = document.getElementById(endpoint.getAttribute("list")!)!;
@@ -130,7 +130,7 @@ describe("the dot editor, new dot", () => {
     await user.selectOptions(model, "Haiku");
     await user.type(screen.getByLabelText("Name"), "nightly");
     await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")[0]).toMatchObject({ spec: { model: "haiku" } });
   });
@@ -145,7 +145,7 @@ describe("the dot editor, new dot", () => {
     await user.clear(box);
     // Emptied, the box stays for another id.
     expect(screen.getByRole("textbox", { name: "Custom model ID" })).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     expect(screen.getByText("Name the model to use.")).toBeVisible();
     await user.type(box, "claude-opus-4-1");
     expect(screen.queryByText("Name the model to use.")).toBeNull();
@@ -224,7 +224,7 @@ describe("the dot editor, new dot", () => {
     await user.type(screen.getByLabelText("Name"), "nightly");
     await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
     await user.type(screen.getByLabelText("Folder"), "C:/dev/app");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     expect(backend.callsTo("create_dot")).toEqual([]);
   });
 
@@ -247,7 +247,7 @@ describe("the dot editor, new dot", () => {
     await user.clear(time);
     await user.type(time, "07:15");
     await user.click(screen.getByRole("radio", { name: "After a number of runs" }));
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     const weekly: Schedule = {
@@ -267,7 +267,7 @@ describe("the dot editor, new dot", () => {
     await fillBasics(user);
     await user.selectOptions(screen.getByLabelText("Kind"), "cron");
     await user.type(screen.getByLabelText("Cron expression"), " 0 0 2 * * * ");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
@@ -292,7 +292,7 @@ describe("the dot editor, new dot", () => {
         count: 3,
       }),
     );
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     expect(screen.getByRole("alert")).toHaveTextContent("Fix the marked fields");
     expect(backend.callsTo("create_dot")).toEqual([]);
   });
@@ -305,7 +305,7 @@ describe("the dot editor, new dot", () => {
     await user.clear(screen.getByLabelText("Every"));
     await waitFor(() => expect(screen.queryByRole("list", { name: "Next runs" })).toBeNull());
     expect(screen.queryByText(/whole minutes/)).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     expect(screen.getByText(/whole minutes/)).toBeVisible();
     expect(backend.callsTo("create_dot")).toEqual([]);
     // Only whole minutes were sent to the core.
@@ -321,7 +321,7 @@ describe("the dot editor, new dot", () => {
   });
 });
 
-describe("the dot editor, stored dot", () => {
+describe("the sol editor, stored sol", () => {
   /// A backend holding the dot. A test changes `held.dot` the way another command would.
   function stored() {
     const held = { dot };
@@ -337,10 +337,10 @@ describe("the dot editor, stored dot", () => {
     stored();
     renderApp(path);
     expect(await screen.findByLabelText("Folder")).toBeVisible();
-    expect(screen.queryByText("Leave blank and Dots makes a new folder for this dot.")).toBeNull();
+    expect(screen.queryByText("Leave blank and Sage makes a new folder for this sol.")).toBeNull();
   });
 
-  it("loads the dot and saves a change", async () => {
+  it("loads the sol and saves a change", async () => {
     stored();
     const { user } = renderApp(path);
     expect(await screen.findByRole("heading", { name: dot.name })).toBeVisible();
@@ -357,7 +357,7 @@ describe("the dot editor, stored dot", () => {
     ]);
   });
 
-  it("switches the global instructions off for this dot", async () => {
+  it("switches the global instructions off for this sol", async () => {
     stored();
     const { user } = renderApp(path);
     const box = await screen.findByLabelText("Start with the global instructions");
@@ -370,7 +370,7 @@ describe("the dot editor, stored dot", () => {
     ]);
   });
 
-  it("switches the result check off for this dot", async () => {
+  it("switches the result check off for this sol", async () => {
     stored();
     const { user } = renderApp(path);
     const box = await screen.findByLabelText("Check its results");
@@ -477,7 +477,7 @@ describe("the dot editor, stored dot", () => {
   /// The model the local endpoint lists.
   const local = sample.models.filter((m) => m.hint === "")[0];
 
-  it("drops a Claude model when the dot is switched to a local engine, and wants one", async () => {
+  it("drops a Claude model when the sol is switched to a local engine, and wants one", async () => {
     stored();
     const { user } = renderApp(path);
     expect(await screen.findByLabelText("Model")).toHaveValue("sonnet");
@@ -544,7 +544,7 @@ describe("the dot editor, stored dot", () => {
     );
   });
 
-  it("keeps the Library items a dot uses when it is switched to the local engine", async () => {
+  it("keeps the Library items a sol uses when it is switched to the local engine", async () => {
     stored();
     const { user } = renderApp(path);
     await user.selectOptions(await screen.findByLabelText("Engine"), "local");
@@ -564,7 +564,7 @@ describe("the dot editor, stored dot", () => {
     expect(backend.callsTo("update_dot")[0]).toMatchObject({ spec: { uses: dot.uses } });
   });
 
-  it("shows what the dot uses in Tools and skills and saves what was changed there", async () => {
+  it("shows what the sol uses in Tools and skills and saves what was changed there", async () => {
     stored();
     backend.on("library_list", () => sample.library);
     const { user } = renderApp(path);
@@ -581,19 +581,19 @@ describe("the dot editor, stored dot", () => {
     });
   });
 
-  it("deletes the dot only after a confirmation", async () => {
+  it("deletes the sol only after a confirmation", async () => {
     stored();
     backend.on("delete_dot", () => null);
     const { user, router } = renderApp(path);
     await user.click(await screen.findByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("alertdialog", { name: `Delete ${dot.name}?` });
     // Its memories go with it (dot memory spec section 6).
-    expect(dialog).toHaveTextContent("The dot, its runs, their transcripts and its memories are deleted.");
+    expect(dialog).toHaveTextContent("The sol, its runs, their transcripts and its memories are deleted.");
     await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     expect(backend.callsTo("delete_dot")).toEqual([]);
 
     await user.click(screen.getByRole("button", { name: "Delete" }));
-    await user.click(await screen.findByRole("button", { name: "Delete the dot" }));
+    await user.click(await screen.findByRole("button", { name: "Delete the sol" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
     expect(backend.callsTo("delete_dot")).toEqual([{ id: dot.id }]);
   });
@@ -608,7 +608,7 @@ describe("the dot editor, stored dot", () => {
     const url = `http://127.0.0.1:47321/dots/${dot.id}/trigger`;
     await waitFor(() => expect(screen.getByLabelText("Webhook URL")).toHaveValue(url));
     // The token is kept as a hash: it is not shown again.
-    expect(screen.getByText(/This dot has a token\. It was shown once/)).toBeVisible();
+    expect(screen.getByText(/This sol has a token\. It was shown once/)).toBeVisible();
     expect(screen.queryByLabelText("Token")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Copy the webhook URL" }));
@@ -623,7 +623,7 @@ describe("the dot editor, stored dot", () => {
     expect(backend.callsTo("regenerate_webhook_token")).toEqual([{ id: dot.id }]);
   });
 
-  it("makes a dot's first token without asking", async () => {
+  it("makes a sol's first token without asking", async () => {
     const held = stored();
     held.dot = { ...held.dot, has_webhook_token: false };
     backend.on("regenerate_webhook_token", () => {
@@ -647,7 +647,7 @@ describe("the dot editor, stored dot", () => {
     await user.click(await screen.findByRole("button", { name: "Make a new token" }));
   }
 
-  it("keeps unsaved edits when the dot is loaded again", async () => {
+  it("keeps unsaved edits when the sol is loaded again", async () => {
     const held = stored();
     // The copy loaded after the new token differs from the form in more than the token.
     backend.on("regenerate_webhook_token", () => {
@@ -665,7 +665,7 @@ describe("the dot editor, stored dot", () => {
     expect(screen.getByLabelText("Name")).toHaveValue(dot.name);
   });
 
-  it("keeps the editor and its unsaved edits when loading the dot again fails", async () => {
+  it("keeps the editor and its unsaved edits when loading the sol again fails", async () => {
     const held = stored();
     backend.on("regenerate_webhook_token", () => {
       held.dot = { ...held.dot, has_webhook_token: true };
@@ -683,7 +683,7 @@ describe("the dot editor, stored dot", () => {
     expect(screen.getByLabelText("Token")).toHaveValue("tok-new");
   });
 
-  it("fills the form from the dot as it is now, not from a copy marked stale", async () => {
+  it("fills the form from the sol as it is now, not from a copy marked stale", async () => {
     const held = stored();
     const { user, router, queryClient } = renderApp(path);
     expect(await screen.findByLabelText("Name")).toHaveValue(dot.name);
@@ -707,7 +707,7 @@ describe("the dot editor, stored dot", () => {
     expect(backend.callsTo("update_dot")).toEqual([{ id: dot.id, spec: specOf(held.dot) }]);
   });
 
-  it("takes a new name to the home's dots column", async () => {
+  it("takes a new name to the home's sols column", async () => {
     const held = stored();
     backend.on("dot_overview", () => [{ ...sample.overview, dot: held.dot }]);
     // The home is opened first, so it holds the dot under its old name.
@@ -725,7 +725,7 @@ describe("the dot editor, stored dot", () => {
     expect(await screen.findByRole("listitem", { name: "renamed" })).toBeVisible();
   });
 
-  it("drops the deleted dot's runs from the Inbox and its count", async () => {
+  it("drops the deleted sol's runs from the Inbox and its count", async () => {
     stored();
     let waiting: Inbox = {
       approvals: [],
@@ -745,7 +745,7 @@ describe("the dot editor, stored dot", () => {
     await waitFor(() => expect(inboxLink).toHaveAccessibleName("Inbox, 1 waiting"));
 
     await user.click(await screen.findByRole("button", { name: "Delete" }));
-    await user.click(await screen.findByRole("button", { name: "Delete the dot" }));
+    await user.click(await screen.findByRole("button", { name: "Delete the sol" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
     await waitFor(() => expect(inboxLink).toHaveAccessibleName("Inbox"));
     await user.click(inboxLink);
@@ -766,7 +766,7 @@ describe("the dot editor, stored dot", () => {
     expect(screen.queryByRole("button", { name: "Copy the webhook URL" })).toBeNull();
   });
 
-  it("lists the dot's runs on their tab", async () => {
+  it("lists the sol's runs on their tab", async () => {
     stored();
     const failed = {
       ...sample.run,
@@ -784,7 +784,7 @@ describe("the dot editor, stored dot", () => {
     expect(backend.callsTo("list_runs")).toEqual([{ dotId: dot.id, limit: 50 }]);
   });
 
-  it("runs the dot now and opens the run", async () => {
+  it("runs the sol now and opens the run", async () => {
     stored();
     backend.on("run_now", () => ({ ...sample.run, id: "run-new" }));
     const { user, router } = renderApp(path);
@@ -793,14 +793,14 @@ describe("the dot editor, stored dot", () => {
   });
 });
 
-describe("the dot editor, quiet limit", () => {
+describe("the sol editor, quiet limit", () => {
   async function save(user: ReturnType<typeof renderApp>["user"]) {
     backend.on("create_dot", (args) => ({ ...dot, ...(args.spec as object), id: "dot-new" }));
     backend.on("get_dot", () => ({ ...dot, id: "dot-new", name: "nightly" }));
     await user.type(await screen.findByLabelText("Name"), "nightly");
     await user.type(screen.getByLabelText("Instructions"), "Run the tests.");
     await user.type(screen.getByLabelText("Folder"), "C:/dev/app");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     await waitFor(() => expect(backend.callsTo("create_dot")).toHaveLength(1));
     return (backend.callsTo("create_dot")[0] as { spec: { quiet_limit_secs: number | null } }).spec
       .quiet_limit_secs;
@@ -846,13 +846,13 @@ describe("the dot editor, quiet limit", () => {
       await user.clear(minutes);
       if (typed) await user.type(minutes, typed);
       expect(choice).toHaveValue("minutes");
-      await user.click(screen.getByRole("button", { name: "Create dot" }));
+      await user.click(screen.getByRole("button", { name: "Create sol" }));
       expect(await screen.findAllByText(message)).not.toHaveLength(0);
     }
     expect(backend.callsTo("create_dot")).toHaveLength(0);
     await user.clear(minutes);
     await user.type(minutes, "5");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     await waitFor(() => expect(backend.callsTo("create_dot")).toHaveLength(1));
     expect(
       (backend.callsTo("create_dot")[0] as { spec: { quiet_limit_secs: number } }).spec

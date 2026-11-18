@@ -7,10 +7,14 @@ export function parseMcpTool(name: string): { server: string; tool: string } | n
   return match ? { server: match[1]!, tool: match[2]! } : null;
 }
 
+/// The server that comes with the app. Its name is in saved allow rules, so it stays.
+const BUILT_IN_SERVER = "dots";
+
 /// "salesforce › query" for `mcp__salesforce__query`. A server that comes with a plugin
 /// (`owners`: server name to plugin name) shows as its plugin. Another name stays as it is.
 export function mcpToolLabel(name: string, owners: ReadonlyMap<string, string>): string {
   const parsed = parseMcpTool(name);
   if (!parsed) return name;
-  return `${owners.get(parsed.server) ?? parsed.server} › ${parsed.tool}`;
+  const server = parsed.server === BUILT_IN_SERVER ? "Sage" : parsed.server;
+  return `${owners.get(parsed.server) ?? server} › ${parsed.tool}`;
 }

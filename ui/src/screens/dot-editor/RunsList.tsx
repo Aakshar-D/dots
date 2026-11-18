@@ -24,7 +24,7 @@ export function RunsList({ dotId }: { dotId: string }) {
   if (runs.isPending) return null;
   if (runs.isError) return <ErrorNote error={runs.error} />;
   if (runs.data.length === 0) {
-    return <p className="text-muted-foreground">This dot has not run yet.</p>;
+    return <p className="text-muted-foreground">This sol has not run yet.</p>;
   }
   return (
     <Table>

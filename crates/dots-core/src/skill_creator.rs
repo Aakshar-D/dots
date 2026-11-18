@@ -288,7 +288,7 @@ pub(crate) fn write_skill_folder(root: &Path, name: &str, text: &str) -> Result<
     let dir = root.join(name);
     if std::fs::symlink_metadata(&dir).is_ok() {
         return Err(Error::Conflict(format!(
-            "{name} already exists in Dots' skills folder ({}).",
+            "{name} already exists in Sage's skills folder ({}).",
             dir.display()
         )));
     }
@@ -315,7 +315,7 @@ pub(crate) fn write_skill_folder(root: &Path, name: &str, text: &str) -> Result<
         let _ = std::fs::remove_dir_all(&tmp);
         if std::fs::symlink_metadata(&dir).is_ok() {
             return Err(Error::Conflict(format!(
-                "{name} already exists in Dots' skills folder ({}).",
+                "{name} already exists in Sage's skills folder ({}).",
                 dir.display()
             )));
         }

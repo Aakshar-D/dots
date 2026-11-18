@@ -98,7 +98,7 @@ function QuietLimit(props: {
       error={props.error}
       hint={
         <>
-          If this dot shows no output for this long, Dots asks you; at twice this long it stops
+          If this sol shows no output for this long, Sage asks you; at twice this long it stops
           the run.
           {longer && " Longer than the time limit; the time limit will end the run first."}
         </>
@@ -181,9 +181,9 @@ function SpendingCaps(props: {
   return (
     <>
       <p className="text-xs text-muted-foreground">
-        Once the dot reaches a cap, its new runs wait until local midnight or until you raise the
+        Once the sol reaches a cap, its new runs wait until local midnight or until you raise the
         cap, and a run that goes over is stopped. Your own chats can run once anyway. Costs are
-        estimates: what the runs would cost on the API. Settings can cap all dots together.
+        estimates: what the runs would cost on the API. Settings can cap all sols together.
       </p>
       {props.dotId !== null && spend && (
         <SpendLine
@@ -239,7 +239,7 @@ export function DotForm(props: {
   const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
 
   function browse() {
-    open({ directory: true, title: "Choose the folder the dot works in" }).then((picked) => {
+    open({ directory: true, title: "Choose the folder the sol works in" }).then((picked) => {
       if (typeof picked === "string") set("workdir", picked);
     }, notifyError);
   }
@@ -272,7 +272,7 @@ export function DotForm(props: {
           label="Instructions"
           htmlFor="dot-instructions"
           error={errors.instructions}
-          hint="What the dot should do on each run. Markdown."
+          hint="What the sol should do on each run. Markdown."
         >
           <Textarea
             id="dot-instructions"
@@ -375,7 +375,7 @@ export function DotForm(props: {
           label="Folder"
           htmlFor="dot-workdir"
           error={errors.workdir}
-          hint={props.existing ? undefined : "Leave blank and Dots makes a new folder for this dot."}
+          hint={props.existing ? undefined : "Leave blank and Sage makes a new folder for this sol."}
         >
           <div className="flex gap-2">
             <Input
@@ -416,7 +416,7 @@ export function DotForm(props: {
           <Label htmlFor="dot-use-graph">Use project graph</Label>
         </div>
         <p className="-mt-2 text-xs text-muted-foreground">
-          Dots keeps a code graph of the folder. Runs get a short map of the project and a graph
+          Sage keeps a code graph of the folder. Runs get a short map of the project and a graph
           tool, so they read and search less.
         </p>
       </Section>

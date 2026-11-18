@@ -64,6 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sink,
         open_sink: Box::new(|| CpalSink::open(None).map(|s| Arc::new(s) as Arc<dyn Sink>)),
         wake,
+        wake_text: None,
         open_mic: Box::new(|| CpalMic::open(None).map(|m| Box::new(m) as Box<dyn Mic>)),
     };
 

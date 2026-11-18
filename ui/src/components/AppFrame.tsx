@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
+import { commands } from "@/api/commands";
 import { Button } from "@/components/ui/button";
 import { connectFrame, SANDBOX, type Bridge } from "@/lib/app-bridge";
 import { useResolvedTheme } from "@/lib/theme";
@@ -8,7 +9,8 @@ import { useResolvedTheme } from "@/lib/theme";
 /// page gets its bridge on its first load. A page that loads again has navigated away from what
 /// Dots served: it is cut off, and the person can load it afresh. `changes` counts the changes
 /// to the app's data; each new count tells the page (`dots.onChange`). `openRun` opens a run the
-/// app started (`dots.openRun`); without it the page's asks are refused.
+/// app started (`dots.openRun`); without it the page's asks are refused. A file the page hands
+/// over (`dots.saveFile`) goes through Dots' Save dialog, on any screen.
 export function AppFrame(props: {
   src: string;
   title: string;
@@ -59,6 +61,7 @@ export function AppFrame(props: {
         const open = latest.current.openRun;
         return open ? open(runId) : Promise.reject(new Error("this screen cannot open runs"));
       },
+      saveFile: (name, data) => commands.appSaveFile(name, data),
     });
     bridge.current.theme(latest.current.theme);
   };
@@ -68,7 +71,7 @@ export function AppFrame(props: {
         role="alert"
         className="m-4 flex flex-col items-start gap-2 rounded-md border border-needs-border bg-needs-surface p-3"
       >
-        <p>The app's screen left its page, so Dots stopped answering it.</p>
+        <p>The app's screen left its page, so Sage stopped answering it.</p>
         <Button
           size="sm"
           onClick={() => {

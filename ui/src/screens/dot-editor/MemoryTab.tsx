@@ -104,7 +104,7 @@ function Byline({ memory }: { memory: Memory }) {
   }
   return (
     <span className="text-xs text-muted-foreground">
-      by the dot · from run{" "}
+      by the sol · from run{" "}
       <Link to={`/runs/${memory.run_id}`} className="text-foreground hover:underline">
         {localDateTime(memory.created_at)}
       </Link>
@@ -221,7 +221,7 @@ export function MemoryTab({ dotId }: { dotId: string }) {
       )}
       {memories.length === 0 ? (
         <EmptyState icon={Brain}>
-          Nothing remembered yet. The dot saves what it learns here; you can add notes too.
+          Nothing remembered yet. The sol saves what it learns here; you can add notes too.
         </EmptyState>
       ) : shown.length === 0 ? (
         <p className="text-muted-foreground">No memory has those words.</p>

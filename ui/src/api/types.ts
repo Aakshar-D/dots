@@ -1175,6 +1175,7 @@ export const Settings = z.strictObject({
   voice_wake_phrase: z.boolean(),
   voice_interrupt_by_talking: z.boolean(),
   voice_tone: z.boolean(),
+  open_dot_commands: z.boolean(),
   // Device ids; null is the system's default.
   voice_mic: nullable(z.string()),
   voice_speaker: nullable(z.string()),
@@ -3233,6 +3234,7 @@ export const Deed = z.discriminatedUnion("kind", [
     dot_name: z.string(),
     text: z.string(),
   }),
+  z.strictObject({ kind: z.literal("command"), command: z.string(), why: z.string() }),
   z.strictObject({
     kind: z.literal("send"),
     dot_id: z.string(),
@@ -3249,6 +3251,11 @@ export const OpenTarget = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("settings") }),
   z.strictObject({ kind: z.literal("usage") }),
   z.strictObject({ kind: z.literal("home") }),
+  z.strictObject({ kind: z.literal("connectors") }),
+  z.strictObject({ kind: z.literal("apps") }),
+  z.strictObject({ kind: z.literal("library") }),
+  z.strictObject({ kind: z.literal("teams") }),
+  z.strictObject({ kind: z.literal("intents") }),
 ]);
 // What Open Dot shows beside its words.
 export const OpenDotCard = z.discriminatedUnion("kind", [
@@ -3275,6 +3282,8 @@ export const VoiceEvent = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("hearing"), text: z.string() }),
   z.strictObject({ kind: z.literal("heard"), text: z.string() }),
   z.strictObject({ kind: z.literal("saying"), text: z.string() }),
+  // What Open Sage is doing now, in a few words: shown, never said.
+  z.strictObject({ kind: z.literal("step"), text: z.string() }),
   // `seq` names the question (1, 2, 3, ... per app run, far below 2^53): a pick sends it back.
   z.strictObject({
     kind: z.literal("ask"),
@@ -3286,6 +3295,12 @@ export const VoiceEvent = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("open"), target: OpenTarget }),
   z.strictObject({ kind: z.literal("cleared") }),
   z.strictObject({ kind: z.literal("woke") }),
+  // A voice setup is recording this take: the person says "Hey Sage" now.
+  z.strictObject({
+    kind: z.literal("setting_up"),
+    take: z.number().int(),
+    of: z.number().int(),
+  }),
   z.strictObject({ kind: z.literal("trouble"), message: z.string() }),
   z.strictObject({
     kind: z.literal("download"),
@@ -3294,6 +3309,18 @@ export const VoiceEvent = z.discriminatedUnion("kind", [
   }),
   z.strictObject({ kind: z.literal("status"), status: VoiceStatus }),
 ]);
+// What Open Sage has learned about the person (dots-core open_dot/memory.rs).
+export const VoiceMemory = z.strictObject({
+  learning: z.boolean(),
+  notes: z.array(z.string()),
+});
+// What a voice setup found (apps/dots-app voice/events.rs).
+export const VoiceSetup = z.strictObject({
+  takes: z.number().int(),
+  heard: z.number().int(),
+  faint: z.boolean(),
+  message: z.string(),
+});
 export const VoiceDevice = z.strictObject({
   id: z.string(),
   name: z.string(),
@@ -3319,4 +3346,6 @@ export type VoiceStatus = z.infer<typeof VoiceStatus>;
 export type VoiceEvent = z.infer<typeof VoiceEvent>;
 export type VoiceDevice = z.infer<typeof VoiceDevice>;
 export type VoiceDevices = z.infer<typeof VoiceDevices>;
+export type VoiceSetup = z.infer<typeof VoiceSetup>;
+export type VoiceMemory = z.infer<typeof VoiceMemory>;
 export type View = z.infer<typeof View>;

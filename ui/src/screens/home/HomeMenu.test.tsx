@@ -27,15 +27,15 @@ function oneDot() {
   return held;
 }
 
-describe("the dot's menu", () => {
-  it("opens from the dot's name with Edit, Memory…, Run now and Enabled", async () => {
+describe("the sol's menu", () => {
+  it("opens from the sol's name with Edit, Memory…, Run now and Enabled", async () => {
     home([]);
     const { user } = renderApp(`/home/${dot.id}`);
     const name = await screen.findByRole("button", { name: dot.name });
     // The name is the header's heading, and the menu's only way in: there is no ⚙.
     expect(screen.getByRole("heading", { level: 1, name: dot.name })).toContainElement(name);
-    expect(name).toHaveAttribute("title", "Dot settings");
-    expect(screen.queryByRole("button", { name: "Dot settings" })).toBeNull();
+    expect(name).toHaveAttribute("title", "Sol settings");
+    expect(screen.queryByRole("button", { name: "Sol settings" })).toBeNull();
     await user.click(name);
     const menu = await screen.findByRole("menu");
     const items = [...menu.querySelectorAll('[role="menuitem"], [role="menuitemcheckbox"]')];
@@ -58,7 +58,7 @@ describe("the dot's menu", () => {
     ).toBeVisible();
   });
 
-  it("opens the dot's editor", async () => {
+  it("opens the sol's editor", async () => {
     home([]);
     backend.on("get_dot", () => dot);
     const { user, router } = renderApp(`/home/${dot.id}`);
@@ -67,7 +67,7 @@ describe("the dot's menu", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/dots/${dot.id}`));
   });
 
-  it("runs the dot now, and the run shows up in the conversation", async () => {
+  it("runs the sol now, and the run shows up in the conversation", async () => {
     const runs = home([]);
     backend.on("run_now", () => {
       const run = scheduled("manual", "12:00", {
@@ -90,15 +90,15 @@ describe("the dot's menu", () => {
   it("shows why a run could not start", async () => {
     home([]);
     backend.on("run_now", () => {
-      throw { kind: "conflict", message: "the dot is disabled" };
+      throw { kind: "conflict", message: "the sol is disabled" };
     });
     const { user } = renderApp(`/home/${dot.id}`);
     const menu = await openMenu(user);
     await user.click(within(menu).getByRole("menuitem", { name: "Run now" }));
-    expect(await screen.findByText("the dot is disabled")).toBeVisible();
+    expect(await screen.findByText("the sol is disabled")).toBeVisible();
   });
 
-  it("turns the dot off and shows the stored state", async () => {
+  it("turns the sol off and shows the stored state", async () => {
     const held = oneDot();
     backend.on("set_dot_enabled", (args) => {
       held.dot = { ...held.dot, enabled: args.enabled as boolean };
@@ -117,7 +117,7 @@ describe("the dot's menu", () => {
     expect(within(menu).getByRole("menuitemcheckbox", { name: "Enabled" })).not.toBeChecked();
   });
 
-  it("hands the dot it switched off to the editor, which then saves it switched off", async () => {
+  it("hands the sol it switched off to the editor, which then saves it switched off", async () => {
     const held = oneDot();
     backend.on("set_dot_enabled", (args) => {
       held.dot = { ...held.dot, enabled: args.enabled as boolean };
@@ -142,7 +142,7 @@ describe("the dot's menu", () => {
     });
   });
 
-  it("makes the editor load the dot again after a switch whose answer was lost", async () => {
+  it("makes the editor load the sol again after a switch whose answer was lost", async () => {
     const held = oneDot();
     // The dot is switched off, but the answer is not one the UI can read.
     backend.on("set_dot_enabled", (args) => {
@@ -173,7 +173,7 @@ describe("the dot's menu", () => {
     // The command is on its way to the core, which still holds the enabled dot: a copy loaded
     // now would be the old one, so the editor waits for the command.
     await act(() => router.navigate(`/dots/${dot.id}`));
-    await screen.findByRole("heading", { name: "Dot" });
+    await screen.findByRole("heading", { name: "Sol" });
     await act(() => new Promise<void>((resolve) => setTimeout(resolve, 20)));
     expect(backend.callsTo("get_dot")).toEqual([]);
     expect(screen.queryByLabelText("Enabled")).toBeNull();
@@ -183,7 +183,7 @@ describe("the dot's menu", () => {
     expect(await screen.findByLabelText("Enabled")).not.toBeChecked();
   });
 
-  it("loads the dot for an editor opened during a switch that then fails", async () => {
+  it("loads the sol for an editor opened during a switch that then fails", async () => {
     oneDot();
     const answer = later<Dot>();
     backend.on("set_dot_enabled", () => answer.answer);
@@ -192,14 +192,14 @@ describe("the dot's menu", () => {
     await user.click(within(menu).getByRole("menuitemcheckbox", { name: "Enabled" }));
     await waitFor(() => expect(backend.callsTo("set_dot_enabled")).toHaveLength(1));
     await act(() => router.navigate(`/dots/${dot.id}`));
-    await screen.findByRole("heading", { name: "Dot" });
+    await screen.findByRole("heading", { name: "Sol" });
 
     await act(async () => answer.fail({ kind: "internal", message: "database is locked" }));
     expect(await screen.findByLabelText("Enabled")).toBeChecked();
     expect(screen.getByText("database is locked")).toBeVisible();
   });
 
-  it("shows today's counts, and fetches them again when a run of the dot changes", async () => {
+  it("shows today's counts, and fetches them again when a run of the sol changes", async () => {
     home([]);
     let counts = { sent: 5, delivered: 4, not_delivered: 1 };
     backend.on("delivery_today", () => counts);
@@ -213,7 +213,7 @@ describe("the dot's menu", () => {
     expect(await within(menu).findByText("Today: 6 sent · 5 delivered · 1 not delivered")).toBeVisible();
   });
 
-  it("counts the messages scheduled to the dot, and says nothing without one", async () => {
+  it("counts the messages scheduled to the sol, and says nothing without one", async () => {
     home([]);
     backend.on("delivery_today", () => ({ sent: 0, delivered: 0, not_delivered: 0 }));
     let rows = [sample.scheduledMessage, sample.scheduledFailed];

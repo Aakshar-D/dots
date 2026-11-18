@@ -120,7 +120,8 @@ impl Store {
     /// Inbox on its own), and returns how many went. A mark made at or after `made_before` is
     /// newer than the Inbox `keep` was read from, so its item may simply be missing from it.
     pub async fn prune_marks(&self, keep: &HashSet<InboxKey>, made_before: &str) -> Result<usize> {
-        let mut tx = self.pool.begin().await?;
+        // It reads before it writes, so it takes the write lock first (see `mirror_workspaces`).
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let rows = sqlx::query("SELECT kind, item_id FROM inbox_marks WHERE marked_at < ?")
             .bind(made_before)
             .fetch_all(&mut *tx)

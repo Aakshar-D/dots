@@ -145,7 +145,7 @@ describe("the always-allowed list", () => {
   };
   const list = () => screen.getByRole("list", { name: "Always allowed" });
 
-  it("shows the allow rules in words, without Dots' own tools", () => {
+  it("shows the allow rules in words, without Sage's own tools", () => {
     setup(ruled);
     const items = within(list()).getAllByRole("listitem");
     expect(items.map((item) => item.textContent)).toEqual([
@@ -236,9 +236,9 @@ describe("the company's Claude Code policy", () => {
     backend.on("managed_policy_check", () => ({ managed, conflicts: [conflict] }));
     setup();
     const note = await screen.findByRole("note");
-    expect(note).toHaveTextContent("refuses these for every dot");
+    expect(note).toHaveTextContent("refuses these for every sol");
     expect(note).toHaveTextContent("WebFetch");
-    expect(note).toHaveTextContent("Dots' own approval check");
+    expect(note).toHaveTextContent("Sage's own approval check");
     expect(note).toHaveTextContent(managed.path);
   });
 
@@ -259,7 +259,7 @@ describe("the company's Claude Code policy", () => {
     expect(screen.queryByRole("note")).toBeNull();
   });
 
-  it("is not asked about a dot that does not run on the Claude CLI", () => {
+  it("is not asked about a sol that does not run on the Claude CLI", () => {
     function Host() {
       const [policy, setPolicy] = useState(sandboxed);
       return <PolicyEditor policy={policy} onChange={setPolicy} engine="local" />;

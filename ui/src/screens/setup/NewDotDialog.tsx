@@ -34,13 +34,13 @@ export function NewDotDialog({ onClose }: { onClose: () => void }) {
           showCloseButton={!applying}
         >
           <DialogHeader>
-            <DialogTitle>New dot</DialogTitle>
+            <DialogTitle>New sol</DialogTitle>
             <DialogDescription>
-              Describe the task. Dots proposes the dot, and you check it before it is made.
+              Describe the task. Sage proposes the sol, and you check it before it is made.
             </DialogDescription>
           </DialogHeader>
           <SetupFlow
-            title="What should the dot do?"
+            title="What should the sol do?"
             onDone={onClose}
             onProposal={onProposal}
             onApplying={onApplying}

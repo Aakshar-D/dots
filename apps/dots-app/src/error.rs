@@ -111,9 +111,9 @@ mod tests {
                 "bad cron",
             ),
             (
-                Error::NotAllowed("Acme: a Viewer can't run dots. Ask an Admin or Owner.".into()),
+                Error::NotAllowed("Acme: a Viewer can't run sols. Ask an Admin or Owner.".into()),
                 CmdErrorKind::NotAllowed,
-                "Acme: a Viewer can't run dots. Ask an Admin or Owner.",
+                "Acme: a Viewer can't run sols. Ask an Admin or Owner.",
             ),
             (
                 Error::Conflict("busy".into()),

@@ -404,7 +404,7 @@ impl Scheduler {
                         SlotStart::Busy(skip) => {
                             tracing::info!(
                                 dot = %dot.spec.name, slot = %due, run = ?skip.run_id,
-                                "slot skipped: the dot is busy"
+                                "slot skipped: the sol is busy"
                             );
                             let _ = self.bus.send(RuntimeEvent::ScheduleSkipped {
                                 dot_id: dot.id.clone(),

@@ -75,7 +75,7 @@ export function ImportAgentsDialog({ onClose }: { onClose: () => void }) {
       // read again, and importing it twice would make a second dot.
       setPicked((now) => ({ ...now, ...Object.fromEntries(chosen.map((path) => [path, false])) }));
       const made = done.created.length;
-      if (made > 0) toast.success(made === 1 ? "1 dot made" : `${made} dots made`);
+      if (made > 0) toast.success(made === 1 ? "1 sol made" : `${made} sols made`);
       invalidateDots(qc);
       await qc.invalidateQueries({ queryKey: keys.claudeAgents });
     } catch (e) {
@@ -90,7 +90,7 @@ export function ImportAgentsDialog({ onClose }: { onClose: () => void }) {
         <DialogHeader>
           <DialogTitle>Import from Claude Code</DialogTitle>
           <DialogDescription>
-            Each agent you pick becomes a dot with its prompt, model and tools. Risky tools ask
+            Each agent you pick becomes a sol with its prompt, model and tools. Risky tools ask
             before each use.
           </DialogDescription>
         </DialogHeader>
@@ -99,7 +99,7 @@ export function ImportAgentsDialog({ onClose }: { onClose: () => void }) {
           {scan.isError && <ErrorNote error={scan.error} />}
           {scan.isSuccess && agents.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              No Claude Code agents were found in your agents folder, your dots' projects or
+              No Claude Code agents were found in your agents folder, your sols' projects or
               your installed plugins.
             </p>
           )}
@@ -123,7 +123,7 @@ export function ImportAgentsDialog({ onClose }: { onClose: () => void }) {
                     <span className="flex items-center gap-2">
                       <span className="font-medium">{agent.name}</span>
                       {agent.already_imported && (
-                        <span className="text-xs text-muted-foreground">Already a dot</span>
+                        <span className="text-xs text-muted-foreground">Already a sol</span>
                       )}
                     </span>
                     {agent.error !== null ? (

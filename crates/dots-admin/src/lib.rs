@@ -66,20 +66,20 @@ pub struct Io<'a> {
 }
 
 const USAGE: &str = "\
-dots-admin: the org admin's key, policy and join code helper for Dots.
+dots-admin: the org admin's key, policy and join code helper for Sage.
 
 Commands:
   dots-admin keygen --out <dir> [--no-password]
       Makes the policy signing key pair, <dir>/policy.key and <dir>/policy.pub.
   dots-admin policy new --org-id <id> [--roster [--admin <dots-id> ...]] [--out <file>]
       Writes a policy with every field at its default. With --roster it is a v2 policy that
-      requires a signed member list; each --admin (the owner's Dots ID, say) may sign it.
+      requires a signed member list; each --admin (the owner's Sage ID, say) may sign it.
   dots-admin policy check <policy.json>
-      Checks a policy as Dots does.
+      Checks a policy as Sage does.
   dots-admin policy sign <policy.json> --key <policy.key> [--out <file>]
       Sets issued_at to now and writes the signed text, to store as DOTS_POLICY.
   dots-admin policy verify <signed> --pub <policy.pub> [--org-id <id>]
-      Shows what a Dots client would accept.
+      Shows what a Sage client would accept.
   dots-admin policy admins add|remove <policy.json> <dots-id>
       Edits the policy's admins, the keys that may sign the member list. Sign it afterwards.
   dots-admin roster new --org-id <id> --owner-name <name> --owner-email <email>
@@ -108,17 +108,17 @@ Commands:
       list option replaces that list, --no-paths, --no-git and --no-commands empty one, --off
       removes them. A bare folder (deploy) is stored as deploy/**. Git actions: push_main, force_push,
       delete_branch, tags, merge_pr, release. Dots 0.4.0 and older can't read a list with
-      guardrails: update every Dots first. Sign the list afterwards.
+      guardrails: update every Sage first. Sign the list afterwards.
   dots-admin roster add-request <roster.json> <request code> --role <owner|admin|member|viewer>
       Adds the sender of a request code (see 'request inspect'); an email already listed gets
       the key as another PC. Sign the list afterwards.
   dots-admin roster check <roster.json> --org-id <id>
-      Checks a member list as Dots does.
+      Checks a member list as Sage does.
   dots-admin roster sign <roster.json> --key <policy.key> [--out <file>]
       Raises seq by one, sets issued_at to now and writes the signed text, to store as
       DOTS_ROSTER.
   dots-admin roster verify <signed> --pub <policy.pub> [--admin <dots-id> ...] --org-id <id>
-      Shows what a Dots client would accept.
+      Shows what a Sage client would accept.
   dots-admin request inspect <request code>
       Shows who a request code is from, after checking its signature.
   dots-admin join-code --org-id <id> --name <name> --source <openbao|infisical|sops>

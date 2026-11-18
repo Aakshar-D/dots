@@ -26,9 +26,9 @@ const Fields = z.object({
       /^(?! )(?!.*  )(?!.* $)[A-Za-z0-9 ._-]{1,64}$/,
       "Use 1 to 64 letters, digits, spaces, '-', '_' or '.'.",
     ),
-  instructions: filled("Say what the dot should do."),
+  instructions: filled("Say what the sol should do."),
   model: filled("Name the model to use."),
-  workdir: filled("Choose the folder the dot works in."),
+  workdir: filled("Choose the folder the sol works in."),
   max_turns: whole(1, Number.MAX_SAFE_INTEGER, "Max turns must be a whole number, 1 or more."),
   timeout_secs: whole(
     1,
@@ -87,7 +87,7 @@ export function specErrors(spec: DotSpec, isNew = false): SpecErrors {
     if (url.startsWith("https://")) {
       errors.endpoint_url = "Use http://. https is not supported for local endpoints.";
     } else if (!/^http:\/\/[^\s/]+/.test(url)) {
-      errors.endpoint_url = "A local dot needs its endpoint, starting with http://.";
+      errors.endpoint_url = "A local sol needs its endpoint, starting with http://.";
     }
   }
   if (spec.policy.rules.some((r) => r.tool.trim() === "")) {

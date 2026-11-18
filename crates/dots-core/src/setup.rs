@@ -20,12 +20,12 @@ use crate::skill_creator::{unwrap_fence, DEFAULT_MODEL, MAX_REQUEST_CHARS};
 use crate::{Error, Result};
 
 /// The system prompt of the setup agent (spec §6, §6.1, §6.3).
-pub const SETUP_INSTRUCTIONS: &str = r#"You set up Dots dots. A person describes a task they want done, once or again and again, and you turn it into exactly one dot. Ask only what you truly cannot guess, in at most two rounds of questions.
+pub const SETUP_INSTRUCTIONS: &str = r#"You set up Sage sols. A person describes a task they want done, once or again and again, and you turn it into exactly one sol. Ask only what you truly cannot guess, in at most two rounds of questions.
 
-What a dot is: a Claude Code agent with instructions it follows on every run, a folder it works in, an optional schedule, permissions, and items from the person's Library (skills, MCP servers, plugins, context collections) it may use.
+What a sol is: a Claude Code agent with instructions it follows on every run, a folder it works in, an optional schedule, permissions, and items from the person's Library (skills, MCP servers, plugins, context collections) it may use.
 
 How to write the instructions:
-- Write to the dot, in the second person ("You read ...").
+- Write to the sol, in the second person ("You read ...").
 - Use numbered steps where there are steps.
 - Say what to produce and where to put it, what to tell the person at the end, and what never to do.
 - Plain Markdown, at most 4000 characters.
@@ -36,7 +36,7 @@ To ask questions, answer:
 { "questions": ["Which folder should it read?", "What time each day?"] }
 with 1 to 3 questions, each at most 300 characters.
 
-To propose the dot, answer:
+To propose the sol, answer:
 {
   "proposal": {
     "name": "Downloads digest",
@@ -50,33 +50,33 @@ To propose the dot, answer:
     "notes": "I assumed weekdays at 9:00. Change the schedule if you want weekends too."
   }
 }
-- "name": 1 to 64 characters: letters, digits, spaces, '-', '_' or '.'. Pick one that none of the person's existing dots has.
-- "folder": an existing folder the person named, written as a full path, or null and Dots makes a new folder for the dot.
-- "schedule": null when the dot runs only when the person talks to it, or one of these:
+- "name": 1 to 64 characters: letters, digits, spaces, '-', '_' or '.'. Pick one that none of the person's existing sols has.
+- "folder": an existing folder the person named, written as a full path, or null and Sage makes a new folder for the sol.
+- "schedule": null when the sol runs only when the person talks to it, or one of these:
   { "rule": { "kind": "once", "at": "2026-11-04T09:00" } }   once, at a local date and time
   { "rule": { "kind": "daily", "time": "09:00" } }   every day at a local time
   { "rule": { "kind": "weekly", "days": ["mon", "fri"], "time": "09:00" } }   on these weekdays ("mon" to "sun")
   { "rule": { "kind": "every", "minutes": 30 } }   every 1 to 10080 minutes
   { "rule": { "kind": "cron", "expr": "0 0 9 * * MON-FRI" } }   cron with seconds first; only when nothing above fits
   Times are local, HH:MM in 24 hours. A schedule other than "once" may also stop: add "until": { "count": 10 } or "until": { "date": "2026-12-31T23:59" }.
-- "preset": what the dot may do. Pick the least power that does the job:
+- "preset": what the sol may do. Pick the least power that does the job:
   "read-only": May read files. Never writes, runs commands, reads websites or uses MCP servers.
   "sandboxed": May edit files in its folder and run a few safe git commands. Asks before anything else.
   "trusted": May run commands without asking.
   Never pick "trusted" unless the person asked for it in their own words. A task that saves files needs at least "sandboxed".
-  A "read-only" dot can only use Read, Glob and Grep. It cannot run commands, so it cannot see file dates or sizes, though Glob lists files newest first.
+  A "read-only" sol can only use Read, Glob and Grep. It cannot run commands, so it cannot see file dates or sizes, though Glob lists files newest first.
   Write instructions that use only what the chosen preset allows.
-  When the task needs file dates, sizes or commands, pick "sandboxed" and say in "notes" that each command will ask for approval; or, if you keep a smaller preset, say in "notes" what the dot cannot do.
-- "extras": permissions added on top of the preset so the dot can run without stopping to ask. Only these two exist:
+  When the task needs file dates, sizes or commands, pick "sandboxed" and say in "notes" that each command will ask for approval; or, if you keep a smaller preset, say in "notes" what the sol cannot do.
+- "extras": permissions added on top of the preset so the sol can run without stopping to ask. Only these two exist:
   "web": reads websites and searches the web without asking. Add it only when the task reads websites.
   "mcp:<server>": uses that MCP server without asking, for example "mcp:gmail". Add it only for a server you also put in "uses" and the task needs.
 - "uses": names from the person's Library only. Leave out any group you do not need.
-- "first_message": what Dots sends the dot as its first chat message, right after it is made.
+- "first_message": what Sage sends the sol as its first chat message, right after it is made.
 - "notes": a short line or two for the person: what you assumed and what they may want to change. May be empty.
 
 Guessing rules:
 - Prefer a sensible default, and say so in "notes", over asking.
-- Ask only about things that change what the dot does: which folder or website, what time, what to do with the results.
+- Ask only about things that change what the sol does: which folder or website, what time, what to do with the results.
 - Never ask about the model, limits or permissions.
 - "My Downloads folder" and the like are folders under the person's home folder.
 
@@ -97,7 +97,7 @@ const MAX_QUESTION_CHARS: usize = 300;
 pub const MAX_INSTRUCTIONS_CHARS: usize = 4000;
 const MAX_NAME_CHARS: usize = 64;
 /// The name a proposal gets when nothing of its own name is left.
-const FALLBACK_NAME: &str = "New dot";
+const FALLBACK_NAME: &str = "New sol";
 
 /// One round of the agent's questions and the person's answers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -234,7 +234,7 @@ pub fn setup_prompt(ctx: &SetupContext, req: &SetupRequest) -> Result<String> {
     ));
     out.push_str(&format!("The person's home folder is {}.\n", ctx.home));
     out.push_str(&format!(
-        "A dot without a folder gets a new one under {}.\n",
+        "A sol without a folder gets a new one under {}.\n",
         ctx.new_dot_root
     ));
 
@@ -271,7 +271,7 @@ pub fn setup_prompt(ctx: &SetupContext, req: &SetupRequest) -> Result<String> {
     }
 
     if !ctx.dot_names.is_empty() {
-        out.push_str("\nThe person's existing dots (a new name must differ from these):\n");
+        out.push_str("\nThe person's existing sols (a new name must differ from these):\n");
         for name in &ctx.dot_names {
             out.push_str(&format!("- {name}\n"));
         }
@@ -411,10 +411,10 @@ fn read_proposal(mut p: Map<String, Value>, notes: &mut Vec<String>) -> Result<S
 }
 
 const CUSTOM_NOTE: &str =
-    "Set what it may do to sandboxed: the setup agent picked no preset Dots knows.";
+    "Set what it may do to sandboxed: the setup agent picked no preset Sage knows.";
 
 const SCHEDULE_NOTE: &str =
-    "Left out the schedule: Dots could not use it. It runs only when you talk to it; set a schedule in the editor.";
+    "Left out the schedule: Sage could not use it. It runs only when you talk to it; set a schedule in the editor.";
 
 fn add_notes(notes: &mut String, added: Vec<String>) {
     for line in added {
@@ -439,7 +439,7 @@ pub fn check_proposal(
     let mut notes = Vec::new();
 
     if p.instructions.trim().is_empty() {
-        return invalid("Write what the dot should do.");
+        return invalid("Write what the sol should do.");
     }
 
     // The preset: `custom` is a person's own rules in the editor; a proposal is a preset plus
@@ -453,7 +453,7 @@ pub fn check_proposal(
     let repaired = repair_name(&p.name);
     if repaired != p.name {
         notes.push(format!(
-            "Named it {repaired:?}: a dot name uses only letters, digits, spaces, '-', '_' or '.'."
+            "Named it {repaired:?}: a sol name uses only letters, digits, spaces, '-', '_' or '.'."
         ));
         p.name = repaired;
     }
@@ -461,7 +461,7 @@ pub fn check_proposal(
     if clashes(&p.name) {
         if !rename_on_clash {
             return Err(Error::Conflict(format!(
-                "A dot named {} already exists",
+                "A sol named {} already exists",
                 p.name
             )));
         }
@@ -474,7 +474,7 @@ pub fn check_proposal(
             .find(|name| !clashes(name))
             .expect("some number is free");
         notes.push(format!(
-            "Named it {renamed:?}: you already have a dot named {:?}.",
+            "Named it {renamed:?}: you already have a sol named {:?}.",
             p.name
         ));
         p.name = renamed;
@@ -503,13 +503,13 @@ pub fn check_proposal(
                 path.is_absolute() && !folder.starts_with("\\\\") && !folder.starts_with("//");
             if !local {
                 notes.push(format!(
-                    "{folder} is not a full path to a folder on this PC, so Dots makes a new folder for this dot."
+                    "{folder} is not a full path to a folder on this PC, so Sage makes a new folder for this sol."
                 ));
             } else if path.is_dir() {
                 p.folder = Some(folder);
             } else {
                 notes.push(format!(
-                    "{folder} is not a folder on this PC, so Dots makes a new folder for this dot."
+                    "{folder} is not a folder on this PC, so Sage makes a new folder for this sol."
                 ));
             }
         }
@@ -572,7 +572,7 @@ pub fn check_proposal(
             }
         } else {
             notes.push(format!(
-                "Left out the extra {extra}: Dots does not know it."
+                "Left out the extra {extra}: Sage does not know it."
             ));
             false
         };
@@ -713,10 +713,10 @@ impl SetupDrafts {
             Err(OnceFailure::NoCli) => Err(Error::Other(NO_CLI.into())),
             Err(OnceFailure::Cancelled) => Err(Error::Other("The setup was cancelled.".into())),
             Err(OnceFailure::TimedOut) => Err(Error::Other(
-                "Claude took too long to set up the dot.".into(),
+                "Claude took too long to set up the sol.".into(),
             )),
             Err(OnceFailure::Failed(e)) => Err(Error::Other(format!(
-                "Claude could not set up the dot: {e}"
+                "Claude could not set up the sol: {e}"
             ))),
         };
         (answer, usage)

@@ -402,7 +402,7 @@ fn a_start_breaking_a_rule_throws() {
     };
     assert_eq!(
         go(json!({"dot": "d9", "message": "m", "tag": "t"}), 20),
-        json!("no dot d9 uses this app")
+        json!("no sol d9 uses this app")
     );
     assert_eq!(
         go(json!({"dot": "d1", "message": " ", "tag": "t"}), 20),
@@ -414,7 +414,7 @@ fn a_start_breaking_a_rule_throws() {
     );
     assert_eq!(
         go(json!({"dot": "d1", "message": "m", "tag": "t"}), 0),
-        json!("this app has started as many dots as the hour allows; try again later")
+        json!("this app has started as many sols as the hour allows; try again later")
     );
 }
 

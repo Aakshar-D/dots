@@ -102,7 +102,7 @@ impl Peer {
             (Some("ping"), Some(id)) => Some(json!({ "jsonrpc": "2.0", "id": id, "result": {} })),
             (Some(method), Some(id)) => Some(json!({
                 "jsonrpc": "2.0", "id": id,
-                "error": { "code": -32601, "message": format!("Dots does not support {method}") }
+                "error": { "code": -32601, "message": format!("Sage does not support {method}") }
             })),
             (Some("notifications/tools/list_changed"), None) => {
                 self.list_changed.send_modify(|n| *n += 1);

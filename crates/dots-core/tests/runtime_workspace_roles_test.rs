@@ -215,7 +215,7 @@ async fn workspace_viewer_cannot_run_and_schedules_hold() {
     .await;
     t.rt.hold_runs(true).await;
 
-    let run_text = payments_viewer_cant("run dots");
+    let run_text = payments_viewer_cant("run sols");
     assert_eq!(refused(t.rt.run_now(&dot).await), run_text);
     assert_eq!(refused(t.rt.chat(&dot, "hello", None).await), run_text);
     let stored = t.rt.store().get_dot(&dot).await.unwrap();
@@ -225,7 +225,7 @@ async fn workspace_viewer_cannot_run_and_schedules_hold() {
     }
     assert_eq!(
         refused(t.rt.update_dot(&dot, t.changed(&dot).await).await),
-        payments_viewer_cant("create or change dots")
+        payments_viewer_cant("create or change sols")
     );
 
     // A scheduled run waits, held with the workspace's words.
@@ -247,7 +247,7 @@ async fn workspace_viewer_cannot_run_and_schedules_hold() {
         HoldReason::Role {
             account: ACME_NAME.into(),
             text:
-                "Acme Engineering: your role in the Payments workspace doesn't allow running dots"
+                "Acme Engineering: your role in the Payments workspace doesn't allow running sols"
                     .into(),
         }
     );
@@ -353,11 +353,11 @@ async fn account_viewer_stays_viewer_with_workspace_admin_entry() {
     t.rt.hold_runs(true).await;
     assert_eq!(
         refused(t.rt.run_now(&dot).await),
-        "Acme Engineering: a Viewer can't run dots. Ask an Admin or Owner."
+        "Acme Engineering: a Viewer can't run sols. Ask an Admin or Owner."
     );
     assert_eq!(
         refused(t.rt.update_dot(&dot, t.changed(&dot).await).await),
-        "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner."
+        "Acme Engineering: a Viewer can't create or change sols. Ask an Admin or Owner."
     );
     // And without an entry, the workspace is closed to it.
     t.become_(3, "viewer", json!({"default": "viewer"})).await;
@@ -427,7 +427,7 @@ async fn create_dot_in_a_workspace_needs_rights_there() {
     t.join().await;
     assert_eq!(
         refused(t.rt.create_dot(t.triage(), Some(ACME.into()), None).await),
-        "Acme Engineering: a Viewer in the Default workspace can't create or change dots. Ask an Admin or Owner."
+        "Acme Engineering: a Viewer in the Default workspace can't create or change sols. Ask an Admin or Owner."
     );
     // No entry in Default: it is closed.
     t.become_(2, "member", json!({"payments": "member"})).await;
@@ -460,8 +460,8 @@ async fn dot_access_names_what_the_role_refuses() {
     assert_eq!(
         t.rt.dot_access(&dot).await.unwrap(),
         DotAccess {
-            edit: Some(payments_viewer_cant("create or change dots")),
-            run: Some(payments_viewer_cant("run dots")),
+            edit: Some(payments_viewer_cant("create or change sols")),
+            run: Some(payments_viewer_cant("run sols")),
             answer: Some(payments_viewer_cant("answer approvals")),
             create_api_keys: Some(payments_viewer_cant("create API keys")),
         }

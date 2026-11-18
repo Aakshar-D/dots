@@ -376,7 +376,7 @@ async fn dots_own_server_checks_each_check_in_against_the_dots_policy() {
     let denied = call(&e, &denying_secret, "notify", json!({"text": "Hello."})).await;
     assert_eq!(denied["result"]["isError"], true, "{denied}");
     assert!(
-        text(&denied).contains("Denied by the policy of dot 'denying'"),
+        text(&denied).contains("Denied by the policy of sol 'denying'"),
         "{denied}"
     );
     assert!(e

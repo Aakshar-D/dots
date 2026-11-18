@@ -49,7 +49,7 @@ describe("a workflow started from a chat", () => {
     for (const call of calls) expect(call).toEqual({ runIds: ["current", "current2"] });
   });
 
-  it("acts on the workflow only: approving does not wake the chat's dot", async () => {
+  it("acts on the workflow only: approving does not wake the chat's sol", async () => {
     const { started, view } = topic();
     const card = within(await within(await conversation()).findByRole("article", { name: CARD }));
     await view.listening();

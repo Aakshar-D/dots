@@ -61,7 +61,7 @@ export function RailMark({ act = commands }: { act?: StageCommands } = {}) {
   const state = useVoiceLive((live) => live.state);
   const setUp = status !== undefined && !(status.enabled && status.ready);
 
-  const label = setUp ? "Set up voice" : "Talk to Dot";
+  const label = setUp ? "Set up voice" : "Talk to Sage";
   const tip = hotkey && !setUp ? `${label} (${shortcutLabel(hotkey)})` : label;
   const click = () => {
     if (status === undefined) return;
@@ -76,7 +76,7 @@ export function RailMark({ act = commands }: { act?: StageCommands } = {}) {
       type="button"
       aria-label={label}
       aria-keyshortcuts={hotkey && !setUp ? ariaShortcut(hotkey) : undefined}
-      title={micOpen ? "Dot is listening" : tip}
+      title={micOpen ? "Sage is listening" : tip}
       data-listening={micOpen || undefined}
       onClick={click}
       className={cn(

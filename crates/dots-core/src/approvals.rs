@@ -267,7 +267,7 @@ impl ApprovalHub {
             Action::Allow => Ok(PermissionOutcome::Allow { input }),
             Action::Deny => Ok(PermissionOutcome::Deny {
                 message: format!(
-                    "Denied by the policy of dot '{}': {tool} is not permitted.",
+                    "Denied by the policy of sol '{}': {tool} is not permitted.",
                     dot.spec.name
                 ),
             }),

@@ -46,7 +46,7 @@ export function DiscardConfirm(props: {
     <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Discard the proposed dot?</AlertDialogTitle>
+          <AlertDialogTitle>Discard the proposed sol?</AlertDialogTitle>
           <AlertDialogDescription>It has not been made yet.</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -69,7 +69,7 @@ export function SetupFlow(props: {
   /// Told whether Run setup is making the dot, so that a dialog stays open meanwhile.
   onApplying?: (applying: boolean) => void;
 }) {
-  const title = props.title ?? "What should your first dot do?";
+  const title = props.title ?? "What should your first sol do?";
   const qc = useQueryClient();
   const navigate = useNavigate();
   const ids = useId();
@@ -198,7 +198,7 @@ export function SetupFlow(props: {
       // send the person back to another one.
       await qc.refetchQueries({ queryKey: keys.overview });
       if (applied.run_error !== null) {
-        toast.error(`The dot was created but its first run did not start: ${applied.run_error}`);
+        toast.error(`The sol was created but its first run did not start: ${applied.run_error}`);
       }
       // What the check at Run setup changed, which the card did not show.
       if (applied.notes.trim() !== "") toast(applied.notes);
@@ -270,7 +270,7 @@ export function SetupFlow(props: {
         <div role="alert" className="flex flex-col gap-1 text-sm text-destructive">
           <p>{error ?? applyError}</p>
           {error && noCli && (
-            <p>Dots uses your Claude Code CLI. Install it and sign in, then try again.</p>
+            <p>Sage uses your Claude Code CLI. Install it and sign in, then try again.</p>
           )}
         </div>
       )}

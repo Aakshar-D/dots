@@ -20,7 +20,7 @@ use crate::store::ApiKeyRow;
 use crate::Error;
 
 /// One text for a missing, garbled, unknown or revoked key, so a caller can't probe which.
-const BAD_KEY: &str = "That API key isn't valid. Make a new one in Dots.";
+const BAD_KEY: &str = "That API key isn't valid. Make a new one in Sage.";
 /// A dot or run outside the key's workspace is answered like an unknown one.
 const NOT_FOUND: &str = "Not found.";
 
@@ -147,7 +147,7 @@ pub async fn trigger(
         Err(answer) => return answer,
     };
     if !dot.spec.enabled {
-        return error(StatusCode::CONFLICT, "dot is disabled");
+        return error(StatusCode::CONFLICT, "sol is disabled");
     }
     let body = match body {
         Ok(body) => body,

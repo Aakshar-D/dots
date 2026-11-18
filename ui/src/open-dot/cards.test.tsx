@@ -1,9 +1,10 @@
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Schedule } from "@/api/types";
 import { localDateTime } from "@/lib/format";
 
-import { scheduleWords } from "./cards";
+import { Card, scheduleWords } from "./cards";
 
 const at = (rule: Schedule["rule"], until: Schedule["until"] = null): Schedule => ({
   rule,
@@ -56,5 +57,24 @@ describe("a schedule in words", () => {
     const until = scheduleWords(at({ kind: "daily", time: "07:00" }, { date: "2031-05-06T12:00" }));
     expect(until).toBe(`Every day at 07:00, until ${localDateTime("2031-05-06T12:00")}`);
     expect(until).not.toContain("2031-05-06T12:00");
+  });
+});
+
+describe("a command to confirm", () => {
+  it("shows the command itself, what it is said to do, and that it waits for a yes", () => {
+    render(
+      <Card
+        card={{
+          kind: "confirm",
+          deed: { kind: "command", command: "Stop-Process -Name chrome", why: "This closes every Chrome window." },
+        }}
+      />,
+    );
+    expect(screen.getByText("Run this command on your computer")).toBeTruthy();
+    expect(document.querySelector("[data-command]")?.textContent).toBe("Stop-Process -Name chrome");
+    expect(screen.getByText("This closes every Chrome window.").textContent).toBe(
+      "The model says: This closes every Chrome window.",
+    );
+    expect(screen.getByText("It runs only when you say yes. Read it first.")).toBeTruthy();
   });
 });

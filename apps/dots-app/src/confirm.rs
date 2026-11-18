@@ -33,7 +33,7 @@ pub fn claude_program_to_confirm(current: Option<&str>, next: Option<&str>) -> O
 
 pub fn claude_program_message(program: &str) -> String {
     format!(
-        "Dots will run this program as the Claude CLI from the next start:\n\n{program}\n\n\
+        "Sage will run this program as the Claude CLI from the next start:\n\n{program}\n\n\
          Allow this only for a program you trust."
     )
 }
@@ -46,7 +46,7 @@ pub const EDGE_TITLE: &str = "Change the Edge program?";
 /// The question about a new Edge program: Dots starts it for every dot that uses the browser.
 pub fn edge_program_message(program: &str) -> String {
     format!(
-        "Dots will run this program as Microsoft Edge for the dots that use the browser:\n\n\
+        "Sage will run this program as Microsoft Edge for the sols that use the browser:\n\n\
          {program}\n\nAllow this only for a program you trust."
     )
 }
@@ -159,7 +159,7 @@ pub fn library_confirmation_in(
                 format!(" with env {}", keys.join(", "))
             };
             Some(format!(
-                "Dots will run: {}{place}{keys}. Run it?\n\nAllow this only for a program you trust.",
+                "Sage will run: {}{place}{keys}. Run it?\n\nAllow this only for a program you trust.",
                 command_line(command, args)
             ))
         }
@@ -176,7 +176,7 @@ pub fn library_confirmation_in(
                 }
             }
             Some(format!(
-                "Dots will send the values of {} to {}. Send them?\n\nAllow this only for a \
+                "Sage will send the values of {} to {}. Send them?\n\nAllow this only for a \
                  server you trust.",
                 variables.join(", "),
                 origin_text(url, env)
@@ -253,7 +253,7 @@ pub fn origin_question(asked: &OriginToConfirm, scope: &DotScope) -> String {
         DotScope::Org(_) => format!(" in {}", asked.scope_name),
     };
     format!(
-        "Dots will send the values of {}{whose} to {}. Send them?\n\nAllow this only for a \
+        "Sage will send the values of {}{whose} to {}. Send them?\n\nAllow this only for a \
          server you trust.",
         asked.variables.join(", "),
         shown_origin(&asked.origin)
@@ -267,7 +267,7 @@ pub fn scope_of(scope: Option<String>) -> DotScope {
 
 /// The title of the dialog for a question `library_confirmation` made.
 pub fn library_title(question: &str) -> &'static str {
-    if question.starts_with("Dots will send") {
+    if question.starts_with("Sage will send") {
         "Send these variables?"
     } else if question.starts_with("This plugin") {
         "Add this plugin?"
@@ -834,11 +834,11 @@ mod tests {
         let q = |s: Option<&LibraryConfig>, n: &LibraryConfig| library_confirmation(s, n, &[]);
         let next = stdio("npx", &["-y", "srv"], Some("C:/d"));
         let asked = q(None, &next).unwrap();
-        assert!(asked.starts_with(r#"Dots will run: "npx" "-y" "srv" in "C:/d". Run it?"#));
+        assert!(asked.starts_with(r#"Sage will run: "npx" "-y" "srv" in "C:/d". Run it?"#));
         // Without a folder the question names none.
         assert!(q(None, &stdio("srv", &[], None))
             .unwrap()
-            .starts_with(r#"Dots will run: "srv". Run it?"#));
+            .starts_with(r#"Sage will run: "srv". Run it?"#));
         // The same command line, args, folder and env: no question.
         assert_eq!(q(Some(&next), &next), None);
         // Any difference in the command, an argument or the folder asks.
@@ -887,7 +887,7 @@ mod tests {
         .unwrap();
         assert!(
             asked.starts_with(
-                r#"Dots will run: "npx" "srv" with env "NODE_OPTIONS", "PATH". Run it?"#
+                r#"Sage will run: "npx" "srv" with env "NODE_OPTIONS", "PATH". Run it?"#
             ),
             "{asked}"
         );
@@ -907,7 +907,7 @@ mod tests {
         });
         assert!(q(None, &in_dir)
             .unwrap()
-            .starts_with(r#"Dots will run: "npx" "srv" in "C:/d" with env "A". Run it?"#));
+            .starts_with(r#"Sage will run: "npx" "srv" in "C:/d" with env "A". Run it?"#));
     }
 
     #[test]
@@ -1021,14 +1021,14 @@ mod tests {
         let one = q(&stdio("node", &["a b"], None));
         let two = q(&stdio("node", &["a", "b"], None));
         assert!(
-            one.starts_with(r#"Dots will run: "node" "a b". Run it?"#),
+            one.starts_with(r#"Sage will run: "node" "a b". Run it?"#),
             "{one}"
         );
         assert_ne!(one, two);
         // A quote and a backslash are escaped; a control or direction character is spelled out.
         let odd = q(&stdio("node", &["x\" \\ \n\u{202e}"], None));
         assert!(
-            odd.starts_with(r#"Dots will run: "node" "x\" \\ \u{000A}\u{202E}". Run it?"#),
+            odd.starts_with(r#"Sage will run: "node" "x\" \\ \u{000A}\u{202E}". Run it?"#),
             "{odd}"
         );
     }
@@ -1094,7 +1094,7 @@ mod tests {
         let asked = q(None, &base).unwrap();
         assert!(
             asked.starts_with(
-                r#"Dots will send the values of GITHUB_TOKEN to "https://host.example:8443". Send them?"#
+                r#"Sage will send the values of GITHUB_TOKEN to "https://host.example:8443". Send them?"#
             ),
             "{asked}"
         );
@@ -1482,7 +1482,7 @@ mod tests {
         .unwrap_err();
         assert_eq!(err.kind, CmdErrorKind::Cancelled);
         assert_eq!(asked.len(), 1);
-        assert!(asked[0].starts_with(r#"Dots will run: "dots-no-such-mcp-server" "a". Run it?"#));
+        assert!(asked[0].starts_with(r#"Sage will run: "dots-no-such-mcp-server" "a". Run it?"#));
 
         let no = |_| std::future::ready(false);
         let yes = |_| std::future::ready(true);
@@ -1863,7 +1863,7 @@ mod tests {
         rt
     }
 
-    const ASKED: &str = "Dots will send the values of MCP_HOST, TOK to \"http://127.0.0.1:1\". \
+    const ASKED: &str = "Sage will send the values of MCP_HOST, TOK to \"http://127.0.0.1:1\". \
                          Send them?\n\nAllow this only for a server you trust.";
 
     #[tokio::test]
@@ -1992,12 +1992,12 @@ mod tests {
         };
         assert_eq!(
             origin_question(&asked, &DotScope::Org("acme-eng".into())),
-            "Dots will send the values of API_KEY, MCP_HOST in Acme Engineering to \
+            "Sage will send the values of API_KEY, MCP_HOST in Acme Engineering to \
              \"https://xn--bcher-kva.de\" (bücher.de). Send them?\n\nAllow this only for a \
              server you trust."
         );
         assert!(origin_question(&asked, &DotScope::Personal)
-            .starts_with("Dots will send the values of API_KEY, MCP_HOST to \"https://"));
+            .starts_with("Sage will send the values of API_KEY, MCP_HOST to \"https://"));
         assert_eq!(scope_of(None), DotScope::Personal);
         assert_eq!(
             scope_of(Some("acme-eng".into())),

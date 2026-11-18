@@ -52,11 +52,11 @@ fn each_permission_names_its_action() {
     assert_eq!(
         actions,
         [
-            "see this account's dots",
-            "create or change dots",
-            "run dots",
+            "see this account's sols",
+            "create or change sols",
+            "run sols",
             "answer approvals",
-            "give secrets to dots",
+            "give secrets to sols",
             "add MCP servers",
             "create API keys",
             "manage members",

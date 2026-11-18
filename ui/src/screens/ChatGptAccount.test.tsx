@@ -11,14 +11,17 @@ const signedOut = { configured: true, signing_in: false, account: null, setup_er
 const signedIn = { ...signedOut, expires_at: new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString(), account: { name: "Alex", email: "alex@example.com" } };
 
 describe("ChatGPT account in Settings", () => {
-  it("explains missing registration and does not start an unavailable login", async () => {
+  it("says sign-in is not available and offers no dead button", async () => {
     backend.on("chatgpt_account", () => ({
       ...signedOut, configured: false,
-      setup_error: "ChatGPT sign-in needs a registered OpenAI client for Dots.",
+      setup_error: "Sign in with ChatGPT is not available in this version of Sage yet.",
     }));
     renderApp("/settings/account");
-    expect(await screen.findByRole("button", { name: "Sign in with ChatGPT" })).toBeDisabled();
-    expect(await screen.findByText(/needs a registered OpenAI client/)).toBeVisible();
+    expect(
+      await screen.findByText("Sign in with ChatGPT is not available in this version of Sage yet."),
+    ).toBeVisible();
+    expect(screen.queryByRole("button", { name: "Sign in with ChatGPT" })).toBeNull();
+    expect(screen.queryByText(/Sign-in lasts until/)).toBeNull();
     expect(backend.callsTo("chatgpt_sign_in")).toEqual([]);
   });
 

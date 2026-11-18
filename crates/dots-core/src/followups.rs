@@ -40,7 +40,7 @@ pub const RETRY_DELAYS: [TimeDelta; 3] = [
 pub const TOO_SOON: &str = "A follow-up must be at least 5 minutes away.";
 pub const TOO_FAR: &str = "A follow-up must be at most 30 days away.";
 pub const TOO_MANY: &str =
-    "This dot already has 3 pending follow-ups; that is the most it may have.";
+    "This sol already has 3 pending follow-ups; that is the most it may have.";
 
 /// When a follow-up asked for at `now` is due, or the limit it breaks (section 3, in order:
 /// `MIN_AHEAD`, then `MAX_AHEAD`; `MAX_PENDING` is checked when it is stored).
@@ -265,7 +265,7 @@ impl FollowUps {
             Err(e) => Err(e),
             Ok(dot) if !dot.spec.enabled => {
                 let text = format!(
-                    "A follow-up was skipped because the dot is off. It was due {}: {}",
+                    "A follow-up was skipped because the sol is off. It was due {}: {}",
                     due_label(row),
                     row.note
                 );

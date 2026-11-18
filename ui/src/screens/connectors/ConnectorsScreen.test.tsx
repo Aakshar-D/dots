@@ -65,7 +65,7 @@ describe("the Connectors screen", () => {
     );
   });
 
-  it("shows how to get a key, opens the right page, and connects with the dots picked", async () => {
+  it("shows how to get a key, opens the right page, and connects with the sols picked", async () => {
     backend.on("list_dots", () => [personal, orgDot]);
     backend.on("connector_open_page", () => null);
     backend.on("connector_connect", () => ({ ...byId("huggingface"), state: "connected" }));
@@ -159,7 +159,7 @@ describe("the Connectors screen", () => {
       ]),
     );
 
-    const save = within(dialog).getByRole("button", { name: "Save dots" });
+    const save = within(dialog).getByRole("button", { name: "Save sols" });
     expect(save).toBeDisabled();
     await user.click(within(dialog).getByLabelText("writer"));
     await user.click(save);

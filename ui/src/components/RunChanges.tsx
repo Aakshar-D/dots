@@ -126,8 +126,8 @@ export function UndoDialog(props: {
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {redo
-              ? "Dots puts these files back as the run left them."
-              : "Dots puts these files back as they were before the run: files it made are deleted, files it deleted come back."}{" "}
+              ? "Sage puts these files back as the run left them."
+              : "Sage puts these files back as they were before the run: files it made are deleted, files it deleted come back."}{" "}
             You can {redo ? "undo" : "redo"} this afterwards.
           </DialogDescription>
         </DialogHeader>
@@ -169,7 +169,7 @@ export function UndoDialog(props: {
                 />
                 <span>
                   Also overwrite the {files(conflicts.length)} changed after the run. Without
-                  this, Dots leaves {conflicts.length === 1 ? "it" : "them"} as{" "}
+                  this, Sage leaves {conflicts.length === 1 ? "it" : "them"} as{" "}
                   {conflicts.length === 1 ? "it is" : "they are"}.
                 </span>
               </label>
@@ -242,7 +242,7 @@ export function RunChangesPanel({ run }: { run: Run }) {
     enabled: recorded && (changes.data?.files.length ?? 0) > 0,
   });
   if (isActive(run)) {
-    return <p className="text-muted-foreground">Dots lists the run's changes once it ends.</p>;
+    return <p className="text-muted-foreground">Sage lists the run's changes once it ends.</p>;
   }
   if (changes.isError) return <ErrorNote error={changes.error} />;
   const data = changes.data;
@@ -250,7 +250,7 @@ export function RunChangesPanel({ run }: { run: Run }) {
   if (data === null) {
     return (
       <p className="text-muted-foreground">
-        Dots kept no record of this run's changes: it ran before Dots kept them.
+        Sage kept no record of this run's changes: it ran before Sage kept them.
       </p>
     );
   }

@@ -18,11 +18,11 @@ describe("Settings, Profile", () => {
     expect(await within(profile).findByText(identity.fingerprint)).toBeVisible();
   });
 
-  it("copies the public key with Copy my Dots ID", async () => {
+  it("copies the public key with Copy my Sage ID", async () => {
     backend.on("identity_get", () => identity);
     const { user } = renderApp("/settings/account");
     const profile = await section();
-    await user.click(await within(profile).findByRole("button", { name: "Copy my Dots ID" }));
+    await user.click(await within(profile).findByRole("button", { name: "Copy my Sage ID" }));
     expect(await navigator.clipboard.readText()).toBe(identity.public_key);
   });
 

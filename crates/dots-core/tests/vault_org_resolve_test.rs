@@ -148,7 +148,7 @@ async fn under_deny_only_the_orgs_entries_resolve() {
         missing(&vault, &scope, &github(), "IN_PERSONAL").await,
         (
             Unresolved::NotDefined,
-            "IN_PERSONAL: not in Acme Engineering (dot 'triage', mcp:github)".into()
+            "IN_PERSONAL: not in Acme Engineering (sol 'triage', mcp:github)".into()
         )
     );
 }
@@ -175,7 +175,7 @@ async fn under_fallback_the_orgs_entry_wins_else_personal() {
         missing(&vault, &scope, &github(), "NOWHERE").await,
         (
             Unresolved::NotDefined,
-            "NOWHERE: not in Acme Engineering (dot 'triage', mcp:github)".into()
+            "NOWHERE: not in Acme Engineering (sol 'triage', mcp:github)".into()
         )
     );
 }
@@ -219,7 +219,7 @@ async fn a_name_not_granted_is_refused_before_anything_else() {
     assert_eq!(refused.why, Unresolved::NotGranted);
     assert_eq!(
         refused.text(DOT),
-        "IN_ORG: not granted to mcp:github in dot 'triage'"
+        "IN_ORG: not granted to mcp:github in sol 'triage'"
     );
 
     // Even an org that is gone: the grant comes first.
@@ -251,7 +251,7 @@ async fn use_deny_wins_over_allow_wherever_the_value_would_come_from() {
         missing(&vault, &scope, &github(), "PROD_DB").await,
         (
             Unresolved::DeniedByPolicy,
-            "PROD_DB: Acme Engineering's policy does not allow it (dot 'triage')".into()
+            "PROD_DB: Acme Engineering's policy does not allow it (sol 'triage')".into()
         )
     );
     // In another case, and for a name only Personal has, which `override` would let win.
@@ -281,7 +281,7 @@ async fn the_shell_gets_no_secret_while_shell_secrets_is_false() {
         missing(&vault, &scope, &shell, "IN_ORG").await,
         (
             Unresolved::ShellSecretsForbidden,
-            "IN_ORG: Acme Engineering does not allow secrets in the shell (dot 'triage')".into()
+            "IN_ORG: Acme Engineering does not allow secrets in the shell (sol 'triage')".into()
         )
     );
     assert_eq!(
@@ -462,7 +462,7 @@ async fn a_removed_org_gives_nothing() {
     h.orgs.remove(ACME).await.unwrap();
     let removed = (
         Unresolved::OrgRemoved,
-        "dot 'triage': its org 'acme-eng' was removed".to_string(),
+        "sol 'triage': its org 'acme-eng' was removed".to_string(),
     );
     assert_eq!(missing(&vault, &acme(), &github(), "IN_ORG").await, removed);
     assert_eq!(
@@ -487,7 +487,7 @@ async fn a_vault_with_no_orgs_resolves_an_org_scope_as_removed() {
         missing(&vault, &acme(), &github(), "IN_PERSONAL").await,
         (
             Unresolved::OrgRemoved,
-            "dot 'triage': its org 'acme-eng' was removed".into()
+            "sol 'triage': its org 'acme-eng' was removed".into()
         )
     );
     assert_eq!(
@@ -512,7 +512,7 @@ async fn a_personal_dot_reads_personal_only() {
         missing(&vault, &scope, &github(), "IN_ORG").await,
         (
             Unresolved::NotDefined,
-            "IN_ORG: not in Personal (dot 'triage', mcp:github)".into()
+            "IN_ORG: not in Personal (sol 'triage', mcp:github)".into()
         )
     );
     // No org rule applies: the shell gets a Personal secret.
@@ -665,7 +665,7 @@ async fn a_run_whose_org_is_removed_while_it_waits_to_refresh_does_not_start() {
     remove.await.unwrap();
     match start.await {
         Err(Error::Other(text)) => {
-            assert_eq!(text, "dot 'triage': its org 'acme-eng' was removed")
+            assert_eq!(text, "sol 'triage': its org 'acme-eng' was removed")
         }
         other => panic!("expected the run refused, got {other:?}"),
     }
@@ -743,19 +743,19 @@ fn every_missing_text_is_exact() {
     let cases = [
         (
             text("NAME", x(), Unresolved::NotGranted, acme),
-            "NAME: not granted to mcp:x in dot 'D'",
+            "NAME: not granted to mcp:x in sol 'D'",
         ),
         (
             text("NAME", x(), Unresolved::NotDefined, acme),
-            "NAME: not in Acme Engineering (dot 'D', mcp:x)",
+            "NAME: not in Acme Engineering (sol 'D', mcp:x)",
         ),
         (
             text("NAME", x(), Unresolved::NotDefined, None),
-            "NAME: not in Personal (dot 'D', mcp:x)",
+            "NAME: not in Personal (sol 'D', mcp:x)",
         ),
         (
             text("NAME", x(), Unresolved::DeniedByPolicy, acme),
-            "NAME: Acme Engineering's policy does not allow it (dot 'D')",
+            "NAME: Acme Engineering's policy does not allow it (sol 'D')",
         ),
         (
             text(
@@ -764,7 +764,7 @@ fn every_missing_text_is_exact() {
                 Unresolved::ShellSecretsForbidden,
                 acme,
             ),
-            "NAME: Acme Engineering does not allow secrets in the shell (dot 'D')",
+            "NAME: Acme Engineering does not allow secrets in the shell (sol 'D')",
         ),
         (
             text("NAME", x(), Unresolved::OrgExpired, acme),
@@ -789,11 +789,11 @@ fn every_missing_text_is_exact() {
         ),
         (
             text("NAME", x(), Unresolved::OrgRemoved, Some(ACME)),
-            "dot 'D': its org 'acme-eng' was removed",
+            "sol 'D': its org 'acme-eng' was removed",
         ),
         (
             text("NAME", x(), Unresolved::NotMember(NotMember::Waiting), acme),
-            "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.",
+            "Acme Engineering: you aren't on its member list yet. Send your Sage ID to an Admin.",
         ),
         (
             text("NAME", x(), Unresolved::NotMember(NotMember::Removed), acme),
@@ -806,7 +806,7 @@ fn every_missing_text_is_exact() {
                 Unresolved::NotMember(NotMember::IdChanged),
                 acme,
             ),
-            "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin.",
+            "Acme Engineering: this PC's Sage ID changed. Send the new one to an Admin.",
         ),
     ];
     for (got, want) in cases {

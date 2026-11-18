@@ -168,7 +168,7 @@ function OrgRow({ org, onUpdate }: { org: OrgSummary; onUpdate: () => void }) {
         <ConfirmButton
           title={`Remove ${org.name}?`}
           description={
-            `The dots of ${org.name} stay on this PC, but they can't run until you join it ` +
+            `The sols of ${org.name} stay on this PC, but they can't run until you join it ` +
             "again. The saved copy of its variables and your sign-in details for it are deleted."
           }
           confirmLabel="Remove"
@@ -488,7 +488,7 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
                   : "Check what this code joins."
                 : kind === "age"
                   ? "This account's variables are in a file encrypted to each person's key."
-                  : "Your sign-in details for the account's source. Dots keeps them in Windows " +
+                  : "Your sign-in details for the account's source. Sage keeps them in Windows " +
                     "Credential Manager and never shows them."}
           </DialogDescription>
         </DialogHeader>
@@ -496,7 +496,7 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
         {requested && (
           <>
             <p role="status" className="text-sm">
-              You joined {requested.account}, but your Dots ID is not on its member list yet.
+              You joined {requested.account}, but your Sage ID is not on its member list yet.
             </p>
             <RequestCodeBox account={requested.account} code={requested.code} />
           </>
@@ -604,7 +604,7 @@ export function JoinDialog(props: { org?: OrgSummary; onClose: () => void }) {
                 )}
                 {org && kind !== "age" && fresh && (
                   <p className="text-xs text-needs">
-                    The source changed, so enter your sign-in details again: Dots does not send
+                    The source changed, so enter your sign-in details again: Sage does not send
                     the saved ones to it.
                   </p>
                 )}
@@ -814,7 +814,7 @@ export function Accounts() {
       <legend className="px-1 text-sm font-semibold">Accounts</legend>
       <p className="text-xs text-muted-foreground">
         An account's admin keeps its variables in OpenBao, Infisical or a SOPS file, and
-        its signed policy says how dots may use them. Join one with the code your admin gives
+        its signed policy says how sols may use them. Join one with the code your admin gives
         you.
       </p>
       {list.isError && <ErrorNote error={list.error} />}

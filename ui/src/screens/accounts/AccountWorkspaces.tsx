@@ -22,7 +22,7 @@ import { keys } from "@/lib/query";
 import { BUSY, DraftBanner, rosterBlockers, useRosterEdits } from "./AccountMembers";
 
 /// The delete confirm's words: what happens to the workspace's dots.
-export const DELETE_TEXT = "Its dots on each PC move to Default.";
+export const DELETE_TEXT = "Its sols on each PC move to Default.";
 
 /// Why an account with no member list has no workspace edits: they are signed into the list.
 const LEGACY_TEXT = "This account has no member list, so its only workspace is Default.";

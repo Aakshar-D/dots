@@ -306,6 +306,111 @@ fn dids(events: &[MindEvent]) -> Vec<String> {
         .collect()
 }
 
+fn step(text: &str) -> MindEvent {
+    MindEvent::Step { text: text.into() }
+}
+
+/// What the mind said it was doing (`Step`), in order.
+fn steps(events: &[MindEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            MindEvent::Step { text } if !text.is_empty() => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Where `event` is among `events`.
+fn place(events: &[MindEvent], event: &MindEvent) -> usize {
+    events
+        .iter()
+        .position(|e| e == event)
+        .unwrap_or_else(|| panic!("{event:?} is not among {events:?}"))
+}
+
+#[tokio::test]
+async fn steps_say_what_is_being_done_and_where_it_goes() {
+    const LOOKING: &str = "Looking at your workspace";
+    const THINKING: &str = "Thinking it over";
+    // A plain answer: the picture, then the model; every step before the turn's end.
+    let t = T::start().await;
+    t.fake.push(says("Hello."));
+    let got = t.hear("hello").await;
+    assert_eq!(steps(&got), vec![LOOKING, THINKING], "{got:?}");
+    assert!(matches!(got.last(), Some(MindEvent::SayEnd { .. })));
+    // The thinking is over at the first words of the reply, not after them.
+    let first_words = got
+        .iter()
+        .position(|e| matches!(e, MindEvent::Say { .. }))
+        .unwrap();
+    assert_eq!(place(&got, &step("")) + 1, first_words, "{got:?}");
+    // A screen opened is named, before it opens.
+    t.fake
+        .push(says("DO {\"act\":\"open\",\"target\":\"inbox\"}"));
+    let got = t.hear("show me the inbox please").await;
+    assert_eq!(
+        steps(&got),
+        vec![LOOKING, THINKING, "Opening the Inbox"],
+        "{got:?}"
+    );
+    let opened = MindEvent::Open {
+        target: OpenTarget::Inbox,
+    };
+    assert!(place(&got, &step("Opening the Inbox")) < place(&got, &opened));
+    // What needs the person.
+    t.fake
+        .push(says("Here's what needs you.\nDO {\"act\":\"needs\"}"));
+    let got = t.hear("what needs me").await;
+    assert_eq!(
+        steps(&got),
+        vec![LOOKING, THINKING, "Checking what needs you"],
+        "{got:?}"
+    );
+    // Answered without a model: no step at all.
+    assert!(steps(&t.hear("stop").await).is_empty());
+    t.rt.shutdown();
+
+    // A message sent names the sol, never the words sent.
+    let t = T::start().await;
+    t.dot("Research").await;
+    t.fake.push(says(
+        "Sending.\nDO {\"act\":\"send\",\"d\":\"d1\",\"text\":\"look at the build\"}",
+    ));
+    let got = t.hear("tell research to look at the build").await;
+    assert_eq!(
+        steps(&got),
+        vec![LOOKING, THINKING, "Sending your message to Research"],
+        "{got:?}"
+    );
+    t.rt.shutdown();
+
+    // A yes: the deed is named as it is carried out, without the tool's target.
+    let t = T::start().await;
+    asking_to_approve(&t).await;
+    let got = t.hear("yes").await;
+    assert_eq!(steps(&got), vec!["Approving Research's request"], "{got:?}");
+    let did = MindEvent::Did {
+        said: "Approved.".into(),
+    };
+    assert!(place(&got, &step("Approving Research's request")) < place(&got, &did));
+    // The deed done, its step is over before the outcome, and only once.
+    assert!(place(&got, &step("")) < place(&got, &did));
+    assert_eq!(got.iter().filter(|e| **e == step("")).count(), 1, "{got:?}");
+    t.rt.shutdown();
+
+    // A yes to a record handled meanwhile: nothing is tried, so no step says it is.
+    let t = T::start().await;
+    let approval = asking_to_approve(&t).await;
+    t.rt.decide_approval(&approval.id, false, None, None)
+        .await
+        .unwrap();
+    let got = t.hear("yes").await;
+    assert!(steps(&got).is_empty(), "{got:?}");
+    assert_eq!(said(&got), "That one is already handled.");
+    t.rt.shutdown();
+}
+
 #[tokio::test]
 async fn did_follows_every_deed() {
     // approve and deny, each after its confirmation
@@ -447,6 +552,24 @@ async fn stop_and_cancel_clear_pending() {
     );
     assert!(!t.mind.pending());
     assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+
+    // "thank you" and "close" end the conversation: what waited is dropped, nothing is
+    // said, and the stage rests.
+    t.fake.push(approve_a1());
+    t.hear("approve the research one").await;
+    assert!(t.mind.pending());
+    let got = t.hear("Thank you, I'll call you later.").await;
+    assert_eq!(
+        got,
+        vec![MindEvent::Cleared, MindEvent::SayEnd { then: Then::Rest }]
+    );
+    assert!(!t.mind.pending());
+    assert_eq!(t.status(&approval).await, ApprovalStatus::Pending);
+    let got = t.hear("close").await;
+    assert_eq!(
+        got,
+        vec![MindEvent::Cleared, MindEvent::SayEnd { then: Then::Rest }]
+    );
     // a yes now has nothing to answer
     let got = t.hear("yes").await;
     assert_eq!(said(&got), "There's nothing waiting on a yes or no.");
@@ -457,12 +580,12 @@ async fn stop_and_cancel_clear_pending() {
 #[tokio::test]
 async fn repeat_says_the_last_reply() {
     let t = T::start().await;
-    t.fake.push(says("Two dots are idle. Nothing needs you."));
+    t.fake.push(says("Two sols are idle. Nothing needs you."));
     let got = t.hear("how are things").await;
-    assert_eq!(said(&got), "Two dots are idle. Nothing needs you.");
+    assert_eq!(said(&got), "Two sols are idle. Nothing needs you.");
     assert_eq!(ended(&got), Some(Then::FollowUp));
     let got = t.hear("say that again").await;
-    assert_eq!(said(&got), "Two dots are idle. Nothing needs you.");
+    assert_eq!(said(&got), "Two sols are idle. Nothing needs you.");
     assert_eq!(ended(&got), Some(Then::FollowUp));
     assert_eq!(t.fake.calls(), 1);
     // with a question waiting, the question is asked again
@@ -913,7 +1036,7 @@ async fn a_refused_pick_ends_the_turn_in_flight() {
         .push(held(says("DO {\"act\":\"run\",\"d\":\"d1\"}"), &hold));
     let (tx, mut rx) = mpsc::unbounded_channel();
     let view = home();
-    let heard = t.mind.hear(&t.rt, "run the backup dot", &view, &tx);
+    let heard = t.mind.hear(&t.rt, "run the backup sol", &view, &tx);
     let click = async {
         while t.fake.calls() == 0 {
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -945,7 +1068,7 @@ async fn which_dot_then_still_confirms_a_run() {
     assert_eq!(
         asks(&got),
         Some((
-            "Which dot did you mean?".into(),
+            "Which sol did you mean?".into(),
             vec!["Deploy watcher".to_string()]
         ))
     );
@@ -1129,7 +1252,15 @@ async fn second_hear_cancels_the_first() {
     assert!(started.elapsed() < Duration::from_secs(10));
     let one = drain(&mut rx1);
     let two = drain(&mut rx2);
-    assert_eq!(one, vec![MindEvent::Thinking], "{one:?}");
+    assert_eq!(
+        one,
+        vec![
+            MindEvent::Thinking,
+            step("Looking at your workspace"),
+            step("Thinking it over")
+        ],
+        "{one:?}"
+    );
     assert_eq!(said(&two), "The second answer.");
     assert!(lock(&t.fake.cancels)[0].is_cancelled());
     t.rt.shutdown();
@@ -1248,7 +1379,7 @@ async fn a_dot_gone_at_yes_is_not_run() {
     assert!(t.mind.pending());
     t.rt.delete_dot(&dot.id).await.unwrap();
     let got = t.hear("yes").await;
-    assert_eq!(said(&got), "I can't find that dot anymore.");
+    assert_eq!(said(&got), "I can't find that sol anymore.");
     assert_eq!(ended(&got), Some(Then::Rest));
     t.rt.shutdown();
 }
@@ -1420,7 +1551,7 @@ async fn common_words_do_not_name_a_dot() {
     }
     let cases = [
         ("The helper", "send the message to it", false),
-        ("The helper", "tell the dot to look at it please", false),
+        ("The helper", "tell the sol to look at it please", false),
         ("Yes please", "yes please tell it to look", false),
         ("Yes please", "ok yes please ask it", false),
         // "deploy" is in two dots' names: it names neither
@@ -1657,7 +1788,7 @@ fn create_question_says_only_the_name_and_when() {
     // the first message, instructions and access are on the card, never partly spoken
     assert_eq!(
         create_question(&p),
-        "Downloads digest. Runs every day at 09:00. The rest is on screen. Create this dot?"
+        "Downloads digest. Runs every day at 09:00. The rest is on screen. Create this sol?"
     );
     let none = SetupProposal {
         name: "N".repeat(200),
@@ -1668,7 +1799,7 @@ fn create_question_says_only_the_name_and_when() {
     assert_eq!(
         create_question(&none),
         format!(
-            "{}. Runs when you ask. The rest is on screen. Create this dot?",
+            "{}. Runs when you ask. The rest is on screen. Create this sol?",
             "N".repeat(80)
         )
     );
@@ -1836,7 +1967,14 @@ async fn a_panicking_thinker_still_ends_the_turn() {
     let got = drain(&mut rx);
     assert_eq!(
         got,
-        vec![MindEvent::Thinking, MindEvent::SayEnd { then: Then::Rest }]
+        vec![
+            MindEvent::Thinking,
+            step("Looking at your workspace"),
+            step("Thinking it over"),
+            // the step under way is over
+            step(""),
+            MindEvent::SayEnd { then: Then::Rest }
+        ]
     );
     // the mind goes on
     t.fake.push(says("Hello."));
@@ -1899,7 +2037,7 @@ async fn nothing_heard_asks_nothing() {
 async fn repeat_says_only_the_question_when_it_came_alone() {
     let t = T::start().await;
     t.dot("Research").await;
-    t.fake.push(says("Two dots are idle."));
+    t.fake.push(says("Two sols are idle."));
     t.hear("how are things").await;
     let dot = t.dot("Backup").await;
     t.approval(&dot, "ls -la").await;
@@ -2278,7 +2416,7 @@ async fn setup_rounds_stop_at_a_cap() {
         }),
         ..says("Let's make it.\nDO {\"act\":\"create\",\"description\":\"digest my downloads\"}")
     });
-    let got = t.hear("make a dot that digests my downloads").await;
+    let got = t.hear("make a sol that digests my downloads").await;
     assert_eq!(
         said(&got),
         "Let's make it. Let me set that up. You've reached today's spending limit, so I can't \
@@ -2340,5 +2478,397 @@ async fn a_drop_after_the_checks_still_stops_the_turn_from_beginning() {
     // With the count it saw after the drop, a turn begins.
     let now = lock(&t.mind.state).drops;
     assert!(t.mind.begin(&t.rt, now).is_some());
+    t.rt.shutdown();
+}
+
+/// A desk that keeps what it was asked to do, and refuses when told to.
+#[derive(Default)]
+struct FakeDesk {
+    asked: Mutex<Vec<desk::DeskTask>>,
+    refuse: Mutex<Option<String>>,
+}
+
+impl desk::Desk for FakeDesk {
+    fn carry_out(
+        &self,
+        task: &desk::DeskTask,
+        stop: &std::sync::atomic::AtomicBool,
+    ) -> Result<String, String> {
+        self.asked.lock().unwrap().push(task.clone());
+        // A command that runs until it is told to stop.
+        if matches!(task, desk::DeskTask::Command { command } if command == "wait") {
+            for _ in 0..500 {
+                if stop.load(Ordering::SeqCst) {
+                    return Err(desk::COMMAND_STOPPED.into());
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            return Err("never stopped".into());
+        }
+        match self.refuse.lock().unwrap().clone() {
+            Some(why) => Err(why),
+            None => Ok(match task {
+                desk::DeskTask::Command { .. } => "first line\n\nsecond line\n".into(),
+                _ => String::new(),
+            }),
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_note_a_site_a_search_and_an_app_are_done_on_the_desk() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    t.fake.push(says(
+        "Writing that down.\nDO {\"act\":\"note\",\"title\":\"Shopping: list\",\"text\":\"milk\\neggs\",\"plain\":true}",
+    ));
+    let got = t.hear("make a note in notepad, milk and eggs").await;
+    assert_eq!(
+        said(&got),
+        "Writing that down. The note Shopping list is written and open."
+    );
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"web\",\"url\":\"https://github.com/a/b?x=1\"}",
+    ));
+    let got = t.hear("open github").await;
+    assert!(said(&got).contains("front page"), "{}", said(&got));
+    t.fake.push(says(
+        "Looking it up.\nDO {\"act\":\"search\",\"query\":\"tauri opener plugin\"}",
+    ));
+    let got = t.hear("search for the tauri opener plugin").await;
+    assert_eq!(
+        said(&got),
+        "Looking it up. The search is open in your browser."
+    );
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"app\",\"name\":\"Calculator\"}",
+    ));
+    let got = t.hear("open the calculator").await;
+    assert_eq!(said(&got), "Opening it. Calculator is open.");
+    let asked = on_desk.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 4);
+    assert_eq!(
+        asked[0],
+        desk::DeskTask::Note {
+            title: "Shopping list".into(),
+            text: "milk\neggs".into(),
+            plain: true,
+        }
+    );
+    assert_eq!(
+        asked[1],
+        desk::DeskTask::Web {
+            url: "https://github.com/".into(),
+            site: "github.com".into(),
+            front: false,
+        }
+    );
+    assert!(matches!(&asked[2], desk::DeskTask::Search { url } if url.contains("tauri")));
+    assert_eq!(
+        asked[3],
+        desk::DeskTask::App {
+            app: desk::DeskApp::Calculator
+        }
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn what_the_desk_cannot_or_must_not_do_is_said_and_not_done() {
+    let t = T::start().await;
+    // With no app around the core there is no desk.
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"app\",\"name\":\"notepad\"}",
+    ));
+    let got = t.hear("open notepad").await;
+    assert_eq!(said(&got), format!("Opening it. {}", desk::NO_DESK));
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    // An address that is not a plain site, and an app name with no name in it, never reach it.
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"web\",\"url\":\"file:///C:/Windows/System32/cmd.exe\"}",
+    ));
+    let got = t.hear("open that file").await;
+    assert_eq!(said(&got), format!("Opening it. {}", desk::NO_SITE));
+    t.fake.push(says(
+        "Opening it.\nDO {\"act\":\"app\",\"name\":\"!!! ???\"}",
+    ));
+    let got = t.hear("open the thing").await;
+    assert_eq!(said(&got), format!("Opening it. {}", desk::NO_APP));
+    assert!(on_desk.asked.lock().unwrap().is_empty());
+    // A desk that fails says why.
+    *on_desk.refuse.lock().unwrap() = Some("I couldn't write the note.".into());
+    t.fake.push(says(
+        "Writing it.\nDO {\"act\":\"note\",\"title\":\"A\",\"text\":\"b\"}",
+    ));
+    let got = t.hear("note this").await;
+    assert_eq!(said(&got), "Writing it. I couldn't write the note.");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn the_screens_of_the_app_are_opened_by_name() {
+    let t = T::start().await;
+    for (target, want, said_) in [
+        ("connectors", OpenTarget::Connectors, "Opening Connectors."),
+        ("apps", OpenTarget::Apps, "Opening Apps."),
+        ("library", OpenTarget::Library, "Opening the Library."),
+        ("teams", OpenTarget::Teams, "Opening Teams."),
+        ("intents", OpenTarget::Intents, "Opening Intents."),
+    ] {
+        t.fake.push(says(&format!(
+            "Here.\nDO {{\"act\":\"open\",\"target\":\"{target}\"}}"
+        )));
+        let got = t.hear("show me that screen").await;
+        assert!(got.contains(&MindEvent::Open { target: want }), "{target}");
+        assert_eq!(said(&got), format!("Here. {said_}"));
+    }
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn the_picture_of_a_running_core_tells_its_connectors() {
+    let t = T::start().await;
+    let picture = Picture::take(&t.rt, &home()).await.unwrap();
+    // The catalog's connectors, none connected in a new install.
+    assert!(!picture.connectors.is_empty());
+    assert!(picture
+        .connectors
+        .iter()
+        .all(|c| c.state == "not connected" && c.used_by.is_empty()));
+    assert!(picture.text().contains("Connectors: "));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn what_the_person_says_about_themselves_is_kept_and_told_to_the_model() {
+    let t = T::start().await;
+    t.fake.push(says(
+        "Got it.\nDO {\"act\":\"remember\",\"note\":\"Prefers answers in one sentence.\"}",
+    ));
+    let got = t.hear("keep your answers to one sentence").await;
+    assert_eq!(
+        said(&got),
+        "Got it. I'll remember this: Prefers answers in one sentence."
+    );
+    assert_eq!(
+        t.mind.memory().learned().notes,
+        vec!["Prefers answers in one sentence."]
+    );
+    // The next request begins with it.
+    t.fake.push(says("Nothing needs you."));
+    t.hear("anything for me").await;
+    let last = t.fake.last_prompt();
+    assert!(
+        last.starts_with("What you learned about the person"),
+        "{last}"
+    );
+    assert!(last.contains("- Prefers answers in one sentence."));
+    assert!(
+        last.find("End of what you learned.").unwrap() < last.find("The picture of now").unwrap()
+    );
+    // And it is forgotten when they ask.
+    t.fake.push(says("Done.\nDO {\"act\":\"forget\"}"));
+    let got = t.hear("forget what you know about me").await;
+    assert_eq!(said(&got), format!("Done. {}", memory::FORGOT));
+    assert!(t.mind.memory().learned().notes.is_empty());
+    // The model alone does not wipe it: the person has to have said so.
+    t.mind.memory().remember("Likes tea.");
+    t.fake.push(says("Done.\nDO {\"act\":\"forget\"}"));
+    let got = t.hear("what needs me").await;
+    assert_eq!(said(&got), format!("Done. {}", memory::FORGET_HOW));
+    assert_eq!(t.mind.memory().learned().notes, vec!["Likes tea."]);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn what_is_asked_for_most_is_tallied_and_told() {
+    let t = T::start().await;
+    for _ in 0..5 {
+        t.fake
+            .push(says("Here's what needs you.\nDO {\"act\":\"needs\"}"));
+        t.hear("what needs me").await;
+    }
+    let text = t.mind.memory().text();
+    assert!(
+        text.contains("They most often ask to see what needs them."),
+        "{text}"
+    );
+    assert!(text.contains("about 3 words at a time"), "{text}");
+    // With learning off the next request carries none of it.
+    t.mind.memory().set_learning(false);
+    t.fake.push(says("Nothing needs you."));
+    t.hear("anything for me").await;
+    assert!(t.fake.last_prompt().starts_with("The picture of now"));
+    t.rt.shutdown();
+}
+
+const CLOSE_CHROME: &str = "Closing it.\nDO {\"act\":\"command\",\"command\":\"Stop-Process -Name chrome\",\"why\":\"This closes every Chrome window\"}";
+
+#[tokio::test]
+async fn a_command_is_shown_and_asked_about_and_runs_only_on_a_yes() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    t.fake.push(says(CLOSE_CHROME));
+    let got = t.hear("close chrome").await;
+    let (question, options) = asks(&got).unwrap();
+    // The model's account is said as the model's, and the command itself is read out.
+    assert_eq!(
+        question,
+        "The model says: This closes every Chrome window. The command reads: \
+         Stop-Process -Name chrome. It is on screen. Run this command?"
+    );
+    assert_eq!(options, yes_no());
+    assert!(got.contains(&MindEvent::Card {
+        card: Card::Confirm {
+            deed: Deed::Command {
+                command: "Stop-Process -Name chrome".into(),
+                why: "This closes every Chrome window".into(),
+            }
+        }
+    }));
+    // Nothing ran yet.
+    assert!(on_desk.asked.lock().unwrap().is_empty());
+    let got = t.hear("yes").await;
+    assert_eq!(dids(&got), vec![desk::COMMAND_DONE.to_string()]);
+    assert_eq!(
+        on_desk.asked.lock().unwrap().clone(),
+        vec![desk::DeskTask::Command {
+            command: "Stop-Process -Name chrome".into()
+        }]
+    );
+    // What it printed is shown, without its empty lines.
+    assert!(got.contains(&MindEvent::Card {
+        card: Card::List {
+            title: "What it printed".into(),
+            lines: vec!["first line".into(), "second line".into()],
+        }
+    }));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_command_is_not_run_on_a_no_a_weak_yes_or_no_answer() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    for answer in ["no", "okay", "run it"] {
+        t.fake.push(says(CLOSE_CHROME));
+        t.hear("close chrome").await;
+        // Whatever else is said is a new request to the model.
+        t.fake.push(says("All right."));
+        t.hear(answer).await;
+        assert!(on_desk.asked.lock().unwrap().is_empty(), "{answer}");
+        t.mind.reset();
+    }
+    // A command that fails says so, and is not said to be done.
+    *on_desk.refuse.lock().unwrap() = Some("That failed. Cannot find a process.".into());
+    t.fake.push(says(CLOSE_CHROME));
+    t.hear("close chrome").await;
+    let got = t.hear("yes").await;
+    assert_eq!(said(&got), "That failed. Cannot find a process.");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn an_app_is_closed_by_name_without_a_question() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    t.fake.push(says(
+        "Closing it.\nDO {\"act\":\"close\",\"name\":\"notepad\"}",
+    ));
+    let got = t.hear("close notepad").await;
+    assert_eq!(said(&got), "Closing it. Notepad is closing.");
+    assert_eq!(
+        on_desk.asked.lock().unwrap().clone(),
+        vec![desk::DeskTask::Close {
+            app: desk::DeskApp::Notepad
+        }]
+    );
+    // The browser is not closed by name.
+    t.fake.push(says(
+        "Closing it.\nDO {\"act\":\"close\",\"name\":\"chrome\"}",
+    ));
+    let got = t.hear("close chrome").await;
+    assert_eq!(said(&got), format!("Closing it. {}", desk::NO_CLOSE));
+    assert_eq!(on_desk.asked.lock().unwrap().len(), 1);
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_long_command_is_not_read_out() {
+    let t = T::start().await;
+    t.mind.set_desk(Arc::new(FakeDesk::default()));
+    let long = format!("Get-ChildItem {}", "a".repeat(150));
+    t.fake.push(says(&format!(
+        "One moment.\nDO {{\"act\":\"command\",\"command\":\"{long}\",\"why\":\"Lists a folder\"}}"
+    )));
+    let got = t.hear("list that folder").await;
+    let (question, _) = asks(&got).unwrap();
+    assert_eq!(
+        question,
+        "The model says: Lists a folder. The command is too long to read out. \
+         It is on screen. Run this command?"
+    );
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn with_commands_turned_off_none_is_offered_or_run() {
+    let t = T::start().await;
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    // Asked while it was on, turned off before the yes: not run.
+    t.fake.push(says(CLOSE_CHROME));
+    t.hear("close chrome").await;
+    let mut settings = t.rt.settings().await;
+    settings.open_dot_commands = false;
+    t.rt.update_settings(settings).await.unwrap();
+    let got = t.hear("yes").await;
+    assert_eq!(said(&got), desk::COMMANDS_OFF);
+    // And while it is off none is offered.
+    t.fake.push(says(CLOSE_CHROME));
+    let got = t.hear("close chrome").await;
+    assert!(asks(&got).is_none());
+    assert_eq!(said(&got), format!("Closing it. {}", desk::COMMANDS_OFF));
+    assert!(on_desk.asked.lock().unwrap().is_empty());
+    // The acts that need no command still work.
+    t.fake.push(says(
+        "Closing it.\nDO {\"act\":\"close\",\"name\":\"notepad\"}",
+    ));
+    let got = t.hear("close notepad").await;
+    assert_eq!(said(&got), "Closing it. Notepad is closing.");
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_running_command_ends_when_the_turn_is_cancelled() {
+    let t = Arc::new(T::start().await);
+    let on_desk = Arc::new(FakeDesk::default());
+    t.mind.set_desk(on_desk.clone());
+    t.fake.push(says(
+        "Waiting.\nDO {\"act\":\"command\",\"command\":\"wait\",\"why\":\"Waits\"}",
+    ));
+    t.hear("wait for it").await;
+    let running = {
+        let t = t.clone();
+        tokio::spawn(async move { t.hear("yes").await })
+    };
+    // Once it runs, the person says stop.
+    for _ in 0..200 {
+        if !on_desk.asked.lock().unwrap().is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(on_desk.asked.lock().unwrap().len(), 1);
+    let started = std::time::Instant::now();
+    t.mind.cancel();
+    running.await.unwrap();
+    // It ended because it was told to, long before it would have by itself.
+    assert!(started.elapsed() < Duration::from_secs(3));
     t.rt.shutdown();
 }

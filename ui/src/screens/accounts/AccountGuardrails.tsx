@@ -17,7 +17,7 @@ import { BUSY, DRAFT_WAITING, DraftBanner, rosterBlockers, useRosterEdits } from
 
 /// What turning guardrails off does, asked before it is signed.
 export const OFF_TEXT =
-  "Its dots go back to their own policies: nothing is protected, and a Member's dot may use any preset.";
+  "Its sols go back to their own policies: nothing is protected, and a Member's sol may use any preset.";
 
 /// The Guardrails tab of an account (guardrails spec section 7): one workspace at a time, its
 /// protected paths, git actions and commands, and the highest preset a Member's dot may use.
@@ -119,11 +119,11 @@ function appliesText(view: GuardrailsView): string {
   if (view.guardrails === null) return `${view.workspace_name} has no guardrails.`;
   switch (view.applies_as) {
     case "member":
-      return "Your dots here are guarded as a Member's: protected calls are refused.";
+      return "Your sols here are guarded as a Member's: protected calls are refused.";
     case "admin":
-      return "Your dots here always ask before a protected call.";
+      return "Your sols here always ask before a protected call.";
     default:
-      return "They don't apply to dots on this PC.";
+      return "They don't apply to sols on this PC.";
   }
 }
 
@@ -243,7 +243,7 @@ function GuardrailsForm(props: {
           <Field
             label="Protected paths"
             htmlFor={`${id}-paths`}
-            hint="One glob a line, relative to the dot's folder: * stays in a folder, ** crosses folders."
+            hint="One glob a line, relative to the sol's folder: * stays in a folder, ** crosses folders."
           >
             <Textarea
               id={`${id}-paths`}
@@ -290,7 +290,7 @@ function GuardrailsForm(props: {
           <Field
             label="Member max"
             htmlFor={`${id}-max`}
-            hint="The highest preset a Member's dot may use here."
+            hint="The highest preset a Member's sol may use here."
           >
             <NativeSelect
               id={`${id}-max`}

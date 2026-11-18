@@ -20,7 +20,7 @@ const inbox = (watchers: PausedWatcher[]) => ({
 });
 
 describe("paused watchers in the Inbox", () => {
-  it("lists the watchers Dots paused, with Resume and a way to their dot", async () => {
+  it("lists the watchers Sage paused, with Resume and a way to their sol", async () => {
     backend.on("inbox", () => inbox([paused]));
     backend.on("watcher_resume", () => sample.watchers[1]);
     const { user } = renderApp("/inbox");
@@ -30,7 +30,7 @@ describe("paused watchers in the Inbox", () => {
     expect(item).toHaveTextContent(
       "paused: Gmail refused the app password for me@gmail.com, or IMAP is off for it.",
     );
-    expect(within(item).getByRole("link", { name: "Open the dot's watchers" })).toHaveAttribute(
+    expect(within(item).getByRole("link", { name: "Open the sol's watchers" })).toHaveAttribute(
       "href",
       `/dots/${paused.dot_id}?tab=watchers`,
     );

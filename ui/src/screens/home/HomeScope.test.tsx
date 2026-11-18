@@ -35,50 +35,50 @@ function routes(router: { state: { location: { pathname: string } }; subscribe: 
   return seen;
 }
 const settle = (ms = 300) => new Promise((r) => setTimeout(r, ms));
-const column = () => screen.getByRole("navigation", { name: "Dots" });
+const column = () => screen.getByRole("navigation", { name: "Sols" });
 
 describe("the home follows the current account", () => {
-  it("lists only the dots of the current org", async () => {
+  it("lists only the sols of the current org", async () => {
     backend.on("dot_overview", () => dots);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     renderApp("/home");
-    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole("listitem", {
+    await within(await screen.findByRole("navigation", { name: "Sols" })).findByRole("listitem", {
       name: "builder",
     });
     expect(within(column()).queryByRole("listitem", { name: "mine" })).toBeNull();
     expect(within(column()).queryByRole("listitem", { name: "pixels" })).toBeNull();
   });
 
-  it("lists only the dots without an org in Personal", async () => {
+  it("lists only the sols without an org in Personal", async () => {
     backend.on("dot_overview", () => dots);
     backend.on("org_list", () => [acme, design]);
     backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
     renderApp("/home");
-    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole("listitem", {
+    await within(await screen.findByRole("navigation", { name: "Sols" })).findByRole("listitem", {
       name: "mine",
     });
     expect(within(column()).queryByRole("listitem", { name: "builder" })).toBeNull();
     expect(within(column()).queryByRole("listitem", { name: "pixels" })).toBeNull();
   });
 
-  it("lists every dot while the scope loads", async () => {
+  it("lists every sol while the scope loads", async () => {
     backend.on("dot_overview", () => dots);
     backend.on("scope_get", () => new Promise(() => {}));
     renderApp("/home");
-    const nav = await screen.findByRole("navigation", { name: "Dots" });
+    const nav = await screen.findByRole("navigation", { name: "Sols" });
     for (const name of ["mine", "builder", "pixels"]) {
       expect(await within(nav).findByRole("listitem", { name })).toBeVisible();
     }
   });
 
-  it("switches to the account of a dot opened by link, without redirecting", async () => {
+  it("switches to the account of a sol opened by link, without redirecting", async () => {
     backend.on("dot_overview", () => dots);
     backend.on("org_list", () => [acme, design]);
     const scope = slowScope("personal");
     const { router } = renderApp("/home/dot-builder");
     const seen = routes(router);
     // Settled: the dot's account is current and its conversation is open.
-    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole(
+    await within(await screen.findByRole("navigation", { name: "Sols" })).findByRole(
       "listitem",
       { name: "builder" },
       { timeout: 3000 },
@@ -93,7 +93,7 @@ describe("the home follows the current account", () => {
     expect(seen).toEqual(["/home/dot-builder"]);
   });
 
-  it("stays in the account picked while a dot is open", async () => {
+  it("stays in the account picked while a sol is open", async () => {
     backend.on("dot_overview", () => dots);
     backend.on("org_list", () => [acme, design]);
     const scope = slowScope("acme-eng");
@@ -118,7 +118,7 @@ describe("the home follows the current account", () => {
     backend.on("org_list", () => new Promise<OrgSummary[]>((r) => (joined = r)));
     const scope = slowScope("design");
     const { user, router } = renderApp("/home/dot-builder");
-    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole("listitem", {
+    await within(await screen.findByRole("navigation", { name: "Sols" })).findByRole("listitem", {
       name: "pixels",
     });
     await user.click(await screen.findByRole("button", { name: /^Account:/ }));
@@ -196,12 +196,12 @@ describe("the home follows the current account", () => {
     expect(backend.callsTo("scope_set")).toEqual([{ account: "acme-eng", workspace: "default" }]);
   });
 
-  it("lists the dots of a removed account under Personal, and opens them without a switch", async () => {
+  it("lists the sols of a removed account under Personal, and opens them without a switch", async () => {
     backend.on("dot_overview", () => dots);
     backend.on("org_list", () => [design]);
     backend.on("scope_get", () => ({ account: "personal", workspace: "default" }));
     const { router } = renderApp("/home/dot-builder");
-    const card = await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole(
+    const card = await within(await screen.findByRole("navigation", { name: "Sols" })).findByRole(
       "listitem",
       { name: "builder" },
     );

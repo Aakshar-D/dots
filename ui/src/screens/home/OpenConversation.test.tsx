@@ -51,7 +51,7 @@ describe("the Inbox's Open conversation", () => {
     expect(await screen.findByText("Back to the current conversation")).toBeVisible();
   });
 
-  it("opens the dot's conversation for a note of Dots' own", async () => {
+  it("opens the sol's conversation for a note of Sage's own", async () => {
     home([]);
     const note: Message = { ...sample.messages[3], dot_id: dot.id, run_id: null, read_at: null };
     backend.on("messages_list", () => [note]);

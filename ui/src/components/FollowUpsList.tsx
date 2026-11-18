@@ -27,7 +27,7 @@ export function FollowUpsList({ dotId }: { dotId: string }) {
   if (list.data.length === 0) {
     return (
       <p className="text-muted-foreground">
-        No follow-up waits. A dot schedules one with its follow-up tool when its work has to
+        No follow-up waits. A sol schedules one with its follow-up tool when its work has to
         wait.
       </p>
     );

@@ -253,7 +253,7 @@ fn a_member_needs_real_keys() {
     r["members"][0]["keys"] = json!(["RWQnotakey"]);
     assert_eq!(
         invalid(&r),
-        "member asha@acme.com has a key that isn't a Dots ID"
+        "member asha@acme.com has a key that isn't a Sage ID"
     );
 }
 

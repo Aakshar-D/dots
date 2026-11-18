@@ -248,7 +248,7 @@ async fn a_claude_run_reaches_the_browser_through_the_gateway() {
     assert_eq!(listed["tools"][0], "browser_close");
     let results = events(&e, &run.id, "tool_result").await;
     let clicked = results[1].data["output"].as_str().unwrap();
-    assert!(clicked.starts_with("Dots: Clicked \"Home\"\n"), "{clicked}");
+    assert!(clicked.starts_with("Sage: Clicked \"Home\"\n"), "{clicked}");
     assert_eq!(called(&e), ["browser_snapshot", "browser_click"]);
     // The run's end closed its Playwright server and its Edge.
     assert!(e.playwright.gone_within(Duration::from_secs(10)).await);
@@ -355,7 +355,7 @@ async fn a_library_server_named_browser_leaves_the_built_in_out() {
         .collect();
     assert!(
         notices.contains(
-            &"browser: an MCP server this dot uses is named browser, so the built-in browser \
+            &"browser: an MCP server this sol uses is named browser, so the built-in browser \
               is left out of this run; rename that server in the Library to use both"
                 .to_string()
         ),

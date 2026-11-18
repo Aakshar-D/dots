@@ -1,9 +1,11 @@
 import { cn } from "cn";
+import { Check, Copy, LoaderCircle, Maximize2, Minimize2 } from "lucide-react";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
 import { notifyError } from "@/lib/notify";
-import { useVoiceLive, useVoiceStatus, type VoiceLive } from "@/lib/use-voice";
+import { useVoiceLive, useVoiceStatus, voiceStore, type TalkLine, type VoiceLive } from "@/lib/use-voice";
 
 import { Breath } from "./Breath";
 import { breathStateOf } from "./breath-model";
@@ -15,6 +17,54 @@ import { interrupts, LEAVE_MS, talk, useStage, type StageCommands } from "./use-
 const KEYED = 4;
 
 const REDUCE = "(prefers-reduced-motion: reduce)";
+
+/// Where the choice of the enlarged stage is kept on this computer.
+const LARGE_KEY = "open-sage-large";
+
+function readLarge(): boolean {
+  try {
+    return window.localStorage.getItem(LARGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function keepLarge(large: boolean): void {
+  try {
+    if (large) window.localStorage.setItem(LARGE_KEY, "1");
+    else window.localStorage.removeItem(LARGE_KEY);
+  } catch {
+    // The choice then lasts until the app closes.
+  }
+}
+
+function copy(text: string): void {
+  navigator.clipboard
+    .writeText(text)
+    .then(() => toast.success("Copied"))
+    .catch(notifyError);
+}
+
+/// The conversation as plain text, one paragraph per turn: what was said, not the steps
+/// Sage took on the way.
+export function talkText(talk: VoiceLive["talk"]): string {
+  return talk
+    .filter((line) => line.who !== "step")
+    .map((line) => `${line.who === "you" ? "You" : "Sage"}: ${line.text}`)
+    .join("\n\n");
+}
+
+/// The conversation in the blocks it is drawn in: the steps Sage took in a row are one block.
+export function talkBlocks(talk: TalkLine[]): (TalkLine | TalkLine[])[] {
+  const blocks: (TalkLine | TalkLine[])[] = [];
+  for (const line of talk) {
+    const last = blocks[blocks.length - 1];
+    if (line.who !== "step") blocks.push(line);
+    else if (Array.isArray(last)) last.push(line);
+    else blocks.push([line]);
+  }
+  return blocks;
+}
 
 /// Whether the person asked for less motion, following the setting as it changes.
 function useReducedMotion(): boolean {
@@ -52,21 +102,25 @@ function micLine(live: {
   showing: boolean;
   options: boolean;
   shortcut: boolean;
+  step: string | null;
 }): string | null {
   if (live.micOpen) return null;
   if (live.trouble) return live.trouble;
   switch (live.state) {
     case "thinking":
-      return "Thinking…";
+      // What it is doing now, when it has said so.
+      return live.step ? `${live.step}…` : "Thinking…";
     case "speaking":
+      // A step taken once the reply has begun shows until the reply goes on.
+      if (live.step) return `${live.step}…`;
       return live.shortcut
-        ? "Speaking. Click the dots or press the shortcut to interrupt."
-        : "Speaking. Click the dots to interrupt.";
+        ? "Speaking. Click the mark or press the shortcut to interrupt."
+        : "Speaking. Click the mark to interrupt.";
     default:
       if (!live.showing) return null;
       return live.options
-        ? "Not listening. Click the dots to answer by voice, or pick an option."
-        : "Not listening. Click the dots to answer by voice.";
+        ? "Not listening. Click the mark to answer by voice, or pick an option."
+        : "Not listening. Click the mark to answer by voice.";
   }
 }
 
@@ -133,6 +187,117 @@ function Words({ question }: { question: string | null }) {
   );
 }
 
+/// The steps Sage took in a row, oldest first: what it did and where it went on the way to its
+/// reply. The one under way turns; the ones before it are ticked.
+function Steps({ steps, now }: { steps: TalkLine[]; now: number | null }) {
+  return (
+    // Shown, never said: the conversation around it is read out as it grows, the steps are not.
+    <ul
+      data-steps=""
+      aria-label="What Sage did"
+      aria-live="off"
+      className="flex flex-col gap-1.5 border-l-2 pl-3"
+    >
+      {steps.map((step) => {
+        const current = step.n === now;
+        return (
+          <li
+            key={step.n}
+            data-step={current ? "now" : "done"}
+            aria-current={current ? "step" : undefined}
+            className={cn(
+              "flex items-center gap-2 text-sm motion-safe:animate-in motion-safe:duration-200 motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-1",
+              current ? "text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {current ? (
+              <LoaderCircle aria-hidden className="size-3.5 shrink-0 text-primary motion-safe:animate-spin" />
+            ) : (
+              <Check aria-hidden className="size-3.5 shrink-0" />
+            )}
+            <span className="min-w-0 wrap-anywhere">{step.text}</span>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+/// The enlarged stage's words: the whole conversation, every reply in full, in text that can
+/// be selected and copied, with the steps Sage took between what was asked and what it
+/// answered. The newest is kept in view. Words still coming show below it.
+function Talk({ reduced }: { reduced: boolean }) {
+  const talk = useVoiceLive((live) => live.talk);
+  const hearing = useVoiceLive((live) => live.hearing);
+  const heard = useVoiceLive((live) => live.heard);
+  const step = useVoiceLive((live) => live.step);
+  const end = useRef<HTMLDivElement>(null);
+  const newest = talk[talk.length - 1];
+  // The newest step can sit above the reply it belongs to: it moves the view too.
+  const tail = `${newest?.n ?? 0}:${newest?.text.length ?? 0}:${talk.length}:${heard ? "" : hearing}`;
+  // The first time it only arrives at the end; after that it glides there.
+  const moved = useRef(false);
+  useEffect(() => {
+    end.current?.scrollIntoView?.({
+      block: "end",
+      behavior: moved.current && !reduced ? "smooth" : "auto",
+    });
+    moved.current = true;
+  }, [tail, reduced]);
+  const coming = hearing !== "" && !heard;
+  // The step under way is the newest one, while the store says one is.
+  const newestStep = step === null ? undefined : talk.filter((line) => line.who === "step").pop();
+  const now = newestStep?.text === step ? newestStep.n : null;
+  return (
+    <div
+      data-talk=""
+      role="log"
+      aria-label="Conversation"
+      tabIndex={0}
+      className="flex min-h-0 w-full flex-1 flex-col gap-4 overflow-y-auto rounded-lg bg-muted/40 px-5 py-4 text-left select-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+    >
+      {talk.length === 0 && !coming && (
+        <p className="m-auto text-sm text-muted-foreground">What you say and what Sage answers shows here.</p>
+      )}
+      {talkBlocks(talk).map((line) =>
+        Array.isArray(line) ? (
+          <Steps key={line[0]!.n} steps={line} now={now} />
+        ) : (
+          <div key={line.n} data-who={line.who} className="group flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground">{line.who === "you" ? "You" : "Sage"}</span>
+              {line.who === "sage" && (
+                <button
+                  type="button"
+                  aria-label="Copy this reply"
+                  onClick={() => copy(line.text)}
+                  className="inline-flex items-center rounded p-1 text-muted-foreground opacity-0 group-hover:opacity-100 hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <Copy aria-hidden className="size-3.5" />
+                </button>
+              )}
+            </div>
+            <p
+              className={cn(
+                "text-base leading-relaxed whitespace-pre-wrap wrap-anywhere",
+                line.who === "you" ? "text-muted-foreground" : "text-foreground",
+              )}
+            >
+              {line.text}
+            </p>
+          </div>
+        ),
+      )}
+      {coming && (
+        <p aria-live="off" className="text-base leading-relaxed text-muted-foreground/70 wrap-anywhere">
+          {hearing}
+        </p>
+      )}
+      <div ref={end} />
+    </div>
+  );
+}
+
 /// The question, printed above its options; an open question says how to answer it.
 function Question({ ask }: { ask: NonNullable<VoiceLive["ask"]> }) {
   return (
@@ -194,23 +359,58 @@ function Options(props: {
 /// a card. Once closed it fades away for `LEAVE_MS`, out of reach of the keyboard, the mouse
 /// and a screen reader, and then renders nothing, so The Breath inside it stops with it.
 export function OpenDotStage({ act = commands }: { act?: StageCommands } = {}) {
-  const stage = useStage(act);
+  // Enlarged, the stage fills the window and shows the whole conversation to read and copy.
+  const [large, setLarge] = useState(readLarge);
+  const resize = () => {
+    keepLarge(!large);
+    setLarge(!large);
+  };
+  const stage = useStage(act, large);
   // Whether the panel is drawn: while open, and for `LEAVE_MS` after. Adjusted while
   // rendering, so it never misses a frame between open and leaving.
   const [drawn, setDrawn] = useState(stage.open);
   if (stage.open && !drawn) setDrawn(true);
+  // A stage that comes up shows a new conversation: nothing said while none was up (or
+  // after the last one went) is carried into it.
+  const wasDrawn = useRef(false);
+  useEffect(() => {
+    if (drawn && !wasDrawn.current) voiceStore.set({ talk: [] });
+    wasDrawn.current = drawn;
+  }, [drawn]);
   const leaving = drawn && !stage.open;
   useEffect(() => {
     if (!leaving) return;
-    const gone = setTimeout(() => setDrawn(false), LEAVE_MS);
+    const gone = setTimeout(() => {
+      setDrawn(false);
+      // The conversation is shown for as long as the stage is: gone with it.
+      voiceStore.set({ talk: [] });
+    }, LEAVE_MS);
     return () => clearTimeout(gone);
   }, [leaving]);
   if (!drawn) return null;
-  return <Panel act={act} close={stage.close} justFinished={stage.justFinished} leaving={leaving} />;
+  return (
+    <Panel
+      act={act}
+      close={stage.close}
+      justFinished={stage.justFinished}
+      leaving={leaving}
+      large={large}
+      resize={resize}
+    />
+  );
 }
 
-function Panel(props: { act: StageCommands; close: () => void; justFinished: boolean; leaving: boolean }) {
-  const { act, close, justFinished, leaving } = props;
+function Panel(props: {
+  act: StageCommands;
+  close: () => void;
+  justFinished: boolean;
+  leaving: boolean;
+  large: boolean;
+  resize: () => void;
+}) {
+  const { act, close, justFinished, leaving, large, resize } = props;
+  const spoken = useVoiceLive((live) => live.talk.some((line) => line.who !== "step"));
+  const step = useVoiceLive((live) => live.step);
   const state = useVoiceLive((live) => live.state);
   const micOpen = useVoiceLive((live) => live.micOpen);
   const trouble = useVoiceLive((live) => live.trouble);
@@ -287,28 +487,34 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
     showing: ask !== null || card !== null,
     options,
     shortcut: hotkey !== "",
+    step,
   });
 
   return (
     <div
       aria-hidden={leaving || undefined}
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pr-4 pb-4 pl-[calc(46px+1rem)]"
+      className={cn(
+        "pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center pr-4 pb-4 pl-[calc(46px+1rem)]",
+        large && "top-0 pt-4",
+      )}
     >
       <section
         role="region"
-        aria-label="Open Dot"
+        aria-label="Open Sage"
+        data-large={large || undefined}
         inert={leaving}
         className={cn(
-          "flex max-h-[calc(100dvh-2rem)] w-full max-w-xl flex-col items-center gap-3 rounded-xl bg-popover px-6 pt-5 pb-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10",
+          "flex max-h-[calc(100dvh-2rem)] w-full flex-col items-center gap-3 rounded-xl bg-popover px-6 pt-5 pb-3 text-popover-foreground shadow-lg ring-1 ring-foreground/10",
+          large ? "h-full max-w-5xl" : "max-w-xl",
           leaving
             ? "pointer-events-none animate-out duration-200 ease-in fill-mode-forwards fade-out-0"
             : "pointer-events-auto animate-in duration-250 ease-out fade-in-0",
           !reduced && (leaving ? "slide-out-to-bottom-4" : "slide-in-from-bottom-4"),
         )}
       >
-        <div data-breath-state={breath} className="shrink-0 p-3">
+        <div data-breath-state={breath} className={cn("shrink-0", large ? "p-1" : "p-3")}>
           <Breath
-            size={132}
+            size={large ? 84 : 132}
             state={breath}
             options={ask?.options.length ?? 3}
             label={interrupts(state) ? "Stop and listen" : "Listen"}
@@ -317,7 +523,7 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
             }}
           />
         </div>
-        <Words question={ask?.question ?? null} />
+        {large ? <Talk reduced={reduced} /> : <Words question={ask?.question ?? null} />}
         {ask !== null && <Question ask={ask} />}
         {options && <Options ask={ask} picked={picked} pick={pick} />}
         {card !== null && (
@@ -326,7 +532,15 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
             role="group"
             aria-label="Details"
             tabIndex={0}
-            className="max-h-48 min-h-0 w-full shrink overflow-y-auto rounded-lg bg-muted/60 px-3 py-2.5 text-xs leading-relaxed wrap-anywhere focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            className={cn(
+              "min-h-0 w-full shrink overflow-y-auto rounded-lg bg-muted/60 px-3 py-2.5 leading-relaxed wrap-anywhere select-text focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+              // A command is said yes to as it is read: it shows whole, never behind a scroll.
+              card.kind === "confirm" && card.deed.kind === "command"
+                ? "shrink-0 text-xs"
+                : large
+                  ? "max-h-[40%] shrink-0 text-sm"
+                  : "max-h-48 text-xs",
+            )}
           >
             <Card card={card} />
           </div>
@@ -345,6 +559,27 @@ function Panel(props: { act: StageCommands; close: () => void; justFinished: boo
           ) : (
             <span className="flex-1" />
           )}
+          {large && spoken && (
+            <button
+              type="button"
+              onClick={() => copy(talkText(voiceStore.get().talk))}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            >
+              <Copy aria-hidden className="size-3.5" />
+              Copy all
+            </button>
+          )}
+          <button
+            type="button"
+            aria-pressed={large}
+            aria-label={large ? "Make Open Sage smaller" : "Enlarge Open Sage"}
+            title={large ? "Smaller" : "Enlarge to read and copy"}
+            onClick={resize}
+            className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
+            {large ? <Minimize2 aria-hidden className="size-3.5" /> : <Maximize2 aria-hidden className="size-3.5" />}
+            {large ? "Smaller" : "Enlarge"}
+          </button>
           <button
             type="button"
             aria-keyshortcuts="Escape"

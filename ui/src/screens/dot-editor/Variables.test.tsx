@@ -66,7 +66,7 @@ function setup(opts: {
 }
 
 describe("the editor's Variables section", () => {
-  it("says a newly ticked server is granted its variables when the dot is saved", async () => {
+  it("says a newly ticked server is granted its variables when the sol is saved", async () => {
     setup({ uses: both, before: null });
     const github = await screen.findByRole("group", { name: "github" });
     expect(within(github).getByText("GITHUB_TOKEN · granted when you save")).toBeVisible();
@@ -150,7 +150,7 @@ function offered(): string[] {
   return [...list.querySelectorAll("option")].map((o) => o.value);
 }
 
-describe("the Variables section of a dot in an org", () => {
+describe("the Variables section of a sol in an org", () => {
   it("shows each grant's status in the org: its source, or the core's reason", async () => {
     setup({
       ...inAcme,
@@ -176,18 +176,18 @@ describe("the Variables section of a dot in an org", () => {
     expect(backend.callsTo("dot_variables")).toEqual([{ dotId: "D2" }]);
   });
 
-  it("shows the grants of a dot whose org was removed in the error tone", async () => {
+  it("shows the grants of a sol whose org was removed in the error tone", async () => {
     setup({ ...inAcme, orgs: [], variables: { shell: ["LOG_LEVEL"] }, statuses: [removed!] });
     const shell = await screen.findByRole("group", { name: "Shell" });
     const text = await within(shell).findByText(removed!.text!);
-    expect(text).toHaveTextContent("dot 'acme-release': its org 'acme-eng' was removed");
+    expect(text).toHaveTextContent("sol 'acme-release': its org 'acme-eng' was removed");
     expect(text).toHaveClass("text-destructive");
     // Nothing of the org is offered: it is not joined.
     expect(offered()).toEqual([]);
     expect(backend.callsTo("org_entries")).toEqual([]);
   });
 
-  it("says a grant not saved yet is checked when the dot is saved", async () => {
+  it("says a grant not saved yet is checked when the sol is saved", async () => {
     const { user } = setup({ ...inAcme, orgs: [acme], entries: sample.orgEntries });
     const shell = await screen.findByRole("group", { name: "Shell" });
     await user.type(within(shell).getByLabelText("Variable for the shell"), "API_BASE_URL");
@@ -300,7 +300,7 @@ describe("the Variables section of a dot in an org", () => {
   });
 });
 
-describe("the Variables section of a Personal dot", () => {
+describe("the Variables section of a Personal sol", () => {
   it("offers every Personal name, secrets too, and asks for no org", async () => {
     setup({ uses: none, before: none, env: sample.env, dotId: "D1" });
     await screen.findByRole("group", { name: "Shell" });
@@ -315,7 +315,7 @@ describe("the Variables section of a Personal dot", () => {
       consumer: "shell",
       name: "NPM_TOKEN",
       status: "not_defined",
-      text: "NPM_TOKEN: not in Personal (dot 'nightly-tests', shell)",
+      text: "NPM_TOKEN: not in Personal (sol 'nightly-tests', shell)",
       source: null,
       secret: false,
     };

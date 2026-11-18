@@ -39,7 +39,7 @@ fn the_expenses_tests_pass_through_the_real_call_path() {
         outcomes(&report),
         [
             ("a month's total adds its expenses".to_string(), true),
-            ("a dot's expense names the dot".to_string(), true),
+            ("a sol's expense names the sol".to_string(), true),
         ],
         "{report:?}"
     );
@@ -209,7 +209,7 @@ fn a_test_can_call_as_a_dot_and_see_the_starts_it_asked_for() {
   "tools": [
     {
       "name": "assign",
-      "description": "Start a dot on the books",
+      "description": "Start a sol on the books",
       "input": { "type": "object", "properties": { "dot": { "type": "string" } }, "required": ["dot"] },
       "writes": true
     },"#,
@@ -226,13 +226,13 @@ fn a_test_can_call_as_a_dot_and_see_the_starts_it_asked_for() {
         "tests/start.test.js",
         r#"
 const dots = [{ id: "d1", name: "builder" }];
-test("assigning starts the dot once", () => {
+test("assigning starts the sol once", () => {
   const run = call("assign", { dot: "d1" }, { can_start: true, dots });
   assert.equal(call("assign", { dot: "d1" }, { can_start: true, dots }), run);
   assert.deepEqual(started().map(s => [s.dot_id, s.tag, s.run_id]), [["d1", "books", run]]);
 });
-test("a dot that does not use the app is not started", () => {
-  assert.throws(() => call("assign", { dot: "d9" }, { can_start: true, dots }), "no dot d9 uses this app");
+test("a sol that does not use the app is not started", () => {
+  assert.throws(() => call("assign", { dot: "d9" }, { can_start: true, dots }), "no sol d9 uses this app");
   assert.deepEqual(started(), []);
 });
 test("without the switch there is no start", () => {

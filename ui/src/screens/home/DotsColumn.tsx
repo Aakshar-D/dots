@@ -69,7 +69,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
   return (
     // Narrower in a small window, so the conversation keeps room and nothing scrolls
     // sideways (420 px self-QA).
-    <nav aria-label="Dots" className="flex w-40 shrink-0 flex-col border-r bg-sidebar sm:w-64">
+    <nav aria-label="Sols" className="flex w-40 shrink-0 flex-col border-r bg-sidebar sm:w-64">
       {/* New dot first, then the list under a quiet heading, as a chat app's column. When the
           role in the account in view refuses making dots, the button stays, off, with the
           core's reason. */}
@@ -83,7 +83,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
             className="w-full cursor-not-allowed justify-start opacity-50"
           >
             <Plus aria-hidden />
-            New dot
+            New sol
           </Button>
         ) : (
           <Button
@@ -93,7 +93,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
             onClick={newDot}
           >
             <Plus aria-hidden />
-            New dot
+            New sol
           </Button>
         )}
         {creating && <NewDotDialog onClose={() => setCreating(false)} />}
@@ -116,7 +116,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
         )}
         {importing && <ImportAgentsDialog onClose={() => setImporting(false)} />}
       </div>
-      <h2 className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">Dots</h2>
+      <h2 className="px-4 pt-3 pb-1 text-xs font-medium text-muted-foreground">Sols</h2>
       <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2" onKeyDown={onKeyDown}>
         {rows.map((row) => {
           const open = row.dot.id === openId;

@@ -267,7 +267,7 @@ export function RunContextSection(props: { runs: Run[] }) {
       )}
       {report.dot_compactions + report.dot_clears > 0 && (
         <p>
-          This dot: {plural(report.dot_compactions, "compaction", "compactions")},{" "}
+          This sol: {plural(report.dot_compactions, "compaction", "compactions")},{" "}
           {plural(report.dot_clears, "fresh start", "fresh starts")}
         </p>
       )}

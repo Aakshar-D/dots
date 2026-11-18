@@ -152,7 +152,7 @@ fn a_version_other_than_1_or_2_is_refused_before_its_fields_are_read() {
                     "new_v3_field": true});
     assert_eq!(
         invalid(&v3.to_string()),
-        "policy version 3 is not supported; this Dots reads versions 1 and 2"
+        "policy version 3 is not supported; this Sage reads versions 1 and 2"
     );
     assert!(invalid(&policy_with(json!({"v": "1"}))).contains("version \"1\" is not supported"));
 }
@@ -431,7 +431,7 @@ fn a_bad_envelope_or_key_is_refused() {
     .contains("unknown field 'by'"));
     assert_eq!(
         envelope_error(&json!({"v": 2, "policy": SPEC_POLICY, "signature": sig}).to_string()),
-        "version 2 is not supported; this Dots reads version 1"
+        "version 2 is not supported; this Sage reads version 1"
     );
     assert_eq!(
         envelope_error(&envelope(SPEC_POLICY, "not a minisig")),
@@ -659,7 +659,7 @@ fn a_join_code_with_an_unknown_version_is_refused() {
     value["new_field"] = json!(true);
     assert_eq!(
         refused(&code_for(&value)),
-        "join code: version 3 is not supported; update Dots"
+        "join code: version 3 is not supported; update Sage"
     );
     value.as_object_mut().unwrap().remove("v");
     assert_eq!(refused(&code_for(&value)), "join code: no version 'v'");
@@ -1189,7 +1189,7 @@ fn v2_bad_admin_key_refused() {
         invalid(&policy_v2_with(
             json!({"roster": "required", "admins": [good, "nope"]})
         )),
-        "admins[1] is not a Dots ID"
+        "admins[1] is not a Sage ID"
     );
 }
 

@@ -24,7 +24,7 @@ export function OrgPicker(props: { value: string | null; onChange: (org: string 
     <Field
       label="Account"
       htmlFor="dot-org"
-      hint="Where the dot's variables come from. It can't be changed once the dot is made."
+      hint="Where the sol's variables come from. It can't be changed once the sol is made."
     >
       <NativeSelect
         id="dot-org"
@@ -58,7 +58,7 @@ export function OrgLine({ orgId }: { orgId: string }) {
         <p className="text-xs text-destructive">{orgRemovedText(orgId)}</p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          Its variables come from this account. It was set when the dot was made.
+          Its variables come from this account. It was set when the sol was made.
         </p>
       )}
     </div>
@@ -93,7 +93,7 @@ export function WorkspacePicker(props: {
   const choices = useChoices(props.account);
   if (!choices) return null;
   return (
-    <Field label="Workspace" htmlFor="dot-workspace" hint="Where the dot is listed and works.">
+    <Field label="Workspace" htmlFor="dot-workspace" hint="Where the sol is listed and works.">
       <NativeSelect
         id="dot-workspace"
         value={props.value ?? DEFAULT_WORKSPACE}
@@ -134,7 +134,7 @@ export function WorkspaceMove({ dot }: { dot: Dot }) {
         id="dot-workspace"
         value={placed}
         disabled={move.isPending || refusal !== undefined}
-        title={move.isPending ? "Moving the dot" : refusal}
+        title={move.isPending ? "Moving the sol" : refusal}
         onChange={(e) => move.mutate(e.target.value)}
       >
         {!choices.some((w) => w.id === placed) && (

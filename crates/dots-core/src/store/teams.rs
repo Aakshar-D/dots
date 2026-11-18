@@ -27,7 +27,7 @@ fn unique(e: sqlx::Error, taken: String) -> Error {
             return Error::Conflict(taken);
         }
         if db.is_foreign_key_violation() {
-            return Error::Invalid("a member is not a dot".into());
+            return Error::Invalid("a member is not a sol".into());
         }
     }
     e.into()
@@ -127,14 +127,14 @@ async fn check_accounts(
         if dot_org.as_deref() != org_id {
             let name: String = row.try_get("name")?;
             return Err(Error::Invalid(format!(
-                "dot '{name}' is in another account than the team"
+                "sol '{name}' is in another account than the team"
             )));
         }
         let dot_workspace: String = row.try_get("workspace_id")?;
         if dot_workspace != workspace_id {
             let name: String = row.try_get("name")?;
             return Err(Error::Invalid(format!(
-                "dot '{name}' is in another workspace than the team"
+                "sol '{name}' is in another workspace than the team"
             )));
         }
     }

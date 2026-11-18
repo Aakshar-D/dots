@@ -14,7 +14,7 @@ async function lands(path: string, expected: string) {
 }
 
 describe("the home's routes", () => {
-  it("opens the home for the root, the old Dots and Chat screens and unknown paths", async () => {
+  it("opens the home for the root, the old Sage and Chat screens and unknown paths", async () => {
     home([]);
     for (const path of ["/", "/dots", "/chat", "/nowhere"]) {
       const router = await lands(path, `/home/${dot.id}`);
@@ -22,7 +22,7 @@ describe("the home's routes", () => {
     }
   });
 
-  it("opens a dot's conversation for its old chat address", async () => {
+  it("opens a sol's conversation for its old chat address", async () => {
     home([]);
     await lands(`/chat/${dot.id}`, `/home/${dot.id}`);
   });
@@ -38,7 +38,7 @@ describe("the home's routes", () => {
     expect(await screen.findByText("Back to the current conversation")).toBeVisible();
   });
 
-  it("opens the dot's conversation for an old chat address of a run that is gone", async () => {
+  it("opens the sol's conversation for an old chat address of a run that is gone", async () => {
     home([]);
     backend.on("run_thread", () => {
       throw { kind: "not_found", message: "run not found" };
@@ -64,7 +64,7 @@ describe("the home's routes", () => {
     await user.click(within(rail).getByRole("link", { name: "Home" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
     expect(
-      await screen.findByRole("heading", { name: "What should your first dot do?" }),
+      await screen.findByRole("heading", { name: "What should your first sol do?" }),
     ).toBeVisible();
   });
 });

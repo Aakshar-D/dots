@@ -167,12 +167,12 @@ pub fn no_server_text(port: u16, bind_error: &std::io::Error) -> String {
     if bind_error.kind() == ErrorKind::AddrInUse {
         format!(
             "local server is not running: port {port} is in use. Change the port in Settings \
-             and restart Dots."
+             and restart Sage."
         )
     } else {
         format!(
             "local server is not running: could not listen on port {port}: {bind_error}. Try \
-             another port in Settings and restart Dots."
+             another port in Settings and restart Sage."
         )
     }
 }

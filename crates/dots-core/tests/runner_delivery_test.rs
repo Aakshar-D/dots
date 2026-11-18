@@ -209,10 +209,10 @@ fn wait_reason_follows_its_precedence() {
     }
     assert_eq!(WaitReason::Busy.text(), "other runs are busy");
     assert_eq!(WaitReason::UsageHold.text(), "held for the usage limit");
-    assert_eq!(WaitReason::Updating.text(), "Dots is updating");
+    assert_eq!(WaitReason::Updating.text(), "Sage is updating");
     assert_eq!(
         WaitReason::DotBusy.text(),
-        "this dot is busy with another run"
+        "this sol is busy with another run"
     );
     assert_eq!(WaitReason::Queued.text(), "next in line");
 }

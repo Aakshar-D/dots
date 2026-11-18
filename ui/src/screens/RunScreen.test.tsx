@@ -59,7 +59,7 @@ describe("the run view", () => {
     expect(screen.getAllByText("Auto · Sonnet — code work: refactor").length).toBe(2);
   });
 
-  it("says only the model for a dot with its own", async () => {
+  it("says only the model for a sol with its own", async () => {
     thread([{ ...run, model: "opus", model_tier: null, model_reason: null, model_fallback_from: null }]);
     renderApp(`/runs/${run.id}`);
     const details = await screen.findByText("Model");
@@ -88,10 +88,49 @@ describe("the run view", () => {
     expect(call).toHaveAttribute("open");
     expect(within(call).getByText("test result: ok")).toBeInTheDocument();
     expect(screen.queryByText("hidden")).toBeNull();
-    expect(screen.getByText("Unparsed output").closest("details")).not.toHaveAttribute("open");
+    expect(screen.getByText("Engine output").closest("details")).not.toHaveAttribute("open");
   });
 
-  it("shows a chat run's tool steps as chips, with its header and the dot's name label", async () => {
+  it("shows the engine's thinking counts as one line that opens to how much it thought", async () => {
+    const count = (total: number, delta: number) =>
+      ev({
+        kind: "raw",
+        line: JSON.stringify({
+          type: "system",
+          subtype: "thinking_tokens",
+          estimated_tokens: total,
+          estimated_tokens_delta: delta,
+          session_id: "s",
+          uuid: "u",
+        }),
+      });
+    thread([run], [count(50, 50), count(383, 333), ev({ kind: "assistant_text", text: "Done." })]);
+    const { user } = renderApp(`/runs/${run.id}`);
+    const line = await screen.findByText("Thought it through · about 383 tokens");
+    const group = line.closest("details")!;
+    expect(group).not.toHaveAttribute("open");
+    await user.click(line);
+    expect(group).toHaveAttribute("open");
+    expect(within(group).queryByText(/session_id|uuid/)).toBeNull();
+    expect(
+      within(group).getByText("The model thought before it answered: about 383 tokens."),
+    ).toBeVisible();
+  });
+
+  it("shows an engine line it does not know as its fields, with a button that copies it", async () => {
+    const raw = JSON.stringify({ type: "system", subtype: "hook_started", hook_name: "PreToolUse", uuid: "u" });
+    thread([run], [ev({ kind: "raw", line: raw })]);
+    const { user } = renderApp(`/runs/${run.id}`);
+    const line = await screen.findByText("System · hook started");
+    await user.click(line);
+    const group = line.closest("details")!;
+    expect(within(group).getByText("hook name").nextElementSibling).toHaveTextContent("PreToolUse");
+    expect(within(group).queryByText("uuid")).toBeNull();
+    await user.click(within(group).getByRole("button", { name: "Copy the line: System · hook started" }));
+    expect(await navigator.clipboard.readText()).toBe(raw);
+  });
+
+  it("shows a chat run's tool steps as chips, with its header and the sol's name label", async () => {
     const asked: Run = { ...folderRun, trigger: "chat", payload: { message: "Run the tests." } };
     thread(
       [asked],
@@ -550,7 +589,7 @@ describe("the run view", () => {
     const { user } = renderApp(`/runs/${run.id}`);
     const card = await screen.findByRole("article", { name: "Approval for Bash" });
     expect(within(card).getAllByText(/git push origin main/)[0]).toBeVisible();
-    await user.type(within(card).getByLabelText("Note for the dot"), "not on main");
+    await user.type(within(card).getByLabelText("Note for the sol"), "not on main");
     await user.click(within(card).getByRole("button", { name: "Deny" }));
     await waitFor(() =>
       expect(backend.callsTo("decide_approval")).toEqual([
@@ -651,7 +690,7 @@ describe("the run view", () => {
   });
 });
 
-describe("the calls Dots performed in a thread", () => {
+describe("the calls Sage performed in a thread", () => {
   /// An approval that was decided late: `state` is where the call Dots performs stands, and
   /// null stands for an approval the model was asked to repeat.
   const decided = (id: string, state: ApplyState | null): Approval => ({
@@ -665,9 +704,9 @@ describe("the calls Dots performed in a thread", () => {
     apply_state: state,
   });
   const labels: [ApplyState, string][] = [
-    ["applied", "Performed by Dots"],
+    ["applied", "Performed by Sage"],
     ["failed", "Performed; the tool reported an error"],
-    ["unknown", "Outcome unknown: Dots stopped while this ran"],
+    ["unknown", "Outcome unknown: Sage stopped while this ran"],
     ["skipped", "Not performed"],
     ["queued", "Waiting to be performed"],
     ["applying", "Being performed"],
@@ -694,7 +733,7 @@ describe("the calls Dots performed in a thread", () => {
     expect(screen.queryByRole("article", { name: "Approval for Bash" })).toBeNull();
   });
 
-  it("names a memory call Dots performed by its memory tool", async () => {
+  it("names a memory call Sage performed by its memory tool", async () => {
     thread([folderRun], [], [{ ...decided("m", "applied"), tool: "Memory", input: { query: "pdf" } }]);
     renderApp(`/runs/${run.id}`);
     const rows = within(await screen.findByRole("list", { name: "Approved calls" })).getAllByRole(
@@ -725,7 +764,7 @@ describe("the calls Dots performed in a thread", () => {
     expect(screen.queryByText("Waiting to be performed")).toBeNull();
   });
 
-  it("names the dot in the rules a pending call offers", async () => {
+  it("names the sol in the rules a pending call offers", async () => {
     const waiting: Run = { ...folderRun, status: "awaiting_approval", ended_at: null };
     thread([waiting], [], [sample.approval]);
     backend.on("approval_rule_candidates", () => sample.rules);
@@ -832,7 +871,7 @@ describe("the approval buttons for a Viewer", () => {
     expect(backend.callsTo("dot_access")).toContainEqual({ dotId: sample.dot.id });
   });
 
-  it("are off outside the dot's workspace, saying so", async () => {
+  it("are off outside the sol's workspace, saying so", async () => {
     const title =
       "Acme Engineering: you aren't in the Payments workspace. Ask an Admin or Owner to add you.";
     const { approve, deny } = await buttons(title);

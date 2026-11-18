@@ -19,7 +19,7 @@ function block(selector: string): Map<string, string> {
 
 const SELECTOR: Record<ThemeName, string> = { light: ":root", dark: ".dark" };
 
-describe("the Deep Teal tokens", () => {
+describe("the Aurora tokens", () => {
   it("index.css declares every token with the value of the table, in both themes", () => {
     for (const theme of ["light", "dark"] as const) {
       const declared = block(SELECTOR[theme]);

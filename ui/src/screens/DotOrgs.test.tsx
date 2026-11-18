@@ -11,7 +11,7 @@ const gamma: OrgSummary = { ...acme, id: "gamma", name: "Gamma" };
 // A dot of Acme Engineering, and the contract's Personal dot.
 const release: Dot = { ...sample.dot, id: "D2", name: "acme-release", org_id: "acme-eng" };
 const personal = sample.dot;
-const REMOVED = "Its account 'acme-eng' was removed. Join it again to run this dot.";
+const REMOVED = "Its account 'acme-eng' was removed. Join it again to run this sol.";
 const basics = { name: "nightly", instructions: "Run the tests.", workdir: "C:/dev/app" };
 
 /// Opens the new-dot form with `orgs` joined and fills in what a dot needs.
@@ -48,8 +48,8 @@ function editor(dot: Dot, orgs: OrgSummary[]) {
   return { held, ...renderApp(`/dots/${dot.id}`) };
 }
 
-describe("the org of a new dot", () => {
-  it("offers Personal and each joined org, and creates the dot in the one chosen", async () => {
+describe("the org of a new sol", () => {
+  it("offers Personal and each joined org, and creates the sol in the one chosen", async () => {
     const { user, router } = await newDot([acme, gamma]);
     const picker = screen.getByLabelText("Account");
     expect(within(picker).getAllByRole("option").map((o) => o.textContent)).toEqual([
@@ -59,16 +59,16 @@ describe("the org of a new dot", () => {
     ]);
     expect(picker).toHaveValue("");
     await user.selectOptions(picker, "Acme Engineering");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
       { spec: { ...blankSpec, ...basics }, orgId: "acme-eng", workspaceId: null },
     ]);
   });
 
-  it("makes a Personal dot with no org", async () => {
+  it("makes a Personal sol with no org", async () => {
     const { user, router } = await newDot([acme]);
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
       { spec: { ...blankSpec, ...basics }, orgId: null, workspaceId: null },
@@ -79,7 +79,7 @@ describe("the org of a new dot", () => {
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     const { user, router } = await newDot([acme, gamma]);
     await waitFor(() => expect(screen.getByLabelText("Account")).toHaveValue("acme-eng"));
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/dots/dot-new"));
     expect(backend.callsTo("create_dot")).toEqual([
       { spec: { ...blankSpec, ...basics }, orgId: "acme-eng", workspaceId: null },
@@ -92,17 +92,17 @@ describe("the org of a new dot", () => {
     expect(screen.queryByLabelText("Account")).toBeNull();
   });
 
-  it("shows the org as text once the dot is made, with no picker", async () => {
+  it("shows the org as text once the sol is made, with no picker", async () => {
     const { user } = await newDot([acme]);
     await user.selectOptions(screen.getByLabelText("Account"), "Acme Engineering");
-    await user.click(screen.getByRole("button", { name: "Create dot" }));
+    await user.click(screen.getByRole("button", { name: "Create sol" }));
     const org = await screen.findByRole("group", { name: "Account" });
     await waitFor(() => expect(org).toHaveTextContent("Account: Acme Engineering"));
     expect(screen.queryByRole("combobox", { name: "Account" })).toBeNull();
   });
 });
 
-describe("a dot whose org was removed", () => {
+describe("a sol whose org was removed", () => {
   it("says so in the editor, and keeps Save and Run off with the reason", async () => {
     editor(release, []);
     const org = await screen.findByRole("group", { name: "Account" });
@@ -129,7 +129,7 @@ describe("a dot whose org was removed", () => {
     expect(backend.callsTo("update_dot")).toEqual([]);
 
     await user.click(screen.getByRole("button", { name: "Delete" }));
-    await user.click(await screen.findByRole("button", { name: "Delete the dot" }));
+    await user.click(await screen.findByRole("button", { name: "Delete the sol" }));
     await waitFor(() => expect(router.state.location.pathname).toBe("/home"));
     expect(backend.callsTo("delete_dot")).toEqual([{ id: "D2" }]);
   });
@@ -139,11 +139,11 @@ describe("a dot whose org was removed", () => {
     const org = await screen.findByRole("group", { name: "Account" });
     await waitFor(() => expect(org).toHaveTextContent("Account: Acme Engineering"));
     backend.on("update_dot", () => {
-      throw { kind: "conflict", message: "dot 'acme-release': its org 'acme-eng' was removed" };
+      throw { kind: "conflict", message: "sol 'acme-release': its org 'acme-eng' was removed" };
     });
     await user.click(screen.getByRole("button", { name: "Save" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "dot 'acme-release': its org 'acme-eng' was removed",
+      "sol 'acme-release': its org 'acme-eng' was removed",
     );
   });
 
@@ -215,7 +215,7 @@ describe("a dot whose org was removed", () => {
   });
 });
 
-describe("a Personal dot", () => {
+describe("a Personal sol", () => {
   it("shows no org, asks for none, and saves and runs as before", async () => {
     backend.on("dot_overview", () => [{ ...sample.overview, dot: personal }]);
     editor(personal, [acme]);
@@ -230,10 +230,10 @@ describe("a Personal dot", () => {
 
 describe("a Viewer in the editor", () => {
   const viewer: OrgSummary = { ...acme, membership: "active", role: "viewer" };
-  const TITLE = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
-  const RUN = "Acme Engineering: a Viewer can't run dots. Ask an Admin or Owner.";
+  const TITLE = "Acme Engineering: a Viewer can't create or change sols. Ask an Admin or Owner.";
+  const RUN = "Acme Engineering: a Viewer can't run sols. Ask an Admin or Owner.";
 
-  it("can't save a dot of the account", async () => {
+  it("can't save a sol of the account", async () => {
     backend.on("dot_access", () => ({ edit: TITLE, run: RUN, answer: null, create_api_keys: null }));
     editor(release, [viewer]);
     const save = await screen.findByRole("button", { name: "Save" });
@@ -244,7 +244,7 @@ describe("a Viewer in the editor", () => {
     expect(run).toHaveAttribute("title", RUN);
   });
 
-  it("can't create a dot in the account chosen, but can in Personal", async () => {
+  it("can't create a sol in the account chosen, but can in Personal", async () => {
     // The core refuses the account's Default; Personal's refuses nothing.
     backend.on("workspace_list", (args) => [
       {
@@ -259,7 +259,7 @@ describe("a Viewer in the editor", () => {
     ]);
     const { user } = await newDot([viewer]);
     await user.selectOptions(screen.getByLabelText("Account"), "acme-eng");
-    const create = screen.getByRole("button", { name: "Create dot" });
+    const create = screen.getByRole("button", { name: "Create sol" });
     await waitFor(() => expect(create).toBeDisabled());
     expect(create).toHaveAttribute("title", TITLE);
     await user.selectOptions(screen.getByLabelText("Account"), "");

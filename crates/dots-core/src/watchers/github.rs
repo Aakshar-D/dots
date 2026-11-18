@@ -197,7 +197,7 @@ impl Poller<'_> {
             .get(&url)
             .header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28")
-            .header("User-Agent", "Dots")
+            .header("User-Agent", "Sage")
             .bearer_auth(&self.token);
         if let Some((etag, _)) = &cached {
             request = request.header("If-None-Match", etag);

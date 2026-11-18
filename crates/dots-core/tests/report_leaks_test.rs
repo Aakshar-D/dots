@@ -238,15 +238,15 @@ fn a_panic_keeps_its_first_line_only() {
             "dots_app",
             "thread 'main' panicked at src\\x.rs:1:2: called unwrap on asha's text",
         ),
-        "the dot said: please email the board".to_string(),
+        "the sol said: please email the board".to_string(),
         "and more".to_string(),
-        line("INFO", "dots_app", "starting Dots 0.3.0"),
+        line("INFO", "dots_app", "starting Sage 0.3.0"),
     ];
     let out = tail_of(&lines, &plain());
     assert_eq!(out.len(), 3, "{out:?}");
     assert!(out[0].contains("panicked at"));
     assert_eq!(out[1], "[2 more lines hidden]");
-    assert!(out[2].ends_with("starting Dots 0.3.0"));
+    assert!(out[2].ends_with("starting Sage 0.3.0"));
 }
 
 #[tokio::test]

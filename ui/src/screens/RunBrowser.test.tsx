@@ -28,14 +28,14 @@ describe("browser calls in the run view", () => {
       ev({
         kind: "tool_result",
         id: "b1",
-        output: "Dots: Opened shop.com/cart\n### Page\n- Page URL: https://shop.com/cart",
+        output: "Sage: Opened shop.com/cart\n### Page\n- Page URL: https://shop.com/cart",
         is_error: false,
       }),
       ev({ kind: "tool_call", id: "b2", tool: "mcp__browser__browser_click", input: { target: "e5" } }),
       ev({
         kind: "tool_result",
         id: "b2",
-        output: 'Dots: Clicked "Add to cart"\nDots: Downloaded statement.pdf\n### Page',
+        output: 'Sage: Clicked "Add to cart"\nSage: Downloaded statement.pdf\n### Page',
         is_error: false,
       }),
       ev({
@@ -44,7 +44,7 @@ describe("browser calls in the run view", () => {
         tool: "mcp__browser__browser_type",
         input: { target: "e11", text: "shoes" },
       }),
-      ev({ kind: "tool_result", id: "b3", output: 'Dots: Typed into "Search"\n### Page', is_error: false }),
+      ev({ kind: "tool_result", id: "b3", output: 'Sage: Typed into "Search"\n### Page', is_error: false }),
       ev({
         kind: "tool_call",
         id: "b4",
@@ -55,7 +55,7 @@ describe("browser calls in the run view", () => {
         kind: "tool_result",
         id: "b4",
         output:
-          "Dots: Took a screenshot\n### Result\n- [Screenshot of viewport](downloads\\page-2026-10-21T12-16-35-575Z.png)",
+          "Sage: Took a screenshot\n### Result\n- [Screenshot of viewport](downloads\\page-2026-10-21T12-16-35-575Z.png)",
         is_error: false,
       }),
     ];
@@ -72,7 +72,7 @@ describe("browser calls in the run view", () => {
     expect(screen.getByText('Clicked "Add to cart" · Downloaded statement.pdf')).toBeVisible();
     expect(screen.getByText('Typed into "Search"')).toBeVisible();
     expect(screen.getByText("Took a screenshot")).toBeVisible();
-    const image = await screen.findByRole("img", { name: "Screenshot of the dot's browser" });
+    const image = await screen.findByRole("img", { name: "Screenshot of the sol's browser" });
     expect(image).toHaveAttribute("src", "data:image/png;base64,iVBORw==");
     expect(backend.callsTo("browser_screenshot")).toEqual([
       { runId: run.id, name: "page-2026-10-21T12-16-35-575Z.png" },

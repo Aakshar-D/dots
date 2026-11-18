@@ -1,13 +1,13 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist";
+@import "@fontsource-variable/inter";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
     --font-heading: var(--font-sans);
-    --font-sans: 'Geist Variable', sans-serif;
+    --font-sans: 'Inter Variable', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
     --color-sidebar-ring: var(--sidebar-ring);
     --color-sidebar-border: var(--sidebar-border);
     --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -15,7 +15,8 @@
     --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
     --color-sidebar-primary: var(--sidebar-primary);
     --color-sidebar-foreground: var(--sidebar-foreground);
-    --color-sidebar: var(--sidebar);
+    /* The three surfaces are glass: the token's colour, part see-through (see "Glass" below). */
+    --color-sidebar: var(--glass-sidebar);
     --color-chart-5: var(--chart-5);
     --color-chart-4: var(--chart-4);
     --color-chart-3: var(--chart-3);
@@ -34,9 +35,9 @@
     --color-primary-foreground: var(--primary-foreground);
     --color-primary: var(--primary);
     --color-popover-foreground: var(--popover-foreground);
-    --color-popover: var(--popover);
+    --color-popover: var(--glass-popover);
     --color-card-foreground: var(--card-foreground);
-    --color-card: var(--card);
+    --color-card: var(--glass-card);
     --color-foreground: var(--foreground);
     --color-background: var(--background);
     --color-needs: var(--needs);
@@ -56,89 +57,121 @@
     --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Deep Teal (deep-teal spec section 2). `src/lib/tokens.ts` mirrors these values and its test
-   holds the two together and measures the contrast of every pair. */
+/* Aurora: Sage's colours. `src/lib/tokens.ts` mirrors these values and its test holds the two
+   together and measures the contrast of every pair. */
 :root {
-    --background: #f7fbfb;
-    --foreground: #11201f;
+    --background: #f6faf8;
+    --foreground: #0b1512;
     --card: #ffffff;
-    --card-foreground: #11201f;
+    --card-foreground: #0b1512;
     --popover: #ffffff;
-    --popover-foreground: #11201f;
-    --primary: #0c7765;
+    --popover-foreground: #0b1512;
+    --primary: #0a6f4d;
     --primary-foreground: #ffffff;
-    --secondary: #e3eceb;
-    --secondary-foreground: #1d3332;
-    --muted: #e9f2f1;
-    --muted-foreground: #4f6867;
-    --accent: #e3eceb;
-    --accent-foreground: #1d3332;
+    --secondary: #e1ebe6;
+    --secondary-foreground: #17302a;
+    --muted: #e7f0eb;
+    --muted-foreground: #476056;
+    --accent: #e1ebe6;
+    --accent-foreground: #17302a;
     --destructive: #b23838;
-    --border: #d3e3e1;
-    --input: #d3e3e1;
-    --ring: #0e9780;
+    --border: #cfdfd7;
+    --input: #cfdfd7;
+    --ring: #0b8a5f;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --radius: 0.75rem;
-    --sidebar: #eef5f4;
-    --sidebar-foreground: #11201f;
-    --sidebar-primary: #0c7765;
+    --radius: 0.875rem;
+    --sidebar: #eaf3ee;
+    --sidebar-foreground: #0b1512;
+    --sidebar-primary: #0a6f4d;
     --sidebar-primary-foreground: #ffffff;
-    --sidebar-accent: #dcefec;
-    --sidebar-accent-foreground: #11201f;
-    --sidebar-border: #d3e3e1;
-    --sidebar-ring: #0e9780;
+    --sidebar-accent: #d6ebde;
+    --sidebar-accent-foreground: #0b1512;
+    --sidebar-border: #cfdfd7;
+    --sidebar-ring: #0b8a5f;
     --needs: #8f6000;
     --needs-foreground: #ffffff;
     --needs-surface: #fff8e5;
     --needs-border: #ecd28c;
-    --bubble: #0c7765;
+    --bubble: #0a6f4d;
     --bubble-foreground: #ffffff;
-    --success: #0c7765;
+    --success: #0a6f4d;
 }
 
 .dark {
-    --background: #0c1416;
-    --foreground: #e2eeee;
-    --card: #0f1a1c;
-    --card-foreground: #e2eeee;
-    --popover: #0f1a1c;
-    --popover-foreground: #e2eeee;
-    --primary: #22c3a6;
-    --primary-foreground: #03211c;
-    --secondary: #1a2a2c;
-    --secondary-foreground: #d5e6e5;
-    --muted: #132325;
-    --muted-foreground: #8fa9a9;
-    --accent: #1a2a2c;
-    --accent-foreground: #d5e6e5;
+    --background: #080d0c;
+    --foreground: #e8f1ec;
+    --card: #0e1614;
+    --card-foreground: #e8f1ec;
+    --popover: #0e1614;
+    --popover-foreground: #e8f1ec;
+    --primary: #5fe0a6;
+    --primary-foreground: #03170f;
+    --secondary: #16221f;
+    --secondary-foreground: #d3e6dd;
+    --muted: #111c19;
+    --muted-foreground: #8aa79b;
+    --accent: #16221f;
+    --accent-foreground: #d3e6dd;
     --destructive: #f78e8e;
-    --border: #1f3133;
-    --input: #1f3133;
-    --ring: #22c3a6;
+    --border: #1c2b27;
+    --input: #1c2b27;
+    --ring: #5fe0a6;
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --sidebar: #0f1a1c;
-    --sidebar-foreground: #e2eeee;
-    --sidebar-primary: #22c3a6;
-    --sidebar-primary-foreground: #03211c;
-    --sidebar-accent: #123033;
-    --sidebar-accent-foreground: #e2eeee;
-    --sidebar-border: #1f3133;
-    --sidebar-ring: #22c3a6;
+    --sidebar: #0b1211;
+    --sidebar-foreground: #e8f1ec;
+    --sidebar-primary: #5fe0a6;
+    --sidebar-primary-foreground: #03170f;
+    --sidebar-accent: #12302a;
+    --sidebar-accent-foreground: #e8f1ec;
+    --sidebar-border: #1c2b27;
+    --sidebar-ring: #5fe0a6;
     --needs: #ffc247;
     --needs-foreground: #231800;
     --needs-surface: #1b1a0e;
     --needs-border: #4a3d16;
-    --bubble: #1a4a48;
-    --bubble-foreground: #e2fffa;
-    --success: #22c3a6;
+    --bubble: #14463a;
+    --bubble-foreground: #e2fff3;
+    --success: #5fe0a6;
+}
+
+/* Glass. A surface is its token's colour with the page's light coming through it. What floats
+   over the screen (menus, dialogs, sheets, the rail) also blurs what is behind it; a card does
+   not, since the page behind a card is already soft, and a screen may hold many cards. These
+   are not colour tokens, so they sit outside the two blocks the token test reads. */
+html {
+    --glass-card: color-mix(in srgb, var(--card) 68%, transparent);
+    --glass-popover: color-mix(in srgb, var(--popover) 80%, transparent);
+    --glass-sidebar: color-mix(in srgb, var(--sidebar) 55%, transparent);
+    --glass-edge: rgb(255 255 255 / 0.75);
+    --glass-shadow: 0 1px 2px rgb(11 21 18 / 0.05), 0 10px 30px -8px rgb(11 21 18 / 0.1);
+    --glass-float-shadow: 0 2px 6px rgb(11 21 18 / 0.08), 0 24px 60px -12px rgb(11 21 18 / 0.22);
+    --glass-blur: blur(26px) saturate(170%);
+    /* The mark's three lights, and how strongly they tint the page. */
+    --brand-lime: #c9f27a;
+    --brand-glow: #5fe0a6;
+    --brand-sky: #4bb8e8;
+    --aurora-glow: rgb(95 224 166 / 0.3);
+    --aurora-sky: rgb(75 184 232 / 0.2);
+    --aurora-lime: rgb(201 242 122 / 0.3);
+}
+html.dark {
+    --glass-card: color-mix(in srgb, var(--card) 62%, transparent);
+    --glass-popover: color-mix(in srgb, var(--popover) 78%, transparent);
+    --glass-sidebar: color-mix(in srgb, var(--sidebar) 50%, transparent);
+    --glass-edge: rgb(255 255 255 / 0.07);
+    --glass-shadow: 0 1px 2px rgb(0 0 0 / 0.3), 0 12px 32px -10px rgb(0 0 0 / 0.5);
+    --glass-float-shadow: 0 2px 8px rgb(0 0 0 / 0.4), 0 28px 70px -12px rgb(0 0 0 / 0.7);
+    --aurora-glow: rgb(95 224 166 / 0.16);
+    --aurora-sky: rgb(75 184 232 / 0.13);
+    --aurora-lime: rgb(201 242 122 / 0.07);
 }
 
 @layer base {
@@ -149,23 +182,106 @@
     @apply bg-background text-foreground;
     font-size: 14px;
     line-height: 1.55;
+    font-feature-settings: "cv11", "ss03";
+    -webkit-font-smoothing: antialiased;
     }
   html {
     @apply font-sans;
     }
   h1 {
-    font-size: 18px;
-    font-weight: 600;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.03em;
     }
   h2 {
     font-size: 15px;
-    font-weight: 600;
+    font-weight: 650;
+    letter-spacing: -0.02em;
     }
   /* Every control shows the ring on keyboard focus (spec section 4). */
   :focus-visible {
     outline: 2px solid var(--ring);
     outline-offset: 2px;
     }
+}
+
+/* The page behind every screen: the background colour with three soft lights that drift very
+   slowly. It is one fixed layer under the app, painted once and only moved. */
+.app-backdrop {
+  position: relative;
+  isolation: isolate;
+  background: var(--background);
+}
+.app-backdrop::before,
+.app-backdrop::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 50%;
+  will-change: transform;
+}
+.app-backdrop::before {
+  top: -30vh;
+  left: 12vw;
+  width: 70vw;
+  height: 70vh;
+  background:
+    radial-gradient(closest-side, var(--aurora-glow), transparent 100%);
+  animation: aurora-drift-a 46s ease-in-out infinite alternate;
+}
+.app-backdrop::after {
+  right: -18vw;
+  bottom: -32vh;
+  width: 72vw;
+  height: 78vh;
+  background:
+    radial-gradient(closest-side at 62% 55%, var(--aurora-sky), transparent 100%),
+    radial-gradient(closest-side at 30% 40%, var(--aurora-lime), transparent 78%);
+  animation: aurora-drift-b 58s ease-in-out infinite alternate;
+}
+@keyframes aurora-drift-a {
+  from {
+    transform: translate3d(-6vw, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(10vw, 6vh, 0) scale(1.12);
+  }
+}
+@keyframes aurora-drift-b {
+  from {
+    transform: translate3d(4vw, 2vh, 0) scale(1.08);
+  }
+  to {
+    transform: translate3d(-9vw, -6vh, 0) scale(1);
+  }
+}
+
+/* A card: glass with a lit top edge and a soft shadow. */
+.bg-card {
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    var(--glass-shadow);
+}
+/* What floats: menus, dialogs, sheets. */
+.bg-popover {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    var(--glass-float-shadow);
+}
+/* The rail and the column beside it. */
+.bg-sidebar {
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+}
+/* Where a browser cannot blur what is behind, the surfaces are solid again. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  html {
+    --glass-popover: var(--popover);
+    --glass-sidebar: var(--sidebar);
+  }
 }
 
 /* Scrolls without showing a scrollbar: the rail's links in a short window. */
@@ -176,7 +292,7 @@
   }
 }
 
-/* The working line's phrase: a soft light that sweeps across the words while a dot works. */
+/* The working line's phrase: a soft light that sweeps across the words while a sol works. */
 .working-shimmer {
   background: linear-gradient(
     90deg,

@@ -49,7 +49,7 @@ pub fn is_limit_reached(text: &str) -> bool {
 /// "Dots is holding background runs: Claude 5-hour usage is at 64%"
 pub fn hold_started(window: &str, utilization: f64) -> String {
     format!(
-        "Dots is holding background runs: Claude {} usage is at {}%",
+        "Sage is holding background runs: Claude {} usage is at {}%",
         window_label(window),
         percent(utilization)
     )

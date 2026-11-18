@@ -26,7 +26,7 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 use tempfile::TempDir;
 
-const BAD_KEY: &str = "That API key isn't valid. Make a new one in Dots.";
+const BAD_KEY: &str = "That API key isn't valid. Make a new one in Sage.";
 const OUTSIDE: &str =
     "Acme Engineering: you aren't in the Payments workspace. Ask an Admin or Owner to add you.";
 const NOT_FOUND: &str = "Not found.";
@@ -297,17 +297,30 @@ async fn read_run_status() {
             .create_run(&NewRun::new(&dot, TriggerKind::Manual))
             .await
             .unwrap();
-    let (status, body) = t.get(&format!("/v1/runs/{}", run.id), Some(&key)).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let stored = t.rt.store().get_run(&run.id).await.unwrap();
-    assert_eq!(
-        body,
+    // The runner takes the queued run up while this reads it, so the answer is compared with
+    // the stored run only when that was the same before the request and after it.
+    let shown = |r: &dots_core::model::Run| {
         json!({
-            "id": run.id, "dot_id": dot, "status": stored.status.as_str(),
-            "queued_at": stored.queued_at, "started_at": stored.started_at,
-            "ended_at": stored.ended_at, "summary": stored.summary, "error": stored.error
+            "id": r.id, "dot_id": r.dot_id, "status": r.status.as_str(),
+            "queued_at": r.queued_at, "started_at": r.started_at,
+            "ended_at": r.ended_at, "summary": r.summary, "error": r.error
         })
-    );
+    };
+    let mut compared = false;
+    for _ in 0..50 {
+        let before = shown(&t.rt.store().get_run(&run.id).await.unwrap());
+        let (status, body) = t.get(&format!("/v1/runs/{}", run.id), Some(&key)).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        let after = shown(&t.rt.store().get_run(&run.id).await.unwrap());
+        if before == after {
+            assert_eq!(body, after);
+            assert_eq!(body["id"], json!(run.id));
+            assert_eq!(body["dot_id"], json!(dot));
+            compared = true;
+            break;
+        }
+    }
+    assert!(compared, "the run never held still between two reads");
 
     let (status, body) = t.get("/v1/runs/nope", Some(&key)).await;
     assert_eq!((status, body), (StatusCode::NOT_FOUND, error(NOT_FOUND)));
@@ -491,7 +504,7 @@ async fn role_change_refuses_existing_key() {
     assert_eq!(
         body,
         error(
-            "Acme Engineering: a Viewer in the Payments workspace can't run dots. Ask an Admin or Owner."
+            "Acme Engineering: a Viewer in the Payments workspace can't run sols. Ask an Admin or Owner."
         )
     );
     assert_eq!(t.runs_of(&dot).await, before, "nothing queued");
@@ -519,7 +532,7 @@ async fn disabled_dot_is_409() {
     let (status, body) = t.trigger(&dot, &key, "").await;
     assert_eq!(
         (status, body),
-        (StatusCode::CONFLICT, error("dot is disabled"))
+        (StatusCode::CONFLICT, error("sol is disabled"))
     );
     assert_eq!(t.runs_of(&dot).await, 0);
     t.rt.shutdown();

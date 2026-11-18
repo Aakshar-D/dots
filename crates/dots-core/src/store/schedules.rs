@@ -198,7 +198,7 @@ impl Store {
         if res.rows_affected() == 0 {
             tx.rollback().await?;
             return Err(Error::Conflict(format!(
-                "the schedule of dot {dot_id} has no row or has handled {slot} already"
+                "the schedule of sol {dot_id} has no row or has handled {slot} already"
             )));
         }
         let Some(new) = fire else {
@@ -254,7 +254,7 @@ impl Store {
         if res.rows_affected() == 0 {
             tx.rollback().await?;
             return Err(Error::Conflict(format!(
-                "the schedule of dot {dot_id} has no pending retry"
+                "the schedule of sol {dot_id} has no pending retry"
             )));
         }
         let (run_id, joined) = start_or_join(&mut tx, new).await?;

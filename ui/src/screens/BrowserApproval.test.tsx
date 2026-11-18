@@ -63,7 +63,7 @@ describe("a browser approval", () => {
     );
   });
 
-  it("says a send or delete always asks while the dot's switch is on", async () => {
+  it("says a send or delete always asks while the sol's switch is on", async () => {
     const remove: PendingApproval = {
       ...pay,
       id: "01J0APR3",
@@ -111,7 +111,7 @@ describe("a browser approval", () => {
     });
     expect(article).toHaveTextContent(`${pay.dot_name} wants to open shop.com/cart`);
     expect(article).toHaveTextContent(
-      "The run stopped waiting. Approving now does not perform this action: the dot is told to take a snapshot and do it again if it is still right.",
+      "The run stopped waiting. Approving now does not perform this action: the sol is told to take a snapshot and do it again if it is still right.",
     );
     expect(
       await within(article).findByRole("button", { name: "Always allow on shop.com" }),

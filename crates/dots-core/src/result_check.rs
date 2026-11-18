@@ -416,7 +416,7 @@ pub fn note_text(check: &ResultCheck) -> Option<String> {
     for c in concerns {
         out.push_str(&format!("\n- {c}"));
     }
-    out.push_str("\n\nOpen the conversation to ask the dot to fix this.");
+    out.push_str("\n\nOpen the conversation to ask the sol to fix this.");
     Some(out)
 }
 
@@ -498,7 +498,7 @@ impl ResultChecker for CliChecker {
         let _ = std::fs::remove_dir_all(&cwd);
         asked.map_err(|e| match e {
             OnceFailure::TimedOut => "The check took too long.".to_string(),
-            OnceFailure::Cancelled => "Dots stopped before the check ended.".to_string(),
+            OnceFailure::Cancelled => "Sage stopped before the check ended.".to_string(),
             OnceFailure::NoCli => NO_CLI.to_string(),
             OnceFailure::Failed(e) => format!("The checker failed: {e}"),
         })

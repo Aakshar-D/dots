@@ -213,7 +213,7 @@ export default function GraphScreen() {
 
   const title = dot.data ? `${dot.data.name} · Graph` : "Graph";
   const back = (
-    <Button asChild size="icon" variant="ghost" aria-label="Back to the dot">
+    <Button asChild size="icon" variant="ghost" aria-label="Back to the sol">
       <Link to={`/home/${dotId}`}>
         <ArrowLeft aria-hidden />
       </Link>
@@ -255,7 +255,7 @@ export default function GraphScreen() {
     return (
       <Page title={title} leading={back}>
         <EmptyState icon={Network}>
-          The project graph is off for this dot. Turn on Use project graph in{" "}
+          The project graph is off for this sol. Turn on Use project graph in{" "}
           <Link className="underline" to={`/dots/${dotId}`}>
             its settings
           </Link>
@@ -279,7 +279,7 @@ export default function GraphScreen() {
         <EmptyState icon={Network}>
           {s.git
             ? "No graph yet. Build graph reads the project's code once; runs keep it up to date."
-            : "This folder is not a git repository, so Dots builds its graph only when you ask. " +
+            : "This folder is not a git repository, so Sage builds its graph only when you ask. " +
               "Build graph reads it once; after that, runs keep it up to date."}
         </EmptyState>
       )}

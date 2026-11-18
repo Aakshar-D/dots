@@ -249,7 +249,7 @@ async fn memory_goals_titles_notes_and_files_are_found_and_follow_changes() {
         .await
         .unwrap();
     store
-        .add_note(&d.id, None, "Dots restarted the scheduler")
+        .add_note(&d.id, None, "Sage restarted the scheduler")
         .await
         .unwrap();
     store

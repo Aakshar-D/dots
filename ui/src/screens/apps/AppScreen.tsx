@@ -44,11 +44,11 @@ function StartPrompt({ name, title }: { name: string; title: string }) {
   return (
     <div
       role="region"
-      aria-label={`Let ${title} start dots?`}
+      aria-label={`Let ${title} start sols?`}
       className="flex flex-wrap items-center gap-3 border-b border-needs-border bg-needs-surface px-4 py-2 text-sm"
     >
       <p className="flex-1">
-        Let {title} start dots? When you assign a task to a dot, {title} starts it on the task.
+        Let {title} start sols? When you assign a task to a sol, {title} starts it on the task.
         You can change this on the Apps screen.
       </p>
       <Button size="sm" disabled={answer.isPending} onClick={() => answer.mutate(true)}>

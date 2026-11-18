@@ -89,7 +89,7 @@ function PluginRow({ entry }: { entry: PluginEntry }) {
         </span>
       )}
       <span className="text-xs text-muted-foreground">
-        Commands, agents and hooks apply to Claude-engine dots only.
+        Commands, agents and hooks apply to Claude-engine sols only.
       </span>
       <UsedBy dots={entry.used_by} />
     </ItemRow>
@@ -127,8 +127,8 @@ function AddPluginDialog(props: { existing: PluginEntry[]; onClose: () => void }
         <DialogHeader>
           <DialogTitle>Add plugin</DialogTitle>
           <DialogDescription>
-            A plugin brings skills and MCP servers to every dot that uses it. Its commands, agents
-            and hooks work in Claude-engine dots only.
+            A plugin brings skills and MCP servers to every sol that uses it. Its commands, agents
+            and hooks work in Claude-engine sols only.
           </DialogDescription>
         </DialogHeader>
         <section className="flex flex-col gap-2">

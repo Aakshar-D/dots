@@ -26,7 +26,7 @@ export function FatalPage(props: {
   }).data?.install_error;
   return (
     <main className="mx-auto flex h-screen max-w-2xl flex-col justify-center gap-4 p-8">
-      <h1 className="text-xl font-semibold">Dots could not start</h1>
+      <h1 className="text-xl font-semibold">Sage could not start</h1>
       <p role="alert" className="rounded-md border border-destructive/50 p-3 font-mono text-sm">
         {props.message}
       </p>
@@ -65,13 +65,13 @@ export function FatalPage(props: {
           )}
           {goBack.isSuccess && (
             <p role="status" className="text-sm">
-              Going back to Dots {props.goBack}. Dots restarts in a moment.
+              Going back to Sage {props.goBack}. Sage restarts in a moment.
             </p>
           )}
         </div>
       )}
       <p className="text-sm text-muted-foreground">
-        Close this window to quit. Dots tries again the next time you start it.
+        Close this window to quit. Sage tries again the next time you start it.
       </p>
     </main>
   );

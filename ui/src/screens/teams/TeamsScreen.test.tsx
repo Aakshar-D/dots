@@ -38,7 +38,7 @@ describe("the Teams screen", () => {
     backend.on("teams_list", () => [crew, platform]);
     renderApp("/teams");
     const row = await screen.findByRole("listitem", { name: "crew" });
-    expect(row).toHaveTextContent("Fixes and ships Dots.");
+    expect(row).toHaveTextContent("Fixes and ships Sage.");
     expect(row).toHaveTextContent("2 members · 2 projects");
     expect(within(row).getByRole("link", { name: "crew" })).toHaveAttribute(
       "href",

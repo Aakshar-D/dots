@@ -104,7 +104,7 @@ function CollectionDialog(props: { entry: ContextEntry | null; path: string; onC
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            Dots read these files as guidance. Only add folders whose writers you trust.
+            Sols read these files as guidance. Only add folders whose writers you trust.
           </DialogDescription>
         </DialogHeader>
         <Field label="Name" htmlFor="context-name" error={tried ? errors.name : undefined}>
@@ -127,7 +127,7 @@ function CollectionDialog(props: { entry: ContextEntry | null; path: string; onC
           label="Description"
           htmlFor="context-description"
           error={tried ? errors.description : undefined}
-          hint="Dots see it next to the name, to know when to look here."
+          hint="Sols see it next to the name, to know when to look here."
         >
           <Textarea
             id="context-description"
@@ -142,7 +142,7 @@ function CollectionDialog(props: { entry: ContextEntry | null; path: string; onC
             checked={form.every_dot}
             onCheckedChange={(every_dot) => set({ every_dot })}
           />
-          <Label htmlFor="context-every-dot">Every dot reads it</Label>
+          <Label htmlFor="context-every-dot">Every sol reads it</Label>
         </div>
         {state.error && (
           <p role="alert" className="text-xs text-destructive">
@@ -223,8 +223,8 @@ export function ContextTab({ entries }: { entries: ContextEntry[] }) {
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <p className="flex-1 text-xs text-muted-foreground">
-          Folders of text documents (Markdown, text, JSON, YAML, CSV) that dots list, search and
-          read. Dots never change them.
+          Folders of text documents (Markdown, text, JSON, YAML, CSV) that sols list, search and
+          read. Sols never change them.
         </p>
         <Button size="sm" onClick={() => void add()}>
           <Plus aria-hidden /> Add collection
@@ -260,7 +260,7 @@ export function ContextTab({ entries }: { entries: ContextEntry[] }) {
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{entry.name}</span>
-                {entry.config.every_dot && <Badge variant="secondary">every dot</Badge>}
+                {entry.config.every_dot && <Badge variant="secondary">every sol</Badge>}
                 {entry.context && (
                   <span className="text-xs text-muted-foreground">
                     {entry.context.complete ? "" : "at least "}
@@ -276,7 +276,7 @@ export function ContextTab({ entries }: { entries: ContextEntry[] }) {
               </span>
               {entry.problem && <span className="text-xs text-destructive">{entry.problem}</span>}
               {entry.config.every_dot ? (
-                <span className="text-xs text-muted-foreground">Every dot reads it</span>
+                <span className="text-xs text-muted-foreground">Every sol reads it</span>
               ) : (
                 <UsedBy dots={entry.used_by} />
               )}

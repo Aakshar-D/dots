@@ -777,7 +777,7 @@ impl<'m> Decrypting<'m> {
                             "the file's value at {at} does not decrypt: the file was changed"
                         )),
                         ValueError::Unsupported => SourceError::Invalid(format!(
-                            "the file's value at {at} has a type Dots does not read"
+                            "the file's value at {at} has a type Sage does not read"
                         )),
                         ValueError::NotItsType => SourceError::Invalid(format!(
                             "the file's value at {at} does not match its type"

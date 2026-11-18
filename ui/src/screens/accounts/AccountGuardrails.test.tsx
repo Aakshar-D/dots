@@ -196,7 +196,7 @@ describe("Settings, Accounts, Guardrails", () => {
     const section = await within(panel).findByRole("region", { name: "Guardrails of Default" });
     expect(within(section).getByText(memberView.edit_refusal!)).toBeVisible();
     expect(
-      within(section).getByText(/Your dots here are guarded as a Member's/),
+      within(section).getByText(/Your sols here are guarded as a Member's/),
     ).toBeVisible();
     expect(within(section).queryByRole("button", { name: "Use defaults" })).toBeNull();
     expect(within(section).queryByRole("button", { name: "Save" })).toBeNull();
@@ -210,7 +210,7 @@ describe("Settings, Accounts, Guardrails", () => {
 
   it("shows an Admin who can't sign why, read-only", async () => {
     const blocker =
-      "Acme Engineering: your Dots ID isn't one of the account's signing admins yet.";
+      "Acme Engineering: your Sage ID isn't one of the account's signing admins yet.";
     account({ default: { ...unguarded, sign_blocker: blocker } });
     const { panel } = await guardrailsTab();
     const section = await within(panel).findByRole("region", { name: "Guardrails of Default" });

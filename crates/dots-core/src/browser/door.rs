@@ -101,13 +101,13 @@ pub async fn connect(
     upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
 ) -> Response {
     let Some(pipe) = doors.enter(&secret) else {
-        tracing::warn!("refused a connection to a dot's browser: its secret is wrong or spent");
+        tracing::warn!("refused a connection to a sol's browser: its secret is wrong or spent");
         return StatusCode::NOT_FOUND.into_response();
     };
     let upgrade = match upgrade {
         Ok(upgrade) => upgrade,
         Err(rejection) => {
-            tracing::warn!("refused a connection to a dot's browser: {rejection}");
+            tracing::warn!("refused a connection to a sol's browser: {rejection}");
             doors.leave(&secret);
             return rejection.into_response();
         }
@@ -117,7 +117,7 @@ pub async fn connect(
         .max_message_size(MAX_MESSAGE)
         .max_frame_size(MAX_MESSAGE)
         .on_failed_upgrade(move |e| {
-            tracing::warn!("a connection to a dot's browser failed: {e}");
+            tracing::warn!("a connection to a sol's browser failed: {e}");
             failed.0.leave(&failed.1);
         })
         .on_upgrade(move |socket| async move {

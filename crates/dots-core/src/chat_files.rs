@@ -25,7 +25,7 @@ pub const WORKSPACE_DIR: &str = "attachments";
 
 pub const TOO_MANY: &str = "You can attach up to 10 files to a message.";
 pub const GONE: &str = "An attached file is no longer there. Remove it and attach it again.";
-pub const PROGRAM: &str = "Dots only opens documents, images and media. Use Show in folder.";
+pub const PROGRAM: &str = "Sage only opens documents, images and media. Use Show in folder.";
 pub const NOT_THERE: &str = "this file is no longer there";
 /// The start of a run's error when a file of its own message could not be put in place.
 pub const COPY_FAILED: &str = "could not put the attached files in the workspace";

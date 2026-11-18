@@ -36,6 +36,8 @@ export function ChatGptAccount() {
   const signingOut = useIsMutating({ mutationKey: signOutKey }) > 0;
   const cancelled = login.error instanceof CommandError && login.error.kind === "cancelled";
   const identity = account.data?.account;
+  // No OpenAI client is registered for this copy: there is nothing to press.
+  const unavailable = !!account.data && !account.data.configured && !identity;
   const expiresAt = account.data?.expires_at;
   useEffect(() => {
     if (!expiresAt) return;
@@ -69,10 +71,15 @@ export function ChatGptAccount() {
             {signingOut ? "Signing out…" : "Sign out"}
           </Button>
         </>
+      ) : unavailable ? (
+        <p role="status">
+          {account.data?.setup_error ??
+            "Sign in with ChatGPT is not available in this version of Sage yet."}
+        </p>
       ) : (
         <>
           <p className="text-muted-foreground">
-            Sign into Dots with your ChatGPT account.
+            Sign into Sage with your ChatGPT account.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Button type="button" disabled={!account.data?.configured || signingIn || signingOut}
@@ -91,9 +98,11 @@ export function ChatGptAccount() {
           {account.isPending && <p role="status">Checking account…</p>}
         </>
       )}
-      <p className="text-xs text-muted-foreground">
-        Sign-in lasts until you quit Dots or for eight hours. Account changes apply immediately.
-      </p>
+      {!unavailable && (
+        <p className="text-xs text-muted-foreground">
+          Sign-in lasts until you quit Sage or for eight hours. Account changes apply immediately.
+        </p>
+      )}
     </fieldset>
   );
 }

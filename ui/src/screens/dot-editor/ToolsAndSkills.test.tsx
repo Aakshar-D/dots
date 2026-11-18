@@ -52,7 +52,7 @@ describe("the editor's Tools and skills section", () => {
     expect(within(screen.getByRole("group", { name: "Plugins" })).getByLabelText("pdf-tools")).not.toBeChecked();
   });
 
-  it("lists the context collections, one for every dot ticked and fixed", async () => {
+  it("lists the context collections, one for every sol ticked and fixed", async () => {
     const own = { ...company!, id: "01J0CTX2", name: "clients" } as LibraryEntry;
     if (own.kind !== "context") throw new Error("the sample is a context collection");
     own.config = { ...own.config, every_dot: false, description: "Who they are" };
@@ -61,14 +61,14 @@ describe("the editor's Tools and skills section", () => {
     const every = within(group).getByLabelText("company");
     expect(every).toBeChecked();
     expect(every).toBeDisabled();
-    expect(within(group).getByText(/42 documents · every dot/)).toBeVisible();
+    expect(within(group).getByText(/42 documents · every sol/)).toBeVisible();
     const box = within(group).getByLabelText("clients");
     expect(box).not.toBeChecked();
     await user.click(box);
     expect(uses().context).toEqual(["clients"]);
   });
 
-  it("lists the apps, one every dot uses ticked and fixed", async () => {
+  it("lists the apps, one every sol uses ticked and fixed", async () => {
     const own = { ...projects!, id: "01J0APP3", name: "expenses" } as LibraryEntry;
     if (own.kind !== "app") throw new Error("the sample is an app");
     own.config = { ...own.config, every_dot: false, description: "Logs expenses" };
@@ -77,7 +77,7 @@ describe("the editor's Tools and skills section", () => {
     const every = within(group).getByLabelText("projects");
     expect(every).toBeChecked();
     expect(every).toBeDisabled();
-    expect(within(group).getByText(/Projects, tasks and to-dos, shared by you and your dots · every dot/)).toBeVisible();
+    expect(within(group).getByText(/Projects, tasks and to-dos, shared by you and your sols · every sol/)).toBeVisible();
     const box = within(group).getByLabelText("expenses");
     expect(box).not.toBeChecked();
     await user.click(box);
@@ -87,7 +87,7 @@ describe("the editor's Tools and skills section", () => {
   it("says where apps come from when there is none", async () => {
     setup({ library: [] });
     const group = await screen.findByRole("group", { name: "Apps" });
-    expect(group).toHaveTextContent("No apps yet. Ask a dot for one; the apps you add show in Apps.");
+    expect(group).toHaveTextContent("No apps yet. Ask a sol for one; the apps you add show in Apps.");
     expect(within(group).getByRole("link", { name: "Apps" })).toHaveAttribute("href", "/apps");
   });
 
@@ -96,7 +96,7 @@ describe("the editor's Tools and skills section", () => {
     const partial = { ...company!, context: { ...company!.context, complete: false } } as LibraryEntry;
     setup({ library: [partial] });
     const group = await screen.findByRole("group", { name: "Context" });
-    expect(within(group).getByText(/at least 42 documents · every dot/)).toBeVisible();
+    expect(within(group).getByText(/at least 42 documents · every sol/)).toBeVisible();
   });
 
   it("ticks and unticks, and hands back the names", async () => {
@@ -145,7 +145,7 @@ describe("the editor's Tools and skills section", () => {
     expect(screen.getByRole("status")).toHaveTextContent("PDF_KEY");
   });
 
-  it("names no Personal gap for an account's dot, which reads the account", async () => {
+  it("names no Personal gap for an account's sol, which reads the account", async () => {
     const { user } = setup({ library: [github!], orgId: "acme-eng" });
     await user.click(await screen.findByLabelText("github"));
     expect(screen.queryByText(/Not in Personal/)).toBeNull();
@@ -157,7 +157,7 @@ describe("the editor's Tools and skills section", () => {
     expect(row).toHaveTextContent("Tools changed");
   });
 
-  it("tells a local dot which parts of a ticked plugin do not apply", async () => {
+  it("tells a local sol which parts of a ticked plugin do not apply", async () => {
     const { user } = setup({ engine: "local" });
     await screen.findByLabelText("pdf-tools");
     expect(screen.queryByText(/do not apply/)).toBeNull();
@@ -165,7 +165,7 @@ describe("the editor's Tools and skills section", () => {
     expect(screen.getByText(/1 command, 1 agent and its hooks do not apply/)).toBeVisible();
   });
 
-  it("says nothing of the kind to a Claude dot", async () => {
+  it("says nothing of the kind to a Claude sol", async () => {
     setup({ engine: "claude", uses: { ...none, plugins: ["pdf-tools"] } });
     await screen.findByLabelText("pdf-tools");
     expect(screen.queryByText(/do not apply/)).toBeNull();

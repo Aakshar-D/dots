@@ -150,7 +150,7 @@ export function SkillsTab({ entries }: { entries: SkillEntry[] }) {
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <p className="flex-1 text-xs text-muted-foreground">
-          Folders with a SKILL.md. A dot that uses a skill can read it when the task calls for it.
+          Folders with a SKILL.md. A sol that uses a skill can read it when the task calls for it.
         </p>
         <Button size="sm" variant="outline" onClick={() => setCreating(true)}>
           <Sparkles aria-hidden /> Create skill

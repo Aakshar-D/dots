@@ -22,17 +22,17 @@ use tempfile::TempDir;
 const MANIFEST: &str = r#"{
   "name": "chores",
   "title": "Chores",
-  "description": "Chores dots do",
+  "description": "Chores sols do",
   "tools": [
     {
       "name": "assign",
-      "description": "Give a chore to a dot",
+      "description": "Give a chore to a sol",
       "input": { "type": "object", "properties": { "dot": { "type": "string" }, "chore": { "type": "string" } }, "required": ["dot", "chore"] },
       "writes": true
     },
     {
       "name": "assign_many",
-      "description": "Give n chores to a dot",
+      "description": "Give n chores to a sol",
       "input": { "type": "object", "properties": { "dot": { "type": "string" }, "n": { "type": "integer" } }, "required": ["dot", "n"] },
       "writes": true
     },
@@ -248,7 +248,7 @@ async fn the_switch_the_dots_the_pause_and_the_hour_bound_the_starts() {
 
     let refused = assign(&t, &other, "dishes").await.unwrap_err();
     assert!(
-        refused.contains(&format!("no dot {} uses this app", other.id)),
+        refused.contains(&format!("no sol {} uses this app", other.id)),
         "{refused}"
     );
     assert_eq!(runs_of(&other).await, 0);
@@ -263,12 +263,12 @@ async fn the_switch_the_dots_the_pause_and_the_hour_bound_the_starts() {
         )
     };
     let over = many(21).await.unwrap_err();
-    assert!(over.contains("as many dots as the hour allows"), "{over}");
+    assert!(over.contains("as many sols as the hour allows"), "{over}");
     assert_eq!(runs_of(&builder).await, 0);
     assert_eq!(many(20).await.unwrap().as_array().unwrap().len(), 20);
     assert_eq!(runs_of(&builder).await, 20);
     let spent = assign(&t, &builder, "one more").await.unwrap_err();
-    assert!(spent.contains("as many dots as the hour allows"), "{spent}");
+    assert!(spent.contains("as many sols as the hour allows"), "{spent}");
 
     t.rt.set_schedules_paused(true).await.unwrap();
     assert!(assign(&t, &builder, "paused")
@@ -328,7 +328,7 @@ async fn an_app_cannot_start_a_dot_that_is_off() {
     t.rt.set_dot_enabled(&builder.id, false).await.unwrap();
     let refused = assign(&t, &builder, "dishes").await.unwrap_err();
     assert!(
-        refused.contains(&format!("no dot {} uses this app", builder.id)),
+        refused.contains(&format!("no sol {} uses this app", builder.id)),
         "{refused}"
     );
     t.rt.shutdown();

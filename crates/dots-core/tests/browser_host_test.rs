@@ -199,7 +199,7 @@ async fn a_profile_held_by_another_edge_is_refused() {
     );
     assert_eq!(
         HostError::ProfileInUse.to_string(),
-        "This dot's browser profile is in use by another Edge window; close it and try again."
+        "This sol's browser profile is in use by another Edge window; close it and try again."
     );
 }
 

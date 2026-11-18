@@ -233,7 +233,7 @@ fn core_error(e: Error) -> Response {
 fn gone() -> Response {
     error(
         StatusCode::SERVICE_UNAVAILABLE,
-        "Dots is turning the phone view off.",
+        "Sage is turning the phone view off.",
     )
 }
 
@@ -547,7 +547,7 @@ struct PhoneHeld {
 /// What a parked approval's card says in the app (`parkedNote`).
 fn parked_note(self_apply: bool) -> String {
     if self_apply {
-        "The run stopped waiting and is parked. If you approve, Dots performs exactly this call \
+        "The run stopped waiting and is parked. If you approve, Sage performs exactly this call \
          and then continues the run."
             .into()
     } else {

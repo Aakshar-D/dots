@@ -75,7 +75,7 @@ fn workflow_calls() -> [(&'static str, Value); 4] {
     [
         (
             "start_workflow",
-            json!({"workflow": "Fix", "project": "Dots", "task": "Fix it."}),
+            json!({"workflow": "Fix", "project": "Sage", "task": "Fix it."}),
         ),
         ("start_member", json!({"member": "dev", "task": "Fix it."})),
         ("report_outcome", json!({"outcome": "fixed"})),
@@ -268,7 +268,7 @@ async fn team_with(t: &Rt, helper: &Dot, steps: Vec<Step>) -> (String, String) {
             .create(&TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: vec![MemberSpec {
                     dot_id: helper.id.clone(),
@@ -283,7 +283,7 @@ async fn team_with(t: &Rt, helper: &Dot, steps: Vec<Step>) -> (String, String) {
         .add_project(
             &team.id,
             &ProjectSpec {
-                name: "Dots".into(),
+                name: "Sage".into(),
                 repo_path: repo.to_string_lossy().to_string(),
                 default_branch: None,
                 remote: "origin".into(),
@@ -349,7 +349,7 @@ async fn a_local_helper_starts_the_teams_workflow_from_a_chat() {
         call(
             "c1",
             "start_workflow",
-            json!({"workflow": "Deploy", "project": "Dots", "task": "x"}),
+            json!({"workflow": "Deploy", "project": "Sage", "task": "x"}),
         ),
         call(
             "c2",
@@ -359,12 +359,12 @@ async fn a_local_helper_starts_the_teams_workflow_from_a_chat() {
         call(
             "c3",
             "start_workflow",
-            json!({"workflow": "fix", "project": "dots", "task": " "}),
+            json!({"workflow": "fix", "project": "sage", "task": " "}),
         ),
         call(
             "c4",
             "start_workflow",
-            json!({"workflow": "Dots management/Fix", "project": "Dots",
+            json!({"workflow": "Sage management/Fix", "project": "Sage",
                    "task": "The tray icon is invisible in dark mode."}),
         ),
         text("Started it."),
@@ -386,7 +386,7 @@ async fn a_local_helper_starts_the_teams_workflow_from_a_chat() {
     let first = prompt(&reqs[0]);
     assert!(
         first.contains(
-            "## Workflows you can start\n\n- \"Fix\" of the team \"Dots management\": projects \"Dots\"\n\nStart one with `start_workflow` when the person asks for work it covers.\n"
+            "## Workflows you can start\n\n- \"Fix\" of the team \"Sage management\": projects \"Sage\"\n\nStart one with `start_workflow` when the person asks for work it covers.\n"
         ),
         "{first}"
     );
@@ -397,9 +397,9 @@ async fn a_local_helper_starts_the_teams_workflow_from_a_chat() {
         answers,
         [
             "There is no workflow named \"Deploy\" that you may start.",
-            "The team \"Dots management\" has no project named \"Other\".",
+            "The team \"Sage management\" has no project named \"Other\".",
             "Not started: the task must be 1 to 8,000 characters.",
-            "Workflow \"Fix\" started on \"Dots\".",
+            "Workflow \"Fix\" started on \"Sage\".",
         ]
     );
     let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
@@ -435,7 +435,7 @@ async fn a_claude_helper_starts_it_through_dots_own_server() {
         {"emit": {"type": "system", "subtype": "init", "session_id": "$SESSION"}},
         {"mcp_list": "dots"},
         {"mcp_call": {"server": "dots", "tool": "start_workflow",
-                      "arguments": {"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}}},
+                      "arguments": {"workflow": "Fix", "project": "Sage", "task": "Fix the icon."}}},
         {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": "done",
                   "usage": {"input_tokens": 1, "output_tokens": 1}}}
     ]))
@@ -551,7 +551,7 @@ async fn the_answer_to_a_workflow_steps_question_may_not_start_a_workflow() {
     .await;
     let project =
         t.rt.store()
-            .get_team_project_id(&flow, "Dots")
+            .get_team_project_id(&flow, "Sage")
             .await
             .unwrap();
     t.rt.workflows()
@@ -604,7 +604,7 @@ async fn a_call_held_for_approval_is_refused_once_the_member_stops_being_a_start
         call(
             "c1",
             "start_workflow",
-            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+            json!({"workflow": "Fix", "project": "Sage", "task": "Fix the icon."}),
         ),
         text("Done."),
     ])
@@ -658,7 +658,7 @@ async fn an_approval_that_outlives_the_wait_still_starts_the_workflow_on_the_res
         call(
             "c1",
             "start_workflow",
-            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+            json!({"workflow": "Fix", "project": "Sage", "task": "Fix the icon."}),
         ),
         text("Queued."),
         text("Done after approval."),
@@ -726,7 +726,7 @@ async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
     .await;
     let project =
         t.rt.store()
-            .get_team_project_id(&flow, "Dots")
+            .get_team_project_id(&flow, "Sage")
             .await
             .unwrap();
     let wr =
@@ -773,7 +773,7 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
         call(
             id,
             "start_workflow",
-            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+            json!({"workflow": "Fix", "project": "Sage", "task": "Fix the icon."}),
         )
     };
     let llm = Llm::start(vec![
@@ -797,11 +797,11 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
     let reqs = llm.requests();
     assert_eq!(
         tool_result(&reqs[1], "c1"),
-        "Workflow \"Fix\" started on \"Dots\"."
+        "Workflow \"Fix\" started on \"Sage\"."
     );
     assert_eq!(
         tool_result(&reqs[2], "c2"),
-        "Not started: \"Fix\" is already running on \"Dots\" from this chat."
+        "Not started: \"Fix\" is already running on \"Sage\" from this chat."
     );
     let runs = t.rt.workflows().list(&Default::default()).await.unwrap();
     assert_eq!(runs.len(), 1, "{runs:#?}");
@@ -815,7 +815,7 @@ async fn a_chat_starts_a_workflow_on_a_project_once_until_that_run_ends() {
     let reqs = llm.requests();
     assert_eq!(
         tool_result(reqs.last().unwrap(), "c3"),
-        "Workflow \"Fix\" started on \"Dots\"."
+        "Workflow \"Fix\" started on \"Sage\"."
     );
     assert_eq!(
         t.rt.workflows()
@@ -852,7 +852,7 @@ async fn a_sandboxed_dot_is_offered_start_workflow_and_asks_before_it_starts_one
         call(
             "c1",
             "start_workflow",
-            json!({"workflow": "Fix", "project": "Dots", "task": "Fix the icon."}),
+            json!({"workflow": "Fix", "project": "Sage", "task": "Fix the icon."}),
         ),
         text("Done."),
     ])
@@ -913,7 +913,7 @@ fn agent_step(id: &str, name: &str, member: &Dot, outcomes: &[&str], back: &[&st
     }
 }
 
-/// A team of `members` with the project "Dots" and a manual workflow "Steps" of `steps`;
+/// A team of `members` with the project "Sage" and a manual workflow "Steps" of `steps`;
 /// starts a run of it.
 async fn run_steps(t: &Rt, members: &[&Dot], steps: Vec<Step>) -> WorkflowRun {
     let team =
@@ -921,7 +921,7 @@ async fn run_steps(t: &Rt, members: &[&Dot], steps: Vec<Step>) -> WorkflowRun {
             .create(&TeamSpec {
                 org_id: None,
                 workspace_id: "default".into(),
-                name: "Dots management".into(),
+                name: "Sage management".into(),
                 description: String::new(),
                 members: members
                     .iter()
@@ -939,7 +939,7 @@ async fn run_steps(t: &Rt, members: &[&Dot], steps: Vec<Step>) -> WorkflowRun {
         .add_project(
             &team.id,
             &ProjectSpec {
-                name: "Dots".into(),
+                name: "Sage".into(),
                 repo_path: repo.to_string_lossy().to_string(),
                 default_branch: None,
                 remote: "origin".into(),
@@ -965,7 +965,7 @@ async fn run_steps(t: &Rt, members: &[&Dot], steps: Vec<Step>) -> WorkflowRun {
             .unwrap();
     let project =
         t.rt.store()
-            .get_team_project_id(&flow.id, "Dots")
+            .get_team_project_id(&flow.id, "Sage")
             .await
             .unwrap();
     t.rt.workflows()

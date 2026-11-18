@@ -85,7 +85,7 @@ impl Updates {
 
 fn updates(app: &AppHandle) -> Result<tauri::State<'_, Updates>, CmdError> {
     app.try_state::<Updates>()
-        .ok_or_else(|| CmdError::internal("Dots did not start; see the startup error"))
+        .ok_or_else(|| CmdError::internal("Sage did not start; see the startup error"))
 }
 
 /// The note as it stands, with the dots that have a run working now.
@@ -162,6 +162,21 @@ pub struct ReleaseNotes {
 
 pub const NOTHING_TO_GO_BACK: &str = "There is nothing to go back to.";
 pub const NO_INSTALLER: &str = "This version has no published installer to repair from.";
+/// The published versions have no installer for this kind of computer (Windows on ARM, say).
+pub const NO_BUILD_HERE: &str = "There is no update for this kind of computer yet.";
+pub const UNREACHABLE: &str =
+    "Sage could not reach the update server. Check your connection and try again.";
+
+/// The updater's error as a sentence for the person; its own text goes to the log.
+fn plain(error: tauri_plugin_updater::Error) -> String {
+    use tauri_plugin_updater::Error as E;
+    tracing::warn!("updates: {error}");
+    match error {
+        E::TargetNotFound(_) | E::TargetsNotFound(_) => NO_BUILD_HERE.to_string(),
+        E::Reqwest(_) | E::Network(_) | E::ReleaseNotFound => UNREACHABLE.to_string(),
+        other => other.to_string(),
+    }
+}
 
 /// Going back: the version it installs, the backup it restores, and whether there is a
 /// runtime to close first (none on the fatal page).
@@ -297,12 +312,13 @@ async fn download_version(
     let found = updater
         .check()
         .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| format!("No installer was found for Dots {version}."))?;
-    let bytes = found
-        .download(|_, _| {}, || {})
-        .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| match plain(e) {
+            // This version was never published for this kind of computer.
+            sentence if sentence == NO_BUILD_HERE => NO_INSTALLER.to_string(),
+            sentence => sentence,
+        })?
+        .ok_or_else(|| format!("No installer was found for Sage {version}."))?;
+    let bytes = found.download(|_, _| {}, || {}).await.map_err(plain)?;
     Ok(Downloaded {
         update: found,
         bytes,
@@ -469,7 +485,7 @@ pub async fn idle_tick(c: &impl IdleControls, updates: &Updates) -> bool {
         return true;
     }
     updates.state.lock().unwrap().abandon(&format!(
-        "Dots could not install {version} by itself. It tries again at the next check."
+        "Sage could not install {version} by itself. It tries again at the next check."
     ));
     c.hold_runs(false).await;
     false
@@ -664,7 +680,7 @@ async fn download_quiet(app: &AppHandle, version: &str) -> Result<Downloaded, St
         .await
         .map_err(|e| e.to_string())?
         .filter(|u| u.version == version)
-        .ok_or_else(|| format!("Dots {version} is no longer offered."))?;
+        .ok_or_else(|| format!("Sage {version} is no longer offered."))?;
     let bytes = found
         .download(|_, _| {}, || {})
         .await
@@ -834,7 +850,7 @@ pub async fn act(
 
 /// Why an install with no downloaded update did not begin.
 const NO_DOWNLOAD: &str =
-    "The downloaded update was lost, so it was not installed. Dots downloads it again.";
+    "The downloaded update was lost, so it was not installed. Sage downloads it again.";
 
 /// An install that could not begin: the state lets go of it, the queue is released and the
 /// note says why. Returns the note. The caller holds the turn.
@@ -893,7 +909,7 @@ pub fn spawn(app: AppHandle, rt: Arc<Runtime>) {
                 rt: &idle_rt,
             };
             if idle_tick(&controls, &updates).await {
-                tracing::info!("installing the update by itself while Dots is idle");
+                tracing::info!("installing the update by itself while Sage is idle");
             }
         }
     });
@@ -1020,16 +1036,13 @@ async fn check_once(
             .ready_version()
             .map(str::to_string)
     };
-    let Some(found) = updater.check().await.map_err(|e| e.to_string())? else {
+    let Some(found) = updater.check().await.map_err(plain)? else {
         return Ok(ready());
     };
     if !updates.state.lock().unwrap().wants(&found.version) {
         return Ok(ready());
     }
-    let bytes = found
-        .download(|_, _| {}, || {})
-        .await
-        .map_err(|e| e.to_string())?;
+    let bytes = found.download(|_, _| {}, || {}).await.map_err(plain)?;
     let version = found.version.clone();
     // The offer is taken or refused under one lock: a wait may have begun during the download.
     let shown = {
@@ -1045,12 +1058,12 @@ async fn check_once(
         });
         state.offer(&version)
     };
-    tracing::info!("Dots {version} is downloaded and ready to install");
+    tracing::info!("Sage {version} is downloaded and ready to install");
     if shown {
         let working = match rt.working_dots().await {
             Ok(working) => working,
             Err(e) => {
-                tracing::warn!("reading the working dots failed: {e}");
+                tracing::warn!("reading the working sols failed: {e}");
                 Vec::new()
             }
         };
@@ -1217,7 +1230,7 @@ impl InstallSteps for AppSteps {
     }
 
     fn install(&self) -> Result<(), String> {
-        tracing::info!("installing Dots {}", self.downloaded.update.version);
+        tracing::info!("installing Sage {}", self.downloaded.update.version);
         self.downloaded
             .update
             .install(&self.downloaded.bytes)
@@ -1559,7 +1572,7 @@ mod tests {
         );
         let release = dots_core::releases::Release {
             version: "0.3.0".into(),
-            name: "Dots 0.3.0".into(),
+            name: "Sage 0.3.0".into(),
             body: String::new(),
             url: String::new(),
             prerelease: false,
@@ -1787,7 +1800,7 @@ mod tests {
         };
         let release = |withdrawn| dots_core::releases::Release {
             version: "0.2.0".into(),
-            name: "Dots 0.2.0".into(),
+            name: "Sage 0.2.0".into(),
             body: String::new(),
             url: String::new(),
             prerelease: withdrawn,

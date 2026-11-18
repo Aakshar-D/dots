@@ -131,7 +131,7 @@ describe("runtime events and the query cache", () => {
     expect([stale(qc, keys.inbox), stale(qc, keys.overview)]).toEqual([false, false]);
   });
 
-  it("marks the dots, the overview and the inbox stale on a schedule update", () => {
+  it("marks the sols, the overview and the inbox stale on a schedule update", () => {
     const qc = createQueryClient();
     const lists = [keys.dots, keys.overview, keys.inbox];
     const untouched = [keys.dot(sample.dot.id), keys.runs(sample.dot.id), keys.settings];
@@ -142,7 +142,7 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
-  it("marks the dot's skips, the overview and the dots stale when a slot is skipped", () => {
+  it("marks the sol's skips, the overview and the sols stale when a slot is skipped", () => {
     const qc = createQueryClient();
     const lists = [keys.scheduleSkips(sample.dot.id), keys.overview, keys.dots];
     const untouched = [keys.scheduleSkips("other"), keys.inbox, keys.runs(sample.dot.id)];
@@ -157,7 +157,7 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
-  it("marks the dot's topics, runs and threads stale when its topics change", () => {
+  it("marks the sol's topics, runs and threads stale when its topics change", () => {
     const qc = createQueryClient();
     const lists = [keys.topics(sample.dot.id), keys.runs(sample.dot.id), keys.thread("r1")];
     const untouched = [keys.topics("other"), keys.inbox, keys.overview];
@@ -168,7 +168,7 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
-  it("marks a dot's scheduled messages stale when one changes, and the runs once it is sent", () => {
+  it("marks a sol's scheduled messages stale when one changes, and the runs once it is sent", () => {
     const qc = createQueryClient();
     const dotId = sample.scheduledMessage.dot_id;
     const mine = keys.scheduledMessages(dotId);
@@ -190,7 +190,7 @@ describe("runtime events and the query cache", () => {
     expect(stale(qc, runs)).toBe(true);
   });
 
-  it("marks the dot's proposed instructions and the inbox stale when a proposal changes", () => {
+  it("marks the sol's proposed instructions and the inbox stale when a proposal changes", () => {
     const qc = createQueryClient();
     const lists = [keys.instructionProposals(sample.dot.id), keys.inbox];
     const untouched = [keys.instructionProposals("other"), keys.dot(sample.dot.id), keys.dots];
@@ -205,7 +205,7 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
-  it("marks the Library, the inbox and what shows a dot's uses stale on a Library update", () => {
+  it("marks the Library, the inbox and what shows a sol's uses stale on a Library update", () => {
     const qc = createQueryClient();
     // Removing an item takes it out of the dots that use it; a changed tool list is an Inbox
     // group.
@@ -248,7 +248,7 @@ describe("runtime events and the query cache", () => {
   it.each([
     { type: "library_updated", item_id: "01J0SRV" },
     { type: "org_updated", org_id: "acme-eng" },
-  ] as const)("does not load an open dot again on $type", async (update) => {
+  ] as const)("does not load an open sage again on $type", async (update) => {
     // An open editor was filled from the dot once; loading it again would put the editor back
     // to empty. It is marked stale, so it is loaded when it is next opened.
     const qc = createQueryClient();
@@ -294,7 +294,7 @@ describe("runtime events and the query cache", () => {
     unsubscribe();
   });
 
-  it("marks each dot's variables and access stale on an org update", () => {
+  it("marks each sol's variables and access stale on an org update", () => {
     const qc = createQueryClient();
     // Each dot's variables resolve in its org, and what the person may do with it follows the
     // member list.
@@ -334,7 +334,7 @@ describe("runtime events and the query cache", () => {
     for (const key of all) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
-  it("refetches the approvals of the approval's own run when Dots performs its call", () => {
+  it("refetches the approvals of the approval's own run when Sage performs its call", () => {
     const qc = createQueryClient();
     // The call is performed by a resume run; the approval belongs to that run's parent.
     const parent = keys.approvals(sample.approval.run_id);
@@ -432,7 +432,7 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
-  it("marks the run pages' dot runs stale when a step's run changes, not for another run", () => {
+  it("marks the run pages' sol runs stale when a step's run changes, not for another run", () => {
     const qc = createQueryClient();
     const pages = [keys.workflowDotRuns("01J0WFR"), keys.workflowDotRuns("01J0WFR2")];
     for (const key of pages) qc.setQueryData(key, []);
@@ -671,7 +671,7 @@ describe("a change announced while a fetch is in flight", () => {
     unwatch();
   });
 
-  it("loads the Dots list again when a dot changed during its first load", async () => {
+  it("loads the Sage list again when a sol changed during its first load", async () => {
     const qc = createQueryClient();
     const renamed = { ...sample.overview, dot: { ...sample.dot, name: "renamed" } };
     const read = later<DotOverview[]>();

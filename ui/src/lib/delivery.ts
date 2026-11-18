@@ -3,8 +3,8 @@ import type { Run } from "@/api/types";
 export const WAIT_REASON_TEXT: Record<NonNullable<Run["wait_reason"]>, string> = {
   busy: "other runs are busy",
   usage_hold: "held for the usage limit",
-  updating: "Dots is updating",
-  dot_busy: "this dot is busy with another run",
+  updating: "Sage is updating",
+  dot_busy: "this sol is busy with another run",
   queued: "next in line",
   spend_cap: "a spending cap is reached",
 };

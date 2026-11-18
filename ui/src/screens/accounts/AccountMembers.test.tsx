@@ -10,7 +10,7 @@ const [acme] = sample.orgs; // Acme Engineering, active, this PC an Admin
 const [bensRequest, troubled] = sample.requestPreviews;
 const OWNER = "Owners can only be changed with the account owner's key, using dots-admin.";
 const NOT_A_SIGNER =
-  "Acme Engineering: your Dots ID isn't one of the account's signing admins yet. Ask the " +
+  "Acme Engineering: your Sage ID isn't one of the account's signing admins yet. Ask the " +
   "owner to add it with dots-admin policy admins add.";
 const REQUEST = "dotsreq_c2FtcGxlLXJlcXVlc3QtY29kZQ";
 const WAITING = "Acme Engineering: a change is waiting to be published. Retry or discard it first.";
@@ -224,7 +224,7 @@ describe("Settings, Accounts, Members", () => {
     });
     const { panel } = await membersTab();
     expect(member(panel, "Asha Rao")).toHaveTextContent(
-      "Can sign the list once the owner adds their Dots ID to the policy's admins.",
+      "Can sign the list once the owner adds their Sage ID to the policy's admins.",
     );
     const invite = within(panel).getByRole("button", { name: "Invite" });
     expect(invite).toBeDisabled();
@@ -274,7 +274,7 @@ describe("Settings, Accounts, Members", () => {
     );
     const ask = await screen.findByRole("alertdialog");
     expect(ask).toHaveTextContent(
-      "Also revoke their access in the source: the list stops Dots honouring them, only the " +
+      "Also revoke their access in the source: the list stops Sage honouring them, only the " +
         "source cuts them off.",
     );
     await user.click(within(ask).getByRole("button", { name: "Remove" }));

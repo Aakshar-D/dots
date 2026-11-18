@@ -9,7 +9,7 @@ import { localDayTime } from "@/lib/format";
 import { notifyError } from "@/lib/notify";
 
 /// Why a listed file has no Open (attachments spec section 4.5.1).
-const NOT_OPENED = "Dots only opens documents, images and media. Use Show in folder.";
+const NOT_OPENED = "Sage only opens documents, images and media. Use Show in folder.";
 
 /// The Files panel beside the conversation (attachments spec section 6): the files the person
 /// attached and the files the dot wrote or edited, newest first. A name opens its file, the

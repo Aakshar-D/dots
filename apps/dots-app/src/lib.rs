@@ -3,6 +3,7 @@
 #![recursion_limit = "256"]
 
 pub mod app_frame;
+pub mod app_save;
 pub mod autostart;
 pub mod commands;
 pub mod confirm;
@@ -284,6 +285,7 @@ command_list![
     app_install_bundled,
     app_answer_start_prompt,
     app_run_link,
+    app_save_file,
     watchers_list,
     watcher_add,
     watcher_update,
@@ -348,6 +350,12 @@ command_list![
     voice_view,
     voice_preview,
     voice_devices,
+    voice_setup,
+    voice_setup_run,
+    voice_memory,
+    voice_memory_forget,
+    voice_memory_clear,
+    voice_memory_learning,
 ];
 
 /// Keeps the log writer flushing until the app exits.
@@ -396,7 +404,7 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             startup::log_panics(log_dir.clone());
         }
     }
-    tracing::info!("starting Dots {}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("starting Sage {}", env!("CARGO_PKG_VERSION"));
     // The lock comes before the runtime touches the database; failing to get it is a failed
     // start like any other.
     let mut restarted = false;
@@ -437,6 +445,9 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
             waker.spawn_send_later();
         });
     }
+    // Before the check below is spawned: the check writes its answer into this, and a task
+    // that ran first found nothing there and logged that the app "did not start".
+    app.manage(publishing::Publisher::default());
     // Managed whenever the data folder is known, so the fatal page can go back too (updates UI
     // spec section 4.4); only the checks need the runtime. What a failed install left is read
     // while Dots holds the data folder.
@@ -464,7 +475,6 @@ fn setup(app: &AppHandle, panics_logged: bool) -> Result<(), Box<dyn std::error:
         stay_hidden = startup::take_stay_hidden_mark(dir);
     }
     app.manage(dots_core::chatgpt::ChatGptAuth::from_env());
-    app.manage(publishing::Publisher::default());
     phone::manage(app, runtime.as_ref().ok().map(|(rt, _)| rt.clone()));
     // Open Dot's voice, and the listener for its spoken notices (it subscribes to the runtime
     // here, after the tray): with voice off nothing is built and nothing is said.
@@ -554,7 +564,7 @@ pub fn run() {
         })
         .invoke_handler(invoke_handler())
         .build(tauri::generate_context!())
-        .expect("failed to build the Dots app");
+        .expect("failed to build the Sage app");
     app.run(|app, event| {
         if let RunEvent::Exit = event {
             // The microphone and speaker are let go before the process ends.

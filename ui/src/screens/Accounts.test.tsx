@@ -133,7 +133,7 @@ describe("Settings, Accounts", () => {
     await user.click(within(await row("Acme Engineering")).getByRole("button", { name: "Remove" }));
     let ask = await screen.findByRole("alertdialog", { name: "Remove Acme Engineering?" });
     expect(ask).toHaveTextContent(
-      "The dots of Acme Engineering stay on this PC, but they can't run until you join it " +
+      "The sols of Acme Engineering stay on this PC, but they can't run until you join it " +
         "again. The saved copy of its variables and your sign-in details for it are deleted.",
     );
     await user.click(within(ask).getByRole("button", { name: "Cancel" }));
@@ -327,7 +327,7 @@ describe("Settings, Accounts", () => {
 
     // The path changed: the saved details are not sent to it, so they are asked as at a Join.
     expect(dialog).toHaveTextContent(
-      "The source changed, so enter your sign-in details again: Dots does not send the saved " +
+      "The source changed, so enter your sign-in details again: Sage does not send the saved " +
         "ones to it.",
     );
     expect(dialog).not.toHaveTextContent("Leave these empty");
@@ -492,8 +492,8 @@ describe("Settings, Accounts", () => {
 describe("Settings, Accounts, membership", () => {
   const named = (over: Partial<OrgSummary>): OrgSummary =>
     ({ ...acme, ...over }) as OrgSummary;
-  const WAITING = "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.";
-  const CHANGED = "Acme Engineering: this PC's Dots ID changed. Send the new one to an Admin.";
+  const WAITING = "Acme Engineering: you aren't on its member list yet. Send your Sage ID to an Admin.";
+  const CHANGED = "Acme Engineering: this PC's Sage ID changed. Send the new one to an Admin.";
   const REMOVED = "Acme Engineering: you were removed from it.";
 
   it("shows the role, and the size and number of the member list", async () => {
@@ -504,7 +504,7 @@ describe("Settings, Accounts, membership", () => {
     expect(within(r).getByText("4 members · list #3")).toBeVisible();
   });
 
-  it("says once that a waiting PC is not on the list, with a button that copies its Dots ID", async () => {
+  it("says once that a waiting PC is not on the list, with a button that copies its Sage ID", async () => {
     orgs([
       named({ membership: "waiting", role: null, status_text: "connected", not_member_text: WAITING }),
     ]);
@@ -513,11 +513,11 @@ describe("Settings, Accounts, membership", () => {
     const r = await row(acme.name);
     expect(within(r).getByText(WAITING)).toBeVisible();
     expect(within(r).queryByText("connected")).toBeNull();
-    await user.click(await within(r).findByRole("button", { name: "Copy my Dots ID" }));
+    await user.click(await within(r).findByRole("button", { name: "Copy my Sage ID" }));
     expect(await navigator.clipboard.readText()).toBe(sample.identity.public_key);
   });
 
-  it("says once that the Dots ID changed, with the reason the core adds", async () => {
+  it("says once that the Sage ID changed, with the reason the core adds", async () => {
     orgs([
       named({
         membership: "waiting",
@@ -528,7 +528,7 @@ describe("Settings, Accounts, membership", () => {
     ]);
     renderApp("/settings/account");
     const r = await row(acme.name);
-    expect(within(r).getAllByText(/Dots ID changed/)).toHaveLength(1);
+    expect(within(r).getAllByText(/Sage ID changed/)).toHaveLength(1);
     expect(within(r).getByText(`${CHANGED} (offline)`)).toBeVisible();
   });
 
@@ -545,7 +545,7 @@ describe("Settings, Accounts, membership", () => {
     const r = await row(acme.name);
     expect(within(r).getByText(REMOVED)).toBeVisible();
     expect(within(r).queryByText("Removed from Acme Engineering")).toBeNull();
-    expect(within(r).queryByRole("button", { name: "Copy my Dots ID" })).toBeNull();
+    expect(within(r).queryByRole("button", { name: "Copy my Sage ID" })).toBeNull();
   });
 
   it("shows why the last member list was not accepted once", async () => {
@@ -642,7 +642,7 @@ describe("Settings, Accounts, invites and request codes", () => {
     await user.click(within(dialog).getByRole("button", { name: "Join" }));
     expect(await within(dialog).findByLabelText("Request code")).toHaveValue(REQUEST);
     expect(dialog).toHaveTextContent(
-      `Send this to an Admin of ${pending().name}. Dots checks again on its normal refresh.`,
+      `Send this to an Admin of ${pending().name}. Sage checks again on its normal refresh.`,
     );
     expect(screen.getByRole("dialog")).toBeVisible();
   });

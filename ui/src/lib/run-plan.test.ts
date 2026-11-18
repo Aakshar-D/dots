@@ -25,7 +25,7 @@ const call = (id: string, tool: string, input: unknown, s = 0, parent?: string) 
   ev({ kind: "tool_call", id, tool, input, ...(parent ? { parent } : {}) }, s);
 
 describe("a run's plan", () => {
-  it("is the newest to-do list the dot wrote, with each step's state", () => {
+  it("is the newest to-do list the sol wrote, with each step's state", () => {
     const plans = runPlans([
       plan("p1", [todo("Read", "in_progress"), todo("Fix", "pending")]),
       ok("p1"),
@@ -89,7 +89,7 @@ describe("a run's plan", () => {
     expect(runPlans([plan("p1", [todo("A", "pending")]), plan("p2", [])])).toEqual([]);
   });
 
-  it("gives a helper's list to that helper, after the dot's own", () => {
+  it("gives a helper's list to that helper, after the sol's own", () => {
     const plans = runPlans([
       call("task1", "Task", { description: "Check the logs", prompt: "…" }),
       plan("h1", [todo("Open logs", "in_progress")], "task1"),
@@ -104,7 +104,7 @@ describe("a run's plan", () => {
     expect(plans[1]!.steps[0]!.content).toBe("Open logs");
   });
 
-  it("gives a call whose helper the run does not know to the dot", () => {
+  it("gives a call whose helper the run does not know to the sol", () => {
     const plans = runPlans([plan("p1", [todo("A", "pending")], "unknown")]);
     expect(plans[0]!.owner).toEqual({ kind: "dot" });
   });
@@ -184,7 +184,7 @@ describe("a run's timeline", () => {
     ]);
   });
 
-  it("names a helper's steps by the helper, apart from the dot's", () => {
+  it("names a helper's steps by the helper, apart from the sol's", () => {
     const entries = runTimeline(
       [
         call("t", "Task", { description: "Check the logs" }),

@@ -30,7 +30,7 @@ let line = 0;
 const lines = (...texts: string[]) => texts.map((text) => ({ n: ++line, text }));
 
 const show = (change: Partial<VoiceLive>) => act(() => voiceStore.set(change));
-const stage = () => screen.queryByRole("region", { name: "Open Dot" });
+const stage = () => screen.queryByRole("region", { name: "Open Sage" });
 const words = () => stage()!.querySelector<HTMLElement>("[aria-live='polite']")!;
 const question = () => stage()!.querySelector<HTMLElement>("[data-question]");
 /// What The Breath shows: its button names the state only through the image underneath, so
@@ -80,7 +80,7 @@ afterEach(() => {
   voiceStore.reset();
 });
 
-describe("the Open Dot stage", () => {
+describe("the Open Sage stage", () => {
   it("does not render at all while closed", () => {
     show({ state: "idle" });
     const { container } = render(<OpenDotStage />);
@@ -186,7 +186,7 @@ describe("the Open Dot stage", () => {
     const button = screen.getByRole("button", { name: "Approve" });
     const propsKey = Object.keys(button).find((k) => k.startsWith("__reactProps$"))!;
     const staleClick = (button as unknown as Record<string, { onClick: () => void }>)[propsKey]!.onClick;
-    show({ ask: { question: "Which dot?", options: ["Mail", "News"], seq: 8 } });
+    show({ ask: { question: "Which sol?", options: ["Mail", "News"], seq: 8 } });
     act(() => staleClick());
     expect(backend.callsTo("voice_pick")).toEqual([{ index: 0, seq: 7 }]);
   });
@@ -334,13 +334,13 @@ describe("the Open Dot stage", () => {
     expect(within(words()).getByText("Triage wants to push.")).toBeVisible();
     // A question spoken a sentence at a time: none of its sentences is printed twice, and
     // what was said before them stays.
-    const long = "Downloads tidy. Runs every day at 08:00. Create this dot?";
+    const long = "Downloads tidy. Runs every day at 08:00. Create this sol?";
     show({
-      said: lines("Let me set that up.", "Downloads tidy.", "Runs every day at 08:00.", "Create this dot?"),
+      said: lines("Let me set that up.", "Downloads tidy.", "Runs every day at 08:00.", "Create this sol?"),
       ask: { question: long, options: ["Yes", "No"], seq: 2 },
     });
     expect(question()).toHaveTextContent(long);
-    expect(within(words()).queryByText("Create this dot?")).toBeNull();
+    expect(within(words()).queryByText("Create this sol?")).toBeNull();
     expect(within(words()).queryByText("Runs every day at 08:00.")).toBeNull();
     expect(within(words()).getByText("Let me set that up.")).toBeVisible();
   });
@@ -352,14 +352,14 @@ describe("the Open Dot stage", () => {
     expect(within(stage()!).getByText("Say your answer.")).toBeVisible();
     expect(screen.queryByRole("group", { name: "What should it be called?" })).toBeNull();
     const footer = stage()!.querySelector("[data-footer-line]");
-    expect(footer).toHaveTextContent("Not listening. Click the dots to answer by voice.");
+    expect(footer).toHaveTextContent("Not listening. Click the mark to answer by voice.");
     expect(footer).not.toHaveTextContent(/pick an option/);
   });
 
   it("names the shortcut to interrupt only when one is set", () => {
     render(<OpenDotStage />, "");
     show({ state: "speaking", micOpen: false });
-    expect(stage()!.querySelector("[data-footer-line]")).toHaveTextContent(/^Speaking\. Click the dots to interrupt\.$/);
+    expect(stage()!.querySelector("[data-footer-line]")).toHaveTextContent(/^Speaking\. Click the mark to interrupt\.$/);
   });
 
   it("lets the options be tried again when a pick fails", async () => {
@@ -368,12 +368,12 @@ describe("the Open Dot stage", () => {
       voiceOpen: async () => null,
       voiceClose: async () => null,
       voiceStop: async () => null,
-      voicePick: () => Promise.reject(new Error("Dot is not asking anything now.")),
+      voicePick: () => Promise.reject(new Error("Sage is not asking anything now.")),
     };
     render(<OpenDotStage act={act_} />);
     show({ state: "asking", micOpen: true, ask: { question: "Q", options: ["A", "B"], seq: 1 } });
     await act(async () => void fireEvent.click(screen.getByRole("button", { name: "A" })));
-    expect(failed).toHaveBeenCalledWith("Dot is not asking anything now.");
+    expect(failed).toHaveBeenCalledWith("Sage is not asking anything now.");
     expect(screen.getByRole("button", { name: "A" })).not.toHaveAttribute("aria-disabled");
     expect(screen.getByRole("button", { name: "A" })).not.toHaveAttribute("data-picked");
     failed.mockRestore();
@@ -477,7 +477,7 @@ describe("the Open Dot stage", () => {
     }
   });
 
-  it("shows an approval with no target as its dot and tool only", () => {
+  it("shows an approval with no target as its sol and tool only", () => {
     render(<OpenDotStage />);
     show({
       state: "asking",
@@ -533,10 +533,10 @@ describe("the Open Dot stage", () => {
     show({ state: "thinking", micOpen: false });
     expect(footer()).toHaveTextContent("Thinking…");
     show({ state: "speaking", micOpen: false });
-    expect(footer()).toHaveTextContent("Speaking. Click the dots or press the shortcut to interrupt.");
+    expect(footer()).toHaveTextContent("Speaking. Click the mark or press the shortcut to interrupt.");
     show({ state: "idle", micOpen: false, ask: { question: "Run it?", options: ["Yes", "No"], seq: 1 } });
     expect(footer()).toHaveTextContent(
-      "Not listening. Click the dots to answer by voice, or pick an option.",
+      "Not listening. Click the mark to answer by voice, or pick an option.",
     );
     show({ trouble: "No microphone was found." });
     expect(footer()).toHaveTextContent("No microphone was found.");
@@ -608,7 +608,152 @@ describe("the Open Dot stage", () => {
     expect(stage()!.className).toMatch(/slide-in-from-bottom/);
   });
 
-  it("is reached by Tab in order: The Breath, the options, then Close", async () => {
+  describe("enlarged", () => {
+    const say = (heard: string, ...said: string[]) => {
+      show({
+        state: "speaking",
+        talk: [
+          ...voiceStore.get().talk,
+          { n: ++line, who: "you", text: heard },
+          { n: ++line, who: "sage", text: said.join(" ") },
+        ],
+        said: lines(...said),
+      });
+    };
+    afterEach(() => window.localStorage.clear());
+
+    it("fills the window and shows the whole conversation, every reply in full", async () => {
+      const user = userEvent.setup();
+      render(<OpenDotStage />);
+      show({ state: "listening", micOpen: true });
+      expect(stage()!.hasAttribute("data-large")).toBe(false);
+      await user.click(screen.getByRole("button", { name: "Enlarge Open Sage" }));
+      expect(stage()!.hasAttribute("data-large")).toBe(true);
+      const long = "A long reply that the small stage would cut to two lines. ".repeat(8).trim();
+      say("What needs me?", long);
+      say("And the second?", "Here is the second.");
+      const log = within(screen.getByRole("log", { name: "Conversation" }));
+      expect(log.getByText("What needs me?")).toBeTruthy();
+      expect(log.getByText(long).className).not.toMatch(/line-clamp/);
+      expect(log.getByText("Here is the second.")).toBeTruthy();
+      // And it is remembered for the next time the stage opens.
+      expect(window.localStorage.getItem("open-sage-large")).toBe("1");
+      await user.click(screen.getByRole("button", { name: "Make Open Sage smaller" }));
+      expect(stage()!.hasAttribute("data-large")).toBe(false);
+      expect(screen.queryByRole("log")).toBeNull();
+      expect(window.localStorage.getItem("open-sage-large")).toBeNull();
+    });
+
+    it("copies one reply, or the whole conversation", async () => {
+      const user = userEvent.setup();
+      const written: string[] = [];
+      vi.spyOn(navigator.clipboard, "writeText").mockImplementation((text) => {
+        written.push(text);
+        return Promise.resolve();
+      });
+      window.localStorage.setItem("open-sage-large", "1");
+      render(<OpenDotStage />);
+      show({ state: "listening", micOpen: true });
+      expect(screen.queryByRole("button", { name: "Copy all" })).toBeNull();
+      say("What needs me?", "Two things.", "An approval and a question.");
+      await user.click(screen.getByRole("button", { name: "Copy this reply" }));
+      await user.click(screen.getByRole("button", { name: "Copy all" }));
+      expect(written).toEqual([
+        "Two things. An approval and a question.",
+        "You: What needs me?\n\nSage: Two things. An approval and a question.",
+      ]);
+    });
+
+    it("shows what Sage is doing between what was asked and its reply", () => {
+      window.localStorage.setItem("open-sage-large", "1");
+      render(<OpenDotStage />);
+      // A stage that comes up starts a new conversation: it is up before anything is said.
+      show({ state: "listening", micOpen: true });
+      show({
+        state: "thinking",
+        micOpen: false,
+        step: "Opening the Inbox",
+        talk: [
+          { n: ++line, who: "you", text: "Open the inbox." },
+          { n: ++line, who: "step", text: "Looking at your workspace" },
+          { n: ++line, who: "step", text: "Opening the Inbox" },
+        ],
+      });
+      const log = screen.getByRole("log", { name: "Conversation" });
+      // The steps in a row are one list, between the person's words and the reply.
+      expect(log.querySelectorAll("[data-steps]")).toHaveLength(1);
+      const steps = () => [...log.querySelectorAll<HTMLElement>("[data-step]")];
+      expect(steps().map((s) => [s.textContent, s.dataset.step])).toEqual([
+        ["Looking at your workspace", "done"],
+        ["Opening the Inbox", "now"],
+      ]);
+      expect(steps()[1]!.getAttribute("aria-current")).toBe("step");
+      // Shown, never said: the list is kept out of what the log reads out.
+      expect(log.querySelector("[data-steps]")!.getAttribute("aria-live")).toBe("off");
+      // The footer names the step under way.
+      expect(stage()!.querySelector("[data-footer-line]")!.textContent).toBe("Opening the Inbox…");
+      // It speaks from the first words of the reply, the screen still to open: under way.
+      show({ state: "speaking" });
+      expect(steps().map((s) => s.dataset.step)).toEqual(["done", "now"]);
+      expect(stage()!.querySelector("[data-footer-line]")!.textContent).toBe("Opening the Inbox…");
+      // The reply goes on: every step is done, and stays above it.
+      show({
+        state: "speaking",
+        step: null,
+        talk: [...voiceStore.get().talk, { n: ++line, who: "sage", text: "The Inbox is open." }],
+      });
+      expect(steps().map((s) => s.dataset.step)).toEqual(["done", "done"]);
+      expect(log.textContent).toMatch(/Open the inbox\..*Opening the Inbox.*The Inbox is open\./);
+    });
+
+    it("leaves the steps out of what is copied", async () => {
+      const user = userEvent.setup();
+      const written: string[] = [];
+      vi.spyOn(navigator.clipboard, "writeText").mockImplementation((text) => {
+        written.push(text);
+        return Promise.resolve();
+      });
+      window.localStorage.setItem("open-sage-large", "1");
+      render(<OpenDotStage />);
+      show({ state: "listening", micOpen: true });
+      show({
+        state: "speaking",
+        talk: [
+          { n: ++line, who: "you", text: "Open the inbox." },
+          { n: ++line, who: "step", text: "Opening the Inbox" },
+          { n: ++line, who: "sage", text: "The Inbox is open." },
+        ],
+      });
+      await user.click(screen.getByRole("button", { name: "Copy all" }));
+      expect(written).toEqual(["You: Open the inbox.\n\nSage: The Inbox is open."]);
+    });
+
+    it("stays until it is closed, and the conversation goes with it", () => {
+      vi.useFakeTimers();
+      window.localStorage.setItem("open-sage-large", "1");
+      render(<OpenDotStage />);
+      show({ state: "listening", micOpen: true });
+      say("Hello.", "Hi.");
+      show({ state: "idle", micOpen: false });
+      act(() => void vi.advanceTimersByTime(LINGER_MS * 20));
+      expect(stage()).not.toBeNull();
+      fireEvent.click(screen.getByRole("button", { name: "Close" }));
+      act(() => void vi.advanceTimersByTime(LEAVE_MS));
+      expect(stage()).toBeNull();
+      expect(voiceStore.get().talk).toEqual([]);
+    });
+  });
+
+  it("names the step under way in the footer of the small stage too", () => {
+    render(<OpenDotStage />);
+    show({ state: "thinking", micOpen: false });
+    const footer = () => stage()!.querySelector("[data-footer-line]")!.textContent;
+    expect(footer()).toBe("Thinking…");
+    show({ step: "Looking at your workspace" });
+    expect(footer()).toBe("Looking at your workspace…");
+  });
+
+  it("is reached by Tab in order: The Breath, the options, Enlarge, then Close", async () => {
     const user = userEvent.setup();
     render(
       <>
@@ -622,6 +767,7 @@ describe("the Open Dot stage", () => {
       screen.getByRole("button", { name: "Listen" }),
       screen.getByRole("button", { name: "A" }),
       screen.getByRole("button", { name: "B" }),
+      screen.getByRole("button", { name: "Enlarge Open Sage" }),
       screen.getByRole("button", { name: "Close" }),
     ];
     for (const element of expected) {

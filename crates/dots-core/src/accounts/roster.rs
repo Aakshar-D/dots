@@ -149,7 +149,7 @@ pub fn parse_roster(text: &str, org_id: &str) -> Result<Roster, RosterError> {
         Some(v) if v.as_u64() == Some(u64::from(ROSTER_VERSION)) => {}
         Some(v) => {
             return Err(invalid(format!(
-                "member list version {v} is not supported; this Dots reads version {ROSTER_VERSION}"
+                "member list version {v} is not supported; this Sage reads version {ROSTER_VERSION}"
             )))
         }
     }
@@ -258,7 +258,7 @@ pub fn parse_roster(text: &str, org_id: &str) -> Result<Roster, RosterError> {
         for key in &member.keys {
             if minisign_verify::PublicKey::from_base64(key).is_err() {
                 return Err(invalid(format!(
-                    "member {} has a key that isn't a Dots ID",
+                    "member {} has a key that isn't a Sage ID",
                     member.email
                 )));
             }
@@ -382,7 +382,7 @@ pub fn verify_roster(
         serde_json::from_str(signed).map_err(|e| RosterError::Envelope(plain_serde(&e)))?;
     if envelope.v != ROSTER_ENVELOPE_VERSION {
         return Err(RosterError::Envelope(format!(
-            "version {} is not supported; this Dots reads version {ROSTER_ENVELOPE_VERSION}",
+            "version {} is not supported; this Sage reads version {ROSTER_ENVELOPE_VERSION}",
             envelope.v
         )));
     }
@@ -411,7 +411,7 @@ pub fn open_accepted_roster(signed: &str, org_id: &str) -> Result<(Roster, Strin
         serde_json::from_str(signed).map_err(|e| RosterError::Envelope(plain_serde(&e)))?;
     if envelope.v != ROSTER_ENVELOPE_VERSION {
         return Err(RosterError::Envelope(format!(
-            "version {} is not supported; this Dots reads version {ROSTER_ENVELOPE_VERSION}",
+            "version {} is not supported; this Sage reads version {ROSTER_ENVELOPE_VERSION}",
             envelope.v
         )));
     }

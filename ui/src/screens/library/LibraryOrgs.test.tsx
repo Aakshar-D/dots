@@ -83,7 +83,7 @@ describe("the Env tab's orgs", () => {
     expect(within(org).queryAllByRole("listitem")).toEqual([]);
   });
 
-  it("names the dots that grant each variable, in its own scope", async () => {
+  it("names the sols that grant each variable, in its own scope", async () => {
     await envTab();
     expect(
       within(await row("Personal", "GITHUB_TOKEN")).getByText("Used by nightly-tests"),
@@ -189,7 +189,7 @@ describe("MCP servers in each scope", () => {
     expect(within(server).queryByRole("listitem", { name: "github in Beta Labs" })).toBeNull();
   });
 
-  it("shows only Personal's dots on the server's own line", async () => {
+  it("shows only Personal's sols on the server's own line", async () => {
     const personal = github.catalogs[0]!;
     const entry = {
       ...scoped(),
@@ -209,7 +209,7 @@ describe("MCP servers in each scope", () => {
     expect(within(server).getAllByText("Used by acme-release")).toHaveLength(1);
   });
 
-  it("keeps an org whose stored list was reset, though no dot of it uses the server", async () => {
+  it("keeps an org whose stored list was reset, though no sol of it uses the server", async () => {
     backend.on("library_list", () => [scoped(true)]);
     backend.on("org_list", () => [acme, beta, gamma]);
     renderApp("/library");

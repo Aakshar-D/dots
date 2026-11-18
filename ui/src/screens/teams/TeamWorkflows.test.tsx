@@ -165,7 +165,7 @@ describe("the team page's recent runs", () => {
     expect(first.getByRole("link", { name: "The tray icon is invisible on a light taskbar." }))
       .toHaveAttribute("href", "/workflow-runs/01J0WFR");
     expect(rows[1]).toHaveTextContent("Fix and ship");
-    expect(rows[1]).toHaveTextContent("Dots");
+    expect(rows[1]).toHaveTextContent("Sage");
     expect(rows[1]).toHaveTextContent("3 runs · 120k tokens");
     expect(rows[2]).toHaveTextContent("A step failed");
     expect(within(rows[2]!).getByText("Test")).toBeVisible();

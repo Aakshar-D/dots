@@ -55,7 +55,7 @@ pub fn apply(app: &AppHandle) {
     if let Some(dot_id) = newly_viewed(before.as_deref(), now.as_deref()).map(str::to_string) {
         tauri::async_runtime::spawn(async move {
             if let Err(e) = rt.mark_dot_seen(&dot_id).await {
-                tracing::warn!(dot = %dot_id, "marking a dot seen failed: {e}");
+                tracing::warn!(dot = %dot_id, "marking a sol seen failed: {e}");
             }
         });
     }

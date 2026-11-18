@@ -322,15 +322,15 @@ async fn a_vault_entry_that_is_gone_pauses_the_watcher() {
 
 #[tokio::test]
 async fn a_label_with_spaces_and_accents_is_examined_by_its_imap_name() {
-    let (h, fake, dot, w) = setup(|c| c.label = "Dots Été".into()).await;
-    fake.folder("Dots &AMk-t&AOk-", 4);
+    let (h, fake, dot, w) = setup(|c| c.label = "Sage Été".into()).await;
+    fake.folder("Sage &AMk-t&AOk-", 4);
     h.watchers.poll_now(&w.id).await.unwrap();
-    fake.deliver("Dots &AMk-t&AOk-", invoice(1));
+    fake.deliver("Sage &AMk-t&AOk-", invoice(1));
     h.watchers.poll_now(&w.id).await.unwrap();
     assert_eq!(h.runs(&dot.id).await.len(), 1);
     assert!(fake
         .commands()
-        .contains(&"EXAMINE Dots &AMk-t&AOk-".to_string()));
+        .contains(&"EXAMINE Sage &AMk-t&AOk-".to_string()));
 
     let (h, _fake, _dot, w) = setup(|c| c.label = "Nope".into()).await;
     assert_eq!(h.watchers.poll_now(&w.id).await.unwrap(), Poll::Stopped);
@@ -344,7 +344,7 @@ async fn a_label_with_spaces_and_accents_is_examined_by_its_imap_name() {
 fn imap_names_use_modified_utf7() {
     assert_eq!(imap_folder_name("INBOX"), "INBOX");
     assert_eq!(imap_folder_name("[Gmail]/Sent Mail"), "[Gmail]/Sent Mail");
-    assert_eq!(imap_folder_name("Dots Été"), "Dots &AMk-t&AOk-");
+    assert_eq!(imap_folder_name("Sage Été"), "Sage &AMk-t&AOk-");
     assert_eq!(imap_folder_name("日本"), "&ZeVnLA-");
     assert_eq!(imap_folder_name("a&b"), "a&-b");
 }

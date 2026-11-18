@@ -132,7 +132,7 @@ fn map_unique(e: sqlx::Error, name: &str) -> Error {
 }
 
 fn name_taken(name: &str) -> Error {
-    Error::Conflict(format!("a dot named {name:?} already exists"))
+    Error::Conflict(format!("a sol named {name:?} already exists"))
 }
 
 /// Whether another dot (not `id`) has `name` in any letter case. The UNIQUE index on `name`
@@ -385,7 +385,7 @@ impl Store {
             .execute(&self.pool)
             .await?;
         if done.rows_affected() == 0 {
-            return Err(Error::NotFound(format!("dot {id}")));
+            return Err(Error::NotFound(format!("sol {id}")));
         }
         Ok(())
     }
@@ -395,7 +395,7 @@ impl Store {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?
-            .ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
+            .ok_or_else(|| Error::NotFound(format!("sol {id}")))?;
         dot_from_row(&row)
     }
 
@@ -488,7 +488,7 @@ impl Store {
             tx.rollback().await?;
             self.get_dot(id).await?;
             return Err(Error::Conflict(
-                "workdir and workspace_mode cannot change while the dot has queued, running or \
+                "workdir and workspace_mode cannot change while the sol has queued, running or \
                  awaiting runs"
                     .into(),
             ));
@@ -516,7 +516,7 @@ impl Store {
             .execute(&mut *tx)
             .await?;
         if res.rows_affected() == 0 {
-            return Err(Error::NotFound(format!("dot {id}")));
+            return Err(Error::NotFound(format!("sol {id}")));
         }
         tx.commit().await?;
         Ok(())
@@ -550,7 +550,7 @@ impl Store {
             tx.rollback().await?;
             self.get_dot(id).await?;
             return Err(Error::Conflict(
-                "dot has queued, running or awaiting runs; cancel them first".into(),
+                "sol has queued, running or awaiting runs; cancel them first".into(),
             ));
         }
         for (maker, topic, message) in wakes {
@@ -588,7 +588,7 @@ impl Store {
             .execute(&self.pool)
             .await?;
         if res.rows_affected() == 0 {
-            return Err(Error::NotFound(format!("dot {id}")));
+            return Err(Error::NotFound(format!("sol {id}")));
         }
         self.get_dot(id).await
     }
@@ -602,7 +602,7 @@ impl Store {
             .execute(&self.pool)
             .await?;
         if res.rows_affected() == 0 {
-            return Err(Error::NotFound(format!("dot {id}")));
+            return Err(Error::NotFound(format!("sol {id}")));
         }
         self.get_dot(id).await
     }
@@ -659,7 +659,7 @@ impl Store {
             .bind(id)
             .fetch_optional(&self.pool)
             .await?
-            .ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
+            .ok_or_else(|| Error::NotFound(format!("sol {id}")))?;
         let needs_you = row.try_get::<i64, _>("needs_you")? as u32;
         let fresh = row.try_get::<i64, _>("fresh")? as u32;
         Ok((needs_you, needs_you + fresh))
@@ -672,7 +672,7 @@ impl Store {
                 .bind(id)
                 .fetch_optional(&self.pool)
                 .await?;
-        let stored = stored.ok_or_else(|| Error::NotFound(format!("dot {id}")))?;
+        let stored = stored.ok_or_else(|| Error::NotFound(format!("sol {id}")))?;
         Ok(!stored.is_empty() && ct_eq(&token_hash(token), &stored))
     }
 
@@ -687,7 +687,7 @@ impl Store {
             .execute(&self.pool)
             .await?;
         if res.rows_affected() == 0 {
-            return Err(Error::NotFound(format!("dot {id}")));
+            return Err(Error::NotFound(format!("sol {id}")));
         }
         Ok(token)
     }

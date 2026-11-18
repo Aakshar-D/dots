@@ -38,7 +38,7 @@ const LINES_PER_RESULT: usize = 3;
 const HEAD_BYTES: u64 = 8 * 1024;
 
 /// What the tool tells the model it does.
-pub const DESCRIPTION: &str = "Read the shared context the person keeps for dots: list a \
+pub const DESCRIPTION: &str = "Read the shared context the person keeps for sols: list a \
     collection's documents, search them with `query`, or read one with `path`.";
 
 /// The arguments of the `context` tool, as JSON Schema properties; only `collection` is

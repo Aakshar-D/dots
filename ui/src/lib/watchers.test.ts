@@ -20,7 +20,7 @@ const configOf = <K extends Watcher["config"]["kind"]>(w: Watcher, _kind: K) =>
 describe("what a watcher says about itself", () => {
   it("sums each kind up in a line", () => {
     expect(watcherSummary(folder)).toBe("*.pdf in C:\\Users\\u\\Downloads\\Invoices, with subfolders");
-    expect(watcherSummary(email)).toBe("billing@acme.com · subject 'invoice' · Gmail label Dots");
+    expect(watcherSummary(email)).toBe("billing@acme.com · subject 'invoice' · Gmail label Sage");
     expect(watcherSummary(github)).toBe("owner/repo · issues, PRs");
     const f = configOf(folder, "folder");
     expect(watcherSummary({ ...folder, config: { ...f, pattern: "", recursive: false } })).toBe(
@@ -45,7 +45,7 @@ describe("what a watcher says about itself", () => {
     ).toBe("owner/repo, owner/other · issues, PRs, comments, pushes, CI runs");
   });
 
-  it("says whether it is on, paused by the person, or paused by Dots and why", () => {
+  it("says whether it is on, paused by the person, or paused by Sage and why", () => {
     expect(watcherState(folder)).toBe("on");
     expect(watcherState({ ...folder, enabled: false })).toBe("paused by you");
     expect(watcherState(email)).toBe(
@@ -78,7 +78,7 @@ describe("what a watcher says about itself", () => {
     expect(watcherTitle(sample.run)).toBeNull();
   });
 
-  it("names a new watcher after its source and knows a folder inside the dot's", () => {
+  it("names a new watcher after its source and knows a folder inside the sol's", () => {
     expect(defaultWatcherName(folder.config)).toBe("Invoices folder");
     expect(defaultWatcherName(email.config)).toBe("me@gmail.com mail");
     expect(defaultWatcherName(github.config)).toBe("owner/repo");

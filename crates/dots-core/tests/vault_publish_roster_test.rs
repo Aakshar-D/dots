@@ -179,7 +179,7 @@ async fn sops_publish_is_unsupported() {
     };
     let e = sops.publish_roster(&creds, ROSTER).await.unwrap_err();
     assert_eq!(e, PublishError::Unsupported);
-    assert_eq!(e.to_string(), "this source can't be written from Dots");
+    assert_eq!(e.to_string(), "this source can't be written from Sage");
 }
 
 #[tokio::test]

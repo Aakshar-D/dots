@@ -61,7 +61,7 @@ async fn a_taken_port_starts_without_the_server_and_fails_claude_runs() {
         failed.error,
         Some(format!(
             "local server is not running: port {taken} is in use. Change the port in Settings \
-             and restart Dots."
+             and restart Sage."
         ))
     );
 

@@ -39,7 +39,7 @@ export function TeamsScreen() {
       {teams.isError && <ErrorNote error={teams.error} />}
       {teams.data?.length === 0 && (
         <EmptyState icon={UsersRound}>
-          No teams yet. A team is dots that work on a project together, step by step, as a
+          No teams yet. A team is sols that work on a project together, step by step, as a
           workflow says: make one with New team.
         </EmptyState>
       )}

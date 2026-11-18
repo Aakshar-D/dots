@@ -108,12 +108,12 @@ export function RemoveButton({ entry }: { entry: LibraryEntry }) {
       title={`Remove ${entry.name}?`}
       description={
         <>
-          {everyDot && "Every dot reads it. "}
+          {everyDot && "Every sol reads it. "}
           {entry.used_by.length > 0
             ? `Used by ${users}. Removing it takes it out of them.`
-            : !everyDot && "No dot uses it."}
+            : !everyDot && "No sol uses it."}
           {entry.kind === "plugin" && " Its MCP servers go with it."}
-          {entry.dots_folder && " Its folder in Dots' skills folder is deleted too."}
+          {entry.dots_folder && " Its folder in Sage's skills folder is deleted too."}
         </>
       }
       confirmLabel={`Remove ${word}`}

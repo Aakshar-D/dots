@@ -118,7 +118,7 @@ async fn policy_deny_still_wins() {
     assert_eq!(why, Unresolved::DeniedByPolicy);
     assert_eq!(
         text,
-        "API_KEY: Acme Engineering's policy does not allow it (dot 'triage')"
+        "API_KEY: Acme Engineering's policy does not allow it (sol 'triage')"
     );
     assert_eq!(resolve(&vault, "STRIPE_KEY").await.unwrap(), "s-1");
 }

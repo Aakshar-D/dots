@@ -90,7 +90,7 @@ async fn memories_are_listed_pinned_first_then_newest_and_can_be_changed_and_del
     tick().await;
     let c = t.memories.add(&dot.id, "Sends on Fridays.").await.unwrap();
     t.memories
-        .add(&other.id, "Another dot's note.")
+        .add(&other.id, "Another sol's note.")
         .await
         .unwrap();
     assert_eq!(a.text, "Prefers invoices as PDF.");

@@ -229,7 +229,7 @@ impl McpSession {
             .unwrap_or_default();
         if !KNOWN_PROTOCOL_VERSIONS.contains(&version) {
             return Err(McpError::Protocol(format!(
-                "the server speaks MCP version {version:?}, which Dots does not know"
+                "the server speaks MCP version {version:?}, which Sage does not know"
             )));
         }
         self.protocol_version = version.to_string();
@@ -274,7 +274,7 @@ impl McpSession {
                 .ok_or_else(|| McpError::Protocol("tools/list gave no tools".into()))?;
             for tool in list {
                 tools.push(serde_json::from_value(tool.clone()).map_err(|e| {
-                    McpError::Protocol(format!("tools/list gave a tool Dots cannot read: {e}"))
+                    McpError::Protocol(format!("tools/list gave a tool Sage cannot read: {e}"))
                 })?);
             }
             match page.get("nextCursor").and_then(Value::as_str) {

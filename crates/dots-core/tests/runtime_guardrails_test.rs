@@ -32,9 +32,9 @@ const PUSH: &str = "This needs an Admin: pushing to main or master is protected 
                     workspace.";
 const MIGRATION: &str = "This needs an Admin: the file migrations/x.sql is protected in the \
                          Payments workspace.";
-const CEILING: &str = "Acme Engineering: a Member's dot in the Payments workspace may use up to \
+const CEILING: &str = "Acme Engineering: a Member's sol in the Payments workspace may use up to \
                        Sandboxed, and this policy is Trusted. Ask an Admin or Owner.";
-const HELD: &str = "Acme Engineering: this dot's tool policy is past what a Member may use in the \
+const HELD: &str = "Acme Engineering: this sol's tool policy is past what a Member may use in the \
                     Payments workspace (this policy is Trusted). Change the policy, or ask an \
                     Admin.";
 

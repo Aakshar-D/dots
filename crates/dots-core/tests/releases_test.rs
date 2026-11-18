@@ -22,7 +22,7 @@ async fn a_release_reads_its_notes_and_is_not_withdrawn() {
         200,
         json!({
             "tag_name": "v0.3.0",
-            "name": "Dots 0.3.0",
+            "name": "Sage 0.3.0",
             "body": "• New",
             "html_url": "https://github.com/Aakshar-D/dots/releases/tag/v0.3.0",
             "prerelease": false
@@ -34,7 +34,7 @@ async fn a_release_reads_its_notes_and_is_not_withdrawn() {
         .unwrap()
         .unwrap();
     assert_eq!(release.version, "0.3.0");
-    assert_eq!(release.name, "Dots 0.3.0");
+    assert_eq!(release.name, "Sage 0.3.0");
     assert_eq!(release.body, "• New");
     assert_eq!(
         release.url,
@@ -50,7 +50,7 @@ async fn a_prerelease_whose_body_starts_with_the_marker_is_withdrawn() {
         200,
         json!({
             "tag_name": "v0.3.0",
-            "name": "Dots 0.3.0 (withdrawn)",
+            "name": "Sage 0.3.0 (withdrawn)",
             "body": format!("{WITHDRAWN_MARKER}\n• New"),
             "html_url": "https://github.com/Aakshar-D/dots/releases/tag/v0.3.0",
             "prerelease": true

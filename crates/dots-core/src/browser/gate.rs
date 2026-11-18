@@ -82,9 +82,9 @@ pub const SECRET_WORDS: [&str; 7] = [
 
 /// The answer to typing a password or a code. No rule allows it.
 /// The answer to `browser_run_code_unsafe`, which no rule allows.
-pub const RUN_CODE_REFUSAL: &str = "Dots does not run code outside the page. Use the page's own controls, or browser_evaluate for code in the page.";
+pub const RUN_CODE_REFUSAL: &str = "Sage does not run code outside the page. Use the page's own controls, or browser_evaluate for code in the page.";
 
-pub const PASSWORD_REFUSAL: &str = "Dots does not type passwords or codes. Ask the person to enter it in the browser window, with your ask tool.";
+pub const PASSWORD_REFUSAL: &str = "Sage does not type passwords or codes. Ask the person to enter it in the browser window, with your ask tool.";
 
 /// The key under which an approval's input carries its card (`Ask`). Dots writes it; a key of
 /// this name in the model's own input is dropped before anything else reads the input.
@@ -413,7 +413,7 @@ pub fn judge(
     let current = page.and_then(site_of);
     let refused = |site: &str| {
         Verdict::Refuse(format!(
-            "Denied by the policy of dot '{dot_name}': the browser may not be used on {site}."
+            "Denied by the policy of sol '{dot_name}': the browser may not be used on {site}."
         ))
     };
     let ask = |action: &str,

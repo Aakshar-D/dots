@@ -69,7 +69,7 @@ describe("an app sent for review", () => {
     );
   });
 
-  it("says so when Dots closed the preview for another card's, and starts it again", async () => {
+  it("says so when Sage closed the preview for another card's, and starts it again", async () => {
     let opened = 0;
     backend.on("app_preview_open", () => `01J0PREV${(opened += 1)}`);
     backend.on("app_preview_close", () => null);
@@ -83,7 +83,7 @@ describe("an app sent for review", () => {
     const port = (post.mock.calls[0] as unknown as [unknown, string, MessagePort[]])[2][0]!;
     port.postMessage({ type: "call", id: 1, tool: "add_expense", input: { item: "Tea" } });
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Dots closed this preview to open another card's",
+      "Sage closed this preview to open another card's",
     );
     await user.click(screen.getByRole("button", { name: "Start the preview again" }));
     expect(await screen.findByTitle("Expenses preview")).toHaveAttribute(
@@ -113,11 +113,11 @@ describe("an app sent for review", () => {
     const panel = screen.getByRole("tabpanel", { name: "Summary" });
     expect(panel).toHaveTextContent("Logs expenses and totals them by month");
     expect(panel).toHaveTextContent("add_expense (writes)");
-    expect(panel).toHaveTextContent("Can start dots");
+    expect(panel).toHaveTextContent("Can start sols");
     expect(panel).toHaveTextContent("1 of 1 test passed");
     expect(panel).toHaveTextContent("7 files · 2.0 KB");
     expect(panel).toHaveTextContent("0001_expenses.sql");
-    expect(screen.getByText(/It is added with "Can start dots" off/)).toBeVisible();
+    expect(screen.getByText(/It is added with "Can start sols" off/)).toBeVisible();
   });
 
   it("shows every file of a new app, and the diff of a change first", async () => {
@@ -200,12 +200,12 @@ describe("an app sent for review", () => {
     backend.on("app_proposal_decide", () => {
       throw {
         kind: "conflict",
-        message: "the dot is still working on this chat; wait until it has finished",
+        message: "the sol is still working on this chat; wait until it has finished",
       };
     });
     const { user } = show(fresh);
     await user.click(screen.getByRole("button", { name: "Add to library" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent("the dot is still working on this chat");
+    expect(await screen.findByRole("alert")).toHaveTextContent("the sol is still working on this chat");
     expect(screen.getByRole("button", { name: "Add to library" })).toBeEnabled();
   });
 });

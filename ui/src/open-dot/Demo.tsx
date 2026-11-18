@@ -21,9 +21,26 @@ let lastLine = 0;
 let lastSeq = 0;
 const nextSeq = () => ++lastSeq;
 const reply = (...texts: string[]) => texts.map((text) => ({ n: ++lastLine, text }));
+/// One more entry of the conversation the enlarged stage shows; a reply's lines are one entry.
+const talked = (who: "you" | "sage" | "step", text: string) => {
+  const { talk } = voiceStore.get();
+  const last = talk[talk.length - 1];
+  if (who === "sage" && last?.who === "sage") {
+    return [...talk.slice(0, -1), { ...last, text: `${last.text} ${text}` }];
+  }
+  return [...talk, { n: ++lastLine, who, text }];
+};
 /// One more line of the reply, the oldest dropped past three, as a `saying` event does.
 const say = (text: string) =>
-  set({ saying: text, said: [...voiceStore.get().said, ...reply(text)].slice(-3), hearing: "", heard: false });
+  set({
+    saying: text,
+    said: [...voiceStore.get().said, ...reply(text)].slice(-3),
+    talk: talked("sage", text),
+    hearing: "",
+    heard: false,
+  });
+/// What it is doing now, as a `step` event does.
+const step = (text: string) => set({ step: text, talk: talked("step", text) });
 
 const STATUS: VoiceStatus = {
   enabled: true,
@@ -65,7 +82,7 @@ const CARDS: [string, OpenDotCard][] = [
       kind: "proposal",
       proposal: {
         ...PROPOSAL,
-        name: "A dot with a very long name that keeps going and going",
+        name: "A sol with a very long name that keeps going and going",
         instructions: LONG.repeat(8),
         folder: "C:\\Users\\me\\Documents\\Projects\\a-folder-with-a-name-that-does-not-stop\\and-a-subfolder",
         schedule: { rule: { kind: "every", minutes: 120, anchor: null }, catch_up: true, until: { count: 5 } },
@@ -210,8 +227,14 @@ export default function Demo() {
     },
     voicePick: async (index, seq) => {
       said(`voice_pick(${index}, seq ${seq})`);
-      later(500, () => set({ state: "thinking", micOpen: false, ask: null, card: null }));
-      later(1500, () => set({ state: "speaking", said: reply("Done.") }));
+      later(500, () => {
+        set({ state: "thinking", micOpen: false, ask: null, card: null });
+        step("Approving triage's request");
+      });
+      later(1500, () => {
+        set({ state: "speaking", step: null, said: [] });
+        say("Done.");
+      });
       later(2500, () => set({ state: "idle" }));
     },
   };
@@ -228,14 +251,24 @@ export default function Demo() {
     words.forEach((w, i) => later(300 + i * 450, () => set({ hearing: w, heard: false })));
     later(2200, () => {
       setTalking(false);
-      set({ state: "thinking", micOpen: false, hearing: "what's waiting for me?", heard: true, said: [] });
+      set({
+        state: "thinking",
+        micOpen: false,
+        hearing: "what's waiting for me?",
+        heard: true,
+        said: [],
+        talk: talked("you", "What's waiting for me?"),
+      });
+      step("Looking at your workspace");
     });
+    later(2700, () => step("Thinking it over"));
+    later(3200, () => step("Checking what needs you"));
     later(3600, () => {
-      set({ state: "speaking" });
+      set({ state: "speaking", step: null });
       say("Triage wants to push a branch.");
       setTalking(true);
     });
-    later(5800, () => say("It is the open dot branch, to origin."));
+    later(5800, () => say("It is the open sage branch, to origin."));
     later(8000, () => {
       setTalking(false);
       // The question is spoken as a reply line too: the stage prints it once, above the options.
@@ -247,8 +280,14 @@ export default function Demo() {
         card: CARDS[2]![1],
       });
     });
-    later(11500, () => set({ state: "thinking", micOpen: false, ask: null, card: null }));
-    later(12500, () => set({ state: "speaking", said: reply("Allowed. It is pushing now.") }));
+    later(11500, () => {
+      set({ state: "thinking", micOpen: false, ask: null, card: null, talk: talked("you", "Allow") });
+      step("Approving triage's request");
+    });
+    later(12500, () => {
+      set({ state: "speaking", step: null, said: [] });
+      say("Allowed. It is pushing now.");
+    });
     later(14000, () => set({ state: "idle", micOpen: false }));
   };
 
@@ -277,7 +316,7 @@ export default function Demo() {
           </Button>
           <div className={controls ? "relative z-50 flex max-w-3xl flex-col gap-3 rounded-xl bg-background/95" : "hidden"}>
             <div>
-              <h1 className="text-base font-semibold">Open Dot demo</h1>
+              <h1 className="text-base font-semibold">Open Sage demo</h1>
               <p className="text-xs text-muted-foreground">
                 Development only. Writes to the voice store directly; the commands are answered here. Now:{" "}
                 <span className="font-mono">
@@ -338,8 +377,8 @@ export default function Demo() {
               <B onClick={() => set({ ask: { question: "Long options", options: [LONG, LONG.slice(0, 80)], seq: nextSeq() } })}>Long options</B>
               <B
                 onClick={() => {
-                  say("What should the new dot be called?");
-                  set({ state: "asking", micOpen: true, ask: { question: "What should the new dot be called?", options: [], seq: nextSeq() } });
+                  say("What should the new sol be called?");
+                  set({ state: "asking", micOpen: true, ask: { question: "What should the new sol be called?", options: [], seq: nextSeq() } });
                 }}
               >
                 Open question

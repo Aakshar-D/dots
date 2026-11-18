@@ -6,6 +6,7 @@
 //! the global shortcut that opens it; `notices` says aloud when something needs the person.
 
 pub mod bridge;
+pub mod desk;
 pub mod download;
 pub mod events;
 pub mod hotkey;
@@ -37,7 +38,7 @@ impl VoiceHandle {
     pub fn get(&self) -> Result<Arc<Service>, CmdError> {
         self.0
             .clone()
-            .ok_or_else(|| CmdError::internal("Dots did not start; see the startup error"))
+            .ok_or_else(|| CmdError::internal("Sage did not start; see the startup error"))
     }
 
     /// Applies saved settings to voice, in the background, when the service is there; without
@@ -74,6 +75,9 @@ pub fn manage(app: &AppHandle, rt: Option<Arc<Runtime>>, data_dir: Option<PathBu
                 tx,
             );
             spawn_forwarder(app.clone(), rx);
+            // Notes, sites and apps the person asks Open Sage for are done through the app.
+            rt.open_dot()
+                .set_desk(Arc::new(desk::SystemDesk::new(app.clone())));
             service.set_hotkey_port(Arc::new(hotkey::PluginHotkey::new(app.clone())));
             service.set_listener(Arc::new(tray_listener(app.clone())));
             // Spoken notices: it looks nothing up and keeps nothing while they are off.
@@ -130,6 +134,17 @@ fn spawn_forwarder(app: AppHandle, mut rx: UnboundedReceiver<VoiceEvent>) {
         while let Some(ev) = rx.recv().await {
             if matches!(ev, VoiceEvent::Level { .. }) && !main_window_shown(&app) {
                 continue;
+            }
+            // A command waits for a yes to what is on screen: the window comes forward, so
+            // that it is on screen.
+            if let VoiceEvent::Card {
+                card:
+                    dots_core::open_dot::Card::Confirm {
+                        deed: dots_core::open_dot::act::Deed::Command { .. },
+                    },
+            } = &ev
+            {
+                crate::show_main(&app);
             }
             let _ = app.emit(VOICE_EVENT, &ev);
         }

@@ -772,8 +772,8 @@ impl Graphs {
         let Some(loaded) = self.loaded_in(project, scope) else {
             if !project.git && !building {
                 return Ok(
-                    "This folder is not a git repository, so Dots builds its graph only \
-                    when asked: Build graph on the dot's Graph screen. Read the files directly \
+                    "This folder is not a git repository, so Sage builds its graph only \
+                    when asked: Build graph on the sol's Graph screen. Read the files directly \
                     for now."
                         .to_string(),
                 );
@@ -830,7 +830,7 @@ impl Graphs {
             self.loaded_in(project, scope)?.maps.prompt.clone()
         };
         Some(format!(
-            "Dots keeps a code graph of this project. Use the tool \
+            "Sage keeps a code graph of this project. Use the tool \
              `{tool}` (search, node, callers, callees, file, path, neighbors) before broad \
              file reads or greps; node ids look like `path#Type.method`. For example: \
              `{tool} {{\"action\":\"callers\",\"node\":\"<name>\"}}` or \
@@ -1350,13 +1350,13 @@ mod tests {
         assert!(!section.body.contains("other"), "{}", section.body);
         let seed = crate::context_rules::handoff_seed(None, &[], &[section]);
         assert!(
-            seed.contains("### Project graph\n\nDots keeps a code graph"),
+            seed.contains("### Project graph\n\nSage keeps a code graph"),
             "{seed}"
         );
         // The ordinary first prompt's section is the same text under its own heading.
         let prompt = graphs.prompt_section(&project, &scope, "graph").unwrap();
         assert!(
-            prompt.starts_with("## Project graph\n\nDots keeps a code graph"),
+            prompt.starts_with("## Project graph\n\nSage keeps a code graph"),
             "{prompt}"
         );
     }

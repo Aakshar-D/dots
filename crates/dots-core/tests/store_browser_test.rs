@@ -18,7 +18,7 @@ async fn a_dot_keeps_its_browser_switch() {
         .create_dot(&spec("plain"), None, "default")
         .await
         .unwrap();
-    assert!(!plain.spec.browser, "a new dot has no browser");
+    assert!(!plain.spec.browser, "a new sol has no browser");
     let mut s = spec("shopper");
     s.browser = true;
     let shopper = store.create_dot(&s, None, "default").await.unwrap();

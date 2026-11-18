@@ -449,12 +449,12 @@ impl RunBrowser {
         let qualified = format!("{PREFIX}{tool}");
         let dot = match self.browsers.store.get_dot(&self.dot_id).await {
             Ok(dot) => dot,
-            Err(e) => return not_performed(&format!("the dot could not be read: {e}")),
+            Err(e) => return not_performed(&format!("the sol could not be read: {e}")),
         };
         // A deny rule on the tool itself (`mcp__browser__*`) refuses it as well.
         if dot.spec.policy.denied_by_rule(&qualified, &input, None) {
             return not_performed(&format!(
-                "Denied by the policy of dot '{}': {qualified} is not permitted.",
+                "Denied by the policy of sol '{}': {qualified} is not permitted.",
                 dot.spec.name
             ));
         }
@@ -565,7 +565,7 @@ fn with_lines(mut result: Value, lines: &[String]) -> Value {
     }
     let text = lines
         .iter()
-        .map(|line| format!("Dots: {line}"))
+        .map(|line| format!("Sage: {line}"))
         .collect::<Vec<_>>()
         .join("\n");
     let part = json!({ "type": "text", "text": text });

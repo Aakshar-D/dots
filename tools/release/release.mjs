@@ -5,11 +5,13 @@
 //       Fails unless the tag, without its "v", is the version in every version field.
 //       Prints "prerelease=true" or "prerelease=false", and appends the same line to
 //       $GITHUB_OUTPUT when it is set.
-//   node tools/release/release.mjs manifest <tag> <installer> <out> [notes-file] [mac-archive]
+//   node tools/release/release.mjs manifest <tag> <installer> <out> [notes-file] [mac-archive] [arm-installer]
 //       Writes the updater manifest (latest.json) for the NSIS installer <installer>, whose
 //       signature is <installer>.sig, to <out>. With <mac-archive>, the universal macOS app's
-//       updater archive (Dots.app.tar.gz, signature <mac-archive>.sig), the manifest offers it
-//       to Apple silicon and Intel Macs too.
+//       updater archive (Sage.app.tar.gz, signature <mac-archive>.sig), the manifest offers it
+//       to Apple silicon and Intel Macs too. With <arm-installer>, the NSIS installer built
+//       for ARM64 Windows (signature <arm-installer>.sig), it offers that to ARM64 Windows.
+//       "-" stands for a file that is not there.
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -19,6 +21,8 @@ import { fileURLToPath } from "node:url";
 const DOWNLOADS = "https://github.com/Aakshar-D/dots/releases/download";
 /// The updater's name for this platform's entry in the manifest.
 const PLATFORM = "windows-x86_64";
+/// The updater's name for a Windows computer with an ARM64 processor.
+const ARM_PLATFORM = "windows-aarch64";
 /// The updater's names for the Macs the one universal macOS archive serves.
 const MAC_PLATFORMS = ["darwin-aarch64", "darwin-x86_64"];
 
@@ -87,25 +91,31 @@ export function notesFor(text, version) {
 
 /// The updater manifest for one Windows installer, and the universal macOS archive when `mac`
 /// (`{ archive, signature }`) is given. `notes`: the release's notes (`release-notes.md`), when
-/// the tag has them.
-export function manifest({ version, signature, installer, date, notes, mac }) {
+/// the tag has them. `arm` (`{ installer, signature }`): the installer for ARM64 Windows.
+export function manifest({ version, signature, installer, date, notes, mac, arm }) {
   const entry = (file, sig) => ({
     signature: sig.trim(),
     url: `${DOWNLOADS}/v${version}/${encodeURIComponent(basename(file))}`,
   });
   const platforms = { [PLATFORM]: entry(installer, signature) };
+  if (arm) platforms[ARM_PLATFORM] = entry(arm.installer, arm.signature);
   if (mac) {
     for (const platform of MAC_PLATFORMS) platforms[platform] = entry(mac.archive, mac.signature);
   }
   return {
     version,
-    notes: notes?.trim() || `Dots ${version}`,
+    notes: notes?.trim() || `Sage ${version}`,
     pub_date: date.toISOString(),
     platforms,
   };
 }
 
-function main([command, tag, installer, out, notesFile, macArchive]) {
+function main([command, tag, installer, out, notesFile, macArchive, armInstaller]) {
+  // "-" holds the place of a file that is not there.
+  const given = (path) => (path && path !== "-" ? path : undefined);
+  notesFile = given(notesFile);
+  macArchive = given(macArchive);
+  armInstaller = given(armInstaller);
   const root = fileURLToPath(new URL("../..", import.meta.url));
   const checked = tag ? checkTag(root, tag) : { errors: ["no tag given"] };
   if (checked.errors.length > 0) {
@@ -132,6 +142,9 @@ function main([command, tag, installer, out, notesFile, macArchive]) {
     const mac = macArchive
       ? { archive: macArchive, signature: readFileSync(`${macArchive}.sig`, "utf8") }
       : undefined;
+    const arm = armInstaller
+      ? { installer: armInstaller, signature: readFileSync(`${armInstaller}.sig`, "utf8") }
+      : undefined;
     const body = manifest({
       version: checked.version,
       signature,
@@ -139,12 +152,13 @@ function main([command, tag, installer, out, notesFile, macArchive]) {
       date: new Date(),
       notes,
       mac,
+      arm,
     });
     writeFileSync(out, `${JSON.stringify(body, null, 2)}\n`);
     console.log(`release: wrote ${out}`);
   } else {
     console.error(
-      "usage: release.mjs check <tag> | notes <tag> <notes-in> <notes-out> | manifest <tag> <installer> <out> [notes-file] [mac-archive]",
+      "usage: release.mjs check <tag> | notes <tag> <notes-in> <notes-out> | manifest <tag> <installer> <out> [notes-file] [mac-archive] [arm-installer]",
     );
     process.exit(2);
   }

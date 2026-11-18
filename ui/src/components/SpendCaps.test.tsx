@@ -40,7 +40,7 @@ describe("a run waiting for a spending cap", () => {
   });
 });
 
-describe("a dot's spending caps in its editor", () => {
+describe("a sol's spending caps in its editor", () => {
   function stored() {
     let dot = sample.dot;
     backend.on("get_dot", () => dot);
@@ -51,7 +51,7 @@ describe("a dot's spending caps in its editor", () => {
     backend.on("spend_today", () => sample.spend);
   }
 
-  it("show what the dot spent today against its cap", async () => {
+  it("show what the sol spent today against its cap", async () => {
     stored();
     renderApp(`/dots/${sample.dot.id}`);
     const line = await screen.findByText(/^Today: \$2\.00 of \$2\.00/);

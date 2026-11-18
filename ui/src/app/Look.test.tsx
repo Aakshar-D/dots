@@ -97,11 +97,11 @@ describe("the rail (deep-teal spec section 4)", () => {
   });
 });
 
-describe("the dots column's marks", () => {
+describe("the sols column's marks", () => {
   it("names each status, and the running pulse stops under reduced motion", async () => {
     backend.on("dot_overview", () => [row("running")]);
     renderApp(`/home/${sample.dot.id}`);
-    const column = within(await screen.findByRole("navigation", { name: "Dots" }));
+    const column = within(await screen.findByRole("navigation", { name: "Sols" }));
     const mark = await column.findByRole("img", { name: "running" });
     expect(mark).toHaveAttribute("data-status", "running");
     expect(mark).toHaveClass("motion-reduce:animate-none");

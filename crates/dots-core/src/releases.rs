@@ -79,7 +79,7 @@ pub async fn fetch_release(api: &str, version: &str) -> Result<Option<Release>> 
     };
     Ok(Some(Release {
         version: version.to_string(),
-        name: raw.name.unwrap_or_else(|| format!("Dots {version}")),
+        name: raw.name.unwrap_or_else(|| format!("Sage {version}")),
         body,
         url: raw.html_url,
         prerelease: raw.prerelease,

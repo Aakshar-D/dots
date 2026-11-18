@@ -370,7 +370,7 @@ fn auto_is_for_claude_dots_only() {
     spec.engine = EngineKind::Local;
     spec.endpoint_url = Some("http://127.0.0.1:1234".into());
     let err = spec.validate().unwrap_err().to_string();
-    assert!(err.contains("Auto is only for Claude dots"), "{err}");
+    assert!(err.contains("Auto is only for Claude sols"), "{err}");
     assert!(is_auto(" AUTO ") && !is_auto("autopilot"));
 }
 

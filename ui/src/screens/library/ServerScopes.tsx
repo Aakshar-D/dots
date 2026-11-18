@@ -62,7 +62,7 @@ export function ServerScopes({ entry }: { entry: ServerEntry }) {
         <Field
           label="Check as"
           htmlFor="server-check-as"
-          hint="Lists the tools with the values of this scope, as a run of a dot in it would."
+          hint="Lists the tools with the values of this scope, as a run of a sol in it would."
         >
           <NativeSelect
             id="server-check-as"
@@ -110,7 +110,7 @@ export function ServerScopes({ entry }: { entry: ServerEntry }) {
         <>
           <p className="text-xs text-muted-foreground">
             This server's URL reads a variable, so where it sends values can differ by scope.
-            Dots sends a scope's values only to an origin confirmed in that scope.
+            Sage sends a scope's values only to an origin confirmed in that scope.
           </p>
           <ul aria-label="Confirmed origins" className="flex flex-col gap-1 text-xs">
             {scopes.map((scope) => {

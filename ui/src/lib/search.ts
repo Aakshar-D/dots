@@ -49,7 +49,7 @@ export function hitPath(hit: SearchHit): string {
 export const KIND_LABELS: Record<SearchKind, string> = {
   topic: "Topics",
   chat: "You said",
-  reply: "Dots said",
+  reply: "Sage said",
   note: "Notes and questions",
   intent: "Goals",
   memory: "Memory",

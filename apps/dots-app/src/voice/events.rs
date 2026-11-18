@@ -31,6 +31,11 @@ pub enum VoiceEvent {
     Saying {
         text: String,
     },
+    /// What Open Sage is doing now, in a few words ("Opening the Inbox"): shown, never said.
+    /// No text: the step under way is over.
+    Step {
+        text: String,
+    },
     /// A question that waits on the person, with its options (none for an open question).
     /// `seq` names this question: a pick carries it back, and one for any other question is
     /// ignored. It starts at 1 per process and grows by one per question, so it stays far
@@ -57,6 +62,11 @@ pub enum VoiceEvent {
         done_bytes: u64,
         total_bytes: u64,
     },
+    /// A voice setup is recording take `take` of `of`: the person says "Hey Sage" now.
+    SettingUp {
+        take: u8,
+        of: u8,
+    },
     /// Sent whenever the status changes.
     Status {
         status: VoiceStatus,
@@ -77,6 +87,29 @@ pub struct VoiceStatus {
     pub download_bytes: u64,
     pub hotkey_error: Option<String>,
     pub trouble: Option<String>,
+}
+
+/// What a voice setup found, for the settings page.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct VoiceSetup {
+    /// How many takes were recorded, and how many of them Sage heard the phrase in.
+    pub takes: u8,
+    pub heard: u8,
+    /// The voice reaches the microphone faintly.
+    pub faint: bool,
+    /// The outcome in a sentence or two.
+    pub message: String,
+}
+
+impl VoiceSetup {
+    pub fn of(found: &dots_voice::Calibration) -> Self {
+        Self {
+            takes: found.takes,
+            heard: found.heard,
+            faint: found.faint(),
+            message: super::service::setup_message(found),
+        }
+    }
 }
 
 /// A microphone or a speaker the person can choose.
@@ -100,6 +133,61 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn a_voice_setup_is_told_in_plain_words() {
+        use dots_voice::{Calibration, WakeTuning};
+        let found = |heard: u8, level: Option<f32>| Calibration {
+            takes: 5,
+            heard,
+            tuning: WakeTuning::Standard,
+            level,
+            by_text: 0,
+            phrases: Vec::new(),
+        };
+        let good = VoiceSetup::of(&found(5, Some(0.05)));
+        assert_eq!(
+            good.message,
+            "Sage heard you 5 times out of 5 and is set up for your voice."
+        );
+        assert!(!good.faint);
+        // Four of five is still set up; a faint voice is told how to be heard better.
+        let faint = VoiceSetup::of(&found(4, Some(0.001)));
+        assert!(faint.faint);
+        assert_eq!(
+            faint.message,
+            "Sage heard you 4 times out of 5 and is set up for your voice. Your voice reaches \
+             the microphone faintly: nearer to it, or with a headset, Sage will hear you better."
+        );
+        let few = VoiceSetup::of(&found(2, Some(0.05)));
+        assert_eq!(
+            few.message,
+            "Sage heard you only 2 times out of 5. Try again a little closer to the microphone, \
+             saying it the same way each time."
+        );
+        // The words Sage learned for the phrase are not part of what the page is given.
+        let learned = Calibration {
+            by_text: 4,
+            phrases: vec!["hate sage".into()],
+            ..found(4, Some(0.05))
+        };
+        let shown = serde_json::to_string(&VoiceSetup::of(&learned)).unwrap();
+        assert!(!shown.contains("hate"), "{shown}");
+        assert_eq!(
+            VoiceSetup::of(&learned).message,
+            "Sage heard you 4 times out of 5 and is set up for your voice."
+        );
+        let none = VoiceSetup::of(&found(0, None));
+        assert_eq!(
+            none.message,
+            "Sage did not hear \"Hey Sage\" in any of the 5 tries, so nothing was changed. Check \
+             the microphone, move closer to it and try again."
+        );
+        assert_eq!(
+            serde_json::to_value(VoiceEvent::SettingUp { take: 2, of: 5 }).unwrap(),
+            json!({"kind": "setting_up", "take": 2, "of": 5})
+        );
+    }
+
+    #[test]
     fn events_serialise_with_a_kind_tag() {
         let ev = VoiceEvent::State {
             state: State::Asking,
@@ -112,6 +200,13 @@ mod tests {
         assert_eq!(
             serde_json::to_value(VoiceEvent::Cleared).unwrap(),
             json!({"kind": "cleared"})
+        );
+        assert_eq!(
+            serde_json::to_value(VoiceEvent::Step {
+                text: "Opening the Inbox".into()
+            })
+            .unwrap(),
+            json!({"kind": "step", "text": "Opening the Inbox"})
         );
         let ev = VoiceEvent::Open {
             target: OpenTarget::Inbox,

@@ -52,7 +52,7 @@ export function AppsScreen() {
     <Page title="Apps">
       {apps.data.length === 0 ? (
         <EmptyState icon={LayoutGrid}>
-          No apps yet. Ask a dot in chat for one ("an app to track my expenses"); it sends the app
+          No apps yet. Ask a sol in chat for one ("an app to track my expenses"); it sends the app
           for your review, and the apps you add show up here.
         </EmptyState>
       ) : (
@@ -66,7 +66,7 @@ export function AppsScreen() {
       {(bundled.data ?? []).length > 0 && (
         <section aria-labelledby="apps-bundled" className="flex flex-col gap-2">
           <h2 id="apps-bundled" className="font-semibold">
-            Comes with Dots
+            Comes with Sage
           </h2>
           <ul className="flex flex-col gap-2">
             {bundled.data!.map((offer) => (
@@ -149,20 +149,20 @@ function AppItem({ row }: { row: AppRow }) {
           {title}
         </Link>
         <span className="text-xs text-muted-foreground">version {config.version}</span>
-        {config.every_dot && <Badge variant="secondary">Every dot</Badge>}
+        {config.every_dot && <Badge variant="secondary">Every sol</Badge>}
         {config.origin.kind === "bundled" && !config.changed && (
-          <Badge variant="outline">Comes with Dots</Badge>
+          <Badge variant="outline">Comes with Sage</Badge>
         )}
       </div>
       <span className="text-xs text-muted-foreground">{config.description}</span>
       {config.changed && (
         <span className="text-xs text-muted-foreground">
-          Changed by you; Dots no longer updates it.
+          Changed by you; Sage no longer updates it.
         </span>
       )}
       {row.error && <span className="text-xs text-destructive">{row.error}</span>}
       <span className="text-xs text-muted-foreground">
-        {row.dots.length > 0 ? `Used by ${row.dots.join(", ")}` : "No dot uses it yet"}
+        {row.dots.length > 0 ? `Used by ${row.dots.join(", ")}` : "No sol uses it yet"}
       </span>
       <div className="flex flex-wrap items-center gap-4 pt-1 text-xs">
         <label className="flex items-center gap-2">
@@ -171,7 +171,7 @@ function AppItem({ row }: { row: AppRow }) {
             disabled={everyDot.isPending}
             onCheckedChange={(on) => everyDot.mutate(on)}
           />
-          Every dot
+          Every sol
         </label>
         {asksToStart && (
           <label className="flex items-center gap-2">
@@ -180,7 +180,7 @@ function AppItem({ row }: { row: AppRow }) {
               disabled={canStart.isPending}
               onCheckedChange={(on) => canStart.mutate(on)}
             />
-            Can start dots
+            Can start sols
           </label>
         )}
       </div>
@@ -222,7 +222,7 @@ function RemoveApp({ row, title }: { row: AppRow; title: string }) {
             <AlertDialogDescription>
               {row.dots.length > 0
                 ? `Used by ${row.dots.join(", ")}. Removing it takes it out of them.`
-                : "No dot uses it."}{" "}
+                : "No sol uses it."}{" "}
               Its code is deleted.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -300,8 +300,8 @@ function BundledItem({ offer }: { offer: BundledOffer }) {
           <AlertDialogHeader>
             <AlertDialogTitle>Install {offer.title}?</AlertDialogTitle>
             <AlertDialogDescription>
-              {offer.title} comes with Dots, for every dot. Dots updates it with each release
-              until you accept a dot's change to it.
+              {offer.title} comes with Sage, for every sol. Sage updates it with each release
+              until you accept a sol's change to it.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {kept && (

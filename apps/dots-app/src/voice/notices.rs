@@ -162,7 +162,7 @@ pub fn plain_name(name: &str) -> Option<String> {
         .filter(|c| c.is_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect();
-    if heard.contains("heydot") || heard.contains("dotstop") {
+    if heard.contains("heysage") || heard.contains("sagestop") {
         return None;
     }
     Some(name)
@@ -937,16 +937,22 @@ mod tests {
         }
         // Nothing that sounds like the wake or the stop phrase, however written.
         for name in [
-            "Hey Dot",
-            "hey-dot helper",
-            "My HEY  DOT",
-            "Dot stop",
-            "dot, stop now",
+            "Hey Sage",
+            "hey-sage helper",
+            "My HEY  SAGE",
+            "Sage stop",
+            "sage, stop now",
         ] {
             assert_eq!(said(name), nameless, "{name:?}");
         }
         // Nor run together, in any case.
-        for name in ["HeyDot", "heydotbot", "DotStop", "Mydotstop", "Hey Do t"] {
+        for name in [
+            "HeySage",
+            "heysagebot",
+            "SageStop",
+            "Mysagestop",
+            "Hey Sa ge",
+        ] {
             assert_eq!(said(name), nameless, "{name:?}");
         }
         // Sentence punctuation of other scripts.
@@ -966,8 +972,8 @@ mod tests {
         let sixteen = "研究助手研究助手研究助手研究助手";
         assert_eq!(said(sixteen), format!("{sixteen} needs your approval."));
         assert_eq!(said(&format!("{sixteen}手")), nameless);
-        // A word that only holds "dot" is fine.
-        assert_eq!(said("Dotty"), "Dotty needs your approval.");
+        // A word that only holds "sage" is fine.
+        assert_eq!(said("Sagely"), "Sagely needs your approval.");
         // The question form, nameless.
         let mut n = Notices::new();
         assert_eq!(
@@ -977,17 +983,24 @@ mod tests {
         );
     }
 
+    /// Whether a line has the word "sage" ("message" only holds it).
+    fn says_sage(line: &str) -> bool {
+        line.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .any(|w| w == "sage")
+    }
+
     #[test]
     fn no_fixed_wording_says_dot() {
         for line in [PRIVATE, AN_APPROVAL, A_QUESTION] {
-            assert!(!line.to_lowercase().contains("dot"), "{line}");
+            assert!(!says_sage(line), "{line}");
         }
         let mut n = Notices::new();
         let line = n.rested(&others(3), Instant::now());
         assert_eq!(line, None, "nothing pending");
         n.missed();
         let line = n.rested(&others(3), Instant::now()).unwrap();
-        assert!(!line.to_lowercase().contains("dot"), "{line}");
+        assert!(!says_sage(&line), "{line}");
     }
 
     // ---- resolve -------------------------------------------------------------------------

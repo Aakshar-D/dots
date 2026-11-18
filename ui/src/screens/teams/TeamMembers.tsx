@@ -36,7 +36,7 @@ export function TeamMembers({ team }: { team: Team }) {
   return (
     <TeamSection id="team-members" title="Members">
       {team.members.length === 0 ? (
-        <p className="text-muted-foreground">No members yet. Add the dots that work here.</p>
+        <p className="text-muted-foreground">No members yet. Add the sols that work here.</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {team.members.map((member) => (
@@ -93,7 +93,7 @@ function MemberRow(props: {
       />
       <ConfirmButton
         title={`Remove ${member.dot_name} from the team?`}
-        description="The dot stays. A workflow whose steps name it cannot start until you change it."
+        description="The sol stays. A workflow whose steps name it cannot start until you change it."
         confirmLabel="Remove"
         ariaLabel={`Remove ${member.dot_name}`}
         disabled={props.busy}
@@ -118,15 +118,15 @@ function AddMember(props: {
   if (props.candidates.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        Every dot of the team&apos;s account and workspace is a member.
+        Every sol of the team&apos;s account and workspace is a member.
       </p>
     );
   }
   return (
     <div className="flex flex-wrap items-end gap-2">
-      <Field label="Dot" htmlFor="member-dot">
+      <Field label="Sol" htmlFor="member-dot">
         <NativeSelect id="member-dot" value={chosen} onChange={(e) => setDotId(e.target.value)}>
-          <NativeSelectOption value="">Choose a dot</NativeSelectOption>
+          <NativeSelectOption value="">Choose a sol</NativeSelectOption>
           {props.candidates.map((dot) => (
             <NativeSelectOption key={dot.id} value={dot.id}>
               {dot.name}

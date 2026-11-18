@@ -36,14 +36,14 @@ const nightly = row("nightly", {
 });
 const idle = row("idle");
 
-const column = () => screen.getByRole("navigation", { name: "Dots" });
+const column = () => screen.getByRole("navigation", { name: "Sols" });
 const item = (name: string) => within(column()).getByRole("listitem", { name });
 
-describe("the home's dots column", () => {
-  it("shows each dot's generated avatar, seeded by its id", async () => {
+describe("the home's sols column", () => {
+  it("shows each sol's generated avatar, seeded by its id", async () => {
     backend.on("dot_overview", () => [reader, shopper]);
     renderApp("/home");
-    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole(
+    await within(await screen.findByRole("navigation", { name: "Sols" })).findByRole(
       "listitem",
       { name: "shopper" },
     );
@@ -55,10 +55,10 @@ describe("the home's dots column", () => {
     }
   });
 
-  it("lists the dots newest activity first, with status, last line and next run", async () => {
+  it("lists the sols newest activity first, with status, last line and next run", async () => {
     backend.on("dot_overview", () => [idle, nightly, reader, shopper]);
     renderApp("/home");
-    await within(await screen.findByRole("navigation", { name: "Dots" })).findByRole(
+    await within(await screen.findByRole("navigation", { name: "Sols" })).findByRole(
       "listitem",
       { name: "shopper" },
     );
@@ -76,16 +76,16 @@ describe("the home's dots column", () => {
     expect(
       third.getByText(`next ${localTime(nightly.schedule_state!.next_fire)}`),
     ).toBeVisible();
-    expect(screen.getByRole("button", { name: "New dot" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "New sol" })).toBeVisible();
   });
 
-  it("starts with New dot, then the heading over the list", async () => {
+  it("starts with New sol, then the heading over the list", async () => {
     backend.on("dot_overview", () => [reader, shopper]);
     renderApp(`/home/${reader.dot.id}`);
-    const view = within(await screen.findByRole("navigation", { name: "Dots" }));
-    const create = view.getByRole("button", { name: "New dot" });
-    expect(create).toHaveTextContent("New dot");
-    const heading = view.getByRole("heading", { name: "Dots" });
+    const view = within(await screen.findByRole("navigation", { name: "Sols" }));
+    const create = view.getByRole("button", { name: "New sol" });
+    expect(create).toHaveTextContent("New sol");
+    const heading = view.getByRole("heading", { name: "Sols" });
     const list = view.getByRole("list");
     const before = (a: Node, b: Node) =>
       (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
@@ -93,7 +93,7 @@ describe("the home's dots column", () => {
     expect(before(heading, list)).toBe(true);
   });
 
-  it("marks running, attention and off, and a dot whose question is open as waiting", async () => {
+  it("marks running, attention and off, and a sol whose question is open as waiting", async () => {
     const question: Message = { ...sample.messages[0], dot_id: "dot-asker" };
     backend.on("messages_list", () => [question]);
     backend.on("dot_overview", () => [
@@ -111,7 +111,7 @@ describe("the home's dots column", () => {
     expect(mark("disabled")).toHaveAccessibleName("off");
   });
 
-  it("says when a dot's next follow-up fires", async () => {
+  it("says when a sol's next follow-up fires", async () => {
     backend.on("dot_overview", () => [idle]);
     const soon = new Date(Date.now() + 3 * 3_600_000).toISOString();
     backend.on("follow_ups_list", () => [
@@ -121,7 +121,7 @@ describe("the home's dots column", () => {
     expect(await screen.findByText("Next follow-up in 3 h")).toBeVisible();
   });
 
-  it("opens the first dot of the column, then the dot last opened", async () => {
+  it("opens the first sol of the column, then the sol last opened", async () => {
     backend.on("dot_overview", () => [reader, shopper]);
     const first = renderApp("/home");
     await waitFor(() =>
@@ -142,14 +142,14 @@ describe("the home's dots column", () => {
     );
   });
 
-  it("forgets a dot last opened that no longer exists", async () => {
+  it("forgets a sol last opened that no longer exists", async () => {
     window.localStorage.setItem("dots.home.dot", "dot-gone");
     backend.on("dot_overview", () => [reader]);
     const { router } = renderApp("/home");
     await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${reader.dot.id}`));
   });
 
-  it("moves the focus through the dots with the arrow keys, Home and End; Enter opens one", async () => {
+  it("moves the focus through the sols with the arrow keys, Home and End; Enter opens one", async () => {
     backend.on("dot_overview", () => [shopper, reader, nightly]);
     const { user, router } = renderApp(`/home/${reader.dot.id}`);
     const link = within(await screen.findByRole("listitem", { name: "reader" })).getByRole("link");
@@ -173,10 +173,10 @@ describe("the home's dots column", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${shopper.dot.id}`));
   });
 
-  it("offers to set up the first dot when there is none", async () => {
+  it("offers to set up the first sol when there is none", async () => {
     renderApp("/home");
     expect(
-      await screen.findByRole("heading", { name: "What should your first dot do?" }),
+      await screen.findByRole("heading", { name: "What should your first sol do?" }),
     ).toBeVisible();
     expect(screen.getByRole("link", { name: "Fill in the form instead" })).toHaveAttribute(
       "href",
@@ -185,7 +185,7 @@ describe("the home's dots column", () => {
     expect(screen.getByRole("navigation", { name: "Main" })).toBeVisible();
   });
 
-  it("goes back to the home when the open dot is deleted", async () => {
+  it("goes back to the home when the open sage is deleted", async () => {
     let rows = [reader, shopper];
     backend.on("dot_overview", () => rows);
     const { router, queryClient } = renderApp(`/home/${reader.dot.id}`);
@@ -195,7 +195,7 @@ describe("the home's dots column", () => {
     await waitFor(() => expect(router.state.location.pathname).toBe(`/home/${shopper.dot.id}`));
   });
 
-  it("shows the dot's name and its 'off' mark in the header of a disabled dot", async () => {
+  it("shows the sol's name and its 'off' mark in the header of a disabled sol", async () => {
     const off = row("paused", {
       dot: { ...sample.dot, id: "dot-paused", name: "paused", enabled: false },
     });
@@ -209,7 +209,7 @@ describe("the home's dots column", () => {
     expect(within(header).queryByText("off")).toBeNull();
   });
 
-  it("shows a failed load of the dots", async () => {
+  it("shows a failed load of the sols", async () => {
     backend.on("dot_overview", () => {
       throw { kind: "internal", message: "database is locked" };
     });
@@ -218,7 +218,7 @@ describe("the home's dots column", () => {
   });
 });
 
-describe("the New dot button", () => {
+describe("the New sol button", () => {
   const viewer = { ...sample.orgs[0], id: "acme-eng", membership: "active", role: "viewer" } as const;
 
   /// Acme's workspaces as the core shows them: those in `refusing` refuse making dots with
@@ -238,7 +238,7 @@ describe("the New dot button", () => {
   }
 
   it("is off with the reason in an account where the person is a Viewer", async () => {
-    const title = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+    const title = "Acme Engineering: a Viewer can't create or change sols. Ask an Admin or Owner.";
     backend.on("org_list", () => [viewer]);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     backend.on("dot_overview", () => []);
@@ -246,8 +246,8 @@ describe("the New dot button", () => {
     renderApp("/home");
     // The button is turned off once the account's role is known.
     const button = await waitFor(() => {
-      const nav = within(screen.getByRole("navigation", { name: "Dots" }));
-      const found = nav.getByRole("button", { name: "New dot" });
+      const nav = within(screen.getByRole("navigation", { name: "Sols" }));
+      const found = nav.getByRole("button", { name: "New sol" });
       expect(found).toHaveAttribute("title", title);
       return found;
     });
@@ -257,14 +257,14 @@ describe("the New dot button", () => {
 
   it("follows the workspace in view: off where the person is a workspace Viewer", async () => {
     const title =
-      "Acme Engineering: a Viewer in the Payments workspace can't create or change dots. Ask an Admin or Owner.";
+      "Acme Engineering: a Viewer in the Payments workspace can't create or change sols. Ask an Admin or Owner.";
     backend.on("org_list", () => [{ ...viewer, role: "member" }]);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "payments" }));
     backend.on("dot_overview", () => []);
     spaces(title, ["payments"]);
     renderApp("/home");
     const button = await waitFor(() => {
-      const found = within(screen.getByRole("navigation", { name: "Dots" })).getByRole("button", { name: "New dot" });
+      const found = within(screen.getByRole("navigation", { name: "Sols" })).getByRole("button", { name: "New sol" });
       expect(found).toHaveAttribute("title", title);
       return found;
     });
@@ -272,22 +272,22 @@ describe("the New dot button", () => {
   });
 
   it("hides the setup composer on the empty home where the person is a Viewer", async () => {
-    const title = "Acme Engineering: a Viewer can't create or change dots. Ask an Admin or Owner.";
+    const title = "Acme Engineering: a Viewer can't create or change sols. Ask an Admin or Owner.";
     backend.on("org_list", () => [viewer]);
     backend.on("scope_get", () => ({ account: "acme-eng", workspace: "default" }));
     backend.on("dot_overview", () => []);
     spaces(title, ["default", "payments"]);
     renderApp("/home");
     expect(await screen.findByText(title, { selector: "p" })).toBeVisible();
-    expect(screen.queryByRole("textbox", { name: "What should your first dot do?" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "What should your first sol do?" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Set it up" })).toBeNull();
   });
 
   it("is on in Personal", async () => {
     backend.on("dot_overview", () => []);
     renderApp("/home");
-    const nav = within(await screen.findByRole("navigation", { name: "Dots" }));
-    const button = await nav.findByRole("button", { name: "New dot" });
+    const nav = within(await screen.findByRole("navigation", { name: "Sols" }));
+    const button = await nav.findByRole("button", { name: "New sol" });
     expect(button).toBeEnabled();
     expect(button).not.toHaveAttribute("aria-disabled");
   });

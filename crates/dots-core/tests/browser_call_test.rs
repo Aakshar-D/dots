@@ -223,7 +223,7 @@ async fn the_first_call_starts_edge_and_playwright_and_reading_is_free() {
     let result = call(&e, &browser, "browser_snapshot", json!({})).await;
     assert!(!failed(&result), "{result}");
     assert!(
-        text(&result).starts_with("Dots: Read the page\n### Open tabs"),
+        text(&result).starts_with("Sage: Read the page\n### Open tabs"),
         "{}",
         text(&result)
     );
@@ -286,7 +286,7 @@ async fn an_approved_site_passes_and_a_new_site_asks() {
     let home = call(&e, &browser, "browser_click", json!({"target": "e6"})).await;
     assert!(!failed(&home), "{home}");
     assert!(
-        text(&home).starts_with("Dots: Clicked \"Home\"\n"),
+        text(&home).starts_with("Sage: Clicked \"Home\"\n"),
         "{}",
         text(&home)
     );
@@ -297,7 +297,7 @@ async fn an_approved_site_passes_and_a_new_site_asks() {
         json!({"target": "e11", "text": "shoes"}),
     )
     .await;
-    assert!(text(&typed).starts_with("Dots: Typed into \"Search\"\n"));
+    assert!(text(&typed).starts_with("Sage: Typed into \"Search\"\n"));
     // A site not approved yet asks; with no wait the call parks.
     let other = call(
         &e,
@@ -388,7 +388,7 @@ async fn a_risky_act_asks_on_an_approved_site_and_passes_with_risky_actions_allo
     e.store.update_dot(&dot.id, &risky).await.unwrap();
     let again = call(&e, &browser, "browser_click", json!({"target": "e16"})).await;
     assert!(
-        text(&again).starts_with("Dots: Clicked \"Pay now\"\n"),
+        text(&again).starts_with("Sage: Clicked \"Pay now\"\n"),
         "{again}"
     );
     // A selector could name a Send or Delete button: with "Always ask before sending or
@@ -412,7 +412,7 @@ async fn a_risky_act_asks_on_an_approved_site_and_passes_with_risky_actions_allo
     )
     .await;
     assert!(
-        text(&named).starts_with("Dots: Clicked text=Pay now\n"),
+        text(&named).starts_with("Sage: Clicked text=Pay now\n"),
         "{named}"
     );
 }
@@ -481,7 +481,7 @@ async fn a_deny_rule_refuses_whatever_the_kind() {
     )
     .await;
     let (_run, browser) = run(&e, &dot).await;
-    let refusal = "Denied by the policy of dot 'shopper': the browser may not be used on shop.com.";
+    let refusal = "Denied by the policy of sol 'shopper': the browser may not be used on shop.com.";
     assert_eq!(
         text(&call(&e, &browser, "browser_snapshot", json!({})).await),
         refusal
@@ -496,7 +496,7 @@ async fn a_deny_rule_refuses_whatever_the_kind() {
             )
             .await
         ),
-        "Denied by the policy of dot 'shopper': the browser may not be used on app.shop.com."
+        "Denied by the policy of sol 'shopper': the browser may not be used on app.shop.com."
     );
     assert!(!failed(
         &call(
@@ -509,7 +509,7 @@ async fn a_deny_rule_refuses_whatever_the_kind() {
     ));
     assert_eq!(
         text(&call(&e, &browser, "browser_take_screenshot", json!({"scale": "css"})).await),
-        "Denied by the policy of dot 'shopper': mcp__browser__browser_take_screenshot is not permitted."
+        "Denied by the policy of sol 'shopper': mcp__browser__browser_take_screenshot is not permitted."
     );
     assert_eq!(sent_tools(&e), ["browser_navigate"]);
 }
@@ -581,7 +581,7 @@ async fn a_live_approval_on_a_page_that_moved_is_not_performed() {
         approve_when_asked(&e, &dot, None)
     );
     assert!(
-        text(&live).starts_with("Dots: Clicked \"Pay now\"\n"),
+        text(&live).starts_with("Sage: Clicked \"Pay now\"\n"),
         "{live}"
     );
 }
@@ -630,7 +630,7 @@ async fn downloads_move_into_the_workspace_and_the_result_says_so() {
     .await;
     assert_eq!(
         text(&shot).lines().take(2).collect::<Vec<_>>(),
-        ["Dots: Took a screenshot", "Dots: Downloaded statement.pdf"]
+        ["Sage: Took a screenshot", "Sage: Downloaded statement.pdf"]
     );
     assert_eq!(shot["content"][2]["type"], "image");
     assert_eq!(
@@ -672,7 +672,7 @@ async fn a_dots_browser_serves_one_run_at_a_time() {
     assert!(failed(&refused));
     assert_eq!(
         text(&refused),
-        "This dot's browser is in use by another run; try again when it ends."
+        "This sol's browser is in use by another run; try again when it ends."
     );
     assert_eq!(text(&refused), HostError::InUse.to_string());
     assert_eq!(e.edges.starts(&dot.id).len(), 1);

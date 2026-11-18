@@ -71,7 +71,7 @@ export function shortDate(day) {
 export function assigneePill(assignee) {
   if (assignee === null) return "";
   if (assignee.kind === "person") return h("span", { class: "pill" }, "You");
-  return h("span", { class: "pill dot" }, `● ${assignee.name ?? "removed dot"}`);
+  return h("span", { class: "pill dot" }, `● ${assignee.name ?? "removed sol"}`);
 }
 
 /// Who did an Activity row's change: "You" or "● <dot>".
@@ -102,7 +102,7 @@ export function describe(row) {
       return ` set the status to ${STATUS_LABELS[after]}`;
     case "assignee":
       if (after === null) return " unassigned it";
-      return ` assigned it to ${after.kind === "person" ? "you" : (after.name ?? "a removed dot")}`;
+      return ` assigned it to ${after.kind === "person" ? "you" : (after.name ?? "a removed sol")}`;
     case "due_on":
       return after === null ? " removed the due date" : ` set the due date to ${shortDate(after)}`;
     case "section":
@@ -318,7 +318,7 @@ export function mount(root, dots) {
       "nav",
       { class: "side", "aria-label": "Projects" },
       item("My tasks", { kind: "my_tasks" }, v.kind === "my_tasks"),
-      item("Assigned to dots", { kind: "assigned_to_dots" }, v.kind === "assigned_to_dots"),
+      item("Assigned to sols", { kind: "assigned_to_dots" }, v.kind === "assigned_to_dots"),
       h("h2", { text: "Projects" }),
       state.projects.map((p) =>
         item(`● ${p.name}`, { kind: "project", id: p.id }, v.kind === "project" && v.id === p.id),
@@ -367,7 +367,7 @@ export function mount(root, dots) {
   function title() {
     const v = state.view;
     if (v.kind === "my_tasks") return "My tasks";
-    if (v.kind === "assigned_to_dots") return "Assigned to dots";
+    if (v.kind === "assigned_to_dots") return "Assigned to sols";
     return state.projects.find((p) => p.id === v.id)?.name ?? "";
   }
 
@@ -558,7 +558,7 @@ export function mount(root, dots) {
             h("option", {
               value: t.assignee.id,
               selected: true,
-              text: `● ${t.assignee.name ?? "removed dot"}`,
+              text: `● ${t.assignee.name ?? "removed sol"}`,
             }),
         ),
         h("label", { for: "pane-due", text: "Due" }),

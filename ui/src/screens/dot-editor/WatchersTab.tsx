@@ -254,7 +254,7 @@ function WatcherForm(props: {
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
-            A watcher starts this dot when what it watches changes; each event is one run.
+            A watcher starts this sol when what it watches changes; each event is one run.
           </DialogDescription>
         </DialogHeader>
         <div className="flex max-h-[60vh] flex-col gap-3 overflow-y-auto pr-1">
@@ -277,7 +277,7 @@ function WatcherForm(props: {
                   props.workdir &&
                   config.path.trim() !== "" &&
                   !folderInside(config.path, props.workdir)
-                    ? `The dot can only open files inside its folder (${props.workdir}); this folder is outside it.`
+                    ? `The sol can only open files inside its folder (${props.workdir}); this folder is outside it.`
                     : undefined
                 }
               >
@@ -636,7 +636,7 @@ export function WatchersTab({ dotId }: { dotId: string }) {
       </div>
       {watchers.length === 0 ? (
         <EmptyState icon={Eye}>
-          No watchers. A watcher starts this dot when a file changes, an email arrives or
+          No watchers. A watcher starts this sol when a file changes, an email arrives or
           something happens on GitHub.
         </EmptyState>
       ) : (
@@ -696,7 +696,7 @@ export function WatchersTab({ dotId }: { dotId: string }) {
                   </Button>
                   <ConfirmButton
                     title={`Delete the watcher ${w.name}?`}
-                    description="It stops starting this dot. Runs it started stay."
+                    description="It stops starting this sol. Runs it started stay."
                     confirmLabel="Delete"
                     disabled={remove.isPending}
                     onConfirm={() => remove.mutate(w.id)}

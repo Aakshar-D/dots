@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 
 const CHANGED: &str = "Acme Engineering: the member list changed (now #2) while you were \
                        editing. Check it and make the change again.";
-const NOT_SIGNER: &str = "Acme Engineering: your Dots ID isn't one of the account's signing \
+const NOT_SIGNER: &str = "Acme Engineering: your Sage ID isn't one of the account's signing \
                           admins yet. Ask the owner to add it with dots-admin policy admins add.";
 /// A policy issued after `ISSUED`.
 const LATER: &str = "2026-10-22T08:30:00Z";
@@ -480,13 +480,13 @@ async fn expired_used_and_mismatched_invites_are_problems() {
     let preview = h.orgs.inspect_request(ACME, &code).await.unwrap();
     assert_eq!(
         preview.problem.as_deref(),
-        Some("This Dots ID is already on the member list.")
+        Some("This Sage ID is already on the member list.")
     );
 
     // A code that doesn't read.
     let e = h.orgs.inspect_request(ACME, "hello").await.unwrap_err();
     assert!(
-        matches!(&e, Error::Invalid(t) if t == "this is not a Dots request code"),
+        matches!(&e, Error::Invalid(t) if t == "this is not a Sage request code"),
         "{e:?}"
     );
 }
@@ -894,7 +894,7 @@ async fn a_list_not_read_back_yet_is_a_draft() {
     );
     assert_eq!(
         draft.error,
-        "The source took the list but Dots couldn't read it back yet. Retry in a moment."
+        "The source took the list but Sage couldn't read it back yet. Retry in a moment."
     );
     assert_eq!(members(&h).await.draft, Some(draft));
 }

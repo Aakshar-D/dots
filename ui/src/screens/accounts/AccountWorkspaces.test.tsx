@@ -99,7 +99,7 @@ describe("Settings, Accounts, Workspaces", () => {
     expect(within(panel).queryByRole("button", { name: "Delete Default" })).toBeNull();
     await user.click(within(panel).getByRole("button", { name: "Delete Ops" }));
     const ask = await screen.findByRole("alertdialog");
-    expect(ask).toHaveTextContent("Its dots on each PC move to Default.");
+    expect(ask).toHaveTextContent("Its sols on each PC move to Default.");
     expect(backend.callsTo("member_edit")).toHaveLength(0);
     await user.click(within(ask).getByRole("button", { name: "Delete" }));
     await waitFor(() => expect(backend.callsTo("member_edit")).toHaveLength(1));
@@ -173,14 +173,14 @@ describe("Settings, Accounts, Workspaces", () => {
     expect(within(personal).queryByRole("button", { name: "Delete Default" })).toBeNull();
     await user.click(within(personal).getByRole("button", { name: "Delete Side" }));
     const ask = await screen.findByRole("alertdialog");
-    expect(ask).toHaveTextContent("Its dots on each PC move to Default.");
+    expect(ask).toHaveTextContent("Its sols on each PC move to Default.");
     await user.click(within(ask).getByRole("button", { name: "Delete" }));
     await waitFor(() =>
       expect(backend.callsTo("personal_workspace_delete")).toEqual([{ id: "side" }]),
     );
   });
 
-  it("deleting the Personal workspace in view loads the scope and the dots again", async () => {
+  it("deleting the Personal workspace in view loads the scope and the sols again", async () => {
     account();
     backend.on("scope_get", () => ({ account: "personal", workspace: "side" }));
     backend.on("personal_workspace_delete", () => null);

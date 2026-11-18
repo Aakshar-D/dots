@@ -684,6 +684,9 @@ export const commands = {
     call(T.LibraryItem, "app_answer_start_prompt", { name, on }),
   /// Where a run the app started is; rejects for a run it did not start.
   appRunLink: (name: string, runId: string) => call(T.RunLink, "app_run_link", { name, runId }),
+  /// A file an app's screen saves (`dots.saveFile`): Dots asks where in the Save dialog. False
+  /// when the person cancels; rejects with kind `invalid` for a bad name or data over 20 MB.
+  appSaveFile: (name: string, data: string) => call(z.boolean(), "app_save_file", { name, data }),
   /// The person's answer on the card. Rejects with kind `conflict` when it was decided already
   /// or its app moved on, and while the dot's thread is still working.
   appProposalDecide: (id: string, decision: T.ProposalDecision) =>
@@ -818,4 +821,17 @@ export const commands = {
   /// `invalid` when Open Dot is not ready.
   voicePreview: (voice: number, speed: number) => call(nothing, "voice_preview", { voice, speed }),
   voiceDevices: () => call(T.VoiceDevices, "voice_devices"),
+  /// The voice setup the person did; null when they did none.
+  voiceSetup: () => call(T.VoiceSetup.nullable(), "voice_setup"),
+  /// Listens to the person say "Hey Sage" five times (a `setting_up` voice event names each
+  /// take) and sets the wake phrase up for their voice. Takes about 20 seconds. Rejects with
+  /// kind `invalid` while Open Sage is not ready or not resting.
+  voiceSetupRun: () => call(T.VoiceSetup, "voice_setup_run"),
+  /// What Open Sage has learned about the person, and whether it is learning.
+  voiceMemory: () => call(T.VoiceMemory, "voice_memory"),
+  /// Removes the note at `index` when it is still `note`; what is left comes back.
+  voiceMemoryForget: (index: number, note: string) =>
+    call(T.VoiceMemory, "voice_memory_forget", { index, note }),
+  voiceMemoryClear: () => call(T.VoiceMemory, "voice_memory_clear"),
+  voiceMemoryLearning: (on: boolean) => call(T.VoiceMemory, "voice_memory_learning", { on }),
 };

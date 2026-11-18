@@ -139,7 +139,7 @@ async fn commit_files_builds_blobs_a_tree_and_a_commit_on_the_parent() {
     Mock::given(method("POST"))
         .and(path(format!("{REPO}/git/commits")))
         .and(body_partial_json(
-            json!({"tree": "tree1", "parents": ["parent1"], "message": "Dots 0.3.0-rc.1"}),
+            json!({"tree": "tree1", "parents": ["parent1"], "message": "Sage 0.3.0-rc.1"}),
         ))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({"sha": "commit1"})))
         .expect(1)
@@ -151,7 +151,7 @@ async fn commit_files_builds_blobs_a_tree_and_a_commit_on_the_parent() {
     ];
     let sha = gh(&server)
         .await
-        .commit_files("parent1", &files, "Dots 0.3.0-rc.1")
+        .commit_files("parent1", &files, "Sage 0.3.0-rc.1")
         .await
         .unwrap();
     assert_eq!(sha, "commit1");
@@ -181,7 +181,7 @@ async fn merge_reports_merged_already_merged_and_conflict() {
             .await;
         let got = gh(&server)
             .await
-            .merge("master", "release/0.3.0", "Dots 0.3.0")
+            .merge("master", "release/0.3.0", "Sage 0.3.0")
             .await
             .unwrap();
         assert_eq!(got, expected);
@@ -195,7 +195,7 @@ async fn merged_pulls_since_reads_merge_commits_newest_first() {
         .and(path(format!("{REPO}/compare/v0.2.0...master")))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "commits": [
-                {"commit": {"message": "Merge pull request #25 from x/feat/watchers\n\nWatchers: dots that start on their own"}},
+                {"commit": {"message": "Merge pull request #25 from x/feat/watchers\n\nWatchers: sols that start on their own"}},
                 {"commit": {"message": "fix: something small"}},
                 {"commit": {"message": "Merge pull request #26 from x/feat/usage-limits\n\nUsage and limits"}}
             ]
@@ -212,7 +212,7 @@ async fn merged_pulls_since_reads_merge_commits_newest_first() {
         got,
         [
             (26, "Usage and limits"),
-            (25, "Watchers: dots that start on their own")
+            (25, "Watchers: sols that start on their own")
         ]
     );
 }

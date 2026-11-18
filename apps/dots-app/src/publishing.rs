@@ -40,7 +40,7 @@ pub struct PullOpened {
     pub url: String,
 }
 
-pub const NOT_A_PUBLISHER: &str = "Dots is not set up to publish.";
+pub const NOT_A_PUBLISHER: &str = "Sage is not set up to publish.";
 
 /// Tauri-managed.
 pub struct Publisher {
@@ -91,7 +91,7 @@ pub fn after_put(slot: &Mutex<Option<MadeKey>>, put: &Result<(), CmdError>) {
 
 fn publisher(app: &AppHandle) -> Result<tauri::State<'_, Publisher>, CmdError> {
     app.try_state::<Publisher>()
-        .ok_or_else(|| CmdError::internal("Dots did not start; see the startup error"))
+        .ok_or_else(|| CmdError::internal("Sage did not start; see the startup error"))
 }
 
 pub fn status(app: &AppHandle) -> Result<PublisherStatus, CmdError> {
@@ -190,7 +190,7 @@ pub async fn put_secrets(
     put
 }
 
-pub const NO_PUBLIC_KEY: &str = "This Dots did not make the key in GitHub's secrets, or has restarted since. Ask whoever set it up for the public key, or remove both secrets on GitHub to start again.";
+pub const NO_PUBLIC_KEY: &str = "This Sage did not make the key in GitHub's secrets, or has restarted since. Ask whoever set it up for the public key, or remove both secrets on GitHub to start again.";
 
 /// The public key step 4 needs: only this Dots' own, made in this run.
 pub fn public_key_for_pull(kept: Option<String>) -> Result<String, CmdError> {

@@ -81,7 +81,7 @@ test("a month's total adds its expenses", () => {
   assert.equal(call("month_total", { month: "2026-10" }), 16.5);
 });
 
-test("a dot's expense names the dot", () => {
+test("a sol's expense names the sol", () => {
   call("add_expense", { item: "Ink", amount: 3, on: "2026-10-01" }, { actor: { kind: "dot", id: "d1", name: "builder" } });
   assert.deepEqual(call("list_expenses", { month: "2026-10" }).map(e => e.item), ["Ink"]);
 });

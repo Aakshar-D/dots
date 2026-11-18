@@ -9,6 +9,7 @@
 
 use serde::Serialize;
 
+use super::desk::{self, DeskTask};
 use super::picture::{
     clean, one_line, ApprovalLine, Picture, View, CHOICE_BYTES, NAME_BYTES, QUESTION_BYTES,
 };
@@ -47,6 +48,27 @@ pub enum Deed {
         text: String,
         topic_root: Option<String>,
     },
+    /// One command of the system's shell, shown to the person as it is; `why` is the
+    /// model's sentence on what it does.
+    Command {
+        command: String,
+        why: String,
+    },
+}
+
+impl Deed {
+    /// What carrying it out is, in a few words, for the stage to show while it is done. It
+    /// names the sol only: never the tool's target, a command or a message's words.
+    pub fn doing(&self) -> String {
+        match self {
+            Deed::Approve { dot_name, .. } => format!("Approving {}'s request", name(dot_name)),
+            Deed::Deny { dot_name, .. } => format!("Denying {}'s request", name(dot_name)),
+            Deed::Run { dot_name, .. } => format!("Starting {}", name(dot_name)),
+            Deed::Answer { dot_name, .. } => format!("Answering {}", name(dot_name)),
+            Deed::Send { dot_name, .. } => format!("Sending your message to {}", name(dot_name)),
+            Deed::Command { .. } => "Running the command".into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -58,6 +80,11 @@ pub enum OpenTarget {
     Settings,
     Usage,
     Home,
+    Connectors,
+    Apps,
+    Library,
+    Teams,
+    Intents,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -83,6 +110,12 @@ pub enum Step {
     Create {
         description: String,
     },
+    /// Something on the computer itself: a note, a site, a search, an app.
+    Desk(DeskTask),
+    /// One sentence about the person, kept for later conversations.
+    Remember(String),
+    /// Everything learned about the person is forgotten.
+    Forget,
 }
 
 /// What an answer to an `Ask` is for.
@@ -100,10 +133,10 @@ pub enum AskFor {
 const GONE: &str = "I can't find that one. It may already be handled.";
 /// Said when the runtime finds the record decided or gone.
 pub const HANDLED: &str = "That one is already handled.";
-const WHICH_DOT: &str = "Which dot did you mean?";
-const NO_DOT: &str = "I can't find that dot.";
+const WHICH_DOT: &str = "Which sol did you mean?";
+const NO_DOT: &str = "I can't find that sol.";
 /// Said when the runtime no longer finds a dot that was in the picture.
-pub const DOT_GONE: &str = "I can't find that dot anymore.";
+pub const DOT_GONE: &str = "I can't find that sol anymore.";
 const CANT_OPEN: &str = "I can't open that.";
 const DIDNT_CATCH: &str = "I didn't catch what to do with that. Say it another way?";
 /// Longest question of the model or the setup agent that is said, in bytes.
@@ -240,6 +273,55 @@ pub fn plan(wish: &Wish, picture: &Picture, view: &View) -> Step {
             })
         }
         Wish::Open { target } => open(target, picture),
+        Wish::Note { title, text, plain } => on_desk(desk::note(title, text, *plain)),
+        Wish::Web { url } => on_desk(desk::web(url)),
+        Wish::Search { query } => on_desk(desk::search(query)),
+        Wish::Close { name } => match desk::closable(name) {
+            Some(app) => Step::Desk(DeskTask::Close { app }),
+            None => Step::Say(desk::NO_CLOSE.into()),
+        },
+        Wish::Command { command, why } => match desk::command(command, why) {
+            Ok((command, why)) => {
+                // The model's sentence is said as the model's, then the command itself is
+                // read out, then Sage's own question: what runs is the command, whatever
+                // the sentence says of it. A long one is not read out; it is on screen.
+                let mut question = String::new();
+                if !why.is_empty() {
+                    question.push_str(&format!("The model says: {} ", sentence(&why)));
+                }
+                if command.len() <= SAY_COMMAND_BYTES {
+                    question.push_str(&format!("The command reads: {command}. "));
+                } else {
+                    question.push_str("The command is too long to read out. ");
+                }
+                question.push_str(RUN_COMMAND);
+                Step::Confirm {
+                    deed: Deed::Command { command, why },
+                    question,
+                    on_screen: false,
+                }
+            }
+            Err(why) => Step::Say(why.into()),
+        },
+        Wish::Remember { note } => Step::Remember(note.clone()),
+        Wish::Forget => Step::Forget,
+        // A settings page, one of the apps and folders named here, or any installed app:
+        // each opens at once. None of them runs anything the model wrote.
+        Wish::App { name } => {
+            if let Some(page) = desk::settings_page(name) {
+                Step::Desk(DeskTask::Page { page })
+            } else if let Some(app) = desk::app(name) {
+                Step::Desk(DeskTask::App { app })
+            } else if let Some(name) = desk::named(name) {
+                Step::Desk(DeskTask::Named { name })
+            } else {
+                Step::Say(desk::NO_APP.into())
+            }
+        }
+        Wish::Key { name } => match desk::key(name) {
+            Some(key) => Step::Desk(DeskTask::Key { key }),
+            None => Step::Say(desk::NO_KEY.into()),
+        },
         Wish::Create { description } => Step::Create {
             description: description.clone(),
         },
@@ -291,7 +373,18 @@ pub(crate) const APPROVE_THIS: &str = "Approve this request?";
 pub(crate) const DENY_THIS: &str = "Deny this request?";
 pub(crate) const SEND_MESSAGE: &str = "Send this message?";
 pub(crate) const SEND_ANSWER: &str = "Send this answer?";
-pub(crate) const CREATE_THIS: &str = "Create this dot?";
+pub(crate) const CREATE_THIS: &str = "Create this sol?";
+pub(crate) const RUN_COMMAND: &str = "It is on screen. Run this command?";
+/// The longest command that is read out before its question.
+const SAY_COMMAND_BYTES: usize = 120;
+
+/// The step for a checked task on the computer, or the sentence saying why not.
+fn on_desk(task: std::result::Result<DeskTask, &'static str>) -> Step {
+    match task {
+        Ok(task) => Step::Desk(task),
+        Err(why) => Step::Say(why.into()),
+    }
+}
 
 /// Whether an approval has no target to say: only its tool would be heard.
 fn no_target(line: &ApprovalLine) -> bool {
@@ -325,6 +418,11 @@ fn open(target: &str, picture: &Picture) -> Step {
         "inbox" => return screen(OpenTarget::Inbox, "Opening the Inbox."),
         "usage" => return screen(OpenTarget::Usage, "Opening Usage."),
         "home" => return screen(OpenTarget::Home, "Opening Home."),
+        "connectors" => return screen(OpenTarget::Connectors, "Opening Connectors."),
+        "apps" => return screen(OpenTarget::Apps, "Opening Apps."),
+        "library" => return screen(OpenTarget::Library, "Opening the Library."),
+        "teams" => return screen(OpenTarget::Teams, "Opening Teams."),
+        "intents" => return screen(OpenTarget::Intents, "Opening Intents."),
         _ => {}
     }
     if let Some(d) = picture.dot(target) {
@@ -527,6 +625,8 @@ pub(crate) async fn outcome(rt: &Runtime, deed: &Deed) -> Outcome {
             Ok(()) => Outcome::done(format!("Sent to {}.", name(dot_name))),
             Err(e) => Outcome::refused(send_refused(e, dot_name)),
         },
+        // A command is carried out by the mind's desk, never through the runtime.
+        Deed::Command { .. } => Outcome::refused(desk::NO_DESK),
     }
 }
 
@@ -580,7 +680,7 @@ fn said_for(e: Error, dot_name: &str) -> String {
         Error::Conflict(_) => format!(
             "{} is still working on that. Try again when it finishes.",
             if dot_name.is_empty() {
-                "The dot".to_string()
+                "The sol".to_string()
             } else {
                 name(dot_name)
             }
@@ -662,7 +762,7 @@ fn number(n: usize) -> String {
 pub fn needs_confirmation(deed: &Deed) -> bool {
     matches!(
         deed,
-        Deed::Approve { .. } | Deed::Deny { .. } | Deed::Run { .. }
+        Deed::Approve { .. } | Deed::Deny { .. } | Deed::Run { .. } | Deed::Command { .. }
     )
 }
 
@@ -1124,7 +1224,7 @@ mod tests {
         assert_eq!(
             plan(&wish, &p, &v),
             Step::Ask {
-                question: "Which dot did you mean?".into(),
+                question: "Which sol did you mean?".into(),
                 options: vec!["Deploy watcher".into()],
                 then: AskFor::Dot {
                     wish: wish.clone(),
@@ -1139,7 +1239,7 @@ mod tests {
             here: false,
         };
         let Step::Ask { options, then, .. } = plan(&wish, &p, &v) else {
-            panic!("an unknown dot asks");
+            panic!("an unknown sol asks");
         };
         assert_eq!(
             options,
@@ -1160,7 +1260,7 @@ mod tests {
         // no dots at all
         assert_eq!(
             plan(&Wish::Run { d: "d1".into() }, &Picture::default(), &v),
-            Step::Say("I can't find that dot.".into())
+            Step::Say("I can't find that sol.".into())
         );
     }
 
@@ -1512,7 +1612,7 @@ mod tests {
         );
         assert_eq!(
             send_refused(conflict(crate::checkins::DECIDING), "Research"),
-            "Dots is still adding the app you accepted in this chat; send your message again \
+            "Sage is still adding the app you accepted in this chat; send your message again \
              in a moment."
         );
         assert_eq!(
@@ -1525,12 +1625,12 @@ mod tests {
         let long = send_refused(conflict(&"ü".repeat(200)), "Research");
         assert!(long.len() <= 161, "{}", long.len());
         assert_eq!(
-            send_refused(Error::NotFound("dot x".into()), "Research"),
-            "I can't find that dot anymore."
+            send_refused(Error::NotFound("sol x".into()), "Research"),
+            "I can't find that sol anymore."
         );
         assert_eq!(
-            run_refused(Error::NotFound("dot x".into()), "Research"),
-            "I can't find that dot anymore."
+            run_refused(Error::NotFound("sol x".into()), "Research"),
+            "I can't find that sol anymore."
         );
         assert_eq!(
             run_refused(Error::Conflict("busy".into()), "Research"),
@@ -1541,8 +1641,8 @@ mod tests {
     #[test]
     fn plain_errors_drop_ids() {
         assert_eq!(
-            plain_error("run 01KA2B3C4D5E6F7G8H9J0K1M2N belongs to a different dot"),
-            "run belongs to a different dot"
+            plain_error("run 01KA2B3C4D5E6F7G8H9J0K1M2N belongs to a different sol"),
+            "run belongs to a different sol"
         );
         assert_eq!(plain_error("line\nbreak"), "line break");
         assert_eq!(

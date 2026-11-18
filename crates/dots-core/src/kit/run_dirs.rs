@@ -144,7 +144,7 @@ fn cleaned(rel: &Path, bytes: Vec<u8>, run_hooks: bool) -> Vec<u8> {
     let (out, emptied) = clean_markdown(&text, &keys);
     if emptied {
         tracing::warn!(
-            "emptied the frontmatter of {} in a plugin copy: a form Dots does not read",
+            "emptied the frontmatter of {} in a plugin copy: a form Sage does not read",
             rel.display()
         );
     }
@@ -267,7 +267,7 @@ pub fn prepare_run_kit(
     if copied_skills > 0 {
         let manifest = json!({
             "name": "dots-skills",
-            "description": "The skills this Dots run uses",
+            "description": "The skills this Sage run uses",
             "version": "0.0.0",
         });
         let dir = skills_plugin.join(".claude-plugin");

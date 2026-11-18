@@ -328,7 +328,7 @@ export function ScheduleEditor(props: {
                 <Label htmlFor="dot-schedule-catch-up">Catch up a missed run</Label>
               </div>
               <p className="text-xs text-muted-foreground">
-                When the PC was off or Dots was closed at a run's time, the dot runs once when Dots
+                When the PC was off or Sage was closed at a run's time, the sol runs once when Sage
                 is back, if that is within 24 hours.
               </p>
             </div>

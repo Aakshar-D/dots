@@ -17,7 +17,7 @@ use crate::events::{NAVIGATE_EVENT, STATUS_EVENT};
 use crate::state::{runtime_of, AppState};
 
 /// The tooltip's last line while Open Dot's microphone is open.
-pub const LISTENING: &str = "Dot is listening";
+pub const LISTENING: &str = "Sage is listening";
 
 /// The tray's tooltip: the Inbox count, then Claude's 5-hour and weekly usage and, while
 /// background runs are held, how many until when (usage and limits spec section 5), and
@@ -29,8 +29,8 @@ pub fn tooltip(
     listening: bool,
 ) -> String {
     let mut text = match count {
-        0 => "Dots".to_string(),
-        n => format!("Dots: {n} to review"),
+        0 => "Sage".to_string(),
+        n => format!("Sage: {n} to review"),
     };
     if let Some(limits) = limits {
         let pct = |r: &Option<LimitReading>| match r {
@@ -123,8 +123,8 @@ pub struct Tray {
 
 impl Tray {
     pub fn build(app: &AppHandle, paused: bool) -> tauri::Result<Tray> {
-        let open = MenuItem::with_id(app, "open", "Open Dots", true, None::<&str>)?;
-        let talk = MenuItem::with_id(app, "talk", "Talk to Dot", false, None::<&str>)?;
+        let open = MenuItem::with_id(app, "open", "Open Sage", true, None::<&str>)?;
+        let talk = MenuItem::with_id(app, "talk", "Talk to Sage", false, None::<&str>)?;
         let inbox = MenuItem::with_id(app, "inbox", inbox_label(0), true, None::<&str>)?;
         let pause = CheckMenuItem::with_id(
             app,
@@ -134,7 +134,7 @@ impl Tray {
             paused,
             None::<&str>,
         )?;
-        let quit = MenuItem::with_id(app, "quit", "Quit Dots", true, None::<&str>)?;
+        let quit = MenuItem::with_id(app, "quit", "Quit Sage", true, None::<&str>)?;
         let separator = PredefinedMenuItem::separator(app)?;
         let nothing = MenuItem::with_id(app, NOTHING_ID, NOTHING_WAITING, false, None::<&str>)?;
         let needs = Submenu::with_id_and_items(app, "needs", "Needs you", true, &[&nothing])?;
@@ -254,7 +254,7 @@ pub async fn refresh_count(app: &AppHandle, rt: &Runtime) {
                 tray.set_needs(app, needs_you_items(&rows));
             }
         }
-        Err(e) => tracing::warn!("listing the dots that need you failed: {e}"),
+        Err(e) => tracing::warn!("listing the sols that need you failed: {e}"),
     }
 }
 
@@ -359,30 +359,30 @@ mod tests {
         };
         assert_eq!(
             tooltip(2, Some(&state), now, false),
-            "Dots: 2 to review\nClaude 5h 42% · week 55%"
+            "Sage: 2 to review\nClaude 5h 42% · week 55%"
         );
         state.holding = true;
         state.held_run_ids = vec!["a".into(), "b".into(), "c".into()];
         state.hold_until = Some(dots_core::util::timestamp(today(15, 10)));
         assert_eq!(
             tooltip(0, Some(&state), now, false),
-            "Dots\nClaude 5h 42% · week 55%\nHolding 3 runs until 15:10"
+            "Sage\nClaude 5h 42% · week 55%\nHolding 3 runs until 15:10"
         );
         // The listening line comes last.
         assert_eq!(
             tooltip(0, Some(&state), now, true),
-            "Dots\nClaude 5h 42% · week 55%\nHolding 3 runs until 15:10\nDot is listening"
+            "Sage\nClaude 5h 42% · week 55%\nHolding 3 runs until 15:10\nSage is listening"
         );
         state.held_run_ids = vec!["a".into()];
         assert_eq!(
             tooltip(0, Some(&state), now, false),
-            "Dots\nClaude 5h 42% · week 55%\nHolding 1 run until 15:10"
+            "Sage\nClaude 5h 42% · week 55%\nHolding 1 run until 15:10"
         );
         state.weekly = None;
         state.holding = false;
         assert_eq!(
             tooltip(0, Some(&state), now, false),
-            "Dots\nClaude 5h 42% · week –"
+            "Sage\nClaude 5h 42% · week –"
         );
     }
 
@@ -390,20 +390,20 @@ mod tests {
     #[test]
     fn tooltip_says_dot_is_listening() {
         let now = chrono::Utc::now();
-        assert_eq!(tooltip(0, None, now, true), "Dots\nDot is listening");
+        assert_eq!(tooltip(0, None, now, true), "Sage\nSage is listening");
         assert_eq!(
             tooltip(2, None, now, true),
-            "Dots: 2 to review\nDot is listening"
+            "Sage: 2 to review\nSage is listening"
         );
-        assert_eq!(tooltip(2, None, now, false), "Dots: 2 to review");
-        assert_eq!(LISTENING, "Dot is listening");
+        assert_eq!(tooltip(2, None, now, false), "Sage: 2 to review");
+        assert_eq!(LISTENING, "Sage is listening");
     }
 
     #[test]
     fn tray_texts_show_the_inbox_count() {
         let now = chrono::Utc::now();
-        assert_eq!(tooltip(0, None, now, false), "Dots");
-        assert_eq!(tooltip(3, None, now, false), "Dots: 3 to review");
+        assert_eq!(tooltip(0, None, now, false), "Sage");
+        assert_eq!(tooltip(3, None, now, false), "Sage: 3 to review");
         assert_eq!(inbox_label(0), "Inbox");
         assert_eq!(inbox_label(12), "Inbox (12)");
     }

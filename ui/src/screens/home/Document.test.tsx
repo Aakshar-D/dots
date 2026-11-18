@@ -23,7 +23,7 @@ const follows = (a: Node, b: Node) =>
   (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
 
 describe("the conversation as a document (deep-teal spec section 4)", () => {
-  it("shows the person's message as a bubble, then the dot's words with no label", async () => {
+  it("shows the person's message as a bubble, then the sol's words with no label", async () => {
     const a = chat("a", "10:00");
     home([a], [said("a", 1, "All tests pass.")]);
     renderApp(`/home/${dot.id}`);
@@ -228,7 +228,7 @@ describe("the conversation as a document (deep-teal spec section 4)", () => {
     backend.on("messages_list", () => [asked]);
     renderApp(`/home/${dot.id}`);
     const view = await conversation();
-    const question = await view.findByRole("group", { name: "Question from the dot" });
+    const question = await view.findByRole("group", { name: "Question from the sol" });
     expect(question.firstElementChild).toHaveTextContent("Question · waiting for your answer");
     expect(question.lastElementChild).toHaveTextContent(asked.text);
   });

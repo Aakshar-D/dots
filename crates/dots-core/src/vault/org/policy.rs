@@ -208,7 +208,7 @@ pub fn parse_policy(text: &str) -> Result<OrgPolicy, PolicyError> {
             Some(n) if POLICY_VERSIONS.contains(&n) => n,
             _ => {
                 return Err(invalid(format!(
-                    "policy version {v} is not supported; this Dots reads versions 1 and 2"
+                    "policy version {v} is not supported; this Sage reads versions 1 and 2"
                 )))
             }
         },
@@ -249,7 +249,7 @@ pub fn parse_policy(text: &str) -> Result<OrgPolicy, PolicyError> {
     }
     for (i, admin) in raw.admins.iter().enumerate() {
         if minisign_verify::PublicKey::from_base64(admin).is_err() {
-            return Err(invalid(format!("admins[{i}] is not a Dots ID")));
+            return Err(invalid(format!("admins[{i}] is not a Sage ID")));
         }
     }
 
@@ -355,7 +355,7 @@ impl OrgPolicy {
             format!("org: {}", self.org_id),
             format!("issued at: {}", self.issued_at),
             plain,
-            format!("dots may be granted: {granted}"),
+            format!("sols may be granted: {granted}"),
             personal.to_string(),
             shell.to_string(),
             format!("refresh: every {}", count(self.refresh_minutes, "minute")),

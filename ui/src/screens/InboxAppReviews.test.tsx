@@ -22,7 +22,7 @@ const only = (app_reviews: PendingAppReview[]): Inbox => ({
 });
 
 describe("apps sent for review in the Inbox", () => {
-  it("lists each with its dot and opens the card in the dot's conversation", async () => {
+  it("lists each with its sol and opens the card in the sol's conversation", async () => {
     backend.on("inbox", () => only([review]));
     renderApp("/inbox");
     const section = await screen.findByRole("region", { name: "Apps to review" });

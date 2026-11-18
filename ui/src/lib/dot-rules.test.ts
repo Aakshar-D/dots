@@ -15,8 +15,8 @@ import { blankSpec, sample } from "@/test/fixtures";
 
 const good = { ...blankSpec, name: "nightly", instructions: "Run the tests.", workdir: "C:/dev" };
 
-describe("dot editor rules", () => {
-  it("accepts a complete dot", () => {
+describe("sol editor rules", () => {
+  it("accepts a complete sol", () => {
     expect(specErrors(good)).toEqual({});
     expect(specErrors(specOf(sample.dot))).toEqual({});
   });
@@ -37,7 +37,7 @@ describe("dot editor rules", () => {
     expect(specOf({ ...sample.dot, quiet_limit_secs: null }).quiet_limit_secs).toBeNull();
   });
 
-  it("names what a new dot still lacks", () => {
+  it("names what a new sol still lacks", () => {
     expect(Object.keys(specErrors(blankSpec)).sort()).toEqual([
       "instructions",
       "name",
@@ -45,7 +45,7 @@ describe("dot editor rules", () => {
     ]);
   });
 
-  it("lets a new dot leave its folder blank", () => {
+  it("lets a new sol leave its folder blank", () => {
     expect(Object.keys(specErrors(blankSpec, true)).sort()).toEqual(["instructions", "name"]);
   });
 
@@ -59,7 +59,7 @@ describe("dot editor rules", () => {
     }
   });
 
-  it("wants an http endpoint for a local dot only", () => {
+  it("wants an http endpoint for a local sol only", () => {
     const local = { ...good, engine: "local" as const };
     expect(specErrors({ ...local, endpoint_url: null }).endpoint_url).toMatch(/needs its/);
     expect(specErrors({ ...local, endpoint_url: "https://x" }).endpoint_url).toMatch(/https/);
@@ -83,7 +83,7 @@ describe("dot editor rules", () => {
     expect(specErrors({ ...good, policy }).policy).toBe("Every rule needs a tool pattern.");
   });
 
-  it("takes the editable fields of a stored dot, with the Library items it uses", () => {
+  it("takes the editable fields of a stored sol, with the Library items it uses", () => {
     const spec = specOf(sample.dot);
     expect(spec).not.toHaveProperty("id");
     expect(spec).not.toHaveProperty("has_webhook_token");
@@ -201,7 +201,7 @@ describe("schedule rules", () => {
 });
 
 describe("folderName", () => {
-  it("makes a folder name of a dot name as the core does", () => {
+  it("makes a folder name of a sol name as the core does", () => {
     expect(folderName("Downloads digest")).toBe("downloads-digest");
     expect(folderName("Résumé bot")).toBe("r-sum-bot");
     expect(folderName("日本")).toBe("dot");

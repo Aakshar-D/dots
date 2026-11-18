@@ -226,7 +226,7 @@ async fn scope_picks_a_visible_workspace() {
 }
 
 const WAITING: &str =
-    "Acme Engineering: you aren't on its member list yet. Send your Dots ID to an Admin.";
+    "Acme Engineering: you aren't on its member list yet. Send your Sage ID to an Admin.";
 
 /// A list at `seq` with both workspaces and only an owner who is not this PC.
 fn without_me(seq: u64) -> String {
@@ -329,8 +329,8 @@ async fn a_workspace_viewer_is_refused_in_the_core_s_words() {
     assert_eq!(
         views[1].refusals,
         Refusals {
-            edit: cant("create or change dots"),
-            run: cant("run dots"),
+            edit: cant("create or change sols"),
+            run: cant("run sols"),
             answer: cant("answer approvals"),
             create_api_keys: cant("create API keys"),
         }

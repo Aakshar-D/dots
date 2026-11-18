@@ -15,7 +15,7 @@ type Decision = { approved: boolean; allowRule: string | null };
 /// What a parked browser card says: an approval decided now does not perform the call
 /// (browser spec section 3.6).
 export const BROWSER_PARKED =
-  "The run stopped waiting. Approving now does not perform this action: the dot is told to take a snapshot and do it again if it is still right.";
+  "The run stopped waiting. Approving now does not perform this action: the sol is told to take a snapshot and do it again if it is still right.";
 
 /// A browser call that waits for the person (browser spec section 3.6): what the dot wants to
 /// do and where, then Allow once, Always allow on <site>, for a risky act Always allow risky
@@ -52,7 +52,7 @@ export function BrowserApprovalCard({
   // One decision per card, as on the tool card.
   const refusal = useRunRefusal(approval.run_id, "answer");
   const decided = decide.isPending || decide.isSuccess || refusal !== undefined;
-  const who = dotName ?? "The dot";
+  const who = dotName ?? "The sol";
   const choose = (decision: Decision) => onSingleClick(() => decide.mutate(decision));
   return (
     <article
@@ -80,7 +80,7 @@ export function BrowserApprovalCard({
       {ask.guarded && (
         <p className="text-xs text-muted-foreground">
           This may send or delete, so it always asks while "Always ask before sending or deleting"
-          is on for {dotName ?? "this dot"}.
+          is on for {dotName ?? "this sol"}.
         </p>
       )}
       {ask.dangerous && (

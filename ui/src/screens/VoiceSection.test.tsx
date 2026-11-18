@@ -33,6 +33,8 @@ function voice(status: VoiceStatus, stored: Settings = sample.settings) {
   backend.on("voice_status", () => now.status);
   backend.on("voice_devices", () => devices);
   backend.on("voice_preview", () => null);
+  backend.on("voice_setup", () => null);
+  backend.on("voice_memory", () => ({ learning: true, notes: [] }));
   backend.on("voice_download_cancel", () => null);
   backend.on("voice_enable", (args) => {
     now.settings = { ...now.settings, voice_enabled: args.on as boolean };
@@ -51,24 +53,24 @@ describe("Settings > Voice", () => {
   it("is off at first and explains the download", async () => {
     voice(sample.voiceOff);
     renderApp("/settings/voice");
-    const toggle = await screen.findByRole("switch", { name: "Open Dot" });
+    const toggle = await screen.findByRole("switch", { name: "Open Sage" });
     expect(toggle).not.toBeChecked();
-    expect(screen.getByText("Open Dot lets you talk to Dots and hear it answer.")).toBeVisible();
+    expect(screen.getByText("Open Sage lets you talk to Sage and hear it answer.")).toBeVisible();
     expect(
       screen.getByText(
         "Turning it on downloads about 260 MB of speech files once; they stay on this computer.",
       ),
     ).toBeVisible();
-    expect(screen.getByRole("status", { name: "Open Dot status" })).toHaveTextContent("Off");
+    expect(screen.getByRole("status", { name: "Open Sage status" })).toHaveTextContent("Off");
     // What needs the session waits for it; what only stores a value does not.
     expect(screen.getByRole("button", { name: "Play voice 1" })).toBeDisabled();
     expect(screen.getByLabelText("Microphone")).toBeDisabled();
     // Said beside the voices and beside the devices.
     expect(
-      screen.getAllByText("Turn Open Dot on to try the voices and choose devices."),
+      screen.getAllByText("Turn Open Sage on to try the voices and choose devices."),
     ).toHaveLength(2);
     expect(screen.getByLabelText("Hotkey")).toBeEnabled();
-    expect(screen.getByRole("switch", { name: "Hey Dot" })).toBeEnabled();
+    expect(screen.getByRole("switch", { name: "Hey Sage" })).toBeEnabled();
     expect(screen.getByLabelText("Which model thinks")).toBeEnabled();
     expect(screen.queryByRole("button", { name: "Remove speech files" })).toBeNull();
   });
@@ -79,7 +81,7 @@ describe("Settings > Voice", () => {
     backend.on("voice_enable", () => download.answer);
     const { user, listening } = renderApp("/settings/voice");
     await listening();
-    await user.click(await screen.findByRole("switch", { name: "Open Dot" }));
+    await user.click(await screen.findByRole("switch", { name: "Open Sage" }));
     expect(backend.callsTo("voice_enable")).toEqual([{ on: true }]);
     act(() =>
       backend.emit("voice", { kind: "download", done_bytes: 52_000_000, total_bytes: 258_000_000 }),
@@ -88,7 +90,7 @@ describe("Settings > Voice", () => {
     expect(bar).toHaveAttribute("aria-valuenow", "52000000");
     expect(bar).toHaveAttribute("aria-valuemax", "258000000");
     expect(screen.getByText("52 MB of 258 MB")).toBeVisible();
-    expect(screen.getByRole("status", { name: "Open Dot status" })).toHaveTextContent(
+    expect(screen.getByRole("status", { name: "Open Sage status" })).toHaveTextContent(
       "Getting ready",
     );
 
@@ -96,7 +98,7 @@ describe("Settings > Voice", () => {
     expect(backend.callsTo("voice_download_cancel")).toEqual([{}]);
     act(() => download.fail({ kind: "cancelled", message: "the download was cancelled" }));
     await waitFor(() => expect(screen.queryByRole("progressbar")).toBeNull());
-    expect(screen.getByRole("switch", { name: "Open Dot" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Open Sage" })).not.toBeChecked();
   });
 
   it("shows why turning on failed", async () => {
@@ -105,19 +107,19 @@ describe("Settings > Voice", () => {
       throw { kind: "internal", message: "The speech files could not be downloaded." };
     });
     const { user } = renderApp("/settings/voice");
-    await user.click(await screen.findByRole("switch", { name: "Open Dot" }));
+    await user.click(await screen.findByRole("switch", { name: "Open Sage" }));
     expect(await screen.findByText("The speech files could not be downloaded.")).toBeVisible();
-    expect(screen.getByRole("switch", { name: "Open Dot" })).not.toBeChecked();
+    expect(screen.getByRole("switch", { name: "Open Sage" })).not.toBeChecked();
   });
 
   it("stays on when another field is saved after turning on", async () => {
     voice(sample.voiceOff);
     const { user } = renderApp("/settings/voice");
-    await user.click(await screen.findByRole("switch", { name: "Open Dot" }));
-    await waitFor(() => expect(screen.getByRole("switch", { name: "Open Dot" })).toBeChecked());
+    await user.click(await screen.findByRole("switch", { name: "Open Sage" }));
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Open Sage" })).toBeChecked());
     // The switch acts at once: nothing waits for Save.
     expect(screen.queryByText("Unsaved changes")).toBeNull();
-    await user.click(screen.getByRole("switch", { name: "Hey Dot" }));
+    await user.click(screen.getByRole("switch", { name: "Hey Sage" }));
     expect(screen.getByText("Unsaved changes")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => expect(backend.callsTo("update_settings")).toHaveLength(1));
@@ -129,7 +131,7 @@ describe("Settings > Voice", () => {
   it("turns the listening tone off through the form", async () => {
     voice(ready, { ...sample.settings, voice_enabled: true, voice_tone: true });
     const { user } = renderApp("/settings/voice");
-    const tone = await screen.findByRole("switch", { name: "Play a tone when Dot starts listening" });
+    const tone = await screen.findByRole("switch", { name: "Play a tone when Sage starts listening" });
     expect(tone).toBeChecked();
     expect(tone).toBeEnabled();
     await user.click(tone);
@@ -144,8 +146,8 @@ describe("Settings > Voice", () => {
   it("shows the controls when ready, and plays a voice at the chosen speed", async () => {
     voice(ready, { ...sample.settings, voice_enabled: true });
     const { user } = renderApp("/settings/voice");
-    expect(await screen.findByRole("switch", { name: "Open Dot" })).toBeChecked();
-    const status = screen.getByRole("status", { name: "Open Dot status" });
+    expect(await screen.findByRole("switch", { name: "Open Sage" })).toBeChecked();
+    const status = screen.getByRole("status", { name: "Open Sage status" });
     expect(status).toHaveTextContent("Ready");
     expect(status).toHaveTextContent("Listening");
     const voices = screen.getByRole("radiogroup", { name: "Voice" });
@@ -162,14 +164,105 @@ describe("Settings > Voice", () => {
     expect(backend.callsTo("voice_preview")[1]).toEqual({ voice: 9, speed: 1.15 });
   });
 
+  it("turns running commands off with the rest of the form", async () => {
+    const now = voice(ready, { ...sample.settings, voice_enabled: true, open_dot_commands: true });
+    const { user } = renderApp("/settings/voice");
+    const commandsSwitch = await screen.findByRole("switch", {
+      name: "Let Sage run commands on this computer",
+    });
+    expect(commandsSwitch).toBeChecked();
+    await user.click(commandsSwitch);
+    expect(commandsSwitch).not.toBeChecked();
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(now.settings.open_dot_commands).toBe(false));
+  });
+
+  it("shows what Sage has learned, removes a note, forgets all and turns learning off", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true });
+    let known = { learning: true, notes: ["Prefers answers in one sentence.", "Calls the research sol Scout."] };
+    backend.on("voice_memory", () => known);
+    backend.on("voice_memory_forget", (args) => {
+      const { index, note } = args as { index: number; note: string };
+      if (known.notes[index] === note) known = { ...known, notes: known.notes.filter((_, i) => i !== index) };
+      return known;
+    });
+    backend.on("voice_memory_clear", () => (known = { ...known, notes: [] }));
+    backend.on("voice_memory_learning", (args) => (known = { ...known, learning: (args as { on: boolean }).on }));
+    const { user } = renderApp("/settings/voice");
+    const list = await screen.findByRole("list", { name: "What Sage has learned" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Forget: Prefers answers in one sentence." }));
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(1));
+    expect(backend.callsTo("voice_memory_forget")).toEqual([
+      { index: 0, note: "Prefers answers in one sentence." },
+    ]);
+    const learning = screen.getByRole("switch", { name: "Learn how I talk and what I need" });
+    expect(learning.getAttribute("aria-checked")).toBe("true");
+    await user.click(learning);
+    await waitFor(() => expect(learning.getAttribute("aria-checked")).toBe("false"));
+    expect(backend.callsTo("voice_memory_learning")).toEqual([{ on: false }]);
+    await user.click(screen.getByRole("button", { name: "Forget everything" }));
+    await user.click(await screen.findByRole("button", { name: "Forget" }));
+    expect(await screen.findByText("Nothing learned yet.")).toBeTruthy();
+    expect(backend.callsTo("voice_memory_clear")).toHaveLength(1);
+  });
+
+  it("teaches Sage the voice: names each take, then says what it found", async () => {
+    voice(ready, { ...sample.settings, voice_enabled: true, voice_wake_phrase: true });
+    const run = later<unknown>();
+    backend.on("voice_setup_run", () => run.answer);
+    const { user } = renderApp("/settings/voice");
+    const teach = await screen.findByRole("button", { name: "Teach Sage your voice" });
+    await user.click(teach);
+    expect(teach).toBeDisabled();
+    expect(await screen.findByText("Get ready…")).toBeVisible();
+    act(() => backend.emit("voice", { kind: "setting_up", take: 2, of: 5 }));
+    expect(await screen.findByText('Say "Hey Sage" now (2 of 5)')).toBeVisible();
+    // The recording is over: nobody is told to speak to a closed microphone.
+    act(() => backend.emit("voice", { kind: "setting_up", take: 0, of: 5 }));
+    expect(await screen.findByText("Working it out… No need to speak now.")).toBeVisible();
+    const found = {
+      takes: 5,
+      heard: 4,
+      faint: false,
+      message: "Sage heard you 4 times out of 5 and is set up for your voice.",
+    };
+    await act(async () => run.give(found));
+    expect(await screen.findByText(found.message)).toBeVisible();
+    expect(screen.getByText("Done. Your voice setup is saved and in use now.")).toBeVisible();
+    expect(screen.queryByText(/now \(2 of 5\)/)).toBeNull();
+    // Done once, the button offers to do it again.
+    expect(
+      await screen.findByRole("button", { name: "Teach Sage your voice again" }),
+    ).toBeEnabled();
+  });
+
+  it("offers the voice setup only with Hey Sage on, and shows the one done before", async () => {
+    const now = voice(ready, { ...sample.settings, voice_enabled: true });
+    backend.on("voice_setup", () => ({
+      takes: 5,
+      heard: 5,
+      faint: true,
+      message: "Sage heard you 5 times out of 5 and is set up for your voice.",
+    }));
+    renderApp("/settings/voice");
+    const teach = await screen.findByRole("button", { name: "Teach Sage your voice again" });
+    expect(teach).toBeDisabled();
+    expect(screen.getByText("Turn on Hey Sage and save, then teach Sage your voice.")).toBeVisible();
+    expect(
+      screen.getByText("Sage heard you 5 times out of 5 and is set up for your voice."),
+    ).toBeVisible();
+    expect(now.settings.voice_wake_phrase).toBe(false);
+  });
+
   it("says why a preview could not play", async () => {
     voice(ready, { ...sample.settings, voice_enabled: true });
     backend.on("voice_preview", () => {
-      throw { kind: "internal", message: "Open Dot is not ready yet." };
+      throw { kind: "internal", message: "Open Sage is not ready yet." };
     });
     const { user } = renderApp("/settings/voice");
     await user.click(await screen.findByRole("button", { name: "Play voice 2" }));
-    expect(await screen.findByText("Open Dot is not ready yet.")).toBeVisible();
+    expect(await screen.findByText("Open Sage is not ready yet.")).toBeVisible();
   });
 
   it("shows the hotkey's error, and Clear empties the hotkey", async () => {
@@ -228,7 +321,7 @@ describe("Settings > Voice", () => {
     await user.click(within(dialog).getByRole("button", { name: "Remove" }));
     await waitFor(() => expect(backend.callsTo("voice_remove")).toEqual([{}]));
     await waitFor(() =>
-      expect(screen.getByRole("switch", { name: "Open Dot" })).not.toBeChecked(),
+      expect(screen.getByRole("switch", { name: "Open Sage" })).not.toBeChecked(),
     );
   });
 
@@ -236,7 +329,7 @@ describe("Settings > Voice", () => {
     voice({ ...sample.voiceOff, enabled: false, downloading: true, download_bytes: 258_000_000 });
     const { user, listening } = renderApp("/settings/voice");
     await listening();
-    const toggle = await screen.findByRole("switch", { name: "Open Dot" });
+    const toggle = await screen.findByRole("switch", { name: "Open Sage" });
     expect(toggle).toBeChecked();
     expect(toggle).toHaveAttribute("aria-disabled", "true");
     const bar = await screen.findByRole("progressbar", { name: "Speech files downloaded" });
@@ -260,7 +353,7 @@ describe("Settings > Voice", () => {
     await user.click(await screen.findByRole("button", { name: "Cancel download" }));
     act(() => backend.emit("voice", { kind: "status", status: ready }));
     await waitFor(() => expect(screen.queryByRole("progressbar")).toBeNull());
-    expect(screen.getByRole("switch", { name: "Open Dot" })).toHaveFocus();
+    expect(screen.getByRole("switch", { name: "Open Sage" })).toHaveFocus();
   });
 
   it("shows a saved device as a saved device until the list has loaded", async () => {
@@ -302,11 +395,11 @@ describe("Settings > Voice", () => {
     await listening();
     await screen.findByText("Ready");
     act(() => backend.emit("voice", { kind: "trouble", message: "No microphone found." }));
-    expect(screen.getByRole("status", { name: "Open Dot status" })).toHaveTextContent(
+    expect(screen.getByRole("status", { name: "Open Sage status" })).toHaveTextContent(
       "No microphone found.",
     );
     act(() => backend.emit("voice", { kind: "state", state: "listening", mic_open: true }));
-    expect(screen.getByRole("status", { name: "Open Dot status" })).toHaveTextContent("Ready");
+    expect(screen.getByRole("status", { name: "Open Sage status" })).toHaveTextContent("Ready");
   });
 
   it("asks for the voice status again after a save, so a fixed hotkey clears its error", async () => {
@@ -328,11 +421,11 @@ describe("Settings > Voice", () => {
     voice(sample.voiceOff);
     const { listening } = renderApp("/settings/voice");
     await listening();
-    await screen.findByRole("switch", { name: "Open Dot" });
+    await screen.findByRole("switch", { name: "Open Sage" });
     const asked = backend.callsTo("voice_status").length;
     act(() => backend.emit("voice", { kind: "status", status: ready }));
-    await waitFor(() => expect(screen.getByRole("switch", { name: "Open Dot" })).toBeChecked());
-    expect(screen.getByRole("status", { name: "Open Dot status" })).toHaveTextContent("Ready");
+    await waitFor(() => expect(screen.getByRole("switch", { name: "Open Sage" })).toBeChecked());
+    expect(screen.getByRole("status", { name: "Open Sage status" })).toHaveTextContent("Ready");
     expect(backend.callsTo("voice_status")).toHaveLength(asked);
   });
 });
@@ -364,7 +457,7 @@ describe("VoiceSection", () => {
     // The listener attaches a moment after mount: a state event shows when it has.
     await waitFor(() => {
       backend.emit("voice", { kind: "state", state: "listening", mic_open: false });
-      expect(screen.getByRole("status", { name: "Open Dot status" })).not.toHaveTextContent(
+      expect(screen.getByRole("status", { name: "Open Sage status" })).not.toHaveTextContent(
         "Listening",
       );
     });

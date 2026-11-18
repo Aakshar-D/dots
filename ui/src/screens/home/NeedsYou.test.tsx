@@ -19,7 +19,7 @@ const row = (name: string, h: number, needs_you: number, unread: number): DotOve
   unread,
 });
 
-const column = () => screen.getByRole("navigation", { name: "Dots" });
+const column = () => screen.getByRole("navigation", { name: "Sols" });
 const item = (name: string) => within(column()).getByRole("listitem", { name });
 const order = () =>
   within(column())
@@ -27,7 +27,7 @@ const order = () =>
     .map((li) => li.getAttribute("aria-label"));
 
 describe("what needs the person, on the home", () => {
-  it("counts what is unread on each dot, in the waiting colour when it needs the person", async () => {
+  it("counts what is unread on each sol, in the waiting colour when it needs the person", async () => {
     backend.on("dot_overview", () => [
       row("asker", 9, 1, 3),
       row("reporter", 10, 0, 2),
@@ -42,7 +42,7 @@ describe("what needs the person, on the home", () => {
     expect(within(item("quiet")).queryByText(/unread/)).toBeNull();
   });
 
-  it("puts the dots that need the person first, then the newest activity", async () => {
+  it("puts the sols that need the person first, then the newest activity", async () => {
     backend.on("dot_overview", () => [
       row("newest", 11, 0, 4),
       row("older", 9, 2, 2),
@@ -70,7 +70,7 @@ describe("what needs the person, on the home", () => {
     expect(within(many).getByText("99+")).toBeVisible();
   });
 
-  it("counts again when a dot was seen", async () => {
+  it("counts again when a sol was seen", async () => {
     backend.on("dot_overview", () => [row("asker", 9, 1, 3)]);
     backend.on("unread_total", () => 3);
     const { listening } = renderApp("/home/dot-asker");
@@ -84,7 +84,7 @@ describe("what needs the person, on the home", () => {
     expect(await screen.findByRole("link", { name: "Home, 1 unread" })).toBeVisible();
   });
 
-  it("marks the counts stale when a dot was seen, an approval moved or a message came", () => {
+  it("marks the counts stale when a sol was seen, an approval moved or a message came", () => {
     const qc = createQueryClient();
     const counts = [keys.overview, keys.unreadTotal];
     const events: RuntimeEvent[] = [

@@ -15,9 +15,10 @@ use dots_core::open_dot::picture::View;
 use dots_core::settings::Settings;
 use dots_core::Runtime;
 use dots_voice::{
-    CpalMic, CpalSink, EarSettings, Ears, EngineError, Manifest, Mic, ModelError, ModelPaths,
-    Parts, Recognizer, Session, SessionEvent, SessionSettings, SherpaDetector, SherpaRecognizer,
-    SherpaSpeaker, SherpaWake, Sink, Speaker, State, Voice, WakeSpotter, WakeWord,
+    Calibration, CpalMic, CpalSink, EarSettings, Ears, EngineError, Manifest, Mic, MicFrame,
+    ModelError, ModelPaths, Parts, Recognizer, Session, SessionEvent, SessionSettings,
+    SherpaDetector, SherpaRecognizer, SherpaSpeaker, SherpaWake, Sink, Speaker, State, Voice,
+    WakeSpotter, WakeText, WakeTuning, WakeWord, TAKES, TAKE_FRAMES,
 };
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 use tokio::sync::watch;
@@ -25,20 +26,27 @@ use tokio_util::sync::CancellationToken;
 
 use super::bridge::{Bridge, MindPort, SessionPort};
 use super::download;
-use super::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceStatus};
+use super::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceSetup, VoiceStatus};
 use super::notices::{Needs, Notices, WaitKind, Waiting};
 use crate::error::CmdError;
 
 /// Said once after the first install, and by the voice preview.
-pub const GREETING: &str = "Hi, I'm Dot.";
-pub const OFF: &str = "Open Dot is off. Turn it on in Settings, under Voice.";
-pub const GETTING_READY: &str = "Open Dot is still getting ready.";
+pub const GREETING: &str = "Hi, I'm Sage.";
+pub const OFF: &str = "Open Sage is off. Turn it on in Settings, under Voice.";
+pub const GETTING_READY: &str = "Open Sage is still getting ready.";
 pub const NOT_READY: &str =
-    "Open Dot is not ready yet. Turn it on in Settings, under Voice, and wait until it is ready.";
-pub const IN_USE: &str = "The speech files are in use. Close Dots and try again.";
+    "Open Sage is not ready yet. Turn it on in Settings, under Voice, and wait until it is ready.";
+/// Sage is on but in the middle of something: listening, thinking or speaking.
+pub const BUSY: &str = "Sage is busy just now. Try again when it has finished.";
+pub const IN_USE: &str = "The speech files are in use. Close Sage and try again.";
 pub const MODELS_BROKEN: &str = "The speech files could not be loaded. Remove them in Settings, \
-     under Voice, and turn Open Dot on again.";
+     under Voice, and turn Open Sage on again.";
 pub const NO_SPEAKER: &str = "The speaker could not be opened. Check your sound settings.";
+pub const NO_MIC: &str =
+    "The microphone could not be opened. Check that one is connected and that Sage may use it.";
+pub const SETUP_BUSY: &str = "Sage is already listening to your voice. Wait until it has finished.";
+/// The name of the file a voice setup is kept in, beside the folder of the speech files.
+const SETUP_FILE: &str = "voice-setup.json";
 
 /// How long `shutdown` waits for the session to let go of its devices.
 const SHUTDOWN_WAIT: Duration = Duration::from_millis(500);
@@ -76,6 +84,12 @@ pub struct BuildSpec {
     pub settings: SessionSettings,
     pub voice: u8,
     pub speed: f32,
+    /// How readily "Hey Sage" is taken for said, and how loud the voice of the person is
+    /// at the microphone: from their voice setup, when they did one.
+    pub tuning: WakeTuning,
+    pub level: Option<f32>,
+    /// What that setup heard their "Hey Sage" as, when not as that: these words wake too.
+    pub phrases: Vec<String>,
 }
 
 /// A built session and its events.
@@ -90,6 +104,13 @@ pub trait SessionFactory: Send + Sync + 'static {
     /// asked just before the session starts (and the microphone may open): `Ok(None)` when
     /// it is no longer wanted (voice turned off, devices changed, Dots quitting).
     fn build(&self, spec: &BuildSpec, wanted: &dyn Fn() -> bool) -> Result<Option<Built>, String>;
+    /// Blocking: records `TAKES` takes of the person saying the wake phrase from the
+    /// microphone of `spec` (`on_take` is told as each begins, from 1) and finds the tuning
+    /// for their voice. No session may hold the microphone meanwhile. A failure is a
+    /// sentence for people.
+    fn setup(&self, _spec: &BuildSpec, _on_take: &dyn Fn(u8)) -> Result<Calibration, String> {
+        Err(MODELS_BROKEN.to_string())
+    }
     fn microphones(&self) -> Vec<VoiceDevice>;
     fn speakers(&self) -> Vec<VoiceDevice>;
 }
@@ -133,6 +154,7 @@ pub fn session_settings(s: &Settings) -> SessionSettings {
         follow_up_secs: 6,
         reopen_after_ms: 250,
         tone: s.voice_tone,
+        carry_on_ms: 2_500,
     }
 }
 
@@ -212,6 +234,10 @@ struct Inner {
     installed: bool,
     /// Dots is quitting or restarting: a download that ends now changes nothing.
     shutting_down: bool,
+    /// The voice setup the person did, if any: read at the start.
+    setup: Option<Calibration>,
+    /// A voice setup is recording: it holds the microphone, so no session is built.
+    setting_up: bool,
 }
 
 pub struct Service {
@@ -254,9 +280,38 @@ const VIEW_TOO_LONG: &str = "That view is too long.";
 const NO_SUCH_VOICE: &str = "Pick one of the ten voices.";
 const BAD_SPEED: &str = "Speaking speed must be between 0.8 and 1.4.";
 
-/// The same microphone and speaker: a session built for one serves the other.
+/// The same microphone and speaker, and the same voice setup: a session built for one
+/// serves the other.
 fn same_devices(a: &BuildSpec, b: &BuildSpec) -> bool {
-    a.mic == b.mic && a.speaker == b.speaker
+    a.mic == b.mic
+        && a.speaker == b.speaker
+        && a.tuning == b.tuning
+        && a.level == b.level
+        && a.phrases == b.phrases
+}
+
+/// What a voice setup found, in words for the person.
+pub(super) fn setup_message(found: &Calibration) -> String {
+    let (heard, takes) = (found.heard, found.takes);
+    let faint = if found.faint() {
+        " Your voice reaches the microphone faintly: nearer to it, or with a headset, Sage will hear you better."
+    } else {
+        ""
+    };
+    if heard == 0 {
+        return format!(
+            "Sage did not hear \"Hey Sage\" in any of the {takes} tries, so nothing was changed. \
+             Check the microphone, move closer to it and try again."
+        );
+    }
+    if u32::from(heard) * 5 >= u32::from(takes) * 4 {
+        format!("Sage heard you {heard} times out of {takes} and is set up for your voice.{faint}")
+    } else {
+        format!(
+            "Sage heard you only {heard} times out of {takes}. Try again a little closer to \
+             the microphone, saying it the same way each time.{faint}"
+        )
+    }
 }
 
 /// A microphone or speaker failure the session reported: kept in the status until the
@@ -275,6 +330,7 @@ impl Service {
         ui: UnboundedSender<VoiceEvent>,
     ) -> Arc<Service> {
         let installed = dots_voice::installed(&root, &manifest);
+        let setup = Self::read_setup(&root);
         Arc::new_cyclic(|me| Service {
             me: me.clone(),
             host,
@@ -296,6 +352,8 @@ impl Service {
                 last_sent: None,
                 installed,
                 shutting_down: false,
+                setup,
+                setting_up: false,
             }),
             state_tx: watch::channel((0, State::Off)).0,
             hotkey_port: Mutex::new(None),
@@ -586,7 +644,7 @@ impl Service {
         s.gen == gen
             && s.settings.voice_enabled
             && !s.shutting_down
-            && same_devices(&self.spec_of(&s.settings), spec)
+            && same_devices(&self.spec_of(&s.settings, s.setup.as_ref()), spec)
     }
 
     /// Brings what runs in line with the settings: builds the session when voice is on, the
@@ -613,9 +671,10 @@ impl Service {
         loop {
             let step = {
                 let mut s = self.lock();
-                let wanted = self.spec_of(&s.settings);
+                let wanted = self.spec_of(&s.settings, s.setup.as_ref());
                 let on = s.settings.voice_enabled
                     && !s.shutting_down
+                    && !s.setting_up
                     && s.download.is_none()
                     && s.installed;
                 let step = if !on {
@@ -733,7 +792,7 @@ impl Service {
         }
     }
 
-    fn spec_of(&self, s: &Settings) -> BuildSpec {
+    fn spec_of(&self, s: &Settings, setup: Option<&Calibration>) -> BuildSpec {
         BuildSpec {
             root: self.root.clone(),
             mic: s.voice_mic.clone(),
@@ -741,7 +800,90 @@ impl Service {
             settings: session_settings(s),
             voice: s.voice_id,
             speed: s.voice_speed,
+            tuning: setup.map(|c| c.tuning).unwrap_or_default(),
+            level: setup.and_then(|c| c.level),
+            phrases: setup.map(|c| c.phrases.clone()).unwrap_or_default(),
         }
+    }
+
+    /// Where a voice setup is kept: beside the folder of the speech files, so removing the
+    /// files leaves it.
+    fn setup_path(root: &std::path::Path) -> PathBuf {
+        root.parent().unwrap_or(root).join(SETUP_FILE)
+    }
+
+    fn read_setup(root: &std::path::Path) -> Option<Calibration> {
+        let text = std::fs::read_to_string(Self::setup_path(root)).ok()?;
+        serde_json::from_str::<Calibration>(&text)
+            .ok()
+            .filter(Calibration::usable)
+    }
+
+    /// The voice setup the person did, in words; `None` when they did none.
+    pub fn setup(&self) -> Option<VoiceSetup> {
+        self.lock().setup.as_ref().map(VoiceSetup::of)
+    }
+
+    /// Listens to the person say "Hey Sage" `TAKES` times and sets the wake phrase up for
+    /// their voice. The session lets go of the microphone for it and is built again after,
+    /// with what was found. A setup that heard nothing changes nothing.
+    pub async fn set_up(&self) -> Result<VoiceSetup, CmdError> {
+        let spec = {
+            let mut s = self.lock();
+            let ready = s.settings.voice_enabled && s.installed && s.live.is_some();
+            if !ready {
+                return Err(CmdError::invalid(NOT_READY));
+            }
+            if s.state != State::Idle {
+                return Err(CmdError::invalid(BUSY));
+            }
+            if s.setting_up {
+                return Err(CmdError::invalid(SETUP_BUSY));
+            }
+            s.setting_up = true;
+            self.spec_of(&s.settings, s.setup.as_ref())
+        };
+        if let Some(live) = self.take_live() {
+            Self::stop_live(live).ended(END_WAIT).await;
+        }
+        self.changed();
+        let (factory, ui) = (self.factory.clone(), self.ui.clone());
+        let found = tauri::async_runtime::spawn_blocking(move || {
+            factory.setup(&spec, &|take| {
+                let _ = ui.send(VoiceEvent::SettingUp { take, of: TAKES });
+            })
+        })
+        .await
+        .unwrap_or_else(|_| Err(MODELS_BROKEN.to_string()));
+        let result = match found {
+            Ok(found) => {
+                // The counts only: the words learned for the phrase are never logged.
+                tracing::info!(
+                    "voice: setup heard {} of {} takes ({} by their words, {} phrases learned), \
+                     tuning {:?}",
+                    found.heard,
+                    found.takes,
+                    found.by_text,
+                    found.phrases.len(),
+                    found.tuning
+                );
+                let told = VoiceSetup::of(&found);
+                if found.usable() {
+                    if let Ok(json) = serde_json::to_string(&found) {
+                        if let Err(e) = std::fs::write(Self::setup_path(&self.root), json) {
+                            tracing::warn!("voice: the voice setup could not be saved: {e}");
+                        }
+                    }
+                    self.lock().setup = Some(found);
+                }
+                Ok(told)
+            }
+            Err(message) => Err(CmdError::invalid(message)),
+        };
+        self.lock().setting_up = false;
+        self.settle(false).await;
+        self.changed();
+        result
     }
 
     /// One task takes the session's events in order: the status follows its state, and the
@@ -1033,7 +1175,8 @@ impl Service {
             let s = self.lock();
             match &s.live {
                 Some(l) if s.state == State::Idle => l.session.clone(),
-                _ => return Err(CmdError::invalid(NOT_READY)),
+                Some(_) => return Err(CmdError::invalid(BUSY)),
+                None => return Err(CmdError::invalid(NOT_READY)),
             }
         };
         let mut states = self.state_tx.subscribe();
@@ -1099,7 +1242,7 @@ impl Service {
             if !settings.voice_enabled || !settings.voice_notices {
                 self.clear_notices();
             }
-            let wanted = self.spec_of(settings);
+            let wanted = self.spec_of(settings, s.setup.as_ref());
             if let Some(l) = s.live.as_mut().filter(|l| same_devices(&l.spec, &wanted)) {
                 if l.spec.voice != wanted.voice || l.spec.speed != wanted.speed {
                     l.session.set_voice(wanted.voice, wanted.speed);
@@ -1381,14 +1524,27 @@ impl SessionFactory for RealFactory {
         );
         let short_ears = Ears::new(
             Box::new(SherpaDetector::load(&paths).map_err(broken)?),
-            recognizer,
+            recognizer.clone(),
             EarSettings::short_answer(),
         );
+        // What is said while resting is read for "Hey Sage" too, by the recogniser the ears
+        // use: it knows the phrase from many more voices than the spotter does. For
+        // everyone, with a voice setup or without; the setup adds the words it learned.
+        let wake_text = if paths.wake_dir().is_dir() {
+            Some(WakeText {
+                detector: Box::new(SherpaDetector::load(&paths).map_err(broken)?),
+                recognizer,
+                phrases: spec.phrases.clone(),
+            })
+        } else {
+            None
+        };
         // Loaded only once "Hey Dot" is on and the spotter is first fed.
         let wake: Option<Box<dyn WakeSpotter>> = paths.wake_dir().is_dir().then(|| {
             let paths = paths.clone();
+            let tuning = spec.tuning;
             Box::new(LazyWake::new(move || {
-                SherpaWake::load(&paths)
+                SherpaWake::load_tuned(&paths, tuning)
                     .ok()
                     .map(|w| Box::new(w) as Box<dyn WakeSpotter>)
             })) as Box<dyn WakeSpotter>
@@ -1407,6 +1563,7 @@ impl SessionFactory for RealFactory {
             sink,
             open_sink: Box::new(move || open_sink(out.as_deref())),
             wake,
+            wake_text,
             open_mic: Box::new(move || open_mic(mic.as_deref())),
         };
         if !wanted() {
@@ -1415,10 +1572,78 @@ impl SessionFactory for RealFactory {
         let (events_tx, events) = unbounded_channel();
         let session = Session::start(parts, spec.settings, events_tx);
         session.set_voice(spec.voice, spec.speed);
+        if let Some(level) = spec.level {
+            session.set_voice_level(level);
+        }
         Ok(Some(Built {
             session: Arc::new(session),
             events,
         }))
+    }
+
+    fn setup(&self, spec: &BuildSpec, on_take: &dyn Fn(u8)) -> Result<Calibration, String> {
+        let paths = ModelPaths {
+            root: spec.root.clone(),
+        };
+        let mut mic = (self.open_mic)(spec.mic.as_deref()).map_err(|_| NO_MIC.to_string())?;
+        let frames = mic.frames();
+        let mut takes = Vec::new();
+        for take in 1..=TAKES {
+            // What came in while the person was told to speak is not part of the take.
+            while frames.try_recv().is_ok() {}
+            on_take(take);
+            let mut heard = Vec::with_capacity(TAKE_FRAMES);
+            while heard.len() < TAKE_FRAMES {
+                match frames.recv_timeout(Duration::from_secs(2)) {
+                    Ok(MicFrame::Audio(frame)) => heard.push(frame),
+                    _ => return Err(NO_MIC.to_string()),
+                }
+            }
+            takes.push(heard);
+        }
+        drop(mic);
+        // Take 0: the recording is over and the takes are being worked out. The microphone
+        // is closed, so the person must not be told to speak any more.
+        on_take(0);
+        let level = dots_voice::voice_level(&takes);
+        tracing::info!(
+            "voice: setup recorded {} takes, voice level {level:?}",
+            takes.len()
+        );
+        // The takes as the recogniser writes them, heard as a resting session hears: what
+        // it wrote is looked at for the phrase and dropped, never logged. The recogniser is
+        // let go before the spotters are loaded.
+        let texts = {
+            let broken = |_| MODELS_BROKEN.to_string();
+            let recognizer = SherpaRecognizer::load(&paths).map_err(broken)?;
+            let detector = SherpaDetector::load(&paths).map_err(broken)?;
+            dots_voice::take_texts(Box::new(detector), &recognizer, &takes, level)
+        };
+        let mut spotters = Vec::new();
+        for tuning in WakeTuning::STRICTEST_FIRST {
+            let wake =
+                SherpaWake::load_tuned(&paths, tuning).map_err(|_| MODELS_BROKEN.to_string())?;
+            spotters.push((tuning, wake));
+        }
+        let spotted = dots_voice::calibrate(&takes, |tuning| {
+            spotters
+                .iter_mut()
+                .find(|(t, _)| *t == tuning)
+                .map_or(0, |(_, wake)| {
+                    let heard = dots_voice::heard_times(wake, &takes, level);
+                    // Each tuning's count: a poor run can then be told from a poor pick.
+                    tracing::info!("voice: setup at {tuning:?} heard {heard}");
+                    heard
+                })
+        });
+        let found = spotted.with_words(&texts);
+        // Counts only: how many takes their words catch, and how many phrases were learned.
+        tracing::info!(
+            "voice: setup by the words heard {}, learned {} phrases",
+            found.by_text,
+            found.phrases.len()
+        );
+        Ok(found)
     }
 
     fn microphones(&self) -> Vec<VoiceDevice> {
@@ -1500,6 +1725,10 @@ impl MindPort for RuntimeMind {
     }
     fn input_arrived(&self) {
         self.0.open_dot().input_arrived();
+    }
+
+    fn warm(&self) {
+        self.0.open_dot().warm();
     }
 }
 

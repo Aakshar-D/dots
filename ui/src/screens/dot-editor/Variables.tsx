@@ -213,7 +213,7 @@ export function Variables(props: {
       <div role="group" aria-label="Shell" className="flex flex-col gap-1">
         <span className="text-sm font-medium">Shell</span>
         <p className="text-xs text-muted-foreground">
-          Set in the agent's own environment, where its shell commands run. The agent can read
+          Set in the sol's own environment, where its shell commands run. The sol can read
           these values and could send them anywhere its tools reach.
         </p>
         {shell.map((name) => (

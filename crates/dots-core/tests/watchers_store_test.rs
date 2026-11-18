@@ -109,10 +109,10 @@ async fn watchers_are_added_listed_changed_and_deleted_and_go_with_their_dot() {
     let labelled = WatcherConfig::Email(labelled);
     tick().await;
     let b2 = store
-        .update_watcher(&b.id, "Dots mail", &labelled, None)
+        .update_watcher(&b.id, "Sage mail", &labelled, None)
         .await
         .unwrap();
-    assert_eq!((b2.name.as_str(), &b2.config), ("Dots mail", &labelled));
+    assert_eq!((b2.name.as_str(), &b2.config), ("Sage mail", &labelled));
     assert!(b2.updated_at > b.updated_at);
     assert_eq!(store.get_watcher_cursor(&b.id).await.unwrap(), None);
     // A new name alone keeps it.

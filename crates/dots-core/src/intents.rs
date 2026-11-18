@@ -12,8 +12,8 @@ pub const MAX_TEXT: usize = 500;
 
 pub const TEXT_RULE: &str = "A goal needs between 1 and 500 characters.";
 pub const BAD_DATE: &str = "A due date must be a real calendar date, like 2026-11-05.";
-pub const NO_DOT: &str = "That dot no longer exists. Pick another one.";
-pub const OTHER_WORKSPACE: &str = "That dot is in another workspace. Pick one from this workspace.";
+pub const NO_DOT: &str = "That sol no longer exists. Pick another one.";
+pub const OTHER_WORKSPACE: &str = "That sol is in another workspace. Pick one from this workspace.";
 pub const GONE: &str = "That goal no longer exists.";
 
 /// What the person writes for a goal, on create and on every change: a change replaces all

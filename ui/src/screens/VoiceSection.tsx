@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Play } from "lucide-react";
+import { Play, X } from "lucide-react";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
-import type { Settings, VoiceDevice, VoiceStatus } from "@/api/types";
+import type { Settings, VoiceDevice, VoiceMemory, VoiceSetup, VoiceStatus } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
@@ -14,7 +14,7 @@ import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
-import { takeVoiceStatus, useVoiceLive, useVoiceStatus } from "@/lib/use-voice";
+import { takeVoiceStatus, useVoiceLive, useVoiceStatus, voiceStore } from "@/lib/use-voice";
 import { shortcutLabel } from "@/open-dot/RailMark";
 
 function Section(props: { title: string; children: ReactNode }) {
@@ -169,6 +169,179 @@ function Download(props: { totalBytes: number; onGone: () => void }) {
 /// Settings > Voice: Open Dot, the voice assistant. The switch, the download, previews and
 /// removing the files act at once; the rest is part of the Settings form (`draft`, `set`).
 /// `voice_enabled` is the core's to save (`voice_enable`), so the form never sends its own.
+/// Teaches Sage the person's voice: they say "Hey Sage" five times, and Sage sets the wake
+/// phrase up for how they sound at their microphone. Shows the take being recorded, then
+/// what was found; the last result stays until the next setup.
+function VoiceSetupBlock({ ready, wake }: { ready: boolean; wake: boolean }) {
+  const qc = useQueryClient();
+  const saved = useQuery({
+    queryKey: keys.voiceSetup,
+    queryFn: commands.voiceSetup,
+    enabled: ready,
+  });
+  const take = useVoiceLive((live) => live.settingUp);
+  // The setup uses the settings as saved, not the form: "Hey Sage" must be on and saved.
+  const stored = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
+  const wakeSaved = wake && (stored?.voice_wake_phrase ?? false);
+  const run = useMutation({
+    mutationFn: commands.voiceSetupRun,
+    onSuccess: (found: VoiceSetup) => {
+      // A setup that heard nothing changed nothing: the one before it still holds.
+      if (found.heard > 0) qc.setQueryData(keys.voiceSetup, found);
+    },
+    onError: notifyError,
+    onSettled: () => voiceStore.set({ settingUp: null }),
+  });
+  const found = run.data ?? saved.data ?? null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={!ready || !wakeSaved || run.isPending}
+          onClick={() => run.mutate()}
+        >
+          {saved.data ? "Teach Sage your voice again" : "Teach Sage your voice"}
+        </Button>
+        {run.isPending && (
+          <p role="status" className="text-sm font-medium">
+            {!take
+              ? "Get ready…"
+              : take.take === 0
+                ? "Working it out… No need to speak now."
+                : `Say "Hey Sage" now (${take.take} of ${take.of})`}
+          </p>
+        )}
+      </div>
+      {ready && !wakeSaved && (
+        <p data-voice-setup-why="" className="text-xs text-muted-foreground">
+          Turn on Hey Sage and save, then teach Sage your voice.
+        </p>
+      )}
+      {!run.isPending && run.data && (
+        <p role="status" data-voice-setup-done="" className="text-sm font-medium">
+          {run.data.heard > 0
+            ? "Done. Your voice setup is saved and in use now."
+            : "Not saved. The setup before this one, if any, still holds."}
+        </p>
+      )}
+      {!run.isPending && !run.data && saved.data && (
+        <p data-voice-setup-saved="" className="text-sm font-medium">
+          Your voice setup is saved and in use.
+        </p>
+      )}
+      {!run.isPending && found && (
+        <p data-voice-setup="" className="text-xs text-muted-foreground">
+          {found.message}
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Say "Hey Sage" five times, about three seconds apart, from where you usually sit. Sage
+        sets itself up for your voice and tells you how well it hears you. It takes about 20
+        seconds, and no recording is kept.
+      </p>
+    </div>
+  );
+}
+
+/// What Sage has learned about the person from talking with them: the notes it keeps, each
+/// with a way to remove it, a way to forget them all, and the switch that turns the learning
+/// off. Everything here acts at once.
+function LearnedBlock() {
+  const qc = useQueryClient();
+  const memory = useQuery({
+    queryKey: keys.voiceMemory,
+    queryFn: commands.voiceMemory,
+    // It changes while the person talks to Sage, with no event to say so.
+    staleTime: 0,
+  });
+  const took = (next: VoiceMemory) => qc.setQueryData(keys.voiceMemory, next);
+  const learning = useMutation({
+    mutationFn: commands.voiceMemoryLearning,
+    onSuccess: took,
+    onError: notifyError,
+  });
+  const forget = useMutation({
+    mutationFn: (at: { index: number; note: string }) => commands.voiceMemoryForget(at.index, at.note),
+    onSuccess: took,
+    onError: notifyError,
+  });
+  const clear = useMutation({
+    mutationFn: commands.voiceMemoryClear,
+    onSuccess: (next) => {
+      took(next);
+      toast.success("Forgotten");
+    },
+    onError: notifyError,
+  });
+  const m = memory.data;
+  const busy = !m || learning.isPending || forget.isPending || clear.isPending;
+  return (
+    <>
+      {m && (
+        <div className="flex items-center gap-2">
+          <Switch
+            id="settings-voice-learning"
+            checked={m.learning}
+            aria-disabled={busy}
+            onCheckedChange={(on) => {
+              if (!busy) learning.mutate(on);
+            }}
+          />
+          <Label htmlFor="settings-voice-learning">Learn how I talk and what I need</Label>
+        </div>
+      )}
+      {memory.isError && (
+        <p role="alert" className="text-xs text-destructive">
+          What Sage has learned could not be read.
+        </p>
+      )}
+      <p className="text-xs text-muted-foreground">
+        Sage keeps short notes about how you like to be answered and what you ask for most, and uses them
+        in later conversations. They stay on this computer and go to the model with your requests. Say
+        "remember that…" to teach it something, or "forget what you know about me".
+      </p>
+      {m && m.notes.length === 0 && (
+        <p className="text-xs text-muted-foreground">Nothing learned yet.</p>
+      )}
+      {m && m.notes.length > 0 && (
+        <ul aria-label="What Sage has learned" className="flex flex-col gap-1">
+          {m.notes.map((note, index) => (
+            <li key={`${index}:${note}`} className="flex items-start gap-2 rounded-md border px-2 py-1 text-sm">
+              <span className="min-w-0 flex-1 wrap-anywhere">{note}</span>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                aria-label={`Forget: ${note}`}
+                disabled={busy}
+                onClick={() => forget.mutate({ index, note })}
+              >
+                <X aria-hidden />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {m && (
+        <div>
+          <ConfirmButton
+            title="Forget everything Sage has learned?"
+            description="The notes and what it counted about how you talk are removed. It starts learning again from nothing."
+            confirmLabel="Forget"
+            disabled={busy}
+            onConfirm={() => clear.mutate()}
+          >
+            Forget everything
+          </ConfirmButton>
+        </div>
+      )}
+    </>
+  );
+}
+
 export function VoiceSection({
   draft,
   set,
@@ -222,14 +395,14 @@ export function VoiceSection({
   const on = enabling || downloading || (s?.enabled ?? false);
   const busy = !s || enable.isPending || remove.isPending || downloading;
   const needsSession = !s?.enabled
-    ? "Turn Open Dot on to try the voices and choose devices."
+    ? "Turn Open Sage on to try the voices and choose devices."
     : !ready
-      ? "Open Dot is still getting ready."
+      ? "Open Sage is still getting ready."
       : null;
 
   return (
     <>
-      <Section title="Open Dot">
+      <Section title="Open Sage">
         <div className="flex items-center gap-2">
           <Switch
             id="settings-voice"
@@ -241,17 +414,17 @@ export function VoiceSection({
               if (!busy) enable.mutate(next);
             }}
           />
-          <Label htmlFor="settings-voice">Open Dot</Label>
+          <Label htmlFor="settings-voice">Open Sage</Label>
         </div>
         <p className="text-xs text-muted-foreground">
-          Open Dot lets you talk to Dots and hear it answer.
+          Open Sage lets you talk to Sage and hear it answer.
         </p>
         {s && !s.installed && !downloading && (
           <p className="text-xs text-muted-foreground">
             Turning it on downloads about 260 MB of speech files once; they stay on this computer.
           </p>
         )}
-        <p role="status" aria-label="Open Dot status" className="flex gap-1.5 text-xs">
+        <p role="status" aria-label="Open Sage status" className="flex gap-1.5 text-xs">
           <span className={s?.enabled && trouble && !downloading ? "text-destructive" : undefined}>
             {statusText(s, enabling, trouble)}
           </span>
@@ -360,12 +533,13 @@ export function VoiceSection({
             checked={draft.voice_wake_phrase}
             onCheckedChange={(voice_wake_phrase) => set({ voice_wake_phrase })}
           />
-          <Label htmlFor="settings-voice-wake">Hey Dot</Label>
+          <Label htmlFor="settings-voice-wake">Hey Sage</Label>
         </div>
         <p className="text-xs text-muted-foreground">
-          The microphone stays on while Dots is running so it can hear the phrase. Audio never
+          The microphone stays on while Sage is running so it can hear the phrase. Audio never
           leaves this computer.
         </p>
+        <VoiceSetupBlock ready={ready} wake={draft.voice_wake_phrase} />
         <div className="flex items-center gap-2">
           <Switch
             id="settings-voice-interrupt"
@@ -381,8 +555,28 @@ export function VoiceSection({
             checked={draft.voice_tone}
             onCheckedChange={(voice_tone) => set({ voice_tone })}
           />
-          <Label htmlFor="settings-voice-tone">Play a tone when Dot starts listening</Label>
+          <Label htmlFor="settings-voice-tone">Play a tone when Sage starts listening</Label>
         </div>
+      </Section>
+
+      <Section title="On this computer">
+        <div className="flex items-center gap-2">
+          <Switch
+            id="settings-voice-commands"
+            checked={draft.open_dot_commands}
+            onCheckedChange={(open_dot_commands) => set({ open_dot_commands })}
+          />
+          <Label htmlFor="settings-voice-commands">Let Sage run commands on this computer</Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          For what you ask that it has no other way to do, such as closing a program or making a folder.
+          Sage always shows the command, reads it to you and waits for a clear yes. Off, it still writes
+          notes, opens sites and opens or closes its listed apps, and never offers a command.
+        </p>
+      </Section>
+
+      <Section title="What Sage has learned">
+        <LearnedBlock />
       </Section>
 
       <Section title="Devices">
@@ -435,7 +629,7 @@ export function VoiceSection({
           <div>
             <ConfirmButton
               title="Remove the speech files?"
-              description="Open Dot turns off. Turning it on again downloads them again."
+              description="Open Sage turns off. Turning it on again downloads them again."
               confirmLabel="Remove"
               disabled={remove.isPending || enable.isPending}
               onConfirm={() => remove.mutate()}

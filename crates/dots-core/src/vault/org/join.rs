@@ -265,7 +265,7 @@ pub fn parse_join_code(text: &str) -> Result<JoinCode> {
         Some(Some(v)) if v == 1 || v == u64::from(JOIN_CODE_VERSION) => {}
         Some(Some(v)) => {
             return Err(refused(format!(
-                "version {v} is not supported; update Dots"
+                "version {v} is not supported; update Sage"
             )))
         }
         _ => return Err(refused("no version 'v'")),

@@ -25,7 +25,7 @@ const TASK: &str = "The tray icon is invisible on a light taskbar.\nIt shows on 
 
 fn project_spec() -> ProjectSpec {
     ProjectSpec {
-        name: "Dots".into(),
+        name: "Sage".into(),
         repo_path: REPO.into(),
         default_branch: Some("main".into()),
         remote: "origin".into(),
@@ -45,7 +45,7 @@ fn project() -> Project {
 fn team_spec() -> TeamSpec {
     TeamSpec {
         name: "crew".into(),
-        description: "Fixes and ships Dots.".into(),
+        description: "Fixes and ships Sage.".into(),
         members: vec![
             MemberSpec {
                 dot_id: DEV.into(),
@@ -68,7 +68,7 @@ fn teams() -> Vec<Team> {
         Team {
             id: TEAM.into(),
             name: "crew".into(),
-            description: "Fixes and ships Dots.".into(),
+            description: "Fixes and ships Sage.".into(),
             members: vec![
                 TeamMember {
                     dot_id: DEV.into(),
@@ -276,7 +276,7 @@ fn workflows() -> Vec<Workflow> {
                 trigger: Trigger::Schedule {
                     schedule,
                     task: "Update the dependencies.".into(),
-                    project: "Dots".into(),
+                    project: "Sage".into(),
                 },
                 steps: vec![
                     work(),
@@ -288,7 +288,7 @@ fn workflows() -> Vec<Workflow> {
                             on: BranchOn::Project,
                             paths: vec![
                                 BranchPath {
-                                    label: "Dots".into(),
+                                    label: "Sage".into(),
                                     steps: vec![deploy("pr", DeployMode::Pr)],
                                 },
                                 BranchPath {

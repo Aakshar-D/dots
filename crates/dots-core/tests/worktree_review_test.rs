@@ -371,7 +371,7 @@ async fn a_follow_up_fails_before_the_engine_starts_when_its_row_names_no_dots_w
         );
         last = wait_status(t.rt.store(), &follow.id, RunStatus::Failed, 15).await;
         let error = last.error.clone().unwrap_or_default();
-        assert!(error.contains("not a dots worktree"), "{error}");
+        assert!(error.contains("not a sols worktree"), "{error}");
         assert!(error.contains(&forged.display().to_string()), "{error}");
         assert!(
             !started.exists(),

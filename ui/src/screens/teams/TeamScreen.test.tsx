@@ -60,7 +60,7 @@ describe("the team page", () => {
     expect(await screen.findByRole("heading", { name: "crew", level: 1 })).toBeVisible();
     const name = screen.getByLabelText("Name");
     expect(name).toHaveValue("crew");
-    expect(screen.getByLabelText("Description")).toHaveValue("Fixes and ships Dots.");
+    expect(screen.getByLabelText("Description")).toHaveValue("Fixes and ships Sage.");
     const save = screen.getByRole("button", { name: "Save" });
     expect(save).toBeDisabled();
     await user.clear(name);
@@ -71,7 +71,7 @@ describe("the team page", () => {
         id: "01J0TEAM",
         spec: {
           name: "core crew",
-          description: "Fixes and ships Dots.",
+          description: "Fixes and ships Sage.",
           members,
           org_id: null,
           workspace_id: "default",
@@ -109,13 +109,13 @@ describe("the team page", () => {
     });
   });
 
-  it("adds a dot of the team's account and workspace with its role", async () => {
+  it("adds a sol of the team's account and workspace with its role", async () => {
     const { user } = crewPage();
     const section = within(await screen.findByRole("region", { name: "Members" }));
-    const pick = await section.findByLabelText("Dot");
+    const pick = await section.findByLabelText("Sol");
     // Members and the org's dot are not offered.
     expect(within(pick).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Choose a dot",
+      "Choose a sol",
       "designer",
     ]);
     const add = section.getByRole("button", { name: "Add member" });
@@ -128,22 +128,22 @@ describe("the team page", () => {
     });
   });
 
-  it("says when every dot that may join is a member", async () => {
+  it("says when every sol that may join is a member", async () => {
     crewPage(DOTS.filter((d) => d.id !== "01J0DOT3"));
-    expect(await screen.findByText(/Every dot of the team's account and workspace/)).toBeVisible();
+    expect(await screen.findByText(/Every sol of the team's account and workspace/)).toBeVisible();
   });
 
   it("lists the projects with their folder, remote and default branch, and opens one", async () => {
     backend.on("open_project_folder", () => null);
     const { user } = crewPage();
     const section = within(await screen.findByRole("region", { name: "Projects" }));
-    const dots = section.getByRole("listitem", { name: "Dots" });
+    const dots = section.getByRole("listitem", { name: "Sage" });
     expect(dots).toHaveTextContent("C:/Users/u/src/dots");
     expect(dots).toHaveTextContent("Remote origin · default branch main");
     expect(section.getByRole("listitem", { name: "Site" })).toHaveTextContent(
       "Remote upstream · default branch found by git",
     );
-    await user.click(within(dots).getByRole("button", { name: "Open the folder of Dots" }));
+    await user.click(within(dots).getByRole("button", { name: "Open the folder of Sage" }));
     expect(backend.callsTo("open_project_folder")).toEqual([
       { projectId: "01J0PRJ", workflowRunId: null, branch: null },
     ]);
@@ -204,8 +204,8 @@ describe("the team page", () => {
         },
       },
     ]);
-    await user.click(section.getByRole("button", { name: "Delete Dots" }));
-    const ask = await screen.findByRole("alertdialog", { name: "Delete Dots?" });
+    await user.click(section.getByRole("button", { name: "Delete Sage" }));
+    const ask = await screen.findByRole("alertdialog", { name: "Delete Sage?" });
     expect(ask).toHaveTextContent("Its folder and git repo stay as they are");
     await user.click(within(ask).getByRole("button", { name: "Delete project" }));
     expect(backend.callsTo("project_delete")).toEqual([{ id: "01J0PRJ" }]);

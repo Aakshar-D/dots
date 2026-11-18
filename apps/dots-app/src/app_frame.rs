@@ -249,7 +249,7 @@ pub async fn respond(rt: Option<&Runtime>, request: &Request<Vec<u8>>) -> Respon
         return plain(StatusCode::NOT_FOUND, "not found");
     };
     let Some(rt) = rt else {
-        return plain(StatusCode::SERVICE_UNAVAILABLE, "Dots did not start");
+        return plain(StatusCode::SERVICE_UNAVAILABLE, "Sage did not start");
     };
     let found = match &target {
         Target::App {
@@ -367,7 +367,7 @@ mod tests {
         assert!(page.ends_with("</script>\n<title>E</title>"));
         let bare = String::from_utf8(with_client(b"<div id=app></div>")).unwrap();
         assert!(
-            bare.starts_with("<script>// Dots' client"),
+            bare.starts_with("<script>// Sage's client"),
             "{}",
             &bare[..40]
         );

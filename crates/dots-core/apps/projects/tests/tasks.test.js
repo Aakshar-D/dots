@@ -118,7 +118,7 @@ test("assignee: me is the calling dot, a dot is named by id or name, others are 
   assert.equal(call("get_task", { id: t.id }, { dots }).assignee.id, "d2");
   assert.throws(
     () => call("update_task", { id: t.id, assignee: "ghost" }, { dots }),
-    "No dot ghost uses Projects",
+    "No sol ghost uses Projects",
   );
   call("update_task", { id: t.id, assignee: "me" });
   assert.deepEqual(call("get_task", { id: t.id }).assignee, { kind: "person" });

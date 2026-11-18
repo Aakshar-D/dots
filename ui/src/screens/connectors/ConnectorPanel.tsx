@@ -45,13 +45,13 @@ function DotPicker(props: {
   if (personal.length === 0) {
     return (
       <p className="text-xs text-muted-foreground">
-        You have no dots yet. Connect now and pick dots later.
+        You have no sols yet. Connect now and pick sols later.
       </p>
     );
   }
   return (
     <fieldset className="flex flex-col gap-1.5">
-      <legend className="sr-only">{`Dots that may use ${props.name}`}</legend>
+      <legend className="sr-only">{`Sols that may use ${props.name}`}</legend>
       {personal.map((dot) => {
         const checked = props.picked.includes(dot.id);
         return (
@@ -251,7 +251,7 @@ export function ConnectorPanel(props: { connector: ConnectorEntry; onClose: () =
           )}
 
           {connector.abilities.length > 0 && (
-            <Section title="What your dots can do">
+            <Section title="What your sols can do">
               <ul className="flex list-disc flex-col gap-1 pl-5 text-sm">
                 {connector.abilities.map((a) => (
                   <li key={a}>{a}</li>
@@ -268,7 +268,7 @@ export function ConnectorPanel(props: { connector: ConnectorEntry; onClose: () =
                   : "Not checked yet."}{" "}
                 {connector.used_by.length > 0
                   ? `Used by ${connector.used_by.map((d) => d.name).join(", ")}.`
-                  : "No dot uses it yet."}
+                  : "No sol uses it yet."}
               </p>
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -286,8 +286,8 @@ export function ConnectorPanel(props: { connector: ConnectorEntry; onClose: () =
                       {connector.used_by.length > 0
                         ? `${connector.used_by.map((d) => d.name).join(", ")} will stop using it. `
                         : ""}
-                      Dots forgets its {connector.auth === "oauth" ? "sign-in" : "key"}. You can
-                      also remove Dots' access on {connector.name}'s own site.
+                      Sage forgets its {connector.auth === "oauth" ? "sign-in" : "key"}. You can
+                      also remove Sage's access on {connector.name}'s own site.
                     </>
                   }
                   confirmLabel="Disconnect"
@@ -335,7 +335,7 @@ export function ConnectorPanel(props: { connector: ConnectorEntry; onClose: () =
                 </Section>
               )}
 
-              <Section title="Dots that may use it">
+              <Section title="Sols that may use it">
                 <DotPicker name={connector.name} picked={picked} onChange={setPicked} />
               </Section>
 
@@ -372,7 +372,7 @@ export function ConnectorPanel(props: { connector: ConnectorEntry; onClose: () =
                     disabled={!dotsChanged || busy}
                     onClick={() => saveDots.mutate()}
                   >
-                    {saveDots.isPending ? "Saving…" : "Save dots"}
+                    {saveDots.isPending ? "Saving…" : "Save sols"}
                   </Button>
                 )}
               </div>

@@ -494,8 +494,8 @@ struct Writer;
 impl Engine for Writer {
     async fn start(&self, ctx: RunContext) -> dots_core::Result<mpsc::Receiver<EngineEvent>> {
         let (tx, rx) = mpsc::channel(8);
-        std::fs::write(ctx.workspace.join("made.txt"), "by the dot\n").unwrap();
-        std::fs::write(ctx.workspace.join("keep.txt"), "changed by the dot\n").unwrap();
+        std::fs::write(ctx.workspace.join("made.txt"), "by the sol\n").unwrap();
+        std::fs::write(ctx.workspace.join("keep.txt"), "changed by the sol\n").unwrap();
         tokio::spawn(async move {
             let _ = tx
                 .send(EngineEvent::Finished {

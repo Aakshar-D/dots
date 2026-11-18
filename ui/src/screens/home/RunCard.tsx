@@ -74,7 +74,7 @@ export function RunCard(props: {
       {question && (
         <div
           role="group"
-          aria-label="Question from the dot"
+          aria-label="Question from the sol"
           className="flex flex-col gap-1 rounded-xl bg-muted px-3.5 py-2.5"
         >
           <span className="text-xs text-muted-foreground">

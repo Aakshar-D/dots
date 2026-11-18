@@ -9,6 +9,7 @@ import client from "../../../apps/dots-app/src/app_client.js?raw";
 type Dots = {
   call: (tool: string, input?: unknown) => Promise<unknown>;
   openRun: (runId: string) => Promise<unknown>;
+  saveFile: (name: string, base64: string) => Promise<unknown>;
   onChange: (cb: () => void) => () => void;
   onTheme: (cb: (mode: string) => void) => () => void;
 };
@@ -82,6 +83,25 @@ describe("the client in an app's page", () => {
     await next(port);
     port.postMessage({ type: "result", id: 2, ok: false, error: "the app started no run r2" });
     await expect(refused).rejects.toThrow("the app started no run r2");
+  });
+
+  it("hands Dots a file to save, and answers whether the person saved it", async () => {
+    const p = page();
+    const port = connect(p);
+    const saved = p.dots.saveFile("INV-1 - Acme.pdf", "JVBERi0xLjQK");
+    expect(await next(port)).toEqual({
+      type: "save_file",
+      id: 1,
+      name: "INV-1 - Acme.pdf",
+      data: "JVBERi0xLjQK",
+    });
+    port.postMessage({ type: "result", id: 1, ok: true, result: true });
+    await expect(saved).resolves.toBe(true);
+    const cancelled = p.dots.saveFile("a.pdf", "");
+    await next(port);
+    port.postMessage({ type: "result", id: 2, ok: true, result: false });
+    await expect(cancelled).resolves.toBe(false);
+    port.close();
   });
 
   it("takes one port, and only from the window that framed it", async () => {

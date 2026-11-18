@@ -16,9 +16,9 @@ use super::VoiceHandle;
 /// Registration failed: the shortcut is taken.
 pub const TAKEN: &str = "That shortcut is already used by another app. Pick a different one.";
 /// Registration failed for another reason.
-pub const COULD_NOT: &str = "Dots could not set that shortcut.";
+pub const COULD_NOT: &str = "Sage could not set that shortcut.";
 /// The setting does not parse as a shortcut.
-pub const NOT_A_SHORTCUT: &str = "That is not a shortcut Dots understands.";
+pub const NOT_A_SHORTCUT: &str = "That is not a shortcut Sage understands.";
 /// A plain key with no modifier would take that key from every app.
 pub const NO_MODIFIER: &str = "Add Ctrl, Alt or Shift to that shortcut, or use a function key.";
 

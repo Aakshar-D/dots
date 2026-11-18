@@ -65,7 +65,7 @@ pub trait Source: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum PublishError {
     /// This kind of source has no write from Dots (a SOPS file).
-    #[error("this source can't be written from Dots")]
+    #[error("this source can't be written from Sage")]
     Unsupported,
     /// The source refused the write (401 or 403), or the sign-in details behind it.
     #[error("the source refused the write: {0}")]
@@ -356,7 +356,7 @@ fn status_failed(address: &str, what: &str, status: StatusCode) -> SourceError {
         401 | 403 => {
             SourceError::Denied(format!("{address} refused access to {what} (HTTP {code})"))
         }
-        429 => SourceError::Unreachable(format!("{address} is rate limiting Dots (HTTP 429)")),
+        429 => SourceError::Unreachable(format!("{address} is rate limiting Sage (HTTP 429)")),
         500..=599 => SourceError::Unreachable(format!("{address} is not available (HTTP {code})")),
         _ => SourceError::Invalid(format!("{address} answered HTTP {code} for {what}")),
     }

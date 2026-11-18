@@ -284,7 +284,7 @@ async fn a_name_resolves_only_when_granted_and_only_from_personal() {
     assert_eq!(missing.why, Unresolved::NotDefined);
     assert_eq!(
         missing.text("triage"),
-        "DOTS_VAULT_ONLY_IN_ENV: not in Personal (dot 'triage', mcp:github)"
+        "DOTS_VAULT_ONLY_IN_ENV: not in Personal (sol 'triage', mcp:github)"
     );
 
     let refused: Missing = vault
@@ -299,7 +299,7 @@ async fn a_name_resolves_only_when_granted_and_only_from_personal() {
         .unwrap_err();
     assert_eq!(
         refused.text("triage"),
-        "GITHUB_TOKEN: not granted to shell in dot 'triage'"
+        "GITHUB_TOKEN: not granted to shell in sol 'triage'"
     );
 }
 
@@ -359,8 +359,8 @@ async fn a_run_starts_a_server_with_its_granted_values_and_leaves_out_one_withou
     let (tools, notices) = open(&store, &vault, &uses, &none, dir.path()).await;
     assert!(tools.servers().is_empty());
     assert!(fake.log().is_empty());
-    assert!(notices.contains(&"GH_TOKEN: not granted to mcp:gh in dot 'triage'".to_string()));
-    assert!(notices.contains(&"NOT_THERE: not in Personal (dot 'triage', shell)".to_string()));
+    assert!(notices.contains(&"GH_TOKEN: not granted to mcp:gh in sol 'triage'".to_string()));
+    assert!(notices.contains(&"NOT_THERE: not in Personal (sol 'triage', shell)".to_string()));
     let shell: Vec<(&str, &str)> = tools
         .shell_env()
         .iter()

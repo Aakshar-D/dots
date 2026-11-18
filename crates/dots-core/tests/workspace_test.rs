@@ -328,7 +328,7 @@ fn only_a_direct_child_of_the_worktrees_folder_with_its_own_branch_is_a_dots_wor
     ] {
         let err = check(path, Some(branch)).unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{path}: {err}");
-        assert!(err.to_string().contains("not a dots worktree"), "{err}");
+        assert!(err.to_string().contains("not a sols worktree"), "{err}");
     }
     for branch in [
         "feature-x",
@@ -342,7 +342,7 @@ fn only_a_direct_child_of_the_worktrees_folder_with_its_own_branch_is_a_dots_wor
     ] {
         let err = check("C:/data/worktrees/R1", Some(branch)).unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{branch}: {err}");
-        assert!(err.to_string().contains("not the dots branch"), "{err}");
+        assert!(err.to_string().contains("not the sols branch"), "{err}");
     }
     let err = check("C:/data/worktrees/R1", None).unwrap_err();
     assert!(matches!(err, Error::Invalid(_)), "{err}");
@@ -692,7 +692,7 @@ async fn restore_refuses_a_forged_row_before_it_touches_the_disk_or_git() {
         };
         let err = wm.restore(&dot, &forged).await.unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{err}");
-        assert!(err.to_string().contains("not a dots worktree"), "{err}");
+        assert!(err.to_string().contains("not a sols worktree"), "{err}");
         assert!(!path.exists(), "{} was made", path.display());
         assert!(!outside.exists(), "the parent folders were made");
         untouched("path");
@@ -705,7 +705,7 @@ async fn restore_refuses_a_forged_row_before_it_touches_the_disk_or_git() {
         };
         let err = wm.restore(&dot, &forged).await.unwrap_err();
         assert!(matches!(err, Error::Invalid(_)), "{branch}: {err}");
-        assert!(err.to_string().contains("not the dots branch"), "{err}");
+        assert!(err.to_string().contains("not the sols branch"), "{err}");
         untouched(branch);
     }
 

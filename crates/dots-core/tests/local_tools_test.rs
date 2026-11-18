@@ -1106,7 +1106,7 @@ async fn read_only_and_sandboxed_walks_skip_git_and_show_dot_claude() {
 
 /// The error a walking tool gives in place of a result when the policy denies its search root.
 fn root_denied(path: &str) -> ToolOutput {
-    ToolOutput::err(format!("{path} is denied by this dot's policy"))
+    ToolOutput::err(format!("{path} is denied by this sol's policy"))
 }
 
 #[tokio::test]

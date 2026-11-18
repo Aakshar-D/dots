@@ -19,6 +19,7 @@ import { AttachmentChip } from "@/components/AttachmentChip";
 import { AutoLine } from "@/components/AutoLine";
 import { BrowserCall } from "@/components/BrowserCall";
 import { Markdown } from "@/components/Markdown";
+import { RawLines } from "@/components/RawLines";
 import { RunPlan } from "@/components/RunPlan";
 import { StatusBadge } from "@/components/StatusBadge";
 import { messageAttachments } from "@/lib/attachments";
@@ -46,7 +47,7 @@ const TRIGGER: Record<Run["trigger"], string> = {
   manual: "Manual run",
   chat: "Chat message",
   resume: "Continued after approval",
-  follow_up: "Follow-up the dot scheduled",
+  follow_up: "Follow-up the sol scheduled",
   app: "Started by an app",
   workflow: "Workflow step",
   watcher: "Watcher run",
@@ -301,9 +302,11 @@ function StepsLine(props: {
 }
 
 /// What a run's section shows, in order: consecutive tool steps as one row of chips (one line in
-/// the conversation), every other item by itself.
+/// the conversation), consecutive raw lines as one line, every other item by itself.
+type RawItem = Extract<TranscriptItem, { type: "raw" }>;
 type Block =
   | { kind: "tools"; seq: number; items: ToolItem[] }
+  | { kind: "raws"; seq: number; items: RawItem[] }
   | { kind: "item"; item: TranscriptItem };
 
 function blocks(items: TranscriptItem[]): Block[] {
@@ -312,6 +315,8 @@ function blocks(items: TranscriptItem[]): Block[] {
     const last = out.at(-1);
     if (item.type === "tool" && last?.kind === "tools") last.items.push(item);
     else if (item.type === "tool") out.push({ kind: "tools", seq: item.seq, items: [item] });
+    else if (item.type === "raw" && last?.kind === "raws") last.items.push(item);
+    else if (item.type === "raw") out.push({ kind: "raws", seq: item.seq, items: [item] });
     else out.push({ kind: "item", item });
   }
   return out;
@@ -372,10 +377,7 @@ function Item(props: {
       );
     case "raw":
       return (
-        <details className="rounded-md border px-2 py-1 text-muted-foreground">
-          <summary className="cursor-pointer text-xs">{item.label}</summary>
-          <pre className="mt-1 overflow-x-auto text-xs whitespace-pre-wrap">{item.text}</pre>
-        </details>
+        <RawLines items={[item]} />
       );
     case "tool":
       return <ToolChip item={item} active={active} owners={owners} />;
@@ -407,7 +409,7 @@ function CheckIn({ message }: { message: Message }) {
   return (
     <div
       role="group"
-      aria-label={question ? "Question from the dot" : "Note from the dot"}
+      aria-label={question ? "Question from the sol" : "Note from the sol"}
       className="flex max-w-prose flex-col gap-1 self-start rounded-xl bg-muted px-3.5 py-2.5"
     >
       <span className="text-xs text-muted-foreground">
@@ -513,7 +515,7 @@ export function Transcript(props: {
                 </p>
               ))}
               {resentAfterRestart(run) && (
-                <p className="self-end text-xs text-muted-foreground">Resent after Dots restarted</p>
+                <p className="self-end text-xs text-muted-foreground">Resent after Sage restarted</p>
               )}
               <DeliveryLine run={run} />
               <CapNote run={run} className="self-end" />
@@ -521,13 +523,13 @@ export function Transcript(props: {
               <RunPlan
                 run={run}
                 events={props.events.get(run.id) ?? []}
-                dotName={props.dotName ?? "The dot"}
+                dotName={props.dotName ?? "The sol"}
                 owners={owners}
               />
               {!conversation && (items.length > 0 || checkIns.length > 0) && (
                 <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
                   <span aria-hidden className="size-1.5 rounded-full bg-primary" />
-                  {props.dotName ?? "The dot"} · {localTime(run.queued_at)}
+                  {props.dotName ?? "The sol"} · {localTime(run.queued_at)}
                 </p>
               )}
               {blocks(items).map((block) =>
@@ -543,6 +545,8 @@ export function Transcript(props: {
                       <MemoryNote key={item.seq} item={item} dotId={run.dot_id} />
                     ))}
                   </Fragment>
+                ) : block.kind === "raws" ? (
+                  <RawLines key={block.seq} items={block.items} />
                 ) : (
                   <Item
                     key={block.item.seq}

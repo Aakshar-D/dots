@@ -31,7 +31,7 @@ function mount(status: VoiceStatus | "never") {
   return router;
 }
 
-const mark = () => screen.getByRole("button", { name: /^(Talk to Dot|Set up voice)$/ });
+const mark = () => screen.getByRole("button", { name: /^(Talk to Sage|Set up voice)$/ });
 
 beforeEach(() => {
   voiceStore.reset();
@@ -45,8 +45,8 @@ describe("the rail mark", () => {
     backend.on("get_settings", () => ({ ...sample.settings, voice_hotkey: "CmdOrCtrl+Shift+Space" }));
     mount(ready);
     await waitFor(() => expect(mark()).toHaveAttribute("aria-keyshortcuts", "Control+Shift+Space"));
-    expect(mark()).toHaveAccessibleName("Talk to Dot");
-    expect(mark()).toHaveAttribute("title", "Talk to Dot (Ctrl+Shift+Space)");
+    expect(mark()).toHaveAccessibleName("Talk to Sage");
+    expect(mark()).toHaveAttribute("title", "Talk to Sage (Ctrl+Shift+Space)");
     fireEvent.click(mark());
     expect(backend.callsTo("voice_open")).toEqual([{}]);
   });
@@ -57,7 +57,7 @@ describe("the rail mark", () => {
     await waitFor(() => expect(backend.callsTo("get_settings")).toHaveLength(1));
     await act(async () => {});
     expect(mark()).not.toHaveAttribute("aria-keyshortcuts");
-    expect(mark()).toHaveAttribute("title", "Talk to Dot");
+    expect(mark()).toHaveAttribute("title", "Talk to Sage");
   });
 
   it.each<[string, Partial<VoiceLive>, string]>([
@@ -66,7 +66,7 @@ describe("the rail mark", () => {
     ["listening", { state: "listening", micOpen: true }, "voice_open"],
     ["idle with a question waiting", { state: "idle", ask: { question: "Run it?", options: ["Yes", "No"], seq: 1 } }, "voice_open"],
     ["idle with a card showing", { state: "idle", card: { kind: "list", title: "Waiting", lines: [] } }, "voice_open"],
-  ])("while Open Dot is %s, a click calls %s", async (_, live, command) => {
+  ])("while Open Sage is %s, a click calls %s", async (_, live, command) => {
     mount(ready);
     await waitFor(() => expect(backend.callsTo("voice_status")).toHaveLength(1));
     await act(async () => {});
@@ -109,6 +109,6 @@ describe("the rail mark", () => {
     expect(mark()).toHaveAttribute("data-listening");
     expect(mark()).toHaveClass("ring-primary");
     expect(mark().className).not.toMatch(/animate-/);
-    expect(mark()).toHaveAttribute("title", "Dot is listening");
+    expect(mark()).toHaveAttribute("title", "Sage is listening");
   });
 });

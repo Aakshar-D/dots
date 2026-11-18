@@ -31,7 +31,7 @@ impl TestEdge {
                     Ok(n) => n,
                 };
                 for frame in frames.push(&buf[..n]) {
-                    let _ = tx.send(serde_json::from_slice(&frame).expect("Dots sends JSON"));
+                    let _ = tx.send(serde_json::from_slice(&frame).expect("Sage sends JSON"));
                 }
             }
         });
@@ -46,7 +46,7 @@ impl TestEdge {
     pub async fn next(&mut self) -> Value {
         self.next_within(Duration::from_secs(5))
             .await
-            .expect("a message from Dots within 5 s")
+            .expect("a message from Sage within 5 s")
     }
 
     /// The next message Dots sends within `wait`, if any.

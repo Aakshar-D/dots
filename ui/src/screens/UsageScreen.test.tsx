@@ -30,33 +30,33 @@ const rows = async () =>
 describe("the Usage page", () => {
   it("opens on the last 5 hours and switches to the week and the month", async () => {
     const { user } = await open((period) => ({ ...week, period: period as UsageSummary["period"] }));
-    expect(await table()).toHaveAccessibleName("Dots' runs in the last 5 hours");
+    expect(await table()).toHaveAccessibleName("Sage's runs in the last 5 hours");
     await user.click(screen.getByRole("tab", { name: "Week" }));
-    expect(await screen.findByRole("table", { name: "Dots' runs in the last 7 days" })).toBeVisible();
+    expect(await screen.findByRole("table", { name: "Sage's runs in the last 7 days" })).toBeVisible();
     await user.click(screen.getByRole("tab", { name: "Month" }));
     expect(
-      await screen.findByRole("table", { name: "Dots' runs in the last 30 days" }),
+      await screen.findByRole("table", { name: "Sage's runs in the last 30 days" }),
     ).toBeVisible();
     // The app asks again once it listens to the backend; each period is asked in turn.
     const asked = backend.callsTo("usage_summary").map((a) => a.period);
     expect([...new Set(asked)]).toEqual(["five_hours", "week", "month"]);
   });
 
-  it("lists each dot in the core's order with its runs, tokens, time and cost", async () => {
+  it("lists each sol in the core's order with its runs, tokens, time and cost", async () => {
     await open();
     const headers = within(await table())
       .getAllByRole("columnheader")
       .map((h) => h.textContent);
-    expect(headers).toEqual(["Dot", "Runs", "Tokens", "Run time", "API-eq."]);
+    expect(headers).toEqual(["Sol", "Runs", "Tokens", "Run time", "API-eq."]);
     expect(await rows()).toEqual([
       ["nightly-tests", "14", "2.1M", "3h 12m", "$18.40"],
       ["local-summarizer", "22", "300k", "1h 05m", "–"],
       // Open Dot's requests, after the dots.
-      ["Open Dot (voice)", "38 requests", "156k", "–", "$0.21"],
+      ["Open Sage (voice)", "38 requests", "156k", "–", "$0.21"],
     ]);
   });
 
-  it("opens a dot's heaviest runs, each a link to its run", async () => {
+  it("opens a sol's heaviest runs, each a link to its run", async () => {
     const { user } = await open();
     const toggle = await screen.findByRole("button", { name: "nightly-tests" });
     expect(toggle).toHaveAttribute("aria-expanded", "false");
@@ -81,21 +81,21 @@ describe("the Usage page", () => {
     );
   });
 
-  it("says a deleted dot's runs are not counted, and when a period has no runs", async () => {
+  it("says a deleted sol's runs are not counted, and when a period has no runs", async () => {
     await open(() => ({ ...week, rows: [], open_dot: null }));
     expect(await screen.findByText("No runs in the last 5 hours.")).toBeVisible();
-    expect(screen.getByText("A deleted dot's runs are deleted with it and not counted.")).toBeVisible();
+    expect(screen.getByText("A deleted sol's runs are deleted with it and not counted.")).toBeVisible();
   });
 
-  it("lists Open Dot's requests in a row of their own, also when no dot ran", async () => {
+  it("lists Open Sage's requests in a row of their own, also when no sol ran", async () => {
     const openDot = { requests: 7, tokens_in: 30_000, tokens_out: 1_153, cost_usd: 0.04 };
     const view = await open(() => ({ ...week, open_dot: openDot }));
-    expect((await rows()).at(-1)).toEqual(["Open Dot (voice)", "7 requests", "31k", "–", "$0.04"]);
+    expect((await rows()).at(-1)).toEqual(["Open Sage (voice)", "7 requests", "31k", "–", "$0.04"]);
     expect(await rows()).toHaveLength(3);
     view.unmount();
 
     await open(() => ({ ...week, rows: [], open_dot: { ...openDot, requests: 1, cost_usd: null } }));
-    expect(await rows()).toEqual([["Open Dot (voice)", "1 request", "31k", "–", "–"]]);
+    expect(await rows()).toEqual([["Open Sage (voice)", "1 request", "31k", "–", "–"]]);
     expect(screen.queryByText("No runs in the last 5 hours.")).toBeNull();
   });
 });
@@ -112,7 +112,7 @@ describe("all Claude use on the Usage page", () => {
     return open();
   }
 
-  it("shows the person's own sessions, Dots' and all of it, then each project", async () => {
+  it("shows the person's own sessions, Sage's and all of it, then each project", async () => {
     await openAll();
     const all = await screen.findByRole("region", { name: "All Claude use" });
     const totals = await within(all).findAllByRole("definition");
@@ -130,7 +130,7 @@ describe("all Claude use on the Usage page", () => {
       .map((r) => within(r).getAllByRole("cell").map((c) => c.textContent));
     expect(cells).toEqual([
       ["dots", "3000", "40", "2.6M", "40M"],
-      ["Dots (all dots)", "310", "5", "461k", "3.1M"],
+      ["Sage (all sols)", "310", "5", "461k", "3.1M"],
       ["site", "900", "18", "530k", "8M"],
     ]);
     // The folder's full path on hover.
@@ -141,7 +141,7 @@ describe("all Claude use on the Usage page", () => {
   it("lets the keyboard reach each table's scroll box, named for its table", async () => {
     const { user } = await openAll();
     await screen.findByRole("table", { name: "Claude use by project in the last 5 hours" });
-    for (const name of ["Dots' runs in the last 5 hours", "Claude use by project in the last 5 hours"]) {
+    for (const name of ["Sage's runs in the last 5 hours", "Claude use by project in the last 5 hours"]) {
       const box = screen.getByRole("region", { name });
       expect(box).toHaveAttribute("tabindex", "0");
       expect(within(box).getByRole("table")).toBeVisible();

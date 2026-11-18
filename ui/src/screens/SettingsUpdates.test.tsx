@@ -41,7 +41,7 @@ describe("the Updates settings", () => {
     settings();
     expect(
       await within(await section()).findByText(
-        `Dots 0.3.0 · up to date · checked ${localTime(CHECKED)}`,
+        `Sage 0.3.0 · up to date · checked ${localTime(CHECKED)}`,
       ),
     ).toBeVisible();
   });
@@ -88,10 +88,10 @@ describe("the Updates settings", () => {
   it("repair asks first with the exact words", async () => {
     backend.on("update_repair", () => ({ state: "installing", version: "0.3.0", purpose: "repair" }));
     const { user } = settings();
-    await user.click(await within(await section()).findByRole("button", { name: "Repair Dots…" }));
+    await user.click(await within(await section()).findByRole("button", { name: "Repair Sage…" }));
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent(
-      "Dots will download version 0.3.0 again, back up your data and reinstall it. It waits for runs that are working to finish.",
+      "Sage will download version 0.3.0 again, back up your data and reinstall it. It waits for runs that are working to finish.",
     );
     await user.click(within(dialog).getByRole("button", { name: "Repair" }));
     await waitFor(() => expect(backend.callsTo("update_repair")).toHaveLength(1));
@@ -105,7 +105,7 @@ describe("the Updates settings", () => {
       };
     });
     const { user } = settings();
-    await user.click(await within(await section()).findByRole("button", { name: "Repair Dots…" }));
+    await user.click(await within(await section()).findByRole("button", { name: "Repair Sage…" }));
     await user.click(
       within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Repair" }),
     );
@@ -147,7 +147,7 @@ describe("the Updates settings", () => {
     const updates = await section();
     await user.click(
       await within(updates).findByRole("button", {
-        name: "Publish versions of Dots (for its developers)…",
+        name: "Publish versions of Sage (for its developers)…",
       }),
     );
     expect(within(updates).getByText("A classic token with the repo and workflow scopes.")).toBeVisible();
@@ -162,7 +162,7 @@ describe("the Updates settings", () => {
     settings({ publisher: true });
     const updates = await section();
     expect(
-      await within(updates).findByRole("link", { name: "Publish versions of Dots…" }),
+      await within(updates).findByRole("link", { name: "Publish versions of Sage…" }),
     ).toHaveAttribute("href", "/releases");
   });
 

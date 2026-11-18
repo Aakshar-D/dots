@@ -21,7 +21,7 @@ describe("an allow rule in words", () => {
     expect(describeAllowRule("App(notes.add)")).toBe("App: notes.add");
   });
 
-  it("knows Dots' own tools", () => {
+  it("knows Sage's own tools", () => {
     for (const tool of [
       "Skill",
       "Context",

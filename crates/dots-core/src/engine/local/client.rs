@@ -48,7 +48,7 @@ pub async fn fetch_models(endpoint: &str) -> Result<Vec<String>> {
     let status = resp.status();
     if status.is_redirection() {
         return Err(Error::Other(format!(
-            "local endpoint answered {status}, a redirect, which Dots does not follow"
+            "local endpoint answered {status}, a redirect, which Sage does not follow"
         )));
     }
     if !status.is_success() {
@@ -170,7 +170,7 @@ impl ChatClient {
         })?;
         if status.is_redirection() {
             return Err(SendError::Fatal(format!(
-                "local endpoint answered {status}, a redirect, which Dots does not follow"
+                "local endpoint answered {status}, a redirect, which Sage does not follow"
             )));
         }
         if status.is_server_error() {

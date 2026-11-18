@@ -128,7 +128,7 @@ impl Vault {
         match self.listed(vec![entry.clone()]).await {
             Ok(mut listed) => Ok(listed.remove(0)),
             Err(e) => {
-                tracing::warn!("could not list the dots for {}: {e}", entry.name);
+                tracing::warn!("could not list the sols for {}: {e}", entry.name);
                 Ok(entry)
             }
         }

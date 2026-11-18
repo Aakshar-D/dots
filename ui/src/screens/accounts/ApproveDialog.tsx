@@ -84,7 +84,7 @@ export function ApproveDialog(props: {
           <DialogTitle>Approve a request to {props.account}</DialogTitle>
           <DialogDescription>
             Paste the request code they sent you. Approving signs a new member list with this PC's
-            Dots ID.
+            Sage ID.
           </DialogDescription>
         </DialogHeader>
         <Field label="Request code" htmlFor="request-code">
@@ -106,7 +106,7 @@ export function ApproveDialog(props: {
               <dd>{preview.name}</dd>
               <dt className="text-muted-foreground">Email</dt>
               <dd>{preview.email}</dd>
-              <dt className="text-muted-foreground">Dots ID fingerprint</dt>
+              <dt className="text-muted-foreground">Sage ID fingerprint</dt>
               <dd className="font-mono">{preview.fingerprint}</dd>
               {preview.role && (
                 <>

@@ -11,6 +11,8 @@
 //! Nothing heard, said or pictured is logged; only timings and the kind of step.
 
 pub mod act;
+pub mod desk;
+pub mod memory;
 pub mod picture;
 pub mod prompt;
 pub mod quick;
@@ -58,6 +60,15 @@ use think::{cap_hit, Thinker};
 /// 6. `SayEnd`, exactly once, last. It is sent also when the turn fails or its thinker panics
 ///    (`Rest`). Nothing of the turn is sent after it.
 ///
+/// `Step` comes anywhere before `SayEnd`, any number of times: a few plain words on what the
+/// mind is about to do ("Looking at your workspace", "Opening the Inbox"), for the stage to
+/// show. It is never spoken, and it names only what a question or an outcome says aloud: a
+/// sol's cleaned name, a screen, an app, a note's title, a site; never a command, a tool's
+/// target or a message's words. A step for a deed is sent only once the deed is sure to be
+/// tried: after the checks that can still drop it. A `Step` with no text says the step under
+/// way is over: it is sent when the first words of the turn are streamed, when a deed was
+/// carried out (before its `Did`) and before `SayEnd`, each only while a step is under way.
+///
 /// A turn ended by a newer turn, `lapse` or `reset` before its end sends nothing more, so it
 /// has no `SayEnd`; the newer turn's events follow. A deed already carried out is the one
 /// exception: its outcome and `SayEnd` are always sent, and a newer turn begins only after
@@ -102,6 +113,11 @@ pub enum MindEvent {
     Did {
         said: String,
     },
+    /// What the mind is doing now, in a few words, to show and never to say. No text: the
+    /// step under way is over.
+    Step {
+        text: String,
+    },
 }
 
 /// What the stage does after a turn's words.
@@ -127,6 +143,13 @@ pub enum Card {
     List { title: String, lines: Vec<String> },
 }
 
+/// The steps shown while a turn is worked on (`MindEvent::Step`).
+const STEP_LOOKING: &str = "Looking at your workspace";
+const STEP_THINKING: &str = "Thinking it over";
+const STEP_NEEDS: &str = "Checking what needs you";
+const STEP_SETUP: &str = "Working out the new sol";
+const STEP_REMEMBER: &str = "Saving that to memory";
+
 /// Turns and what waits are forgotten after this long without a turn.
 pub const IDLE_FORGET: Duration = Duration::from_secs(600);
 /// A step that waits on the person is dropped this long after it was asked: silence is no,
@@ -140,7 +163,10 @@ const MAX_WAITS: u32 = 3;
 pub const FILLER_AFTER: Duration = Duration::from_millis(1500);
 /// Most turns kept, and the longest record of what was said in one.
 const KEPT_TURNS: usize = 12;
-const SAID_BYTES: usize = 400;
+const SAID_BYTES: usize = 800;
+/// Most lines of what a command printed that are shown, and the longest of them.
+const OUTPUT_LINES: usize = 12;
+const OUTPUT_LINE_BYTES: usize = 200;
 
 const FILLER: &str = "One moment.";
 const OKAY: &str = "Okay.";
@@ -167,6 +193,10 @@ fn yes_no() -> Vec<String> {
 /// One spoken turn in, events out. See the module documentation.
 pub struct Mind {
     thinker: Arc<dyn Thinker>,
+    /// What carries out a task on the computer itself; the app's, once it has set it.
+    desk: Mutex<Arc<dyn desk::Desk>>,
+    /// What was learned about the person in earlier conversations.
+    memory: Arc<memory::Memory>,
     state: Mutex<State>,
     /// `FILLER_AFTER`; shorter in tests.
     filler_after: Duration,
@@ -185,6 +215,8 @@ type Gate<'a> = tokio::sync::MutexGuard<'a, ()>;
 
 #[derive(Default)]
 struct State {
+    /// The model the last request went to: the next one is got ready on it (`warm`).
+    model: Option<String>,
     turns: Vec<Turn>,
     pending: Option<Pending>,
     /// The words of the last reply, for "say that again", and how it ended.
@@ -311,6 +343,7 @@ impl Waiting {
                 Deed::Run { .. } => ConfirmKind::Run,
                 Deed::Send { .. } => ConfirmKind::Send,
                 Deed::Answer { .. } => ConfirmKind::Answer,
+                Deed::Command { .. } => ConfirmKind::Command,
             }),
             Waiting::Create { .. } => Some(ConfirmKind::Create),
             Waiting::Ask {
@@ -357,6 +390,8 @@ struct Out<'a> {
     forgot: bool,
     /// `State::inputs` when this turn's call was first polled.
     inputs: u64,
+    /// A `Step` was sent and not yet said to be over.
+    stepping: AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -384,6 +419,7 @@ impl<'a> Out<'a> {
     /// deed gate keeps any newer turn from beginning until they are out.
     /// `Did` goes out at once, whether or not the turn is still the current one.
     fn deed_done(&self, said: &str) {
+        self.step_over();
         self.done.store(true, Ordering::SeqCst);
         if !self.ended.load(Ordering::SeqCst) {
             let _ = self.tx.send(MindEvent::Did {
@@ -417,7 +453,10 @@ impl<'a> Out<'a> {
         let delta = delta.as_str();
         lock(&self.said).push_str(delta);
         lock(&self.words).push_str(delta);
-        self.spoke.store(true, Ordering::SeqCst);
+        // The first words: what was done to get to them is over.
+        if !self.spoke.swap(true, Ordering::SeqCst) {
+            self.step_over();
+        }
         self.send(MindEvent::Say {
             delta: delta.to_string(),
         });
@@ -466,6 +505,24 @@ impl<'a> Out<'a> {
         });
     }
 
+    /// What the mind is doing now, for the stage to show: a few words with no full stop.
+    fn step(&self, text: &str) {
+        let text = text.trim().trim_end_matches('.');
+        if !text.is_empty() {
+            self.stepping.store(true, Ordering::SeqCst);
+            self.send(MindEvent::Step { text: text.into() });
+        }
+    }
+
+    /// The step under way, if any, is over: the stage stops showing it as going on.
+    fn step_over(&self) {
+        if self.stepping.swap(false, Ordering::SeqCst) {
+            self.send(MindEvent::Step {
+                text: String::new(),
+            });
+        }
+    }
+
     fn ask(&self, question: &str, options: Vec<String>) {
         {
             let mut said = lock(&self.said);
@@ -482,6 +539,7 @@ impl<'a> Out<'a> {
 
     /// Ends the turn: `SayEnd` once, and nothing after it.
     fn end(&self, then: Then) {
+        self.step_over();
         self.send(MindEvent::SayEnd { then });
         self.ended.store(true, Ordering::SeqCst);
     }
@@ -495,12 +553,30 @@ impl Mind {
     pub fn new(thinker: Arc<dyn Thinker>) -> Mind {
         Mind {
             thinker,
+            desk: Mutex::new(desk::no_desk()),
+            memory: Arc::new(memory::Memory::passing()),
             state: Mutex::new(State::default()),
             filler_after: FILLER_AFTER,
             idle_forget: IDLE_FORGET,
             pending_limit: PENDING_LIMIT,
             deeds: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// This mind, keeping what it learns about the person in `path`.
+    pub fn remembering(mut self, path: std::path::PathBuf) -> Mind {
+        self.memory = Arc::new(memory::Memory::kept_in(path));
+        self
+    }
+
+    /// What was learned about the person: Settings shows it and changes it.
+    pub fn memory(&self) -> &memory::Memory {
+        &self.memory
+    }
+
+    /// What carries out notes, sites and apps on the computer from now on.
+    pub fn set_desk(&self, desk: Arc<dyn desk::Desk>) {
+        *lock(&self.desk) = desk;
     }
 
     /// One spoken turn. Events go to `out` in the order `MindEvent` describes; returns when the
@@ -570,6 +646,18 @@ impl Mind {
             c.cancel();
         }
         dropped
+    }
+
+    /// The person has stopped speaking for a moment, so a request is likely to follow: the
+    /// thinker gets ready for it, on the model the last request used (the first of a start
+    /// goes to the default one). A sentence that is answered without the model wastes this,
+    /// which costs nothing with the model.
+    pub fn warm(&self) {
+        let model = lock(&self.state)
+            .model
+            .clone()
+            .unwrap_or_else(|| think::DEFAULT_MODEL.to_string());
+        self.thinker.warm(INSTRUCTIONS, &model);
     }
 
     /// The stage took a newer input (a click, or a sentence heard) than the turns in flight.
@@ -704,6 +792,7 @@ impl Mind {
             ended: AtomicBool::new(false),
             forgot,
             inputs,
+            stepping: AtomicBool::new(false),
         };
         if forgot {
             o.send(MindEvent::Cleared);
@@ -712,7 +801,7 @@ impl Mind {
         tracing::debug!(
             ms = started.elapsed().as_millis() as u64,
             step = kind,
-            "open dot turn"
+            "open sage turn"
         );
     }
 
@@ -825,9 +914,25 @@ impl Mind {
                 then: AskFor::AnswerCheck { deed },
                 ..
             } => {
-                let Some(done) = confirmed(rt, &deed, view, &may_act).await else {
-                    o.end(Then::Rest);
-                    return "ended before the deed";
+                let done = if let Deed::Command { command, .. } = &deed {
+                    if !may_act() {
+                        o.end(Then::Rest);
+                        return "ended before the deed";
+                    }
+                    // Turned off since it was asked: not run.
+                    if !rt.settings().await.open_dot_commands {
+                        Outcome::refused(desk::COMMANDS_OFF)
+                    } else {
+                        o.step(&deed.doing());
+                        self.run_command(o, command, cancel).await
+                    }
+                } else {
+                    let going = || o.step(&deed.doing());
+                    let Some(done) = confirmed(rt, &deed, view, &may_act, &going).await else {
+                        o.end(Then::Rest);
+                        return "ended before the deed";
+                    };
+                    done
                 };
                 o.deed_done(&done.said);
                 let then = if done.done {
@@ -843,6 +948,12 @@ impl Mind {
                     o.end(Then::Rest);
                     return "ended before the deed";
                 }
+                let named = spoken_name(&proposal.name);
+                o.step(&if named.is_empty() {
+                    "Creating the sol".to_string()
+                } else {
+                    format!("Creating {named}")
+                });
                 let (said, opened, then) = create(rt, proposal, view).await;
                 o.deed_done(&said);
                 o.say(&said);
@@ -858,6 +969,52 @@ impl Mind {
                 o.end(Then::Rest);
                 "nothing to do"
             }
+        }
+    }
+
+    /// Runs a command the person said yes to, on the desk. What it printed is shown on a
+    /// card (its first lines); what is said is that it is done, or why it is not.
+    async fn run_command(&self, o: &Out<'_>, command: &str, cancel: &CancellationToken) -> Outcome {
+        let desk = lock(&self.desk).clone();
+        let task = desk::DeskTask::Command {
+            command: command.to_string(),
+        };
+        // "Stop", a new sentence or closing the stage ends the turn: the command is told to
+        // stop, and is waited for (it ends within a moment).
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let told = stop.clone();
+        let running = tokio::task::spawn_blocking(move || desk.carry_out(&task, &told));
+        tokio::pin!(running);
+        let ran = tokio::select! {
+            ran = &mut running => ran,
+            _ = cancel.cancelled() => {
+                stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                running.await
+            }
+        }
+        .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
+        match ran {
+            Ok(printed) => {
+                let lines: Vec<String> = printed
+                    .lines()
+                    .map(|line| picture::clean(line, OUTPUT_LINE_BYTES))
+                    .filter(|line| !line.is_empty())
+                    .take(OUTPUT_LINES)
+                    .collect();
+                if !lines.is_empty() {
+                    o.send(MindEvent::Card {
+                        card: Card::List {
+                            title: "What it printed".into(),
+                            lines,
+                        },
+                    });
+                }
+                Outcome {
+                    said: desk::COMMAND_DONE.into(),
+                    done: true,
+                }
+            }
+            Err(why) => Outcome::refused(why),
         }
     }
 
@@ -927,7 +1084,7 @@ impl Mind {
         };
 
         match quick {
-            Some(Quick::Stop) | Some(Quick::Cancel) => {
+            Some(Quick::Stop) | Some(Quick::Cancel) | Some(Quick::Bye) => {
                 let setup = waiting
                     .as_ref()
                     .and_then(|w| w.kind.setup_id().map(str::to_string));
@@ -945,7 +1102,14 @@ impl Mind {
                     self.finish(o, &heard, OKAY, Then::Rest);
                     return "cancel";
                 }
+                // "Thank you", "goodbye", "close": what waited is dropped and the card goes, the
+                // session rests and the stage closes. Nothing is said: the recogniser can make
+                // "thank you" of speech in the room, and an answer to nobody would be worse
+                // than a stage that closes quietly.
                 o.end(Then::Rest);
+                if quick == Some(Quick::Bye) {
+                    return "bye";
+                }
                 return "stop";
             }
             Some(Quick::Repeat) => {
@@ -1152,17 +1316,22 @@ impl Mind {
             return "cap";
         }
         o.send(MindEvent::Thinking);
+        o.step(STEP_LOOKING);
         let picture = match Picture::take(rt, view).await {
             Ok(p) => p,
             Err(_) => {
-                tracing::warn!("open dot could not take the picture");
+                tracing::warn!("open sage could not take the picture");
                 self.finish(o, heard, WENT_WRONG, Then::Rest);
                 return "picture failed";
             }
         };
+        o.step(STEP_THINKING);
         let turns = lock(&self.state).turns.clone();
-        let asking = prompt(&picture, &turns, heard);
+        // What was learned about the person comes first, so the answer is theirs.
+        let asking = format!("{}{}", self.memory.text(), prompt(&picture, &turns, heard));
+        self.memory.heard(heard);
         let model = settings.open_dot_model.clone();
+        lock(&self.state).model = Some(model.clone());
         let mut gate = SpeechGate::new();
         // Past 200 bytes the words wait until the reply is read: before a question Dots asks a
         // yes on, no more than that is said.
@@ -1208,7 +1377,7 @@ impl Mind {
         };
         if let Some(usage) = &answer.usage {
             if rt.store().add_open_dot_usage(&model, usage).await.is_err() {
-                tracing::warn!("open dot usage could not be recorded");
+                tracing::warn!("open sage usage could not be recorded");
             }
         }
         // What the stream held back and turned out to be speech; never the words twice.
@@ -1218,6 +1387,9 @@ impl Mind {
         match &reply.wish {
             Some(wish) if wish.may_ask_a_yes() => o.stream(&held.cut()),
             _ => o.stream(&held.release()),
+        }
+        if let Some(what) = reply.wish.as_ref().and_then(Wish::habit) {
+            self.memory.asked(what);
         }
         let Some(wish) = reply.wish else {
             // A wish that could not be read is said not to be done, after any words.
@@ -1235,6 +1407,7 @@ impl Mind {
             return "words";
         };
         if wish == Wish::Needs {
+            o.step(STEP_NEEDS);
             return self.needs(&picture, heard, o);
         }
         if let Wish::ReadQuestion { q } = &wish {
@@ -1242,7 +1415,14 @@ impl Mind {
                 lock(&o.read_aloud).push(line.id.clone());
             }
         }
-        let step = plan(&wish, &picture, view);
+        let step = match plan(&wish, &picture, view) {
+            // Turned off in Settings: no command is offered, and the person is told why.
+            Step::Confirm {
+                deed: Deed::Command { .. },
+                ..
+            } if !settings.open_dot_commands => Step::Say(desk::COMMANDS_OFF.into()),
+            step => step,
+        };
         self.act(rt, step, &picture, heard, own, view, o, cancel)
             .await
     }
@@ -1323,6 +1503,7 @@ impl Mind {
                     o.end(Then::Rest);
                     return "ended before the deed";
                 }
+                o.step(&deed.doing());
                 let done = outcome(rt, &deed).await;
                 o.deed_done(&done.said);
                 let then = if done.done {
@@ -1369,12 +1550,54 @@ impl Mind {
                 "ask"
             }
             Step::Open(target, said) => {
+                // Where it goes: the outcome's own words ("Opening the Inbox").
+                o.step(&said);
                 o.send(MindEvent::Open { target });
                 // The model often says the same thing first ("Opening the inbox."): once is
                 // enough.
                 let line = if o.just_said(&said) { "" } else { &said };
                 self.finish(o, heard, line, Then::FollowUp);
                 "open"
+            }
+            Step::Remember(note) => {
+                o.step(STEP_REMEMBER);
+                // What is kept is said, so the person hears what Sage took from it.
+                let line = match self.memory.remember(&note) {
+                    memory::REMEMBERED => format!(
+                        "I'll remember this: {}",
+                        sentence_of(&picture::clean(&note, memory::NOTE_BYTES))
+                    ),
+                    other => other.to_string(),
+                };
+                self.finish(o, heard, &line, Then::FollowUp);
+                "remember"
+            }
+            Step::Forget => {
+                // Only on the person's own word: the model alone does not wipe it.
+                if heard.to_lowercase().contains("forget") {
+                    self.memory.forget_all();
+                    self.finish(o, heard, memory::FORGOT, Then::FollowUp);
+                } else {
+                    self.finish(o, heard, memory::FORGET_HOW, Then::FollowUp);
+                }
+                "forget"
+            }
+            Step::Desk(task) => {
+                o.step(&task.doing());
+                let desk = lock(&self.desk).clone();
+                let doing = task.clone();
+                // Writing a file or starting a program is not for the async threads.
+                let done = tokio::task::spawn_blocking(move || {
+                    desk.carry_out(&doing, &std::sync::atomic::AtomicBool::new(false))
+                })
+                .await
+                .unwrap_or_else(|_| Err(desk::FAILED.to_string()));
+                let line = match done {
+                    Ok(_) => task.done(),
+                    Err(why) => why,
+                };
+                self.finish(o, heard, &line, Then::FollowUp);
+                "desk"
             }
             Step::Create { description } => {
                 o.say(SETTING_UP);
@@ -1432,6 +1655,7 @@ impl Mind {
         o: &Out<'_>,
         cancel: &CancellationToken,
     ) -> &'static str {
+        o.step(STEP_LOOKING);
         let picture = match Picture::take(rt, view).await {
             Ok(p) => p,
             Err(_) => {
@@ -1446,7 +1670,7 @@ impl Mind {
             .map(|d| d.handle.clone())
         else {
             self.finish(o, heard, DOT_GONE, Then::Rest);
-            return "dot gone";
+            return "sol gone";
         };
         let wish = match wish.clone() {
             Wish::Run { .. } => Wish::Run { d: handle },
@@ -1484,6 +1708,7 @@ impl Mind {
             self.finish(o, heard, &said, Then::Rest);
             return "cap";
         }
+        o.step(STEP_SETUP);
         let (asked, usage) = {
             let request = rt.setup_ask_with_usage(&id, req.clone());
             tokio::pin!(request);
@@ -1515,7 +1740,7 @@ impl Mind {
                 .await
                 .is_err()
             {
-                tracing::warn!("open dot usage could not be recorded");
+                tracing::warn!("open sage usage could not be recorded");
             }
         }
         // Written by the setup agent: cleaned and capped before they are said or shown.
@@ -1579,7 +1804,7 @@ async fn capped(rt: &Runtime, settings: &crate::settings::Settings) -> Option<St
     match cap_hit(rt.store(), settings, chrono::Utc::now()).await {
         Ok(hit) => hit,
         Err(_) => {
-            tracing::warn!("open dot could not read the spending caps");
+            tracing::warn!("open sage could not read the spending caps");
             Some(WENT_WRONG.into())
         }
     }
@@ -1593,6 +1818,7 @@ async fn confirmed(
     deed: &Deed,
     view: &View,
     may_act: &(dyn Fn() -> bool + Sync),
+    going: &(dyn Fn() + Sync),
 ) -> Option<Outcome> {
     let Ok(picture) = Picture::take(rt, view).await else {
         return Some(Outcome::refused(WENT_WRONG));
@@ -1608,6 +1834,8 @@ async fn confirmed(
             picture.dots.iter().any(|d| &d.id == dot_id)
         }
         Deed::Answer { message_id, .. } => picture.questions.iter().any(|q| &q.id == message_id),
+        // Run by the mind itself (`run_command`); there is no record to look for.
+        Deed::Command { .. } => true,
     };
     if !still {
         return Some(Outcome::refused(match deed {
@@ -1615,7 +1843,19 @@ async fn confirmed(
             _ => HANDLED,
         }));
     }
+    // The record is there and the turn still stands: the deed is tried now.
+    going();
     Some(outcome(rt, deed).await)
+}
+
+/// `text` ending as a sentence does.
+fn sentence_of(text: &str) -> String {
+    let text = text.trim();
+    if text.ends_with(['.', '!', '?']) {
+        text.to_string()
+    } else {
+        format!("{text}.")
+    }
 }
 
 /// While alive, a step taken by a yes is being decided (`State::deciding`).
@@ -1744,7 +1984,7 @@ fn create_question(p: &SetupProposal) -> String {
     let name = name
         .trim_end_matches(['.', '!', '?', ':', ';', ','])
         .trim_end();
-    let name = if name.is_empty() { "The new dot" } else { name };
+    let name = if name.is_empty() { "The new sol" } else { name };
     let runs = runs(p.schedule.as_ref());
     let mut chars = runs.chars();
     let runs = match chars.next() {
@@ -1794,7 +2034,7 @@ fn error_said(e: Error) -> String {
         _ => String::new(),
     };
     // The CLI's own words after this are not said.
-    const CLI_FAILED: &str = "Claude could not set up the dot";
+    const CLI_FAILED: &str = "Claude could not set up the sol";
     let text = if text.starts_with(CLI_FAILED) {
         CLI_FAILED.to_string()
     } else {

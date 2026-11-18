@@ -58,7 +58,7 @@ fn asks(v: &Verdict) -> &Ask {
 
 fn denied(site: &str) -> Verdict {
     Verdict::Refuse(format!(
-        "Denied by the policy of dot 'shopper': the browser may not be used on {site}."
+        "Denied by the policy of sol 'shopper': the browser may not be used on {site}."
     ))
 }
 
@@ -508,7 +508,7 @@ fn typing_a_password_or_code_is_refused_whatever_the_rules() {
     let refusal = Verdict::Refuse(s(PASSWORD_REFUSAL));
     assert_eq!(
         PASSWORD_REFUSAL,
-        "Dots does not type passwords or codes. Ask the person to enter it in the browser window, with your ask tool."
+        "Sage does not type passwords or codes. Ask the person to enter it in the browser window, with your ask tool."
     );
     assert_eq!(
         verdict(

@@ -91,7 +91,7 @@ test("the manifest points the updater at the release's installer and its signatu
   });
   assert.deepEqual(body, {
     version: "0.2.0",
-    notes: "Dots 0.2.0",
+    notes: "Sage 0.2.0",
     pub_date: "2026-10-20T09:17:00.000Z",
     platforms: {
       "windows-x86_64": {
@@ -124,6 +124,22 @@ test("the manifest offers the universal macOS archive to both kinds of Mac", () 
   assert.equal(body.platforms["windows-x86_64"].signature, "d2lu");
 });
 
+test("the manifest offers the ARM64 installer to ARM64 Windows", () => {
+  const body = manifest({
+    version: "0.5.2",
+    signature: "eDY0",
+    installer: "Sage_0.5.2_x64-setup.exe",
+    date: new Date("2026-11-17T09:00:00Z"),
+    arm: { installer: "arm-release/Sage_0.5.2_arm64-setup.exe", signature: "YXJt " },
+  });
+  assert.deepEqual(Object.keys(body.platforms), ["windows-x86_64", "windows-aarch64"]);
+  assert.deepEqual(body.platforms["windows-aarch64"], {
+    signature: "YXJt",
+    url: "https://github.com/Aakshar-D/dots/releases/download/v0.5.2/Sage_0.5.2_arm64-setup.exe",
+  });
+  assert.equal(body.platforms["windows-x86_64"].signature, "eDY0");
+});
+
 test("the manifest carries the notes file when one is given", () => {
   const base = {
     version: "0.3.0",
@@ -132,8 +148,8 @@ test("the manifest carries the notes file when one is given", () => {
     date: new Date("2026-10-27T09:00:00Z"),
   };
   assert.equal(manifest({ ...base, notes: "- New things\n" }).notes, "- New things");
-  assert.equal(manifest(base).notes, "Dots 0.3.0");
-  assert.equal(manifest({ ...base, notes: "  \n" }).notes, "Dots 0.3.0");
+  assert.equal(manifest(base).notes, "Sage 0.3.0");
+  assert.equal(manifest({ ...base, notes: "  \n" }).notes, "Sage 0.3.0");
 });
 
 // Final review I6: the notes a promote left on master never describe a later version.

@@ -594,13 +594,13 @@ async fn an_origin_that_cannot_be_computed_says_why_without_a_value() {
     assert_eq!(opened, 0);
     assert_eq!(
         notices,
-        ["MCP_HOST: not in Personal (dot 'triage', mcp:gh)"]
+        ["MCP_HOST: not in Personal (sol 'triage', mcp:gh)"]
     );
     let (opened, notices) = run(&h, &vault, &acme(), "gh").await;
     assert_eq!(opened, 0);
     assert_eq!(
         notices,
-        ["MCP_HOST: not in Acme Engineering (dot 'triage', mcp:gh)"]
+        ["MCP_HOST: not in Acme Engineering (sol 'triage', mcp:gh)"]
     );
 }
 

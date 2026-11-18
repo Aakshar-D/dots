@@ -181,7 +181,7 @@ pub fn edit_members(
         } => {
             if roster.member_with_key(key).is_some() {
                 return Err(Error::Conflict(
-                    "This Dots ID is already on the member list.".into(),
+                    "This Sage ID is already on the member list.".into(),
                 ));
             }
             let listed = roster.member_with_email(email).map(|m| m.id.clone());
@@ -222,7 +222,7 @@ pub fn edit_members(
             locked(member.role == Role::Owner)?;
             let Some(at) = member.keys.iter().position(|k| k == key) else {
                 return Err(Error::NotFound(format!(
-                    "{} does not list that Dots ID.",
+                    "{} does not list that Sage ID.",
                     member.name
                 )));
             };

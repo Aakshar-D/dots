@@ -124,14 +124,14 @@ pub fn write(root: &Path, graph: &Graph, commit: Option<&str>) -> Result<PathBuf
         };
     if linked {
         return Err(format!(
-            "{} is a link to another folder; Dots does not export through it",
+            "{} is a link to another folder; Sage does not export through it",
             dir.display()
         ));
     }
     let target = dir.join("graph.json");
     if std::fs::symlink_metadata(&target).is_ok_and(|m| m.file_type().is_symlink()) {
         return Err(format!(
-            "{} is a link; Dots does not write through it",
+            "{} is a link; Sage does not write through it",
             target.display()
         ));
     }

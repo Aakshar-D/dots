@@ -74,7 +74,7 @@ describe("the run page's steps", () => {
     expect(joinAnd(["10 runs"])).toBe("10 runs");
   });
 
-  it("links a step to its dot runs by thread, and each member to the run of its branch", () => {
+  it("links a step to its sol runs by thread, and each member to the run of its branch", () => {
     const build = latestStepRuns(waiting).get("build") as StepRun;
     // The lead's, a member's with a branch, a member's without, the lead's continuation.
     const runs: StepDotRun[] = sample.stepDotRuns;

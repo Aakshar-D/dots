@@ -98,7 +98,7 @@ impl Stdio {
             .try_send(message.to_string())
             .map_err(|e| match e {
                 mpsc::error::TrySendError::Full(_) => {
-                    McpError::Protocol("the server does not read what Dots sends".into())
+                    McpError::Protocol("the server does not read what Sage sends".into())
                 }
                 mpsc::error::TrySendError::Closed(_) => McpError::Stopped,
             })

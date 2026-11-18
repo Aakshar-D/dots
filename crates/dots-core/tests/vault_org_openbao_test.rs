@@ -510,7 +510,7 @@ async fn sealed_a_server_error_or_rate_limiting_is_unreachable() {
     assert_eq!(
         e,
         SourceError::Unreachable(format!(
-            "{} is rate limiting Dots (HTTP 429)",
+            "{} is rate limiting Sage (HTTP 429)",
             fake.address()
         ))
     );

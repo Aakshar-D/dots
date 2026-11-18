@@ -5,7 +5,7 @@ import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 
 describe("the memory commands", () => {
-  it("list, add, change and delete a dot's memories as the core names them", async () => {
+  it("list, add, change and delete a sol's memories as the core names them", async () => {
     const [pinned, persons] = sample.memories;
     backend.on("memories_list", () => sample.memories);
     backend.on("memory_add", () => persons);
@@ -27,11 +27,11 @@ describe("the memory commands", () => {
 
   it("rejects with the core's sentence", async () => {
     backend.on("memory_add", () => {
-      throw { kind: "conflict", message: "This dot already remembers that." };
+      throw { kind: "conflict", message: "This sol already remembers that." };
     });
     await expect(commands.memoryAdd("dot-a", "Again.")).rejects.toMatchObject({
       kind: "conflict",
-      message: "This dot already remembers that.",
+      message: "This sol already remembers that.",
     });
   });
 });

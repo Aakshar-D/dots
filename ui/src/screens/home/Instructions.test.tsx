@@ -41,7 +41,7 @@ function deciding(list: InstructionProposal[]) {
   });
 }
 
-describe("instructions a dot proposed", () => {
+describe("instructions a sol proposed", () => {
   it("shows the waiting one in the conversation with its reason and changes", async () => {
     home([a]);
     backend.on("instruction_proposals_list", () => [
@@ -64,7 +64,7 @@ describe("instructions a dot proposed", () => {
     expect(backend.callsTo("instruction_proposals_list")).toContainEqual({ dotId: dot.id });
   });
 
-  it("approves it, and reads the dot and the list again", async () => {
+  it("approves it, and reads the sol and the list again", async () => {
     home([a]);
     deciding([proposal()]);
     const { user } = renderApp(`/home/${dot.id}`);
@@ -98,7 +98,7 @@ describe("instructions a dot proposed", () => {
 
   it("shows a refused decision as the core words it and keeps the card", async () => {
     const refusal =
-      "the dot's instructions changed after it proposed these; ask it to propose them again";
+      "the sol's instructions changed after it proposed these; ask it to propose them again";
     home([a]);
     backend.on("instruction_proposals_list", () => [proposal()]);
     backend.on("instruction_proposal_decide", () => {
@@ -111,7 +111,7 @@ describe("instructions a dot proposed", () => {
     expect(within(shown).getByRole("button", { name: "Approve" })).toBeEnabled();
   });
 
-  it("waits to be decided while the dot still works on its topic", async () => {
+  it("waits to be decided while the sol still works on its topic", async () => {
     const working = { ...a, status: "running" as const, ended_at: null };
     const runs = home([working]);
     backend.on("instruction_proposals_list", () => [proposal()]);
@@ -132,7 +132,7 @@ describe("instructions a dot proposed", () => {
     expect(within(shown).queryByText(wait)).toBeNull();
   });
 
-  it("lists the waiting ones in the Inbox with their dot and conversation", async () => {
+  it("lists the waiting ones in the Inbox with their sol and conversation", async () => {
     backend.on("inbox", () => ({
       approvals: [],
       review_runs: [],

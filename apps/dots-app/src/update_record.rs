@@ -302,12 +302,12 @@ mod tests {
     fn a_start_with_nothing_to_change_leaves_the_record_alone() {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join(RECORD_FILE);
-        std::fs::write(&file, "{written by a newer Dots").unwrap();
+        std::fs::write(&file, "{written by a newer Sage").unwrap();
         let (_, health) = settle_start(dir.path(), "0.3.0", true);
         assert_eq!(health, Health::Fine);
         assert_eq!(
             std::fs::read_to_string(&file).unwrap(),
-            "{written by a newer Dots"
+            "{written by a newer Sage"
         );
         // A start that does change it writes it.
         write(dir.path(), &installed(dir.path())).unwrap();

@@ -79,9 +79,9 @@ const IDENTITY: [(&str, &str); 4] = [
     ("GIT_COMMITTER_EMAIL", "checkpoints@dots.invalid"),
 ];
 const TOO_LARGE_REASON: &str =
-    "Larger than 20 MB: Dots did not keep a copy, so it can't be put back.";
-const LINK_REASON: &str = "A link: Dots does not put links back.";
-const REPO_REASON: &str = "A folder with its own git repository: Dots does not put it back.";
+    "Larger than 20 MB: Sage did not keep a copy, so it can't be put back.";
+const LINK_REASON: &str = "A link: Sage does not put links back.";
+const REPO_REASON: &str = "A folder with its own git repository: Sage does not put it back.";
 
 /// How a run's folder was snapshotted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -502,13 +502,13 @@ impl Limits {
     fn check(&self, count: usize, total: u64) -> Result<()> {
         if count > self.max_files {
             return Err(Error::Invalid(format!(
-                "This folder has more than {} files to back up, so Dots did not back it up and this run can't be undone.",
+                "This folder has more than {} files to back up, so Sage did not back it up and this run can't be undone.",
                 self.max_files
             )));
         }
         if total > self.max_total_bytes {
             return Err(Error::Invalid(format!(
-                "This folder holds more than {} MB to back up, so Dots did not back it up and this run can't be undone.",
+                "This folder holds more than {} MB to back up, so Sage did not back it up and this run can't be undone.",
                 self.max_total_bytes / (1024 * 1024)
             )));
         }
@@ -602,7 +602,7 @@ impl Checkpoints {
             Ok(rec) => rec,
             Err(_) => Record {
                 note: Some(format!(
-                    "Dots took longer than {} seconds to back up this folder, so this run can't be undone.",
+                    "Sage took longer than {} seconds to back up this folder, so this run can't be undone.",
                     SNAPSHOT_TIMEOUT.as_secs()
                 )),
                 ..self.empty_record(run_id, folder, Kind::Folder)
@@ -652,7 +652,7 @@ impl Checkpoints {
                 tracing::warn!(run = %run_id, "the run's checkpoint failed: {e}");
                 rec.note = Some(match e {
                     Error::Invalid(why) => why,
-                    other => format!("Dots could not back up this folder ({other}), so this run can't be undone."),
+                    other => format!("Sage could not back up this folder ({other}), so this run can't be undone."),
                 });
             }
         }
@@ -689,11 +689,11 @@ impl Checkpoints {
                 Ok(Err(e)) => {
                     tracing::warn!(run = %run_id, "the run's closing checkpoint failed: {e}");
                     rec.before = None;
-                    rec.note = Some(format!("Dots could not list this run's changes ({e})."));
+                    rec.note = Some(format!("Sage could not list this run's changes ({e})."));
                 }
                 Err(_) => {
                     rec.before = None;
-                    rec.note = Some("Dots took too long to list this run's changes.".into());
+                    rec.note = Some("Sage took too long to list this run's changes.".into());
                 }
             }
             if let Err(e) = self.save(&rec) {
@@ -1144,7 +1144,7 @@ impl Checkpoints {
 }
 
 const PARTIAL_NOTE: &str =
-    "Some files could not be read when Dots backed up the folder; changes to them can't be undone.";
+    "Some files could not be read when Sage backed up the folder; changes to them can't be undone.";
 
 /// `None` when `folder` is not in a git work tree; else the folder's path inside it
 /// (`/`-terminated, or empty at the top).
@@ -1454,7 +1454,7 @@ async fn changes_between(rec: &Record, before: &Snapshot, after: &Snapshot) -> R
         } else {
             (
                 false,
-                Some("Dots does not put this kind of file back.".to_string()),
+                Some("Sage does not put this kind of file back.".to_string()),
             )
         };
         changes.push(Change {
