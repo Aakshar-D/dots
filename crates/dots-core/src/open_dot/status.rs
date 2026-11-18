@@ -123,10 +123,33 @@ fn doing(tool: &str) -> String {
 /// at all when it sounds like the wake or stop phrase.
 fn said_line(last: &LastRun) -> String {
     let line = unmarked(&clean(&last.line, RESULT_BYTES));
+    let line = if last.outcome == "failed" {
+        without_code(&line).to_string()
+    } else {
+        line
+    };
     if sounds_like_an_order(&line) {
         String::new()
     } else {
         line
+    }
+}
+
+/// An error without the code the engine puts before it ("error_during_execution: The disk is
+/// full" is stored so): a first word in snake case and a colon. Said aloud, the code is noise
+/// before the words that tell what went wrong. A line that is only the code is kept whole.
+fn without_code(line: &str) -> &str {
+    match line.split_once(':') {
+        Some((code, rest))
+            if code.contains('_')
+                && code
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+                && !rest.trim().is_empty() =>
+        {
+            rest.trim_start()
+        }
+        _ => line,
     }
 }
 
@@ -376,6 +399,24 @@ pub(super) fn named<'a>(picture: &'a Picture, name: &str) -> Option<&'a DotLine>
 mod tests {
     use super::super::picture::StepLine;
     use super::*;
+
+    #[test]
+    fn an_error_is_said_without_the_engines_code_before_it() {
+        assert_eq!(
+            without_code("error_during_execution: The disk is full."),
+            "The disk is full."
+        );
+        // Words that only look alike are kept: no snake case, a code alone, a path, a time.
+        for kept in [
+            "exit code 1",
+            "timeout: the build took too long",
+            "error_during_execution:",
+            "C:/work/notes_2.md: not found",
+            "At 10:30 the build_step failed",
+        ] {
+            assert_eq!(without_code(kept), kept);
+        }
+    }
 
     fn dot(n: usize, name: &str, status: &str) -> DotLine {
         DotLine {
