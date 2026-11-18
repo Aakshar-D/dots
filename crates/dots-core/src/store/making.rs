@@ -721,20 +721,25 @@ impl Store {
     }
 
     /// The newest question a run of the chat topic `root_run_id` asked the person, among the
-    /// runs queued at or after `since`: the question a job that runs in that topic since then
-    /// waits on, answered, dismissed or open.
+    /// runs queued at or after `since` and no later than `until`: the question a job that runs
+    /// in that topic since `since`, and is now at a run queued at `until`, waits on, answered,
+    /// dismissed or open. A question a later run asked is not that job's yet: the job comes
+    /// to it once it has moved to the run that carries the answer to this one.
     pub async fn latest_question_since(
         &self,
         root_run_id: &str,
         since: &str,
+        until: &str,
     ) -> Result<Option<Message>> {
         let id: Option<String> = sqlx::query_scalar(
             "SELECT m.id FROM messages m JOIN runs r ON r.id = m.run_id \
              WHERE m.kind = 'question' AND r.root_run_id = ? AND r.queued_at >= ? \
+             AND r.queued_at <= ? \
              ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1",
         )
         .bind(root_run_id)
         .bind(since)
+        .bind(until)
         .fetch_optional(&self.pool)
         .await?;
         match id {

@@ -727,14 +727,17 @@ impl Makers {
                 continue;
             }
             // The questions of the job's runs: those the topic's runs asked since the job's
-            // first run was queued.
+            // first run was queued, up to the run the job is at. When the run that carries an
+            // answer asked again before a pass saw the answer, the job is still at the run
+            // before it: it follows the answered question to that run first, and only then
+            // waits on the next one.
             let since = match job.first_run_id.as_deref() {
                 Some(id) => store.get_run(id).await.ok().map(|run| run.queued_at),
                 None => None,
             }
             .unwrap_or_else(|| job.created_at.clone());
             let asked = store
-                .latest_question_since(&last.root_run_id, &since)
+                .latest_question_since(&last.root_run_id, &since, &last.queued_at)
                 .await?;
             let final_text = last.summary.as_deref();
             match asked {
