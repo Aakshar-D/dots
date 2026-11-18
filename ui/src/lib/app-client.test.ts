@@ -1,5 +1,7 @@
 // The client Dots puts into an app's page (apps/dots-app/src/app_client.js), run in a context of
 // its own with a stand-in for the page's window.
+import { Blob } from "node:buffer";
+import { TextEncoder } from "node:util";
 import { runInNewContext } from "node:vm";
 
 import { describe, expect, it } from "vitest";
@@ -16,8 +18,9 @@ type Dots = {
 
 /// A page with the client loaded: what it set on `window`, a way to deliver a `message` event,
 /// the window that framed it, and its root element's style.
-function page() {
+function page(more: Record<string, unknown> = {}) {
   const listeners: ((event: unknown) => void)[] = [];
+  const clicks: ((event: unknown) => void)[] = [];
   const style = new Map<string, string>();
   const root = {
     style: { setProperty: (name: string, value: string) => style.set(name, value), colorScheme: "" },
@@ -28,13 +31,63 @@ function page() {
     parent,
     addEventListener: (type: string, listener: (event: unknown) => void) => {
       if (type === "message") listeners.push(listener);
+      if (type === "click") clicks.push(listener);
     },
+    ...more,
   };
   runInNewContext(client, { window, document: { documentElement: root }, console });
   const deliver = (event: unknown) => {
     for (const listener of listeners) listener(event);
   };
-  return { window, dots: window.dots as Dots, deliver, parent, root, style };
+  /// A click that reached the window, on `target`.
+  const click = (event: unknown) => {
+    for (const listener of clicks) listener(event);
+  };
+  return { window, dots: window.dots as Dots, deliver, click, parent, root, style };
+}
+
+/// A link as the client reads one: its attributes, and whether it is on the page.
+class Link {
+  isConnected = false;
+  /// How often the browser's own `click` ran.
+  clicked = 0;
+  constructor(private attributes: Record<string, string>) {}
+  getAttribute(name: string): string | null {
+    return this.attributes[name] ?? null;
+  }
+  closest(): Link {
+    return this;
+  }
+  click(): void {
+    this.clicked += 1;
+  }
+}
+
+/// A page whose window has what a browser's has for files: `URL` (it numbers the addresses it
+/// makes), `Blob`, links, `btoa`, and a `window.open` that counts its calls.
+function filePage() {
+  let made = 0;
+  const revoked: string[] = [];
+  const opened: unknown[] = [];
+  // A class of its own, so that the client's change to `click` stays in this page.
+  class Anchor extends Link {}
+  const p = page({
+    URL: {
+      createObjectURL: () => `blob:app/${++made}`,
+      revokeObjectURL: (url: string) => revoked.push(url),
+    },
+    Blob,
+    HTMLAnchorElement: Anchor,
+    TextEncoder,
+    btoa,
+    open: (url: unknown) => {
+      opened.push(url);
+      return "a window";
+    },
+  });
+  type Urls = { createObjectURL: (o: unknown) => string; revokeObjectURL: (u: string) => void };
+  const open = p.window.open as (url: string) => unknown;
+  return { ...p, Anchor, urls: p.window.URL as Urls, open, revoked, opened };
 }
 
 /// The next message that arrives on `port`.
@@ -101,6 +154,103 @@ describe("the client in an app's page", () => {
     await next(port);
     port.postMessage({ type: "result", id: 2, ok: true, result: false });
     await expect(cancelled).resolves.toBe(false);
+    port.close();
+  });
+
+  it("saves the file of a download link the page made from a blob", async () => {
+    const p = filePage();
+    const port = connect(p);
+    const url = p.urls.createObjectURL(new Blob(["%PDF-1.4\n"], { type: "application/pdf" }));
+    expect(url).toBe("blob:app/1");
+    // The usual way: a link that is not on the page, clicked from script, its address revoked
+    // at once.
+    const link = new p.Anchor({ href: url, download: "INV-1 - Acme.pdf" });
+    link.click();
+    p.urls.revokeObjectURL(url);
+    expect(await next(port)).toEqual({
+      type: "save_file",
+      id: 1,
+      name: "INV-1 - Acme.pdf",
+      data: btoa("%PDF-1.4\n"),
+    });
+    // The browser's own click, which the frame would refuse, was not tried.
+    expect(link.clicked).toBe(0);
+    expect(p.revoked).toEqual([url]);
+
+    // A link on the page: the click reaches the window, and is taken from the browser.
+    const second = p.urls.createObjectURL(new Blob(["a,b\n1,2\n"], { type: "text/csv" }));
+    let prevented = false;
+    const event = {
+      defaultPrevented: false,
+      target: new p.Anchor({ href: second, download: "" }),
+      preventDefault: () => {
+        prevented = true;
+      },
+    };
+    p.click(event);
+    expect(prevented).toBe(true);
+    // No name on the link: "download", with the ending of its type.
+    expect(await next(port)).toEqual({
+      type: "save_file",
+      id: 2,
+      name: "download.csv",
+      data: btoa("a,b\n1,2\n"),
+    });
+    port.close();
+  });
+
+  it("saves the file of a data: address, from a link or window.open", async () => {
+    const p = filePage();
+    const port = connect(p);
+    new p.Anchor({ href: "data:text/plain;base64,aGVsbG8=", download: "note" }).click();
+    expect(await next(port)).toEqual({
+      type: "save_file",
+      id: 1,
+      name: "note.txt",
+      data: "aGVsbG8=",
+    });
+    // Not base64: the text as the address spells it, percent signs undone.
+    expect(p.open("data:text/csv;charset=utf-8,name%2Ctotal%0AAcme%2C%E2%82%AC5")).toBeNull();
+    expect(await next(port)).toEqual({
+      type: "save_file",
+      id: 2,
+      name: "download.csv",
+      data: Buffer.from("name,total\nAcme,€5").toString("base64"),
+    });
+    expect(p.opened).toEqual([]);
+    port.close();
+  });
+
+  it("leaves alone what is no file of the page's: other links, and what the page saved itself", async () => {
+    const p = filePage();
+    const port = connect(p);
+    // Another address: the browser's own click and window.open, as before.
+    const link = new p.Anchor({ href: "https://example.com/a.pdf", download: "a.pdf" });
+    link.click();
+    expect(link.clicked).toBe(1);
+    expect(p.open("https://example.com")).toBe("a window");
+    expect(p.opened).toEqual(["https://example.com"]);
+    // A blob: address this page did not make, or has revoked.
+    const url = p.urls.createObjectURL(new Blob(["x"]));
+    p.urls.revokeObjectURL(url);
+    const gone = new p.Anchor({ href: url, download: "x.txt" });
+    gone.click();
+    expect(gone.clicked).toBe(1);
+    // A click the page's own handler took (it called saveFile itself) is not saved twice.
+    let prevented = false;
+    p.click({
+      defaultPrevented: true,
+      target: new p.Anchor({ href: "data:text/plain,hi", download: "hi.txt" }),
+      preventDefault: () => {
+        prevented = true;
+      },
+    });
+    expect(prevented).toBe(false);
+    // Nothing went to Dots: the next message is this call.
+    const asked = p.dots.call("ping");
+    expect(await next(port)).toEqual({ type: "call", id: 1, tool: "ping", input: {} });
+    port.postMessage({ type: "result", id: 1, ok: true, result: null });
+    await asked;
     port.close();
   });
 
