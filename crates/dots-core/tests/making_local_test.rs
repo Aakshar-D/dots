@@ -508,7 +508,7 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_on_the_local_engine()
     // Beyond reach: nothing is made, the request waits, and the run is told to carry on.
     let told = done(&t, &chat, "c2").await;
     assert!(
-        told.starts_with("Not made yet: \"Browser Dot\" needs the person's say-so"),
+        told.starts_with("Not made yet: \"Browser Sol\" needs the person's say-so"),
         "{told}"
     );
     assert!(
@@ -544,7 +544,7 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_on_the_local_engine()
         "{listed}"
     );
     assert!(
-        listed.ends_with("Waiting for the person: \"Browser Dot\""),
+        listed.ends_with("Waiting for the person: \"Browser Sol\""),
         "{listed}"
     );
 

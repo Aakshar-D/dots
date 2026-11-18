@@ -632,7 +632,7 @@ async fn a_makers_run_makes_changes_lists_jobs_and_deletes_through_dots_own_serv
     let waiting = call(&cli, "make_dot", more).await;
     let told = done(&waiting);
     assert!(
-        told.starts_with("Not made yet: \"Browser Dot\" needs the person's say-so"),
+        told.starts_with("Not made yet: \"Browser Sol\" needs the person's say-so"),
         "{told}"
     );
     assert!(told.contains("The browser"), "{told}");
