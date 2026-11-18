@@ -2803,6 +2803,11 @@
       "waiting",
       "not_delivered"
     ],
+    "DoneNotices": [
+      "off",
+      "mine",
+      "all"
+    ],
     "EngineKind": [
       "claude",
       "local"
@@ -7981,6 +7986,7 @@
     "spend_daily_usd": 10.0,
     "spend_monthly_usd": 200.0,
     "tested_claude_version": "2.1.295",
+    "voice_done_notices": "mine",
     "voice_enabled": false,
     "voice_hotkey": "CmdOrCtrl+Shift+Space",
     "voice_id": 0,
@@ -8034,6 +8040,7 @@
       "spend_daily_usd": 10.0,
       "spend_monthly_usd": 200.0,
       "tested_claude_version": "2.1.295",
+      "voice_done_notices": "mine",
       "voice_enabled": false,
       "voice_hotkey": "CmdOrCtrl+Shift+Space",
       "voice_id": 0,

@@ -11,6 +11,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Weak};
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
+use dots_core::model::Run;
 use dots_core::open_dot::picture::View;
 use dots_core::settings::Settings;
 use dots_core::Runtime;
@@ -27,7 +28,7 @@ use tokio_util::sync::CancellationToken;
 use super::bridge::{Bridge, MindPort, SessionPort};
 use super::download;
 use super::events::{VoiceDevice, VoiceDevices, VoiceEvent, VoiceSetup, VoiceStatus};
-use super::notices::{Needs, Notices, WaitKind, Waiting};
+use super::notices::{EndedRun, Needs, Notices, WaitKind, Waiting};
 use crate::error::CmdError;
 
 /// Said once after the first install, and by the voice preview.
@@ -266,7 +267,7 @@ pub struct Service {
 
 /// Where the session stands for a notice.
 enum Rest {
-    /// Notices off, or voice off or not ready: nothing waits.
+    /// Voice off or not ready: nothing waits.
     Off,
     /// The person speaks, Dot thinks or speaks, or a question or card shows.
     Busy,
@@ -761,6 +762,13 @@ impl Service {
                         me.kick_notices();
                     }
                 }));
+                // The mind handed a run to a sol: its end is told of.
+                let me = self.me.clone();
+                bridge.on_handed(Arc::new(move |run_id| {
+                    if let Some(me) = me.upgrade() {
+                        me.run_handed(run_id);
+                    }
+                }));
                 let ended = Ended::new();
                 s.state = built.session.state();
                 self.saw_state(s.state);
@@ -970,7 +978,7 @@ impl Service {
             s.state = State::Off;
             s.mic_open = false;
         }
-        self.clear_notices();
+        self.clear_all_notices();
         self.saw_state(State::Off);
         self.changed();
     }
@@ -986,7 +994,7 @@ impl Service {
             s.live.take()
         };
         // Not ready: nothing waits to be said.
-        self.clear_notices();
+        self.clear_all_notices();
         live
     }
 
@@ -1242,6 +1250,11 @@ impl Service {
             if !settings.voice_enabled || !settings.voice_notices {
                 self.clear_notices();
             }
+            if settings.voice_enabled {
+                self.notices().done_mode(settings.voice_done_notices);
+            } else {
+                self.notices().clear_runs();
+            }
             let wanted = self.spec_of(settings, s.setup.as_ref());
             if let Some(l) = s.live.as_mut().filter(|l| same_devices(&l.spec, &wanted)) {
                 if l.spec.voice != wanted.voice || l.spec.speed != wanted.speed {
@@ -1320,18 +1333,42 @@ impl Service {
         self.notices.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    fn notices_on(s: &Inner) -> bool {
-        s.settings.voice_enabled && s.settings.voice_notices && s.live.is_some() && !s.shutting_down
+    /// Voice is on and its session is built: a notice can be said.
+    fn voice_ready(s: &Inner) -> bool {
+        s.settings.voice_enabled && s.live.is_some() && !s.shutting_down
     }
 
-    /// Notices are on and voice is ready: only then is anything looked up, kept or said.
+    fn notices_on(s: &Inner) -> bool {
+        Self::voice_ready(s) && s.settings.voice_notices
+    }
+
+    /// Notices are on and voice is ready: only then is anything that needs the person looked
+    /// up, kept or said.
     pub fn notices_wanted(&self) -> bool {
         Self::notices_on(&self.lock())
     }
 
-    /// Nothing waits to be said.
+    /// Voice is ready: only then is a run that ended looked up, kept or told of. Which runs
+    /// are told of is the setting's (`voice_done_notices`); one handed over by voice always
+    /// is, so the setting alone turns nothing off here.
+    pub fn runs_wanted(&self) -> bool {
+        let ready = Self::voice_ready(&self.lock());
+        if !ready {
+            self.notices().clear_runs();
+        }
+        ready
+    }
+
+    /// Nothing that needs the person waits to be said.
     pub fn clear_notices(&self) {
         self.notices().clear();
+    }
+
+    /// Voice is off or not ready: nothing at all waits to be said.
+    fn clear_all_notices(&self) {
+        let mut n = self.notices();
+        n.clear();
+        n.clear_runs();
     }
 
     /// Where the session stands for a notice. Resting is the session Idle with the stage
@@ -1339,7 +1376,7 @@ impl Service {
     fn rest(&self) -> Rest {
         let (session, bridge) = {
             let s = self.lock();
-            let Some(live) = s.live.as_ref().filter(|_| Self::notices_on(&s)) else {
+            let Some(live) = s.live.as_ref().filter(|_| Self::voice_ready(&s)) else {
                 return Rest::Off;
             };
             if s.state != State::Idle {
@@ -1358,8 +1395,11 @@ impl Service {
     /// rests and none was said in the last 30 seconds, else kept for the next rest. With
     /// notices off, or voice off or not ready, it is dropped and nothing waits.
     pub async fn need(&self, need: Needs) {
+        if !self.notices_wanted() {
+            return self.clear_notices();
+        }
         let session = match self.rest() {
-            Rest::Off => return self.clear_notices(),
+            Rest::Off => return self.clear_all_notices(),
             Rest::Busy => None,
             Rest::Resting(session) => Some(session),
         };
@@ -1371,6 +1411,43 @@ impl Service {
         match (said, session) {
             (Some((line, kind)), Some(session)) => say_notice(session.as_ref(), &line, kind),
             // More waits, or the gap has not passed: counted at rest, or later.
+            _ => self.notices_at_rest().await,
+        }
+    }
+
+    /// A run changed (the notices listener); whether it has just ended in a way that is told
+    /// of. Followed whether or not voice is ready: only run ids are kept.
+    pub fn run_seen(&self, run: &Run) -> bool {
+        self.notices().seen(run)
+    }
+
+    /// Open Sage handed the run to a sol for the person (the mind's `Handed`): its end is
+    /// told of whatever "Tell me aloud when a sol finishes" says.
+    pub fn run_handed(&self, run_id: &str) {
+        if self.notices().handed(run_id) {
+            // It ended already: said at the next rest.
+            self.kick_notices();
+        }
+    }
+
+    /// A run ended (the notices listener): told of now when the setting asks for it, the
+    /// session rests and no notice was said in the last 30 seconds, else kept for the next
+    /// rest. With voice off or not ready it is dropped and nothing waits.
+    pub async fn run_ended(&self, run: EndedRun) {
+        let session = match self.rest() {
+            Rest::Off => return self.clear_all_notices(),
+            Rest::Busy => None,
+            Rest::Resting(session) => Some(session),
+        };
+        let mode = self.lock().settings.voice_done_notices;
+        let said = {
+            let mut n = self.notices();
+            n.finished(run, mode, session.is_some(), Instant::now())
+                .map(|line| (line, n.kind()))
+        };
+        match (said, session) {
+            (Some((line, kind)), Some(session)) => say_notice(session.as_ref(), &line, kind),
+            // More waits, or the gap has not passed: said at rest, or later.
             _ => self.notices_at_rest().await,
         }
     }
@@ -1400,34 +1477,52 @@ impl Service {
     /// The session rests (or a notice's gap has passed): says what still waits, counted from
     /// the Inbox, once 30 seconds have passed since the last notice and only when something
     /// waits that did not at that notice; before that, a wake-up is set for then. Busy, it
-    /// waits for the next rest.
+    /// waits for the next rest. With nothing that needs the person to say, the runs that
+    /// ended are told of; what is left of them waits for the next gap.
     async fn notices_at_rest(&self) {
         match self.rest() {
-            Rest::Off => return self.clear_notices(),
+            Rest::Off => return self.clear_all_notices(),
             Rest::Busy => return,
             Rest::Resting(_) => {}
+        }
+        if !self.notices_wanted() {
+            self.clear_notices();
         }
         match self.notices().wait_for(Instant::now()) {
             None => return,
             Some(wait) if !wait.is_zero() => return self.notice_wake_up(wait),
             Some(_) => {}
         }
-        let Some(inbox) = self.host.waiting().await else {
-            return;
+        // The Inbox is read only for what needs the person. When it cannot be read, that
+        // keeps waiting, and the runs that ended are told of all the same.
+        let inbox = if self.notices().needs_pending() {
+            self.host.waiting().await
+        } else {
+            None
         };
         // Things may have moved while the Inbox was read.
         let session = match self.rest() {
-            Rest::Off => return self.clear_notices(),
+            Rest::Off => return self.clear_all_notices(),
             Rest::Busy => return,
             Rest::Resting(session) => session,
         };
-        let said = {
+        let (said, wait) = {
             let mut n = self.notices();
-            n.rested(&inbox, Instant::now())
-                .map(|line| (line, n.kind()))
+            let now = Instant::now();
+            let line = match inbox.and_then(|inbox| n.rested(&inbox, now)) {
+                Some(line) => Some(line),
+                None => n.rested_runs(now),
+            };
+            let said = line.map(|line| (line, n.kind()));
+            (said, n.wait_for(now))
         };
         if let Some((line, kind)) = said {
             say_notice(session.as_ref(), &line, kind);
+        }
+        // Runs that ended still wait (what needs the person went first, or one handed over
+        // by voice was said alone): said once the gap has passed.
+        if let Some(wait) = wait.filter(|wait| !wait.is_zero()) {
+            self.notice_wake_up(wait);
         }
     }
 

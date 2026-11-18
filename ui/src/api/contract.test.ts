@@ -192,6 +192,7 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   FolderEvent: T.FolderEvent,
   GithubEvent: T.GithubEvent,
   WaitingOn: T.WaitingOn,
+  DoneNotices: T.DoneNotices,
   WorkflowTrigger: T.WorkflowTrigger,
   WorkflowRunStatus: T.WorkflowRunStatus,
   StepRunStatus: T.StepRunStatus,

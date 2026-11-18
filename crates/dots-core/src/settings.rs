@@ -5,7 +5,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::auto_model::AutoModels;
-use crate::model::{check_endpoint_url, MAX_QUIET_LIMIT_SECS, MIN_QUIET_LIMIT_SECS};
+use crate::model::{check_endpoint_url, TriggerKind, MAX_QUIET_LIMIT_SECS, MIN_QUIET_LIMIT_SECS};
 use crate::models::DEFAULT_CLAUDE_MODEL;
 use crate::store::Store;
 use crate::{Error, Result};
@@ -28,6 +28,37 @@ pub const MIN_VOICE_SPEED: f32 = 0.8;
 pub const MAX_VOICE_SPEED: f32 = 1.4;
 /// The longest microphone or speaker id, in bytes.
 pub const MAX_DEVICE_ID: usize = 256;
+
+// Which runs Open Sage tells of aloud when they end (`voice_done_notices`). `Off`: none.
+// `Mine`: the runs the person started (a message in the chat, **Run now**, a run that goes on
+// after an approval). `All`: every run, scheduled ones included. A run the person handed over
+// by voice is told of whatever this says.
+str_enum!(DoneNotices {
+    Off => "off",
+    Mine => "mine",
+    All => "all",
+});
+
+/// What the person started, until they pick another.
+impl Default for DoneNotices {
+    fn default() -> Self {
+        DoneNotices::Mine
+    }
+}
+
+impl DoneNotices {
+    /// Whether a run that `trigger` started is told of when it ends.
+    pub fn tells(self, trigger: TriggerKind) -> bool {
+        match self {
+            DoneNotices::Off => false,
+            DoneNotices::Mine => matches!(
+                trigger,
+                TriggerKind::Chat | TriggerKind::Manual | TriggerKind::Resume
+            ),
+            DoneNotices::All => true,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -104,6 +135,9 @@ pub struct Settings {
     pub voice_speaker: Option<String>,
     /// Open Dot says notices (a question waiting, a run that ended) aloud while it is idle.
     pub voice_notices: bool,
+    /// Which runs Open Sage tells of aloud when they end. A run the person handed over by
+    /// voice is told of whatever this says: they asked aloud.
+    pub voice_done_notices: DoneNotices,
     /// The most every dot together may spend in a local day, in estimated API USD (spend caps
     /// design); `None` is no cap.
     pub spend_daily_usd: Option<f64>,
@@ -155,6 +189,7 @@ impl Default for Settings {
             voice_mic: None,
             voice_speaker: None,
             voice_notices: false,
+            voice_done_notices: DoneNotices::default(),
             spend_daily_usd: None,
             spend_daily_tokens: None,
             spend_monthly_usd: None,
