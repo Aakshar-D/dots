@@ -31,6 +31,7 @@ const empty: Inbox = {
   app_reviews: [],
   team_scope: [],
   workflows: [],
+  make_requests: [],
   not_delivered: [],
   back: [],
   snoozed: [],
@@ -104,7 +105,13 @@ describe("waiting workflow runs in the Inbox", () => {
     renderApp("/inbox");
     await screen.findByRole("region", { name: "Workflows" });
     const groups = screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent);
-    expect(groups).toEqual(["Approvals", "Apps to review", "Workflows", "New instructions"]);
+    expect(groups).toEqual([
+      "Approvals",
+      "Sols asking to make sols",
+      "Apps to review",
+      "Workflows",
+      "New instructions",
+    ]);
   });
 
   it("leaves the Inbox when the run goes on, read again on its event", async () => {

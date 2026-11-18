@@ -32,6 +32,7 @@ describe("an allow rule in words", () => {
       "App",
       "ProposeApp",
       "Instructions",
+      "MakeDots",
     ]) {
       expect(isDotsOwnRule(tool)).toBe(true);
     }

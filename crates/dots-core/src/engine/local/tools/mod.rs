@@ -108,8 +108,13 @@ pub fn local_name(alias: &str) -> Option<&'static str> {
 /// The local tool of an approval's call: `local_name`, or for `Memory` the memory tool whose
 /// argument the input holds (`memory::Tool::for_input`), for `Workflow` likewise the workflow
 /// tool (`team_tools::Tool::for_input`), or for `ProposeApp` `copy_app` when the input names
-/// an app.
+/// an app. A `MakeDots` call is the tool for making dots its input names
+/// (`making::tools::Tool::for_input`); it is no tool of `TOOLS`, since the engine checks and
+/// performs it itself, as it does an app's tool.
 pub fn local_name_for(alias: &str, input: &Value) -> Option<&'static str> {
+    if alias == crate::making::tools::POLICY_NAME {
+        return crate::making::tools::Tool::for_input(input).map(|tool| tool.name());
+    }
     if alias == crate::memory::POLICY_NAME {
         return Some(crate::memory::Tool::for_input(input).name());
     }

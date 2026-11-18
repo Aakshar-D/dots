@@ -98,8 +98,13 @@ function Spending() {
       {capped.map((d) => (
         <SpendLine
           key={d.dot_id}
-          label={`Today, ${d.dot_name}`}
-          spend={d.today}
+          // A maker's caps count what the sols it made spent too.
+          label={
+            d.shared_today !== null
+              ? `Today, ${d.dot_name} and the sols it made`
+              : `Today, ${d.dot_name}`
+          }
+          spend={d.shared_today ?? d.today}
           usdCap={d.caps.daily_usd}
           tokenCap={d.caps.daily_tokens}
         />

@@ -419,6 +419,7 @@ mod tests {
                 seen_at: None,
                 org_id: None,
                 workspace_id: "default".into(),
+                made: None,
                 spec: DotSpec::new(name, "Do it.", "C:/work"),
             },
             active_run: None,
@@ -426,6 +427,7 @@ mod tests {
             schedule_state: None,
             needs_you,
             unread: needs_you,
+            made_dots: 0,
         }
     }
 

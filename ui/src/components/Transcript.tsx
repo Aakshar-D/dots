@@ -26,6 +26,7 @@ import { messageAttachments } from "@/lib/attachments";
 import { WorkingLine } from "@/components/WorkingLine";
 import { appTitle, isActive } from "@/lib/home-topics";
 import { localDateTime, localTime } from "@/lib/format";
+import { runSender, senderLabel, senderText } from "@/lib/making";
 import { mcpToolLabel } from "@/lib/mcp-tool";
 import { keys } from "@/lib/query";
 import { sentLaterLines } from "@/lib/send-later";
@@ -55,18 +56,23 @@ const TRIGGER: Record<Run["trigger"], string> = {
 };
 
 /// What a run's header says started it; an app-started run names its app (app library spec
-/// section 7).
+/// section 7), and a chat run that carries a maker's job or Sage's report to a maker says so
+/// (dots-make-dots design section 8).
 export function runTrigger(run: Pick<Run, "trigger" | "payload">): string {
+  const sender = runSender(run);
+  if (sender !== null) return senderLabel(sender);
   const title = appTitle(run);
   return title === null ? TRIGGER[run.trigger] : `Started by ${title}`;
 }
 
 /// What the person wrote, for a chat run: an answer to a question as they typed it, not the
-/// words Dots wraps it in for the dot.
+/// words Dots wraps it in for the dot. Nothing for a chat run whose message a maker or Sage
+/// wrote (`runSender`): it is never shown, or sent again, as the person's.
 export function chatMessage(run: Run): string | null {
   if (run.trigger !== "chat" || typeof run.payload !== "object" || run.payload === null) {
     return null;
   }
+  if (runSender(run) !== null) return null;
   const { answer, message } = run.payload as Record<string, unknown>;
   if (typeof answer === "string") return answer;
   return typeof message === "string" ? message : null;
@@ -460,6 +466,9 @@ export function Transcript(props: {
     <div className="flex flex-col gap-4">
       {props.runs.map((run, i) => {
         const message = chatMessage(run);
+        // A job from the sol's maker, or Sage's report to a maker: not the person's message.
+        const sender = runSender(run);
+        const sent = sender === null ? null : senderText(run);
         // The files a person's message carried (attachments spec section 6).
         const files = run.trigger === "chat" ? messageAttachments(run) : [];
         const last = i === props.runs.length - 1;
@@ -471,7 +480,7 @@ export function Transcript(props: {
           <section key={run.id} aria-label={names[i]}>
             {/* In the conversation a chat-trigger run needs no header: its bubble says it. The
                 section keeps its name either way. */}
-            {!(conversation && run.trigger === "chat") && (
+            {!(conversation && run.trigger === "chat" && sender === null) && (
               <header className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
                 <span>{runTrigger(run)}</span>
                 <span>{localDateTime(run.queued_at)}</span>
@@ -491,6 +500,16 @@ export function Transcript(props: {
                   )}
                 >
                   {message}
+                </p>
+              )}
+              {/* A sol wrote this text, or Sage quoted a sol in it: plain text, on the sol's
+                  side of the chat, under a header that says whose it is. */}
+              {sender !== null && sent !== null && (
+                <p
+                  data-from={sender.kind === "report" ? "sage" : "maker"}
+                  className="max-h-80 max-w-[85%] self-start overflow-auto rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-sm break-words whitespace-pre-wrap"
+                >
+                  {sent}
                 </p>
               )}
               {message !== null && props.messageAction?.(run)}

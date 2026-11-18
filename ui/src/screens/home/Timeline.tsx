@@ -8,6 +8,7 @@ import { ErrorNote } from "@/components/ErrorNote";
 import { Button } from "@/components/ui/button";
 import type { Topic } from "@/lib/home-topics";
 import { keys } from "@/lib/query";
+import { RootMakingCards } from "@/screens/home/MakingCards";
 import { useStickToBottom } from "@/lib/use-stick-to-bottom";
 import { RunCard } from "@/screens/home/RunCard";
 import { ScheduledCards } from "@/screens/home/ScheduledCard";
@@ -122,9 +123,12 @@ export function Timeline(props: {
                 />
                 {/* An app the run sent for review waits under its card. */}
                 <AppReviews runs={topic.runs.slice(0, 1)} dotName={dotName} />
+                {/* What that run did as a maker shows under its card too. */}
+                <RootMakingCards runs={topic.runs} />
                 {topic.runs.length > 1 && (
                   <TopicRuns
                     runs={topic.runs.slice(1)}
+                    makingElsewhere={topic.runs[0].id}
                     checkIns={checkIns}
                     dotName={dotName}
                     moveTargets={props.moveTargets}

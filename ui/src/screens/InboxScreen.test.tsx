@@ -28,6 +28,7 @@ type Optional =
   | "app_reviews"
   | "team_scope"
   | "workflows"
+  | "make_requests"
   | "not_delivered"
   | "back"
   | "snoozed"
@@ -41,6 +42,7 @@ const none = {
   app_reviews: [],
   team_scope: [],
   workflows: [],
+  make_requests: [],
   not_delivered: [],
   back: [],
   snoozed: [],
@@ -164,7 +166,7 @@ describe("the Inbox", () => {
         held: [], instructions: [],
         app_reviews: [],
         team_scope: [],
-        workflows: [],
+        workflows: [], make_requests: [],
       };
     });
 
@@ -662,7 +664,7 @@ describe("the approvals of one run", () => {
     held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
-    workflows: [],
+    workflows: [], make_requests: [],
     not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   };
   const answered = [approval, second].map((a) => ({ ...sample.approval, id: a.id }));
@@ -840,7 +842,7 @@ describe("a schedule that needs attention", () => {
     held: [], instructions: [],
     app_reviews: [],
     team_scope: [],
-    workflows: [],
+    workflows: [], make_requests: [],
     not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   };
   const only = (attention: Inbox["attention"]): Inbox => ({ ...empty, attention });

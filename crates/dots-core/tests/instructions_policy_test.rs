@@ -6,7 +6,7 @@ use dots_core::policy::{Action, Policy, Preset, Rule, INSTRUCTIONS_RULE, INSTRUC
 use serde_json::{json, Value};
 
 #[test]
-fn every_preset_allows_proposing_instructions_last() {
+fn every_preset_allows_proposing_instructions_before_making_dots() {
     for preset in [
         Preset::Sandboxed,
         Preset::Trusted,
@@ -19,8 +19,9 @@ fn every_preset_allows_proposing_instructions_last() {
             Action::Allow,
             "{preset:?}"
         );
+        // `MakeDots` alone follows it (dots-make-dots design section 5).
         assert_eq!(
-            p.rules.last(),
+            p.rules.iter().rev().nth(1),
             Some(&Rule::new("Instructions", Action::Allow))
         );
     }

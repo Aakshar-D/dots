@@ -17,6 +17,7 @@ const row = (name: string, h: number, needs_you: number, unread: number): DotOve
   schedule_state: null,
   needs_you,
   unread,
+  made_dots: 0,
 });
 
 const column = () => screen.getByRole("navigation", { name: "Sols" });

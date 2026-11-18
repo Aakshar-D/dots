@@ -64,6 +64,7 @@ describe("Run now on a sol whose runs are held", () => {
       app_reviews: [],
       team_scope: [],
       workflows: [],
+      make_requests: [],
       not_delivered: [],
       back: [],
       snoozed: [],

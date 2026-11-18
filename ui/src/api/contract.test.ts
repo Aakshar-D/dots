@@ -21,6 +21,10 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   NewDotSpec: T.DotSpec,
   ModelOption: T.ModelOption.array(),
   Dot: T.Dot,
+  DotMade: T.Dot,
+  MakeRequest: T.MakeRequest.array(),
+  MakeRequestCard: T.MakeRequestCard.array(),
+  MakingCard: T.MakingCard.array(),
   ScannedAgent: T.ScannedAgent.array(),
   AgentImport: T.AgentImport,
   Run: T.Run,
@@ -207,6 +211,11 @@ const enums: Record<keyof typeof fixture.Enums, { options: readonly string[] }> 
   GuardRole: T.GuardRole,
   RolePermission: T.RolePermission,
   InboxKind: T.InboxKind,
+  MakeDecision: T.MakeDecision,
+  RequestStatus: T.RequestStatus,
+  RequestKind: T.RequestKind,
+  JobStatus: T.JobStatus,
+  JobEnd: T.JobEnd,
   ConnectorState: T.ConnectorState,
   AuthKind: T.AuthKind,
   Trust: T.Trust,
@@ -243,6 +252,14 @@ describe("Rust/TypeScript contract", () => {
   it("has a sample of every engine event kind", () => {
     const kinds = T.RunEventData.options.map((o) => o.shape.kind.value);
     expect(fixture.RunEventData.map((e) => e.kind).sort()).toEqual([...kinds].sort());
+  });
+
+  it("has a making card of every kind, and an ask card of every kind of request", () => {
+    const kinds = T.MakingCard.options.map((o) => o.shape.kind.value);
+    expect([...new Set(fixture.MakingCard.map((c) => c.kind))].sort()).toEqual([...kinds].sort());
+    expect([...new Set(fixture.MakeRequestCard.map((c) => c.request.kind))].sort()).toEqual(
+      [...T.RequestKind.options].sort(),
+    );
   });
 
   it("has a sample of every runtime event type", () => {

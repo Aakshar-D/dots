@@ -13,6 +13,7 @@ const row = (name: string): DotOverview => ({
   schedule_state: null,
   needs_you: 0,
   unread: 0,
+  made_dots: 0,
 });
 
 /// The sols the backend has; `delete_dot` takes one out unless its name is in `stuck`.

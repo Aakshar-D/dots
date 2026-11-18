@@ -1749,6 +1749,7 @@ fn research_done(id: &str, trigger: TriggerKind) -> EndedRun {
         ok: true,
         result: Some("I found three papers".into()),
         trigger,
+        from_a_sol: false,
         viewed: false,
     }
 }

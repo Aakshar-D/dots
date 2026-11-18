@@ -1,10 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { open } from "@tauri-apps/plugin-dialog";
 import { useState, type ReactNode } from "react";
+import { Link } from "react-router";
 
 import { commands } from "@/api/commands";
 import {
   EngineKind,
+  LIMITS,
   WorkspaceMode,
   type Dot,
   type DotSpec,
@@ -20,7 +22,7 @@ import { Label } from "@/components/ui/label";
 import { NativeSelect } from "@/components/ui/native-select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import type { SpecErrors } from "@/lib/dot-rules";
+import { MAKE_PER_RUN_RULE, MAKE_TOTAL_RULE, type SpecErrors } from "@/lib/dot-rules";
 import { notifyError } from "@/lib/notify";
 import { tokenCapError, usdCapError } from "@/lib/spend";
 import { keys } from "@/lib/query";
@@ -174,10 +176,10 @@ function SpendingCaps(props: {
 }) {
   const caps = props.spec.spend_cap;
   const spend = useSpendToday().data;
-  const today = spend?.dots.find((d) => d.dot_id === props.dotId)?.today ?? {
-    cost_usd: 0,
-    tokens: 0,
-  };
+  const mine = spend?.dots.find((d) => d.dot_id === props.dotId);
+  // A maker shares its caps with the sols it made: what counts toward them is the shared total.
+  const shared = mine?.shared_today ?? null;
+  const today = shared ?? mine?.today ?? { cost_usd: 0, tokens: 0 };
   return (
     <>
       <p className="text-xs text-muted-foreground">
@@ -187,7 +189,7 @@ function SpendingCaps(props: {
       </p>
       {props.dotId !== null && spend && (
         <SpendLine
-          label="Today"
+          label={shared !== null ? "Today, with the sols it made" : "Today"}
           spend={today}
           usdCap={caps.daily_usd}
           tokenCap={caps.daily_tokens}
@@ -210,6 +212,74 @@ function SpendingCaps(props: {
           error={tokenCapError(caps.daily_tokens)}
         />
       </div>
+    </>
+  );
+}
+
+/// "Can make sols" and its two limits (dots-make-dots design section 5). The limits show while
+/// the switch is on, and while one of them cannot be saved. `made` is who made this sol, when
+/// a sol did: such a sol with the switch on has more than its maker.
+function MakingSols(props: {
+  spec: DotSpec;
+  made: Dot["made"];
+  onChange: (making: DotSpec["making"]) => void;
+  error?: string;
+}) {
+  const { spec, error } = props;
+  const making = spec.making;
+  // The tools share one policy name; a deny rule for it keeps them from the sol.
+  const denied = spec.policy.rules.some(
+    (rule) => rule.tool.trim() === "MakeDots" && rule.action === "deny",
+  );
+  return (
+    <>
+      <div className="flex items-center gap-2">
+        <Switch
+          id="dot-making-on"
+          checked={making.on}
+          onCheckedChange={(on) => props.onChange({ ...making, on })}
+        />
+        <Label htmlFor="dot-making-on">Can make sols</Label>
+      </div>
+      <p className="-mt-2 text-xs text-muted-foreground">
+        With this on, the sol makes new sols, changes or deletes the ones it made and gives them
+        jobs without asking you, as long as a sol it makes gets nothing this sol does not have
+        itself: its folder, permissions, tools, variables and limits. For anything more, or past
+        a limit below, Sage asks you on a card first. A sol it makes cannot make sols, and its
+        runs as a workflow step are not offered this.
+      </p>
+      {making.on && denied && (
+        <p role="note" className="text-xs text-needs">
+          This sol's permissions deny MakeDots, so its runs are not offered the tools. Remove
+          that rule under Permissions to let it make sols.
+        </p>
+      )}
+      {making.on && props.made && (
+        <p role="note" className="text-xs text-needs">
+          {props.made.by_name} made this sol. With this on it has more than its maker, so Sage
+          asks you before {props.made.by_name} gives it a job or changes it.
+        </p>
+      )}
+      {(making.on || error !== undefined) && (
+        <>
+          <NumberField
+            id="dot-making-per-run"
+            label="Sols it may make in one run"
+            value={making.per_run}
+            onChange={(per_run) => props.onChange({ ...making, per_run })}
+            error={error === MAKE_PER_RUN_RULE ? error : undefined}
+            hint={`1 to ${LIMITS.max_make_per_run}. One more than this in a run asks you first.`}
+          />
+          <NumberField
+            id="dot-making-total"
+            label="Sols it may keep in total"
+            value={making.total}
+            onChange={(total) => props.onChange({ ...making, total })}
+            error={error === MAKE_TOTAL_RULE ? error : undefined}
+            hint={`1 to ${LIMITS.max_make_total}. One more than this asks you first; deleting a made sol frees a place.`}
+          />
+        </>
+      )}
     </>
   );
 }
@@ -247,6 +317,22 @@ export function DotForm(props: {
   return (
     <div className="flex max-w-3xl flex-col gap-4">
       <Section title="Basics">
+        {props.existing?.made && (
+          <p className="text-sm text-muted-foreground">
+            Made by{" "}
+            {props.existing.made.by_dot_id !== null ? (
+              <Link
+                to={`/dots/${props.existing.made.by_dot_id}`}
+                className="text-foreground hover:underline"
+              >
+                {props.existing.made.by_name}
+              </Link>
+            ) : (
+              `${props.existing.made.by_name} (deleted)`
+            )}
+            {props.existing.made.purpose !== "" && <> · {props.existing.made.purpose}</>}
+          </p>
+        )}
         <Field label="Name" htmlFor="dot-name" error={errors.name}>
           <Input id="dot-name" value={spec.name} onChange={(e) => set("name", e.target.value)} />
         </Field>
@@ -503,6 +589,15 @@ export function DotForm(props: {
           spec={spec}
           onChange={(secs) => set("quiet_limit_secs", secs)}
           error={errors.quiet_limit_secs}
+        />
+      </Section>
+
+      <Section title="Making sols">
+        <MakingSols
+          spec={spec}
+          made={props.existing?.made ?? null}
+          onChange={(making) => set("making", making)}
+          error={errors.making}
         />
       </Section>
 

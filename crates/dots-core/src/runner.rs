@@ -20,12 +20,12 @@ use crate::delivery::{wait_reason, WaitFacts};
 use crate::engine::claude::once::OnceUsage;
 use crate::engine::{Engine, EngineEvent, PassUsage, RunContext};
 use crate::events::{Bus, RuntimeEvent};
-use crate::limits::{is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
+use crate::limits::{run_is_background, Admit, Limits, QueuedRun, STOPPED_BY_LIMIT};
 use crate::model::{
     effective_quiet_limit, ApprovalStatus, Delivery, Dot, EngineKind, NewRun, Run, RunStatus,
     TriggerKind, WorkspaceMode,
 };
-use crate::prompt::{build_prompt_full, context_tool_name, PromptParts};
+use crate::prompt::{build_prompt_full, context_tool_name, MakerPart, PromptParts};
 use crate::result_check::{CheckEvent, ResultCheck, ResultChecker};
 use crate::run_tools::{CloseOnDrop, OpenRequest, RunTools};
 use crate::spend::STOPPED_BY_CAP;
@@ -81,8 +81,9 @@ async fn run_graph(
 /// The name the run's model knows a policy tool by: the `Context` tool is `mcp__dots__context`
 /// on the Claude engine, `context` on the local one, and the check-in tools likewise
 /// (`checkins::Tool::model_name`); a `Memory` call is the memory tool its `input` is for
-/// (`memory::Tool::for_input`) and an `App` call the app tool its input names
-/// (`apps::run::model_name`); every other tool keeps its name.
+/// (`memory::Tool::for_input`), an `App` call the app tool its input names
+/// (`apps::run::model_name`) and a `MakeDots` call the tool for making dots its input names
+/// (`making::tools::Tool::for_input`); every other tool keeps its name.
 fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<'a, str> {
     if tool == "Context" {
         Cow::Borrowed(context_tool_name(engine))
@@ -96,6 +97,12 @@ fn model_tool_name<'a>(tool: &'a str, input: &Value, engine: EngineKind) -> Cow<
         Cow::Borrowed(crate::team_tools::Tool::for_input(input).model_name(engine))
     } else if tool == crate::instructions::POLICY_NAME {
         Cow::Borrowed(crate::instructions::model_name(engine))
+    } else if tool == crate::making::tools::POLICY_NAME {
+        // The input names which of the tools for making dots it is.
+        match crate::making::tools::Tool::for_input(input) {
+            Some(making) => Cow::Borrowed(making.model_name(engine)),
+            None => Cow::Borrowed(tool),
+        }
     } else if tool == crate::apps::PROPOSE_POLICY {
         // `copy_app` names an app; `propose_app` does not.
         let name = if input.get("app").is_some() {
@@ -321,7 +328,7 @@ impl Runner {
         let orgs = self.vault.get().and_then(|v| v.orgs());
         let run_dots = crate::accounts::Permission::RunDots;
         let access = crate::accounts::access_dot(orgs, &dot);
-        if access.allows(run_dots) || !is_background(run.trigger) {
+        if access.allows(run_dots) || !run_is_background(run) {
             return Ok(self.ceiling_hold(&dot).await);
         }
         let account = match orgs {
@@ -429,6 +436,23 @@ impl Runner {
             .await?
             .hit_for(&self.store, &run.dot_id)
             .await
+    }
+
+    /// Whether Claude's usage hold would keep a background Claude run queued now, were one
+    /// queued (usage and limits spec section 4): for a run Dots is yet to make.
+    pub(crate) fn usage_holds_background(&self) -> bool {
+        let Some(limits) = self.limits.get() else {
+            return false;
+        };
+        let probe = QueuedRun {
+            id: String::new(),
+            trigger: TriggerKind::Chat,
+            background: true,
+            engine: EngineKind::Claude,
+            hold_released: false,
+            queued_at: crate::util::now(),
+        };
+        limits.admit(&probe, self.running_background_claude()) != Admit::Go
     }
 
     /// Sets why each waiting run waits (delivery tracking spec section 3): each `queued` run
@@ -684,7 +708,10 @@ impl Runner {
     }
 
     /// Whether `run` may start workflows: it is no step of a workflow, and the person's chat is
-    /// at the root of its resumes (a follow-up, scheduled, webhook or manual run is not).
+    /// at the root of its resumes (a follow-up, scheduled, webhook or manual run is not). A chat
+    /// run that carries a maker's job or Dots' wake of a maker is not the person's: its words
+    /// were written by a model (dots-make-dots design section 8). So is a job's text the person
+    /// sent again after its job ended (`prompt::FROM_MAKER`).
     async fn may_start_workflows(&self, run: &Run) -> bool {
         if run.workflow_step_run_id.is_some() {
             return false;
@@ -699,7 +726,14 @@ impl Runner {
                 Err(_) => return false,
             }
         }
-        cur.trigger == TriggerKind::Chat
+        let made_by_a_model = [&cur, run].iter().any(|r| {
+            r.payload.as_ref().is_some_and(|p| {
+                p.get(crate::making::jobs::JOB_ID).is_some()
+                    || p.get(crate::making::wake::WAKE_ID).is_some()
+                    || p.get(crate::prompt::FROM_MAKER).is_some()
+            })
+        });
+        cur.trigger == TriggerKind::Chat && !made_by_a_model
     }
 
     /// The dot's runs a person's chat message names (conversational chat spec section 3.1): for
@@ -748,8 +782,14 @@ impl Runner {
     /// passed over. `Dot::updated_at` moves on every save of the dot, not only of its
     /// instructions; naming them once more is harmless, so a topic that cannot be read counts
     /// as a change (logged). Both are `util::now()` text, so they compare as strings.
+    ///
+    /// A maker's job that goes on in its made dot's session is told the same way (dots-make-dots
+    /// design section 8): a job's prompt names them too, so a job's run tells the session as a
+    /// person's message does.
     async fn instructions_changed(&self, run: &Run, dot: &Dot) -> bool {
-        if !crate::prompt::is_typed(run) || run.session_id.is_none() {
+        let tells =
+            |r: &Run| crate::prompt::is_typed(r) || crate::prompt::makers_words(r).is_some();
+        if !tells(run) || run.session_id.is_none() {
             return false;
         }
         let thread = match self.store.list_thread(&run.root_run_id).await {
@@ -765,7 +805,7 @@ impl Runner {
             let Some(prev) = next.and_then(|id| thread.iter().find(|r| r.id == id)) else {
                 break;
             };
-            if prev.parent_run_id.is_none() || crate::prompt::is_typed(prev) {
+            if prev.parent_run_id.is_none() || tells(prev) {
                 return dot.updated_at > prev.queued_at;
             }
             next = prev.parent_run_id.as_deref();
@@ -949,7 +989,7 @@ impl Runner {
         // The spending caps, read once for the pass (spend caps design).
         let mut ledger: Option<crate::spend::Ledger> = None;
         for (run, engine) in self.store.queued_with_engine(true).await? {
-            let background_claude = engine == EngineKind::Claude && is_background(run.trigger);
+            let background_claude = engine == EngineKind::Claude && run_is_background(&run);
             // A role that may not run dots keeps a background run queued, unstarted, until the
             // role returns (members spec section 6.3); the next pass looks again.
             if self.role_hold(&run).await?.is_some() {
@@ -2044,6 +2084,18 @@ impl Runner {
                 }
             };
         let tools = tools.with_instructions(proposes);
+        // A run of a dot that may make dots has the tools for it (dots-make-dots design section
+        // 5), where the makers' service would not refuse the run for what it is: not a workflow
+        // step's run. A policy that denies `MakeDots` outright leaves them out, as above.
+        let making_off = dot
+            .spec
+            .policy
+            .resolve(crate::policy::MAKE_DOTS_TOOL, &Value::Null)
+            == crate::policy::Action::Deny;
+        let makes = !making_off
+            && self.checkins().is_some_and(|c| c.makers().is_some())
+            && crate::making::tools::offered(&dot, run);
+        let tools = tools.with_making(makes.then_some(dot.spec.making));
         // The project's code graph (project graph spec section 5): its first build starts now,
         // in the background; the run never waits for it. A policy that denies `Graph` outright
         // leaves the tool out.
@@ -2204,6 +2256,12 @@ impl Runner {
         let instructions_changed = self.instructions_changed(run, &dot).await;
         let startable = crate::team_tools::prompt_section(tools.startable(), dot.spec.engine);
         let handoff = seed.as_deref();
+        // A first prompt of a run with the tools for making dots lists the dots its dot made
+        // (dots-make-dots design section 11), as they are now.
+        let made_dots = match tools.making() {
+            Some(_) if run.session_id.is_none() => self.store.list_made_dots(&dot.id).await?,
+            _ => Vec::new(),
+        };
         let prompt = {
             let mut prompt = build_prompt_full(
                 &dot,
@@ -2222,6 +2280,10 @@ impl Runner {
                     instructions_changed,
                     so_far,
                     handoff,
+                    making: tools.making().map(|limits| MakerPart {
+                        limits: *limits,
+                        made: &made_dots,
+                    }),
                 },
             );
             // A chat's first prompt lists the workflows it may start (teams spec section 7).
@@ -2459,7 +2521,7 @@ impl Runner {
             (RunStatus::AwaitingApproval, error)
         } else if let Some(e) = error {
             let stopped_by_limit =
-                saw_rejected && dot.spec.engine == EngineKind::Claude && is_background(run.trigger);
+                saw_rejected && dot.spec.engine == EngineKind::Claude && run_is_background(run);
             // Back to the queue only while Dots knows when the limit resets: without that the
             // run would start again at once, and be refused again.
             let resets_known = self
@@ -2957,6 +3019,7 @@ fn queued_run(run: &Run, engine: EngineKind) -> QueuedRun {
     QueuedRun {
         id: run.id.clone(),
         trigger: run.trigger,
+        background: run_is_background(run),
         engine,
         hold_released: run.hold_released,
         queued_at: run.queued_at.clone(),

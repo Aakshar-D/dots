@@ -14,6 +14,7 @@ const DOTS_OWN = new Set([
   "App",
   "ProposeApp",
   "Instructions",
+  "MakeDots",
 ]);
 
 const COMMAND_TOOLS = new Set(["Bash", "PowerShell"]);

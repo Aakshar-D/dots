@@ -25,6 +25,7 @@ mod intents;
 mod invites;
 mod library;
 mod limits;
+mod making;
 mod memories;
 mod messages;
 mod open_dot;
@@ -101,6 +102,7 @@ impl Store {
         upgrade::finish_0015(&store.pool).await?;
         upgrade::finish_0016(&store.pool).await?;
         upgrade::finish_0018(&store.pool).await?;
+        upgrade::finish_0048(&store.pool).await?;
         store.sync_search_index().await?;
         Ok(store)
     }

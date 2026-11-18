@@ -205,6 +205,52 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
+  it("marks a topic's making cards, the ask cards, the inbox and the overview stale when making changes", () => {
+    const events = [
+      { type: "making_updated", dot_id: sample.dot.id, root_run_id: "01J0ROOT" },
+      {
+        type: "make_requested",
+        request_id: "01J0MRQ",
+        dot_id: sample.dot.id,
+        root_run_id: "01J0ROOT",
+        title: "Researcher wants to make one more sol",
+        name: "Blog Watcher",
+        purpose: "Reads the feeds",
+      },
+      {
+        type: "dot_made",
+        dot_id: sample.dot.id,
+        root_run_id: "01J0ROOT",
+        maker_name: "Researcher",
+        made_dot_id: "01J0MADE",
+        name: "Blog Watcher",
+        purpose: "Reads the feeds",
+        typed: false,
+      },
+    ] as const;
+    for (const event of events) {
+      const qc = createQueryClient();
+      // The topic's cards (an open ask card is one of them), the Inbox's ask cards and items,
+      // and the sols list with its "N of M".
+      const lists = [
+        keys.makingCards("01J0ROOT"),
+        keys.makeRequestsWaiting,
+        keys.inbox,
+        keys.overview,
+      ];
+      const untouched = [keys.makingCards("01J0OTHER"), keys.settings, keys.library];
+      for (const key of [...lists, ...untouched, keys.dots]) qc.setQueryData(key, []);
+
+      applyRuntimeEvent(qc, event);
+      for (const key of lists) expect(stale(qc, key), `${event.type} ${key.join("/")}`).toBe(true);
+      for (const key of untouched) {
+        expect(stale(qc, key), `${event.type} ${key.join("/")}`).toBe(false);
+      }
+      // Only a new sol changes the lists that name every sol.
+      expect(stale(qc, keys.dots), event.type).toBe(event.type === "dot_made");
+    }
+  });
+
   it("marks the Library, the inbox and what shows a sol's uses stale on a Library update", () => {
     const qc = createQueryClient();
     // Removing an item takes it out of the dots that use it; a changed tool list is an Inbox
@@ -593,7 +639,7 @@ describe("a run's events while their list loads or refetches", () => {
 });
 
 describe("a change announced while a fetch is in flight", () => {
-  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [] };
+  const empty: Inbox = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], make_requests: [], not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [] };
   /// Shows the Inbox as the app's frame does.
   const watchInbox = (qc: Client) =>
     new QueryObserver(qc, { queryKey: keys.inbox, queryFn: commands.inbox }).subscribe(() => {});

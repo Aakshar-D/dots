@@ -210,8 +210,18 @@ pub struct EndedRun {
     /// handed over by voice.
     pub result: Option<String>,
     pub trigger: TriggerKind,
+    /// A chat run the person did not start: a job a maker gave the sol it made, or Sage's
+    /// report that wakes a maker (dots-make-dots design section 8).
+    pub from_a_sol: bool,
     /// The person was viewing its sol when it ended.
     pub viewed: bool,
+}
+
+/// Whether `mode` tells of `run` when it ends. A maker's job and a maker's wake are chat runs,
+/// but no person started them: "mine" leaves them out, as it leaves out a scheduled run, and
+/// "all" still tells of them.
+fn tells(mode: DoneNotices, run: &EndedRun) -> bool {
+    mode.tells(run.trigger) && !(run.from_a_sol && matches!(mode, DoneNotices::Mine))
 }
 
 /// An ended run that waits to be told of.
@@ -477,7 +487,7 @@ impl Notices {
         now: Instant,
     ) -> Option<String> {
         let handed = self.handed.take(&run.run_id);
-        if !handed && (run.viewed || !mode.tells(run.trigger)) {
+        if !handed && (run.viewed || !tells(mode, &run)) {
             if self.passed.len() >= PASSED_KEPT {
                 self.passed.pop_front();
             }
@@ -523,7 +533,7 @@ impl Notices {
     /// "Tell me aloud when a sol finishes" changed: what the new choice does not tell of no
     /// longer waits.
     pub fn done_mode(&mut self, mode: DoneNotices) {
-        self.ended.retain(|t| t.handed || mode.tells(t.run.trigger));
+        self.ended.retain(|t| t.handed || tells(mode, &t.run));
     }
 
     /// Voice off or not ready: no run that ended waits to be told of.
@@ -728,6 +738,7 @@ pub async fn ended(rt: &dyn Lookup, run: &Run) -> Option<EndedRun> {
             .filter(|_| ok)
             .and_then(dots_core::open_dot::spoken_result),
         trigger: run.trigger,
+        from_a_sol: dots_core::prompt::is_job(run) || dots_core::prompt::is_wake(run),
         viewed: crate::events::quiet(Some(&run.dot_id), rt.viewing().as_deref()),
     })
 }
@@ -1459,6 +1470,7 @@ mod tests {
             ok,
             result: None,
             trigger: Chat,
+            from_a_sol: false,
             viewed: false,
         }
     }
@@ -1619,6 +1631,67 @@ mod tests {
                 "{trigger:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_makers_job_and_a_makers_wake_are_told_of_only_when_every_run_is() {
+        let t = Instant::now();
+        // A chat run no person started: a job from the sol's maker, or Sage's report to one.
+        let by = || EndedRun {
+            from_a_sol: true,
+            ..over("r1", "Research", true)
+        };
+        let mut n = Notices::new();
+        assert_eq!(n.finished(by(), MINE, true, t), None);
+        assert!(!n.pending());
+        let mut n = Notices::new();
+        assert_eq!(n.finished(by(), DoneNotices::Off, true, t), None);
+        let mut n = Notices::new();
+        assert_eq!(
+            n.finished(by(), DoneNotices::All, true, t).as_deref(),
+            Some("Research finished.")
+        );
+        // One that waits under "all" goes when the choice becomes "mine"; the person's stays.
+        let mut n = Notices::new();
+        assert_eq!(n.finished(by(), DoneNotices::All, false, t), None);
+        assert_eq!(
+            n.finished(over("r2", "Writer", true), DoneNotices::All, false, t),
+            None
+        );
+        n.done_mode(MINE);
+        assert_eq!(n.rested_runs(t).as_deref(), Some("Writer finished."));
+        // Handed over by voice, it is told of whatever the setting.
+        let mut n = Notices::new();
+        n.handed("r1");
+        assert!(n.finished(by(), MINE, true, t).is_some());
+    }
+
+    #[tokio::test]
+    async fn a_job_run_and_a_wake_run_are_read_as_not_the_persons() {
+        let rt = lookup();
+        let with = |payload: serde_json::Value| Run {
+            payload: Some(payload),
+            ..run("r1", RunStatus::Succeeded, Chat)
+        };
+        let job = with(serde_json::json!({
+            "message": "Read the feeds.", "job_id": "j1", "job_from": "Research"
+        }));
+        assert!(ended(&rt, &job).await.unwrap().from_a_sol);
+        let wake =
+            with(serde_json::json!({ "message": "Blog Watcher finished.", "wake_id": "w1" }));
+        assert!(ended(&rt, &wake).await.unwrap().from_a_sol);
+        // What the person typed, and a job's text the person sent again themselves.
+        let typed = with(serde_json::json!({ "message": "hello", "typed": true }));
+        assert!(!ended(&rt, &typed).await.unwrap().from_a_sol);
+        let again =
+            with(serde_json::json!({ "message": "Read the feeds.", "from_maker": "Research" }));
+        assert!(!ended(&rt, &again).await.unwrap().from_a_sol);
+        // The keys mean this on a chat run only.
+        let scheduled = Run {
+            payload: Some(serde_json::json!({ "wake_id": "w1" })),
+            ..run("r1", RunStatus::Succeeded, Schedule)
+        };
+        assert!(!ended(&rt, &scheduled).await.unwrap().from_a_sol);
     }
 
     #[test]
@@ -1985,6 +2058,7 @@ mod tests {
                 ok: true,
                 result: Some("I found three papers".into()),
                 trigger: Manual,
+                from_a_sol: false,
                 viewed: false,
             })
         );

@@ -691,6 +691,24 @@ export const commands = {
   /// or its app moved on, and while the dot's thread is still working.
   appProposalDecide: (id: string, decision: T.ProposalDecision) =>
     call(T.AppProposal, "app_proposal_decide", { id, decision }),
+  /// The ask card of a maker's request, waiting or answered, as it is now. Reading it may mark
+  /// a waiting request gone. Rejects with kind `not_found` once the request went with its maker
+  /// or with the made dot a change was asked for.
+  makeRequestCard: (id: string) => call(T.MakeRequestCard, "make_request_card", { id }),
+  /// The ask cards of every request that waits for the person, newest first (the Inbox).
+  makeRequestsWaiting: () => call(T.MakeRequestCard.array(), "make_requests_waiting"),
+  /// The person's answer on an ask card. `limit` and `shown` are the card's, exactly as it was
+  /// read. Rejects with kind `conflict` when the card no longer says what the request would
+  /// give, or when it was answered already; with `not_allowed` when this PC's role may not.
+  makeRequestDecide: (
+    id: string,
+    decision: T.MakeDecision,
+    limit: string | null,
+    shown: string | null,
+  ) => call(T.MakeRequest, "make_request_decide", { id, decision, limit, shown }),
+  /// The making cards of a chat topic, oldest first; empty for a topic no maker worked in.
+  makingCards: (rootRunId: string) =>
+    call(T.MakingCard.array(), "making_cards", { rootRunId }),
   /// The instructions dots proposed, of one dot or of all (null), newest first.
   instructionProposalsList: (dotId: string | null) =>
     call(T.InstructionProposal.array(), "instruction_proposals_list", { dotId }),

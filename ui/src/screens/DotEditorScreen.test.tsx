@@ -732,12 +732,12 @@ describe("the sol editor, stored sol", () => {
       review_runs: sample.inbox.review_runs,
       attention: [],
       tools_changed: [],
-      watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [],
+      watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], make_requests: [],
       not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
     };
     backend.on("inbox", () => waiting);
     backend.on("delete_dot", () => {
-      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [] };
+      waiting = { approvals: [], review_runs: [], attention: [], tools_changed: [], watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], make_requests: [], not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [] };
       return null;
     });
     const { user, router } = renderApp(path);

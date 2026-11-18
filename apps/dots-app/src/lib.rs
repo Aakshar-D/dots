@@ -1,3 +1,7 @@
+// Open Dot's turns (`voice::service::RuntimeMind`) await the runtime's dot actions, whose
+// futures nest deeper than the default limit lets the compiler lay out.
+#![recursion_limit = "256"]
+
 pub mod app_frame;
 pub mod app_save;
 pub mod autostart;
@@ -272,6 +276,10 @@ command_list![
     app_proposal_decide,
     instruction_proposals_list,
     instruction_proposal_decide,
+    make_request_card,
+    make_requests_waiting,
+    make_request_decide,
+    making_cards,
     app_preview_open,
     app_preview_call,
     app_preview_close,

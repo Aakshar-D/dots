@@ -77,6 +77,7 @@ pub fn fake_dot(name: &str, workdir: &Path, mode: WorkspaceMode) -> Dot {
         seen_at: None,
         org_id: None,
         workspace_id: "default".into(),
+        made: None,
         spec: s,
     }
 }

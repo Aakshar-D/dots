@@ -16,8 +16,9 @@ fn every_preset_allows_memory_after_the_check_in_tools() {
     for preset in Preset::ALL {
         let p = Policy::preset(*preset);
         // `Workflow` follows it (teams spec section 7), then `App` and `ProposeApp` (app library
-        // spec section 6), then `Instructions` (conversational chat spec section 4).
-        let tail: Vec<&str> = p.rules[p.rules.len() - 8..]
+        // spec section 6), then `Instructions` (conversational chat spec section 4), then
+        // `MakeDots` (dots-make-dots design section 5).
+        let tail: Vec<&str> = p.rules[p.rules.len() - 9..]
             .iter()
             .map(|r| r.tool.as_str())
             .collect();
@@ -31,7 +32,8 @@ fn every_preset_allows_memory_after_the_check_in_tools() {
                 "Workflow",
                 "App",
                 "ProposeApp",
-                "Instructions"
+                "Instructions",
+                "MakeDots"
             ],
             "{preset:?}"
         );
@@ -110,6 +112,7 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
                 && r.tool != "Workflow"
                 && !APP_TOOLS.contains(&r.tool.as_str())
                 && r.tool != "Instructions"
+                && r.tool != "MakeDots"
         });
         p
     };
@@ -153,6 +156,7 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
     kept.rules
         .extend(APP_TOOLS.map(|tool| Rule::new(tool, Action::Allow)));
     kept.rules.push(Rule::new("Instructions", Action::Allow));
+    kept.rules.push(Rule::new("MakeDots", Action::Allow));
     assert_eq!(store.get_dot("D3").await.unwrap().spec.policy, kept);
     // 0016 gives Custom policies `App` and `ProposeApp` too, as 0007 did `Context`.
     let mut custom_then = custom.clone();
@@ -162,6 +166,7 @@ async fn migration_0012_gives_every_policy_that_is_not_custom_its_memory() {
     custom_then
         .rules
         .push(Rule::new("Instructions", Action::Allow));
+    custom_then.rules.push(Rule::new("MakeDots", Action::Allow));
     assert_eq!(store.get_dot("D4").await.unwrap().spec.policy, custom_then);
     assert!(CHECK_IN_TOOLS
         .iter()
