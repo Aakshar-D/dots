@@ -37,7 +37,7 @@ A maker may make a sol, change it, delete it, and give it a job, as long as the 
 
 Taking things away from a made sol never asks.
 
-What the made sols spend counts toward the maker's daily cap too.
+What the made sols spend counts toward the maker's daily cap too. The maker's editor and the Usage screen then show that total, as **Today, with the sols it made**.
 
 ## What a maker may not do without asking
 
@@ -64,7 +64,7 @@ It shows:
 - What the maker asks.
 - What lies beyond the maker's reach, one line each.
 - The limit it passes, if any.
-- The instructions, the model, and the first job. A sol wrote these, so they are set apart from Sage's own words and shown as plain text. Read them before you answer.
+- What the sol is for, the instructions, the model, and the first job. A sol wrote these, so they are set apart from Sage's own words and shown as plain text. Read them before you answer.
 
 The buttons:
 

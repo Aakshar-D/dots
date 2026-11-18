@@ -341,6 +341,15 @@ Plan B built the screens of section 11 on the core above. The person's guide is 
 - A `MakeDots` approval names what is asked ("wants to make a sol: Blog Watcher") and lists the call's arguments as plain text instead of JSON; another shape shows as every other call.
 - A job's run and a wake's run are not said aloud under "What I started" (`voice_done_notices` `mine`); under "Everything" they are. A resume run after an approval in a job, and a job's text the person sent again, are told of as before.
 
+### What the check in the built app changed
+
+The first run of the screens in a debug build, with the fake engine, found these, and they are fixed:
+
+- An answer carries the card's limit line both ways: it is also refused (`Conflict`, the "changed since the card was shown" sentence) when it carries a limit line and the card as it is now shows none, for a change or a job too. Before, only a limit the card did not show was refused.
+- A job's end, its wake and its `job_ended` log entry are one transaction (`Store::end_making_job`), and `making_updated` is published after it. Before, the entry was written after the end was visible.
+- A job follows an answered question to the run that carries the answer before it waits on a question that run asked (`latest_question_since` is bounded by the run the job is at). Before, a second question asked before any pass saw the first answered left the job at the first run.
+- The ask card shows the purpose in a box marked as the maker's words, and says once that the card changed. The approval card of a making call has "Making sols" and the tool's name in its header, not the call's JSON. A maker's spend line (editor, Usage) shows `shared_today`, the total its cap counts.
+
 ### Left open
 
 - The making log and jobs are keyed by the topic's root run when written. Moving or merging a topic's runs does not move them: the cards stay with the old root, and the loop guard counts from the new one.
