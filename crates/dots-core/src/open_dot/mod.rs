@@ -17,6 +17,7 @@ pub mod picture;
 pub mod prompt;
 pub mod quick;
 pub mod reply;
+mod status;
 pub mod think;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -39,8 +40,8 @@ use act::{
 use picture::{Picture, View, NAME_BYTES};
 use prompt::{prompt, Turn, INSTRUCTIONS};
 use quick::{
-    asks_for_a_deed, common_word, firm_for_another, firm_yes, quick, unclear_yes, words_of,
-    ConfirmKind, Quick,
+    asks_for_a_deed, common_word, firm_for_another, firm_yes, quick, status_ask, unclear_yes,
+    words_of, ConfirmKind, Quick, StatusAsk,
 };
 use reply::{read_reply, HeldWords, SpeechGate, Wish};
 use think::{cap_hit, Thinker};
@@ -68,6 +69,10 @@ use think::{cap_hit, Thinker};
 /// tried: after the checks that can still drop it. A `Step` with no text says the step under
 /// way is over: it is sent when the first words of the turn are streamed, when a deed was
 /// carried out (before its `Did`) and before `SayEnd`, each only while a step is under way.
+///
+/// A question about the sols that Sage answers itself (`quick::status_ask`) sends the step
+/// "Looking at your workspace", as a model turn does, then its `Say` and `SayEnd`, with no
+/// `Thinking`: no model is asked.
 ///
 /// A turn ended by a newer turn, `lapse` or `reset` before its end sends nothing more, so it
 /// has no `SayEnd`; the newer turn's events follow. A deed already carried out is the one
@@ -248,12 +253,16 @@ struct State {
     /// How many inputs the stage took (`input_arrived`): a turn in flight when a newer one
     /// came is not shown there any more, so it installs no step.
     inputs: u64,
+    /// The sol the last turn told about, when Sage answered it itself (`Mind::tell`): the
+    /// "it" of the next turn's "what did it say". Any other turn ends it.
+    spoke_of: Option<String>,
 }
 
 impl State {
     /// Forgets turns, replies and what waits; returns whether a step that waited was dropped.
     fn forget(&mut self) -> bool {
         self.turns.clear();
+        self.spoke_of = None;
         self.last_said.clear();
         self.last_then = Then::Rest;
         self.read_aloud.clear();
@@ -1075,6 +1084,8 @@ impl Mind {
         gate: Gate<'_>,
     ) -> &'static str {
         let (waiting, expired) = self.waiting(view, o);
+        // The sol the turn before told about: "it", for this turn only.
+        let spoke_of = lock(&self.state).spoke_of.take();
         let options = waiting
             .as_ref()
             .map(|w| w.kind.asked().1)
@@ -1236,6 +1247,8 @@ impl Mind {
             },
             dot_id: None,
         };
+        // The picture a status question took, when the model answers it after all.
+        let mut taken = None;
         match waiting.map(|w| w.kind) {
             // answered above
             Some(Waiting::Confirm { .. }) | Some(Waiting::Create { .. }) => {}
@@ -1311,12 +1324,89 @@ impl Mind {
                     self.finish(o, &heard, NOTHING_WAITING, Then::Rest);
                     return "nothing waiting";
                 }
+                // A clear question about the sols, said with nothing waiting: Sage answers
+                // it from the picture. When the picture does not settle which sol is meant,
+                // the model reads the sentence, on the picture already taken.
+                if let Some(ask) = status_ask(&heard).filter(|_| !clicked) {
+                    match self.tell(rt, &ask, &heard, view, o, spoke_of).await {
+                        Ok(kind) => return kind,
+                        Err(picture) => taken = Some(picture),
+                    }
+                }
             }
         }
-        self.think(rt, &to_model, &own, view, o, cancel).await
+        self.think(rt, &to_model, &own, view, o, cancel, taken)
+            .await
     }
 
-    /// A model turn: the caps, the picture, the request, then the wish.
+    /// Answers a question about the sols from the picture, with no model: no cap is asked
+    /// and no usage counted. The stage is shown the step a model turn shows for reading the
+    /// workspace. `Err` when the picture does not say which one sol is meant (no close name,
+    /// or several; "it" with no sol to point at), with the picture taken, for the model's
+    /// turn. `spoke_of` is the sol the turn before told about.
+    ///
+    /// "It" stands for that sol, else for the sol on screen at the start of a conversation.
+    /// Later in a conversation "it" may be anything said before, which only the model can
+    /// follow.
+    async fn tell(
+        &self,
+        rt: &Runtime,
+        ask: &StatusAsk,
+        heard: &str,
+        view: &View,
+        o: &Out<'_>,
+        spoke_of: Option<String>,
+    ) -> std::result::Result<&'static str, Box<Picture>> {
+        o.step(STEP_LOOKING);
+        let Ok(picture) = Picture::take(rt, view).await else {
+            tracing::warn!("open sage could not take the picture");
+            self.finish(o, heard, WENT_WRONG, Then::Rest);
+            return Ok("picture failed");
+        };
+        let (said, about) = match ask {
+            StatusAsk::Overall => (status::overall(&picture), None),
+            StatusAsk::Pending => {
+                o.step(STEP_NEEDS);
+                return Ok(self.needs(&picture, heard, &status::waiting_runs(&picture), o));
+            }
+            StatusAsk::Sol(name) | StatusAsk::Result(name) => {
+                let dot = match name {
+                    Some(name) => status::named(&picture, name),
+                    None => {
+                        let fresh = lock(&self.state).turns.is_empty();
+                        spoke_of
+                            .as_deref()
+                            .and_then(|id| picture.dots.iter().find(|d| d.id == id))
+                            .or_else(|| {
+                                picture
+                                    .viewing_dot
+                                    .as_deref()
+                                    .filter(|_| fresh)
+                                    .and_then(|handle| picture.dot(handle))
+                            })
+                    }
+                };
+                let Some(dot) = dot else {
+                    return Err(Box::new(picture));
+                };
+                let said = match ask {
+                    StatusAsk::Result(_) => status::result(&picture, dot),
+                    _ => status::sol(&picture, dot),
+                };
+                (said, Some(dot.id.clone()))
+            }
+        };
+        self.finish(o, heard, &said, Then::FollowUp);
+        let mut s = lock(&self.state);
+        if s.turn == o.turn {
+            s.spoke_of = about;
+        }
+        Ok("told")
+    }
+
+    /// A model turn: the caps, the picture (`taken`, when this turn took it already), the
+    /// request, then the wish.
+    #[allow(clippy::too_many_arguments)]
     async fn think(
         &self,
         rt: &Runtime,
@@ -1325,6 +1415,7 @@ impl Mind {
         view: &View,
         o: &Out<'_>,
         cancel: &CancellationToken,
+        taken: Option<Box<Picture>>,
     ) -> &'static str {
         let settings = rt.settings().await;
         if let Some(said) = capped(rt, &settings).await {
@@ -1332,13 +1423,18 @@ impl Mind {
             return "cap";
         }
         o.send(MindEvent::Thinking);
-        o.step(STEP_LOOKING);
-        let picture = match Picture::take(rt, view).await {
-            Ok(p) => p,
-            Err(_) => {
-                tracing::warn!("open sage could not take the picture");
-                self.finish(o, heard, WENT_WRONG, Then::Rest);
-                return "picture failed";
+        let picture = match taken {
+            Some(picture) => *picture,
+            None => {
+                o.step(STEP_LOOKING);
+                match Picture::take(rt, view).await {
+                    Ok(p) => p,
+                    Err(_) => {
+                        tracing::warn!("open sage could not take the picture");
+                        self.finish(o, heard, WENT_WRONG, Then::Rest);
+                        return "picture failed";
+                    }
+                }
             }
         };
         o.step(STEP_THINKING);
@@ -1424,7 +1520,7 @@ impl Mind {
         };
         if wish == Wish::Needs {
             o.step(STEP_NEEDS);
-            return self.needs(&picture, heard, o);
+            return self.needs(&picture, heard, "", o);
         }
         if let Wish::ReadQuestion { q } = &wish {
             if let Some(line) = picture.question(q) {
@@ -1444,8 +1540,11 @@ impl Mind {
     }
 
     /// What needs the person: said, listed on a card, and the Inbox opened for private ones.
-    fn needs(&self, picture: &Picture, heard: &str, o: &Out<'_>) -> &'static str {
+    /// `also` is said after the report: the runs that have not started, when "what's pending"
+    /// was asked.
+    fn needs(&self, picture: &Picture, heard: &str, also: &str, o: &Out<'_>) -> &'static str {
         o.say(&act::needs_report(picture));
+        o.say(also);
         let mut lines: Vec<String> = picture
             .questions
             .iter()

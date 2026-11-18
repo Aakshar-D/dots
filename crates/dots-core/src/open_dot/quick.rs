@@ -417,6 +417,230 @@ pub(crate) fn common_word(word: &str) -> bool {
             .any(|phrase| phrase.split(' ').any(|p| p == word))
 }
 
+/// A question about the sols that Sage answers itself, from the picture and with no model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StatusAsk {
+    /// "What's going on?": which sols are at work, and how much waits for the person.
+    Overall,
+    /// "What's pending?": what waits for the person, and the runs that have not started.
+    Pending,
+    /// "Is the research sol done?": how one sol is getting on. The words that name it;
+    /// `None` for "it".
+    Sol(Option<String>),
+    /// "What did research say?": the one line of a sol's last result. The words that name
+    /// it; `None` for "it" and for "what was the result".
+    Result(Option<String>),
+}
+
+/// The whole sentence, as `status_words` gives it, that asks what is going on.
+const OVERALL: &[&str] = &[
+    "whats going on",
+    "whats happening",
+    "whats running",
+    "whats the status",
+    "status",
+    "status update",
+    "status report",
+    "give me a status update",
+    "give me an update",
+    "anything running",
+    "is anything running",
+    "what are my sols doing",
+    "what are the sols doing",
+    "what are my sols up to",
+    "what are the sols up to",
+    "how are my sols doing",
+    "how are the sols doing",
+    "whats going on with my sols",
+    "whats happening with my sols",
+];
+/// The whole sentence that asks what waits. "What needs me" is not here: the model takes it,
+/// as before.
+const PENDING: &[&str] = &[
+    "whats pending",
+    "whats waiting",
+    "whats queued",
+    "anything pending",
+    "anything waiting",
+    "anything queued",
+    "is anything pending",
+    "is anything waiting",
+    "whats waiting for me",
+    "whats waiting on me",
+    "anything waiting for me",
+    "anything waiting on me",
+    "is anything waiting for me",
+    "is anything waiting on me",
+];
+/// Questions about one sol, with its name (or "it") in the middle: the word before the name,
+/// and what may come after it, the longest first.
+const SOL_AROUND: &[(&str, &[&str])] = &[
+    (
+        "is",
+        &[
+            "still running",
+            "still going",
+            "still working",
+            "done",
+            "finished",
+            "running",
+        ],
+    ),
+    ("has", &["finished"]),
+    ("whats", &["working on", "up to", "doing"]),
+];
+/// The same, for a name only: "how's it going" is a greeting, not a question about a sol.
+const SOL_NAMED_AROUND: &[(&str, &[&str])] = &[(
+    "hows",
+    &[
+        "getting on",
+        "getting along",
+        "coming along",
+        "doing",
+        "going",
+    ],
+)];
+/// Questions about one sol that end in its name.
+const SOL_AFTER: &[&str] = &[
+    "whats going on with",
+    "whats happening with",
+    "whats the status of",
+    "status of",
+    "hows it going with",
+];
+/// Questions about a sol's result, with its name (or "it") in the middle.
+const RESULT_AROUND: (&str, &[&str]) = ("what did", &["come back with", "say", "find", "report"]);
+/// Questions about a sol's result that end in its name.
+const RESULT_AFTER: &[&str] = &[
+    "what was the result of",
+    "what was the result from",
+    "whats the result of",
+    "whats the result from",
+];
+/// Questions about the result of the sol in view.
+const RESULT_ALONE: &[&str] = &["what was the result", "whats the result"];
+/// Words that stand for the sol in view.
+const POINTING: &[&str] = &[
+    "it", "this sol", "that sol", "the sol", "this one", "that one",
+];
+/// Words before a status question that add nothing to it, and words after it.
+const STATUS_LEAD: &[&str] = &[
+    "can you tell me",
+    "could you tell me",
+    "tell me",
+    "so",
+    "and",
+];
+const STATUS_TAIL: &[&str] = &["right now", "at the moment", "now", "yet"];
+/// A sol's name has none of these in it: they join a second request to the question.
+const JOINING: &[&str] = &["and", "or", "but", "then", "because", "if", "also"];
+/// Most words of a sol's name in a status question.
+const MAX_NAME_WORDS: usize = 4;
+
+/// The words of a status question, joined: trimmed as `quick` trims them, without the words
+/// of `STATUS_LEAD` before and `STATUS_TAIL` after, "what is" and "how is" as speech
+/// recognition often writes them ("whats", "hows"), and "soul" or "sole" as "sol".
+fn status_words(heard: &str) -> String {
+    let words: Vec<String> = trimmed(words_of(heard))
+        .into_iter()
+        .map(|w| match w.as_str() {
+            "soul" | "sole" => "sol".to_string(),
+            "souls" | "soles" => "sols".to_string(),
+            _ => w,
+        })
+        .collect();
+    let mut j = words.join(" ");
+    while let Some(rest) = STATUS_LEAD
+        .iter()
+        .find_map(|lead| j.strip_prefix(&format!("{lead} ")))
+    {
+        j = rest.to_string();
+    }
+    while let Some(rest) = STATUS_TAIL
+        .iter()
+        .find_map(|tail| j.strip_suffix(&format!(" {tail}")))
+    {
+        j = rest.to_string();
+    }
+    for (spoken, written) in [("what is ", "whats "), ("how is ", "hows ")] {
+        if let Some(rest) = j.strip_prefix(spoken) {
+            j = format!("{written}{rest}");
+        }
+    }
+    j
+}
+
+/// The name between `before` and one of `afters` in `joined`, when it has that shape.
+fn around<'a>(joined: &'a str, before: &str, afters: &[&str]) -> Option<&'a str> {
+    let rest = joined.strip_prefix(before)?.strip_prefix(' ')?;
+    afters
+        .iter()
+        .find_map(|after| rest.strip_suffix(after)?.strip_suffix(' '))
+}
+
+/// The sol the words `name` stand for in a status question: `Some(None)` for "it" and the
+/// like (only where `pointing` is allowed), `Some(Some(words))` for a name, without "the" or
+/// "my" before it and "sol" after it. `None` when the words cannot be a sol's name alone:
+/// more than `MAX_NAME_WORDS`, only common words, or a word that joins a second request.
+fn sol_named(name: &str, pointing: bool) -> Option<Option<String>> {
+    if POINTING.contains(&name) {
+        return pointing.then_some(None);
+    }
+    let mut words: Vec<&str> = name.split(' ').filter(|w| !w.is_empty()).collect();
+    while words.len() > 1 && matches!(words[0], "the" | "my" | "our") {
+        words.remove(0);
+    }
+    if words.len() > 1 && words[words.len() - 1] == "sol" {
+        words.pop();
+    }
+    let fits = (1..=MAX_NAME_WORDS).contains(&words.len())
+        && !words.iter().any(|w| JOINING.contains(w))
+        && words.iter().any(|w| !common_word(w));
+    fits.then(|| Some(words.join(" ")))
+}
+
+/// Whether the whole utterance is one of a few clear questions about the sols, which Sage
+/// answers from the picture with no model: what is going on, what is pending, how one sol is
+/// getting on, and what a sol's result was. Letter case, punctuation and the usual filler are
+/// left aside, as in `quick`. Anything more in the sentence ("what's going on with the
+/// invoice app and can you fix it") is no match: the model reads it.
+pub fn status_ask(heard: &str) -> Option<StatusAsk> {
+    let joined = status_words(heard);
+    let j = joined.as_str();
+    if OVERALL.contains(&j) {
+        return Some(StatusAsk::Overall);
+    }
+    if PENDING.contains(&j) {
+        return Some(StatusAsk::Pending);
+    }
+    if RESULT_ALONE.contains(&j) {
+        return Some(StatusAsk::Result(None));
+    }
+    let after = |starts: &[&str]| {
+        starts
+            .iter()
+            .find_map(|start| j.strip_prefix(start)?.strip_prefix(' '))
+    };
+    if let Some(name) = after(SOL_AFTER) {
+        return sol_named(name, false).map(StatusAsk::Sol);
+    }
+    if let Some(name) = after(RESULT_AFTER) {
+        return sol_named(name, true).map(StatusAsk::Result);
+    }
+    for (before, afters) in SOL_AROUND {
+        if let Some(name) = around(j, before, afters) {
+            return sol_named(name, true).map(StatusAsk::Sol);
+        }
+    }
+    for (before, afters) in SOL_NAMED_AROUND {
+        if let Some(name) = around(j, before, afters) {
+            return sol_named(name, false).map(StatusAsk::Sol);
+        }
+    }
+    let (before, afters) = RESULT_AROUND;
+    around(j, before, afters).and_then(|name| sol_named(name, true).map(StatusAsk::Result))
+}
+
 /// `options`: the options currently offered (empty when none).
 pub fn quick(heard: &str, options: &[String]) -> Option<Quick> {
     let w = trimmed(words_of(heard));
@@ -516,6 +740,134 @@ mod tests {
         assert_eq!(quick("Done.", &options), Some(Quick::Pick(0)));
         assert_eq!(quick("Call.", &options), Some(Quick::Pick(1)));
         assert_eq!(quick("Thank you.", &options), Some(Quick::Bye));
+    }
+
+    #[test]
+    fn status_questions_are_matched_whole() {
+        for said in [
+            "What's going on?",
+            "whats going on",
+            "What is going on?",
+            "Hey Sage, what's going on right now?",
+            "What's happening?",
+            "Status.",
+            "status update please",
+            "What's the status?",
+            "So, what's the status?",
+            "Anything running?",
+            "Is anything running right now?",
+            "What are my sols doing?",
+            "What are my souls doing?",
+            "what are the soles up to",
+            "Tell me what's happening.",
+        ] {
+            assert_eq!(status_ask(said), Some(StatusAsk::Overall), "{said}");
+            // None of them is a stop, a yes or the like.
+            assert_eq!(quick(said, &[]), None, "{said}");
+        }
+        for said in [
+            "What's pending?",
+            "what is pending",
+            "Anything pending?",
+            "Anything waiting?",
+            "Is anything waiting for me?",
+            "What's waiting on me right now?",
+            "anything queued",
+        ] {
+            assert_eq!(status_ask(said), Some(StatusAsk::Pending), "{said}");
+        }
+        for (said, name) in [
+            ("Is research done?", "research"),
+            ("Is the research sol done yet?", "research"),
+            ("is the deploy watcher still running", "deploy watcher"),
+            ("Has research finished?", "research"),
+            ("What is research doing?", "research"),
+            ("What's the research soul doing right now?", "research"),
+            ("What's research up to?", "research"),
+            ("What is my backup sol working on?", "backup"),
+            ("How is research getting on?", "research"),
+            ("How's the backup sol doing?", "backup"),
+            ("What's going on with research?", "research"),
+            ("What's the status of the backup sol?", "backup"),
+            ("status of research", "research"),
+            ("How's it going with research?", "research"),
+        ] {
+            assert_eq!(
+                status_ask(said),
+                Some(StatusAsk::Sol(Some(name.into()))),
+                "{said}"
+            );
+        }
+        for said in [
+            "Is it done?",
+            "is it finished yet",
+            "What is it doing?",
+            "Is this sol still running?",
+        ] {
+            assert_eq!(status_ask(said), Some(StatusAsk::Sol(None)), "{said}");
+        }
+        for (said, name) in [
+            ("What did research say?", "research"),
+            ("what did the research sol find", "research"),
+            ("What did research come back with?", "research"),
+            ("What was the result of research?", "research"),
+            (
+                "What's the result from the deploy watcher?",
+                "deploy watcher",
+            ),
+        ] {
+            assert_eq!(
+                status_ask(said),
+                Some(StatusAsk::Result(Some(name.into()))),
+                "{said}"
+            );
+        }
+        for said in [
+            "What was the result?",
+            "What's the result?",
+            "What did it say?",
+            "What was the result of it?",
+        ] {
+            assert_eq!(status_ask(said), Some(StatusAsk::Result(None)), "{said}");
+        }
+    }
+
+    #[test]
+    fn sentences_with_more_in_them_are_no_status_question() {
+        for said in [
+            // a second request, or more than the question
+            "What's going on with the invoice app and can you fix it?",
+            "What's going on with research and backup?",
+            "What's going on in the world?",
+            "Is research done with the report?",
+            "Is it done and can you send it?",
+            "What did research say about the vendors?",
+            "Tell research to check the status.",
+            "Status report on research.",
+            "Is one two three four five done?",
+            // greetings and small talk
+            "How are things?",
+            "How's it going?",
+            "How is it going?",
+            "What's up?",
+            "How are you doing?",
+            // what the model answers, as before
+            "What needs me?",
+            "Anything for me?",
+            "What about the backup?",
+            "What does it ask?",
+            // no sol is named
+            "What did you say?",
+            "What did he say?",
+            "Is that done?",
+            "Is it?",
+            "Status of.",
+            "What's it?",
+            "Is it going to rain?",
+            "",
+        ] {
+            assert_eq!(status_ask(said), None, "{said}");
+        }
     }
 
     #[test]

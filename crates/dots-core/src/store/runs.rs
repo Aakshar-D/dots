@@ -1403,4 +1403,24 @@ impl Store {
         .await?;
         rows.iter().map(event_from_row).collect()
     }
+
+    /// The newest tool call of `run_id`, as its event stores it: the tool and its input.
+    /// `None` when the run has made no call. One row is read, never the run's whole record:
+    /// Open Sage asks this for every sol at work.
+    pub async fn latest_tool_call(&self, run_id: &str) -> Result<Option<(String, Value)>> {
+        let row = sqlx::query(
+            "SELECT data FROM run_events WHERE run_id = ? AND kind = 'tool_call' \
+             ORDER BY seq DESC LIMIT 1",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let data: Value = serde_json::from_str(&row.try_get::<String, _>("data")?)?;
+        let tool = data.get("tool").and_then(Value::as_str).unwrap_or_default();
+        let input = data.get("input").cloned().unwrap_or(Value::Null);
+        Ok(Some((tool.to_string(), input)))
+    }
 }
