@@ -12,10 +12,12 @@ import { ChangesLine, isFolderRun } from "@/components/RunChanges";
 import { Failure, Transcript } from "@/components/Transcript";
 import { Button } from "@/components/ui/button";
 import { isActive, type Topic } from "@/lib/home-topics";
+import { cardsAfter } from "@/lib/making";
 import { errorMessage } from "@/lib/notify";
 import { eventsQuery, invalidate, keys } from "@/lib/query";
 import { WorkflowCard } from "@/screens/teams/run/WorkflowCard";
 
+import { MakingCards, useMakingCards } from "./MakingCards";
 import { QuietCard } from "./QuietCard";
 import { MoveToTopic } from "./TopicTools";
 
@@ -23,7 +25,9 @@ import { MoveToTopic } from "./TopicTools";
 /// steps, check-ins and browser calls (`Transcript`), the calls Dots performed, a card per
 /// approval it waits for and per app it sent for review, the instructions the dot proposed that
 /// wait for the person, and why the last run failed. A workflow a run started shows as a card
-/// after that run's turn (teams spec section 10.4).
+/// after that run's turn (teams spec section 10.4), and so does what a maker's run did: the sols
+/// it made, changed or deleted, the jobs it gave and what it asked the person (dots-make-dots
+/// design section 11).
 export function TopicRuns(props: {
   runs: Run[];
   checkIns: Message[];
@@ -34,8 +38,11 @@ export function TopicRuns(props: {
   workflows?: ReadonlyMap<string, WorkflowRun[]>;
   /// The dot's topics a message the person sent may be moved to; none offers no move.
   moveTargets?: Topic[];
+  /// A run of the topic drawn elsewhere (a run topic's card), which shows its own making cards.
+  makingElsewhere?: string;
 }) {
   const { runs, dotName } = props;
+  const making = useMakingCards(runs[0]?.root_run_id);
   const qc = useQueryClient();
   const events = useQueries({ queries: runs.map((run) => eventsQuery(qc, run.id)) });
   const approvals = useQueries({
@@ -76,6 +83,10 @@ export function TopicRuns(props: {
               ?.map((workflowRun) => <WorkflowCard key={workflowRun.id} run={workflowRun} />)}
             {/* The files a folder run changed, with Undo (undo spec section 5). */}
             {isFolderRun(run) && <ChangesLine run={run} />}
+            {/* What the run did as a maker, in the order it happened. */}
+            <MakingCards
+              cards={cardsAfter(making.data ?? [], run, runs, props.makingElsewhere ?? null)}
+            />
           </>
         )}
         messageAction={
@@ -87,7 +98,7 @@ export function TopicRuns(props: {
             ) : null)
         }
       />
-      <LoadErrors queries={[...events, ...approvals]} />
+      <LoadErrors queries={[...events, ...approvals, making]} />
       <AppliedCalls approvals={asked} />
       {pending.map((approval) => (
         <ApprovalCard key={approval.id} approval={approval} dotName={dotName} />

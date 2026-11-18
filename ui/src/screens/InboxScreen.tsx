@@ -8,11 +8,13 @@ import type {
   HeldRun,
   Inbox,
   InboxKey,
+  MakeRequestCard as MakeRequestCardData,
   Message,
   NeedsAttention,
   PausedWatcher,
   PendingAppReview,
   PendingInstructions,
+  PendingMakeRequest,
   ReviewRun,
   TeamScopeIssue,
   ToolsChanged,
@@ -24,6 +26,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { ErrorNote } from "@/components/ErrorNote";
 import { InboxActed, InboxActions } from "@/components/InboxActions";
 import { InstructionsCard } from "@/components/InstructionsCard";
+import { MakeRequestCard } from "@/components/MakeRequestCard";
 import { MessageCard } from "@/components/MessageCard";
 import { Page } from "@/components/Page";
 import { ReviewActions } from "@/components/ReviewActions";
@@ -43,6 +46,7 @@ import {
   heldKey,
   instructionsKey,
   keyString,
+  makeRequestKey,
   messageKey,
   notDeliveredKey,
   reviewKey,
@@ -471,6 +475,50 @@ function InstructionsRow({ item, actions }: { item: PendingInstructions; actions
   );
 }
 
+/// A maker's request that waits for the person (dots-make-dots design section 11): the ask
+/// card as the core builds it now, with links to the maker and its conversation. The Inbox's
+/// own item is slim, so nothing is allowed from it: until its card is read, the row only says
+/// what is asked and opens the conversation.
+function MakeRequestRow(props: {
+  item: PendingMakeRequest;
+  card: MakeRequestCardData | undefined;
+  actions?: ReactNode;
+}) {
+  const { item, card } = props;
+  return (
+    <li aria-label={`${item.dot_name}'s request about ${item.name}`} className="flex flex-col gap-2">
+      <div className="flex items-center gap-2">
+        <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+          <Link to={`/dots/${item.dot_id}`} className="text-foreground hover:underline">
+            {item.dot_name}
+          </Link>{" "}
+          asked {relativeTime(item.created_at)} ·{" "}
+          <Link to={`/home/${item.dot_id}/${item.root_run_id}`} className="hover:underline">
+            Open conversation
+          </Link>
+        </p>
+        {props.actions}
+      </div>
+      {card ? (
+        <MakeRequestCard card={card} />
+      ) : (
+        <div className="flex flex-col gap-1 rounded-lg border p-3">
+          <span className="font-medium">{item.title}</span>
+          <span className="text-sm break-words">
+            {item.name}
+            {item.purpose !== "" && ` · ${item.purpose}`}
+          </span>
+          {item.lines.map((line, i) => (
+            <span key={`${i}:${line}`} className="text-xs break-words text-muted-foreground">
+              {line}
+            </span>
+          ))}
+        </div>
+      )}
+    </li>
+  );
+}
+
 /// A section of the Inbox under its heading; nothing when it has no rows.
 function Section(props: { id: string; title: string; count: number; children: ReactNode }) {
   if (props.count === 0) return null;
@@ -502,6 +550,11 @@ export function InboxScreen() {
   const messages = useQuery({
     queryKey: keys.messages(null),
     queryFn: () => commands.messagesList(null),
+  });
+  // The ask cards of the makers' requests, with their buttons: the Inbox's own items are slim.
+  const makeCards = useQuery({
+    queryKey: keys.makeRequestsWaiting,
+    queryFn: commands.makeRequestsWaiting,
   });
   // After Snooze or Done the item's row goes, and focus with it: once the Inbox has reloaded,
   // focus moves to the heading of the section it was in, or to the page's when that is gone.
@@ -539,6 +592,7 @@ export function InboxScreen() {
   const [approvals, backApprovals] = split(data.approvals, approvalKey, back);
   const [undelivered, backUndelivered] = split(data.not_delivered, notDeliveredKey, back);
   const [reviews, backReviews] = split(data.app_reviews, appReviewKey, back);
+  const [makeRequests, backMakeRequests] = split(data.make_requests, makeRequestKey, back);
   const [instructions, backInstructions] = split(data.instructions, instructionsKey, back);
   const [attention, backAttention] = split(data.attention, attentionKey, back);
   const [teamScope, backTeamScope] = split(data.team_scope, teamScopeKey, back);
@@ -578,6 +632,14 @@ export function InboxScreen() {
     ),
     review: (item: PendingAppReview) => (
       <AppReviewRow key={item.proposal.id} item={item} actions={act(appReviewKey(item), `${item.dot_name}'s app to review`)} />
+    ),
+    makeRequest: (item: PendingMakeRequest) => (
+      <MakeRequestRow
+        key={item.id}
+        item={item}
+        card={makeCards.data?.find((card) => card.request.id === item.id)}
+        actions={act(makeRequestKey(item), `${item.dot_name}'s request about ${item.name}`)}
+      />
     ),
     instructions: (item: PendingInstructions) => (
       <InstructionsRow
@@ -625,6 +687,7 @@ export function InboxScreen() {
   }
   add(backUndelivered, notDeliveredKey, row.undelivered);
   add(backReviews, appReviewKey, row.review);
+  add(backMakeRequests, makeRequestKey, row.makeRequest);
   add(backInstructions, instructionsKey, row.instructions);
   add(backAttention, attentionKey, row.attention);
   add(backTeamScope, teamScopeKey, row.teamScope);
@@ -660,6 +723,7 @@ export function InboxScreen() {
     held.length === 0 &&
     instructions.length === 0 &&
     reviews.length === 0 &&
+    makeRequests.length === 0 &&
     workflows.length === 0;
   return (
     <InboxActed.Provider value={acted}>
@@ -668,7 +732,8 @@ export function InboxScreen() {
         {nothing && (
           <EmptyState icon={InboxIcon}>
             Nothing waits for you. Questions and notes from sols, approvals a sol asks for,
-            messages that did not reach a sol, apps sent for review, workflow runs that wait for
+            sols a sol asks to make, messages that did not reach a sol, apps sent for review,
+            workflow runs that wait for
             you, schedules that need attention, paused watchers and finished runs to review show
             up here.
           </EmptyState>
@@ -681,6 +746,10 @@ export function InboxScreen() {
         </Section>
         <Section id="inbox-approvals" title="Approvals" count={approvals.length}>
           {byRun(approvals).map(row.approvals)}
+        </Section>
+        <Section id="inbox-make-requests" title="Sols asking to make sols" count={makeRequests.length}>
+          {makeCards.isError && <ErrorNote error={makeCards.error} />}
+          <ul className="flex flex-col gap-3">{makeRequests.map(row.makeRequest)}</ul>
         </Section>
         <Section id="inbox-not-delivered" title="Not delivered" count={undelivered.length}>
           <ul className="flex flex-col gap-2">{undelivered.map(row.undelivered)}</ul>

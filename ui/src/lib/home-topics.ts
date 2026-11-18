@@ -2,6 +2,7 @@
 // spec, section 2).
 import type { Run, TopicInfo } from "@/api/types";
 import { localTime } from "@/lib/format";
+import { runSender, senderLabel } from "@/lib/making";
 import { watcherTitle } from "@/lib/watchers";
 
 /// One line of runs: a root run and the runs that continued it (`root_run_id`).
@@ -186,6 +187,9 @@ export function appTitle(run: Started): string | null {
 
 /// What started a run, in a word or two: "Scheduled", "Webhook", "Run now", or the app's title.
 export function triggerLabel(run: Started): string {
+  // A maker's job and Sage's report to a maker are chat runs nobody typed.
+  const sender = runSender(run);
+  if (sender !== null) return senderLabel(sender);
   return appTitle(run) ?? TRIGGER[run.trigger];
 }
 
