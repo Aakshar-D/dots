@@ -325,7 +325,21 @@ Fix 14b's rulings that are now written into the sections above: a custom maker g
 - On the local engine a making call shows as tool `MakeDots` with input `{"tool", "input"}`; on the Claude engine as `mcp__dots__make_dot` and so on. The approval on either engine is for `MakeDots`; for `change_dot`, `delete_dot` and `give_job` its input also has `"dot": {"id", "name"}`, and the approval card names the dot by its stored name. A local approval is applied by the resume run, so the made dot's `made.run_id` is that run.
 - A held run of a made dot names the maker's cap in its text only (`<maker> reached its $2.00 daily cap, shared with the dots it made`); no field says whose cap it is.
 - `spend_today` lists a maker only when it has a cap or a run of its own today.
-- No screen turns "Can make dots" on until plan B: until then the feature is reachable only through the store.
+- The switch "Can make sols" is in the editor's **Making sols** section since plan B.
+
+### What plan B built
+
+Plan B built the screens of section 11 on the core above. The person's guide is `docs/sols-make-sols.md`.
+
+- Commands: `make_request_card(id)`, `make_requests_waiting()`, `make_request_decide(id, decision, limit, shown)` and `making_cards(root_run_id)`, one line each over the `Runtime` functions. The UI schemas are `MakeRequest`, `MakeRequestCard` and `MakingCard`; `DotOverview.made_dots` and `Inbox.make_requests` are required.
+- The ask card (`MakeRequestCard.tsx`) draws what the core's card says and follows `can_allow`, `can_without` and `blocked`. Every answer sends the `limit` and `shown` of the card on screen. On `Conflict` it reads the card again and shows the core's sentence before Allow is on again; it also says so when the list brings a card that says something else than the one first shown. A card that cannot be read again keeps Allow and "without" off. Instructions, the model, a first job and a job are plain text in a box that says a sol wrote them.
+- Refuse asks no right, as in the core (my call: refusing gives nothing, and a person who may not change sols can still say no).
+- The chat draws `making_cards` after the run each names; a card whose run is not shown goes after the topic's last run. A job's run, a job's text sent again and a wake's run are read from the run's payload: their text is drawn on the sol's side under "Job from <maker>", "Job from <maker>, sent again" or "Report from Sage", never as the person's bubble, and Run again does not send it as the person's.
+- A job's card has no result text: the core's `JobCard` carries how the job ended, and the text is in the wake's run that follows as "Report from Sage".
+- The Inbox section reads `make_requests_waiting()` for the cards and lists them by the Inbox's own items, so a snoozed or done one is left out. Until a card is read, its row shows the item's title and lines with no answer.
+- The sols list puts made sols under their maker; a made sol of a made sol steps in once more. Deleting several sols deletes a maker before the sols it made, and the confirmation says a maker's sols stay unless picked themselves and that its waiting requests are dropped.
+- A `MakeDots` approval names what is asked ("wants to make a sol: Blog Watcher") and lists the call's arguments as plain text instead of JSON; another shape shows as every other call.
+- A job's run and a wake's run are not said aloud under "What I started" (`voice_done_notices` `mine`); under "Everything" they are. A resume run after an approval in a job, and a job's text the person sent again, are told of as before.
 
 ### Left open
 
