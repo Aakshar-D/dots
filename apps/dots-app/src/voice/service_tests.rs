@@ -9,7 +9,9 @@ use axum::http::{header, StatusCode};
 use axum::response::Response;
 use axum::routing::get;
 use axum::Router;
+use dots_core::model::TriggerKind;
 use dots_core::open_dot::MindEvent;
+use dots_core::settings::DoneNotices;
 use dots_voice::ModelFile;
 use sha2::{Digest, Sha256};
 use tokio::sync::Notify;
@@ -285,12 +287,17 @@ impl SessionFactory for Arc<FakeFactory> {
 #[derive(Default)]
 struct QuietMind {
     views: Mutex<Vec<View>>,
+    /// The run its next turn says it handed to a sol.
+    hands: Mutex<Option<String>>,
 }
 
 #[async_trait]
 impl MindPort for QuietMind {
-    async fn hear(&self, _: &str, view: &View, _: &UnboundedSender<MindEvent>) {
+    async fn hear(&self, _: &str, view: &View, out: &UnboundedSender<MindEvent>) {
         self.views.lock().unwrap().push(view.clone());
+        if let Some(run_id) = self.hands.lock().unwrap().take() {
+            let _ = out.send(MindEvent::Handed { run_id });
+        }
     }
     async fn pick(&self, _: usize, _: &View, _: &UnboundedSender<MindEvent>) {}
     fn lapse(&self, _: &UnboundedSender<MindEvent>) {}
@@ -1729,4 +1736,211 @@ fn the_wake_model_loads_only_when_first_fed() {
     assert_eq!(broken.heard(&[2.0; 512]), None);
     assert_eq!(broken.heard(&[2.0; 512]), None);
     assert_eq!(tries.load(Ordering::SeqCst), 1);
+}
+
+// ---- told when a run ends -------------------------------------------------------------------
+
+/// A run of Research that succeeded, with a result, its sol not viewed.
+fn research_done(id: &str, trigger: TriggerKind) -> EndedRun {
+    EndedRun {
+        run_id: id.into(),
+        dot_id: "d1".into(),
+        dot_name: "Research".into(),
+        ok: true,
+        result: Some("I found three papers".into()),
+        trigger,
+        viewed: false,
+    }
+}
+
+const DONE_LINE: &str = "notice Research finished.";
+const ASKED_LINE: &str = "notice Research finished what you asked: I found three papers.";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_that_ends_is_told_of_only_when_voice_is_ready_and_the_session_rests() {
+    let r = rig(Mode::Normal).await;
+    // Voice off, not ready: nothing is said and nothing waits.
+    assert!(!r.svc.runs_wanted());
+    r.svc
+        .run_ended(research_done("r0", TriggerKind::Chat))
+        .await;
+    assert!(!r.svc.notices().pending());
+    // Ready and resting: said at once. "Tell me aloud when something needs me" is off, and
+    // has no say in this.
+    r.svc.enable(true).await.unwrap();
+    session_in(&r, State::Idle).await;
+    assert!(r.svc.runs_wanted() && !r.svc.notices_wanted());
+    r.svc
+        .run_ended(research_done("r1", TriggerKind::Chat))
+        .await;
+    let session = r.factory.session(0);
+    assert_eq!(noticed(&session), [DONE_LINE]);
+    assert!(!r.svc.notices().pending());
+    // While Sage speaks: kept. At rest again, once the gap has passed: said.
+    session_in(&r, State::Speaking).await;
+    let backup = EndedRun {
+        dot_id: "d2".into(),
+        dot_name: "Backup".into(),
+        ok: false,
+        ..research_done("r2", TriggerKind::Manual)
+    };
+    r.svc.run_ended(backup.clone()).await;
+    assert_eq!(noticed(&session), [DONE_LINE]);
+    assert!(r.svc.notices().pending());
+    r.svc.notices().spoke_long_ago();
+    session_in(&r, State::Idle).await;
+    let s = session.clone();
+    until("the second notice", || noticed(&s).len() == 2).await;
+    assert_eq!(noticed(&session)[1], "notice Backup failed.");
+    assert!(!r.svc.notices().pending());
+    // Voice turned off drops what waits.
+    session_in(&r, State::Thinking).await;
+    r.svc.run_ended(backup).await;
+    assert!(r.svc.notices().pending());
+    r.svc.enable(false).await.unwrap();
+    assert!(!r.svc.notices().pending());
+    assert_eq!(noticed(&session).len(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_setting_says_which_ended_runs_are_told_of_and_a_handed_one_always_is() {
+    let r = rig(Mode::Normal).await;
+    r.svc.enable(true).await.unwrap();
+    session_in(&r, State::Idle).await;
+    let session = r.factory.session(0);
+    let mode = |voice_done_notices| Settings {
+        voice_done_notices,
+        ..on()
+    };
+    // Off: a run the person started in the chat is not told of.
+    save(&r, mode(DoneNotices::Off)).await;
+    r.svc
+        .run_ended(research_done("r1", TriggerKind::Chat))
+        .await;
+    assert!(noticed(&session).is_empty());
+    assert!(!r.svc.notices().pending());
+    // One handed over by voice is, with one sentence of its result.
+    r.svc.run_handed("r2");
+    r.svc
+        .run_ended(research_done("r2", TriggerKind::Chat))
+        .await;
+    assert_eq!(noticed(&session), [ASKED_LINE]);
+    // What I started: not a scheduled run, but one run by hand.
+    save(&r, mode(DoneNotices::Mine)).await;
+    r.svc.notices().spoke_long_ago();
+    r.svc
+        .run_ended(research_done("r3", TriggerKind::Schedule))
+        .await;
+    assert_eq!(noticed(&session).len(), 1);
+    r.svc
+        .run_ended(research_done("r4", TriggerKind::Manual))
+        .await;
+    assert_eq!(noticed(&session), [ASKED_LINE, DONE_LINE]);
+    // Everything: a scheduled run too.
+    save(&r, mode(DoneNotices::All)).await;
+    r.svc.notices().spoke_long_ago();
+    r.svc
+        .run_ended(research_done("r5", TriggerKind::Schedule))
+        .await;
+    assert_eq!(noticed(&session), [ASKED_LINE, DONE_LINE, DONE_LINE]);
+    // A choice that tells of less drops what waits.
+    session_in(&r, State::Speaking).await;
+    r.svc
+        .run_ended(research_done("r6", TriggerKind::Schedule))
+        .await;
+    assert!(r.svc.notices().pending());
+    save(&r, mode(DoneNotices::Mine)).await;
+    assert!(!r.svc.notices().pending());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn what_needs_the_person_is_said_before_a_run_that_ended() {
+    let r = rig(Mode::Normal).await;
+    *r.host.waiting.lock().unwrap() = research_waits();
+    r.svc.enable(true).await.unwrap();
+    save(
+        &r,
+        Settings {
+            voice_notices: true,
+            ..on()
+        },
+    )
+    .await;
+    // Both arrive while Sage speaks.
+    session_in(&r, State::Speaking).await;
+    r.svc
+        .run_ended(research_done("r1", TriggerKind::Chat))
+        .await;
+    r.svc.need(research()).await;
+    let session = r.factory.session(0);
+    assert!(noticed(&session).is_empty());
+    // At rest: the approval first; the run waits for the gap.
+    session_in(&r, State::Idle).await;
+    let s = session.clone();
+    until("the approval's notice", || !noticed(&s).is_empty()).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(noticed(&session), [RESEARCH_LINE]);
+    assert!(r.svc.notices().pending());
+    // The gap has passed, and the session comes to rest again: the run is told of.
+    r.svc.notices().spoke_long_ago();
+    session_in(&r, State::Thinking).await;
+    session_in(&r, State::Idle).await;
+    let s = session.clone();
+    until("the run's notice", || noticed(&s).len() == 2).await;
+    assert_eq!(noticed(&session), [RESEARCH_LINE, DONE_LINE]);
+    assert!(!r.svc.notices().pending());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_run_the_mind_hands_over_in_a_turn_is_told_of_when_it_ends() {
+    let r = rig(Mode::Normal).await;
+    // The mind sends a message for the person in its next turn, and says which run it started.
+    *r.host.mind.hands.lock().unwrap() = Some("r1".into());
+    r.svc.enable(true).await.unwrap();
+    save(
+        &r,
+        Settings {
+            voice_done_notices: DoneNotices::Off,
+            ..on()
+        },
+    )
+    .await;
+    session_in(&r, State::Idle).await;
+    let session = r.factory.session(0);
+    session.emit(SessionEvent::Heard {
+        text: "tell research to look at the build".into(),
+        turn: 1,
+    });
+    // The turn is over, and with it the mind's word has reached the service.
+    let (mind, svc) = (r.host.mind.clone(), r.svc.clone());
+    until("the turn", || {
+        mind.hands.lock().unwrap().is_none() && svc.bridge().is_some_and(|b| b.at_rest())
+    })
+    .await;
+    // The run ends, as the runtime reports it: queued, running, succeeded.
+    let run = |status: &str| -> Run {
+        serde_json::from_value(serde_json::json!({
+            "id": "r1",
+            "dot_id": "d1",
+            "root_run_id": "r1",
+            "trigger": "chat",
+            "status": status,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "queued_at": "t",
+            "hold_released": false,
+            "tokens_cache_read": 0,
+            "quiet_stopped": false,
+        }))
+        .unwrap()
+    };
+    assert!(!r.svc.run_seen(&run("queued")));
+    assert!(!r.svc.run_seen(&run("running")));
+    assert!(r.svc.run_seen(&run("succeeded")));
+    assert!(!r.svc.run_seen(&run("succeeded")), "an end is seen once");
+    // Off tells of no run, but of this one: the person asked aloud.
+    r.svc
+        .run_ended(research_done("r1", TriggerKind::Chat))
+        .await;
+    assert_eq!(noticed(&session), [ASKED_LINE]);
 }

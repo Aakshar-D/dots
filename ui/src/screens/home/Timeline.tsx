@@ -82,11 +82,15 @@ export function Timeline(props: {
   const entries = mergeSkips(topics, skips);
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
+      {/* `relative`: what is placed absolutely in the conversation (a working sol's line for
+          screen readers, `sr-only`) is then placed in this scrolling area and scrolls with it.
+          Without it such an element is placed in the pane instead, far below its foot when the
+          conversation is long, and the whole window scrolls down into nothing. */}
       <section
         ref={ref}
         onScroll={onScroll}
         aria-label="Conversation"
-        className="flex min-h-0 flex-1 flex-col overflow-auto"
+        className="relative flex min-h-0 flex-1 flex-col overflow-auto"
       >
         {/* The scrolling area keeps the pane's width, so its scrollbar is at the pane's edge;
             what it shows is one centred column (conversational chat spec section 5). */}

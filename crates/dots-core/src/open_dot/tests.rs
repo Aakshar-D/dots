@@ -3771,3 +3771,147 @@ async fn what_a_sol_wrote_is_cleaned_or_withheld_when_catching_up() {
     assert_eq!(t.fake.calls(), 0);
     t.rt.shutdown();
 }
+
+/// The runs the mind said it handed to a sol (`Handed`), in order.
+fn handed(events: &[MindEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            MindEvent::Handed { run_id } => Some(run_id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_message_sent_or_a_sol_run_by_voice_hands_its_run_over() {
+    // A message: the run it started is named once, after the deed's `Did`.
+    let t = T::start().await;
+    let dot = t.dot("Research").await;
+    t.fake.push(says(
+        "Sending.\nDO {\"act\":\"send\",\"d\":\"d1\",\"text\":\"look at the build\"}",
+    ));
+    let got = t.hear("tell research to look at the build").await;
+    let runs = handed(&got);
+    assert_eq!(runs.len(), 1, "{got:?}");
+    let run = t.rt.get_run(&runs[0]).await.unwrap();
+    assert_eq!((run.dot_id, run.trigger), (dot.id, TriggerKind::Chat));
+    let did = MindEvent::Did {
+        said: "Sent to Research.".into(),
+    };
+    let over = MindEvent::Handed {
+        run_id: runs[0].clone(),
+    };
+    assert!(place(&got, &did) < place(&got, &over), "{got:?}");
+    assert!(matches!(got.last(), Some(MindEvent::SayEnd { .. })));
+    t.rt.shutdown();
+
+    // A sol run now: nothing is handed over by asking, its run is by the yes.
+    let t = T::start().await;
+    let dot = t.dot("Deploy watcher").await;
+    t.fake.push(says("DO {\"act\":\"run\",\"d\":\"d1\"}"));
+    let asked = t.hear("run the deploy watcher").await;
+    assert!(handed(&asked).is_empty(), "{asked:?}");
+    let got = t.hear("yes").await;
+    let runs = handed(&got);
+    assert_eq!(runs.len(), 1, "{got:?}");
+    let run = t.rt.get_run(&runs[0]).await.unwrap();
+    assert_eq!((run.dot_id, run.trigger), (dot.id, TriggerKind::Manual));
+    t.rt.shutdown();
+}
+
+#[tokio::test]
+async fn a_deed_that_starts_no_run_or_was_refused_hands_nothing_over() {
+    // An approval answered: no run was started for the person.
+    let t = T::start().await;
+    asking_to_approve(&t).await;
+    let got = t.hear("yes").await;
+    assert_eq!(dids(&got), vec!["Approved.".to_string()]);
+    assert!(handed(&got).is_empty(), "{got:?}");
+    t.rt.shutdown();
+
+    // A run of a sol that is gone: refused, so there is no run to tell of.
+    let t = T::start().await;
+    let gone = Deed::Run {
+        dot_id: "no-such-sol".into(),
+        dot_name: "Research".into(),
+    };
+    let done = outcome(&t.rt, &gone).await;
+    assert!(!done.done);
+    assert_eq!(done.run, None);
+    t.rt.shutdown();
+}
+
+#[test]
+fn a_result_is_said_as_one_cut_sentence() {
+    // The first sentence of the first line with words in it, without its end mark.
+    assert_eq!(
+        spoken_result("I found three papers. The best one is from 2024.\nMore below.").as_deref(),
+        Some("I found three papers")
+    );
+    // A heading, an empty line and a rule are passed over; marks are not said.
+    assert_eq!(
+        spoken_result(
+            "## Summary\n\n---\n- **Fixed** the `login` bug in v2.1 today!\nDetails follow."
+        )
+        .as_deref(),
+        Some("Fixed the login bug in v2.1 today")
+    );
+    assert_eq!(
+        spoken_result("1. Updated notes.md and sent it").as_deref(),
+        Some("Updated notes.md and sent it")
+    );
+    // Control and hidden characters go, and white space runs become one space.
+    assert_eq!(
+        spoken_result("Done\twith\u{200B} the\u{202E} report\u{7}.\r\nNext line").as_deref(),
+        Some("Done with the report")
+    );
+    // Sentence marks of other scripts end it too.
+    assert_eq!(
+        spoken_result("研究完成。详情如下").as_deref(),
+        Some("研究完成")
+    );
+    // At most 160 characters, cut on a character boundary.
+    let long = "é".repeat(400);
+    let cut = spoken_result(&long).unwrap();
+    assert_eq!(cut.chars().count(), 160);
+    assert_eq!(cut, "é".repeat(160));
+    let words = "word ".repeat(100);
+    assert!(spoken_result(&words).unwrap().chars().count() <= 160);
+    // Nothing to say: nothing is said.
+    for empty in [
+        "",
+        "   \n\t",
+        "...",
+        "# Only a heading",
+        "---\n***",
+        "\u{200B}",
+    ] {
+        assert_eq!(spoken_result(empty), None, "{empty:?}");
+    }
+}
+
+#[test]
+fn a_result_with_a_secret_in_it_is_not_said() {
+    let secret = "Zx9-result-token-77aa";
+    crate::vault::redact::global().add("RESULT_TOKEN", secret);
+    // In the sentence itself, or elsewhere on its line: the line is not said at all.
+    assert_eq!(spoken_result(&format!("The key is {secret}.")), None);
+    assert_eq!(
+        spoken_result(&format!("All done. The key is {secret}.")),
+        None
+    );
+    // Split by a tab so that it shows only with white space taken out.
+    let split = secret.replacen('-', "-\t", 1);
+    assert_eq!(spoken_result(&format!("The key is {split} today")), None);
+    // On a later line it is never reached.
+    assert_eq!(
+        spoken_result(&format!("All done.\nThe key is {secret}.")).as_deref(),
+        Some("All done")
+    );
+    // An address loses its credentials and query before it is said.
+    assert_eq!(
+        spoken_result("Posted to https://user:pw@example.com/a?token=1 just now").as_deref(),
+        Some("Posted to https://example.com/a just now")
+    );
+}

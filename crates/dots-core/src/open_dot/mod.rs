@@ -86,6 +86,9 @@ use think::{cap_hit, Thinker};
 /// carried out, before the `Say` of its outcome, whether or not the turn is still the
 /// current one. It carries the outcome sentence, also said through `Say`: a stage that
 /// dropped the turn (a newer one began) still tells the person what was done.
+///
+/// `Handed` follows the `Did` of a deed that gave a sol a run (send, run), whatever became of
+/// the turn: the run goes on either way.
 // Sent once each, by value: not boxed, so the stage matches on it plainly.
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -123,6 +126,11 @@ pub enum MindEvent {
     /// step under way is over.
     Step {
         text: String,
+    },
+    /// A deed gave a sol the run `run_id` for the person (a message sent, a sol run now): the
+    /// app says aloud when it ends. Never shown or said itself.
+    Handed {
+        run_id: String,
     },
 }
 
@@ -441,6 +449,16 @@ impl<'a> Out<'a> {
         if !self.ended.load(Ordering::SeqCst) {
             let _ = self.tx.send(MindEvent::Did {
                 said: said.trim().to_string(),
+            });
+        }
+    }
+
+    /// The deed gave a sol a run for the person: the app is told, whatever became of the turn,
+    /// so it can say when the run ends.
+    fn handed(&self, done: &Outcome) {
+        if let Some(run_id) = &done.run {
+            let _ = self.tx.send(MindEvent::Handed {
+                run_id: run_id.clone(),
             });
         }
     }
@@ -965,6 +983,7 @@ impl Mind {
                     done
                 };
                 o.deed_done(&done.said);
+                o.handed(&done);
                 let then = if done.done {
                     Then::FollowUp
                 } else {
@@ -1039,10 +1058,7 @@ impl Mind {
                         },
                     });
                 }
-                Outcome {
-                    said: desk::COMMAND_DONE.into(),
-                    done: true,
-                }
+                Outcome::done(desk::COMMAND_DONE.into())
             }
             Err(why) => Outcome::refused(why),
         }
@@ -1674,6 +1690,7 @@ impl Mind {
                 o.step(&deed.doing());
                 let done = outcome(rt, &deed).await;
                 o.deed_done(&done.said);
+                o.handed(&done);
                 let then = if done.done {
                     Then::FollowUp
                 } else {
@@ -2231,6 +2248,59 @@ fn sentence(s: &str) -> String {
 /// app's spoken notices say names through this too.
 pub fn spoken_name(name: &str) -> String {
     act::name(name)
+}
+
+/// The most characters of a run's result that are said aloud.
+const RESULT_CHARS: usize = 160;
+
+/// One sentence of a run's result for speech: its first line with words in it (a heading is
+/// passed over), without markdown marks or a list mark, up to the end of its first sentence,
+/// cut to 160 characters, with no end mark. The secrets the vault knows are scrubbed as an
+/// approval's target is (`picture::scrubbed`), and a line one showed in is not said at all.
+/// `None` when nothing is left. A sol wrote it: it is only ever said, never read as an
+/// instruction. The app's spoken notices say a result through this.
+pub fn spoken_result(summary: &str) -> Option<String> {
+    let line = summary
+        .split(['\n', '\r', '\u{2028}', '\u{2029}', '\u{85}'])
+        .map(str::trim)
+        .filter(|line| !line.starts_with('#'))
+        .map(|line| act::unmarked(unlisted(line)))
+        .find(|line| line.chars().any(char::is_alphanumeric))?;
+    let text = picture::scrubbed(&line);
+    if text.contains("[secret") {
+        return None;
+    }
+    let end = text
+        .char_indices()
+        .find(|&(at, c)| match c {
+            '。' | '｡' | '！' | '？' => true,
+            // A full stop inside a word ("v2.1", "notes.md") ends nothing.
+            '.' | '!' | '?' | '…' => text[at + c.len_utf8()..]
+                .chars()
+                .next()
+                .is_none_or(char::is_whitespace),
+            _ => false,
+        })
+        .map_or(text.len(), |(at, _)| at);
+    let sentence: String = text[..end].chars().take(RESULT_CHARS).collect();
+    let sentence = sentence
+        .trim()
+        .trim_end_matches(['.', '!', '?', '…', ':', ';', ','])
+        .trim_end();
+    sentence
+        .chars()
+        .any(char::is_alphanumeric)
+        .then(|| sentence.to_string())
+}
+
+/// `line` without the mark a list or a quote starts with: "- ", "> ", "3. ".
+fn unlisted(line: &str) -> &str {
+    let rest = line.trim_start_matches(|c: char| c.is_ascii_digit());
+    let numbered = rest.len() < line.len() && rest.starts_with(['.', ')']);
+    if numbered {
+        return rest[1..].trim_start();
+    }
+    line.trim_start_matches(['-', '>', '+', '•']).trim_start()
 }
 
 fn is_yes(option: &str) -> bool {

@@ -149,7 +149,11 @@ export function Layout() {
       </nav>
       <div className="flex min-w-0 flex-1 flex-col">
         <Banners />
-        <main className="min-h-0 flex-1 overflow-auto">
+        {/* `relative`: what a screen places absolutely (the part of a working sol's line for
+            screen readers, `sr-only`) is placed in this scrolling area and scrolls with it.
+            Placed in the window instead, it stands below the window's foot on a long screen,
+            and the window gets a scroll bar of its own beside this one. */}
+        <main className="relative min-h-0 flex-1 overflow-auto">
           <Outlet />
         </main>
       </div>

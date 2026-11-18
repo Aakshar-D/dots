@@ -156,10 +156,15 @@ struct Job {
     view: View,
 }
 
+/// What is called with the id of a run the mind handed to a sol.
+pub type HandedHook = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct Bridge {
     session: Arc<dyn SessionPort>,
     /// Called when a card left at rest was cleared: the stage is now at rest.
     on_rest: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+    /// Called with the id of a run the mind handed to a sol for the person.
+    on_handed: Mutex<Option<HandedHook>>,
     mind: Arc<dyn MindPort>,
     ui: UnboundedSender<VoiceEvent>,
     inner: Mutex<Inner>,
@@ -195,6 +200,7 @@ impl Bridge {
         Arc::new(Bridge {
             session,
             on_rest: Mutex::new(None),
+            on_handed: Mutex::new(None),
             mind,
             ui,
             inner: Mutex::new(Inner::default()),
@@ -266,6 +272,12 @@ impl Bridge {
     /// What to call once a card left at rest was cleared (the service looks for notices).
     pub fn on_rest(&self, hook: Arc<dyn Fn() + Send + Sync>) {
         *self.on_rest.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook);
+    }
+
+    /// What to call when the mind handed a run to a sol for the person (the service says
+    /// aloud when that run ends).
+    pub fn on_handed(&self, hook: HandedHook) {
+        *self.on_handed.lock().unwrap_or_else(|e| e.into_inner()) = Some(hook);
     }
 
     /// The account, workspace and screen the next turns see.
@@ -479,6 +491,18 @@ impl Bridge {
     /// One mind event of `turn`: applied only while `turn` is the live turn. The lock is held
     /// while the session and the UI are told, so a newer `Heard` cannot come between.
     fn apply(&self, turn: u64, ev: MindEvent) {
+        // Whatever became of the turn: the run goes on, and its end is told of.
+        if let MindEvent::Handed { run_id } = &ev {
+            let hook = self
+                .on_handed
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            if let Some(hook) = hook {
+                hook(run_id);
+            }
+            return;
+        }
         let mut s = self.lock();
         if let MindEvent::Did { said } = ev {
             self.did(&mut s, turn, said);
@@ -536,7 +560,7 @@ impl Bridge {
                 s.forget();
                 self.send(VoiceEvent::Cleared);
             }
-            MindEvent::Did { .. } => {}
+            MindEvent::Did { .. } | MindEvent::Handed { .. } => {}
         }
     }
 
@@ -2393,5 +2417,35 @@ mod tests {
         }
         assert!(r.mind.calls().is_empty());
         assert!(r.session.calls().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_run_the_mind_handed_over_reaches_the_hook_and_is_neither_said_nor_shown() {
+        let mut r = rig();
+        let handed = Arc::new(Mutex::new(Vec::new()));
+        let got = handed.clone();
+        r.bridge.on_handed(Arc::new(move |run_id: &str| {
+            got.lock().unwrap().push(run_id.to_string())
+        }));
+        r.mind.script(vec![
+            say("Sent to Research."),
+            Step::Send(MindEvent::Handed {
+                run_id: "run-1".into(),
+            }),
+            end(Then::FollowUp),
+        ]);
+        r.heard("tell research to look at the build", 1);
+        settle().await;
+        assert_eq!(*handed.lock().unwrap(), ["run-1"]);
+        let told = format!("{:?} {:?}", r.session.calls(), r.ui());
+        assert!(!told.contains("run-1"), "{told}");
+        // A turn that is no longer the live one: the run goes on, so the hook still hears.
+        r.bridge.apply(
+            7,
+            MindEvent::Handed {
+                run_id: "run-2".into(),
+            },
+        );
+        assert_eq!(*handed.lock().unwrap(), ["run-1", "run-2"]);
     }
 }

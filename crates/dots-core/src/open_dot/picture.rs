@@ -1010,23 +1010,30 @@ fn described(tool: &str, input: &Value) -> Target {
             })
         })
         .unwrap_or_default();
-    let shown = plain_urls_in(&one_line(&raw, None));
+    let full = scrubbed(&raw);
+    let text = clean(&full, TARGET_BYTES);
+    Target {
+        cut: text.len() < full.len(),
+        text,
+        summary: is_summary,
+    }
+}
+
+/// `raw` on one line, each address in it made plain, the secrets the vault knows scrubbed.
+/// When a secret shows only once white space is taken out (also beside one already scrubbed),
+/// all of it is "[secret]". A run's result is said aloud through this too.
+pub(crate) fn scrubbed(raw: &str) -> String {
+    let shown = plain_urls_in(&one_line(raw, None));
     let redact = crate::vault::redact::global();
     let scrubbed = redact.scrub(&shown);
     // A secret that shows only with white space taken out, also beside one already scrubbed.
     let hidden_secret = readings(&scrubbed)[2..]
         .iter()
         .any(|r| redact.scrub(r) != r.as_str());
-    let full = if hidden_secret {
+    if hidden_secret {
         "[secret]".to_string()
     } else {
         one_line(&scrubbed, None)
-    };
-    let text = clean(&full, TARGET_BYTES);
-    Target {
-        cut: text.len() < full.len(),
-        text,
-        summary: is_summary,
     }
 }
 
