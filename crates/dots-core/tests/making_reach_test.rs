@@ -617,12 +617,13 @@ fn a_subfolder_of_a_folder_mode_maker_is_within_reach_and_made_when_missing() {
     std::fs::create_dir_all(&there).unwrap();
     let missing = place.maker_dir.join("research").join("new").join("deep");
 
-    // One that exists, given absolute and given relative.
-    for folder in [
-        text(&there),
-        "research/blogs".to_string(),
-        r"research\blogs".to_string(),
-    ] {
+    // One that exists, given absolute and given relative. A backslash parts folders on
+    // Windows only: elsewhere it is a letter of one folder's name.
+    let mut given = vec![text(&there), "research/blogs".to_string()];
+    if cfg!(windows) {
+        given.push(r"research\blogs".to_string());
+    }
+    for folder in given {
         let mut w = wanted();
         w.folder = Some(folder);
         let reach = new(&maker, &w, &place);
