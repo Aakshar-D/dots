@@ -430,6 +430,9 @@ pub enum StatusAsk {
     /// "What did research say?": the one line of a sol's last result. The words that name
     /// it; `None` for "it" and for "what was the result".
     Result(Option<String>),
+    /// "Catch me up": what finished, failed, waits and runs since the person last spoke to
+    /// Sage.
+    CatchUp,
 }
 
 /// The whole sentence, as `status_words` gives it, that asks what is going on.
@@ -471,6 +474,32 @@ const PENDING: &[&str] = &[
     "anything waiting on me",
     "is anything waiting for me",
     "is anything waiting on me",
+];
+/// The whole sentence that asks what happened since the person last spoke to Sage. With a
+/// thing named after it ("catch me up on the invoice app", "what's new in Rust") it is not
+/// here: the model reads that.
+const CATCH_UP: &[&str] = &[
+    "catch me up",
+    "can you catch me up",
+    "could you catch me up",
+    "catch me up on everything",
+    "what did i miss",
+    "what have i missed",
+    "what i missed",
+    "did i miss anything",
+    "have i missed anything",
+    "what did i miss while i was away",
+    "what did i miss while i was gone",
+    "what have i missed while i was away",
+    "what have i missed while i was gone",
+    "what happened while i was away",
+    "what happened while i was gone",
+    "whats new",
+    "anything new",
+    "is there anything new",
+    "brief me",
+    "give me a briefing",
+    "fill me in",
 ];
 /// Questions about one sol, with its name (or "it") in the middle: the word before the name,
 /// and what may come after it, the longest first.
@@ -601,7 +630,7 @@ fn sol_named(name: &str, pointing: bool) -> Option<Option<String>> {
 
 /// Whether the whole utterance is one of a few clear questions about the sols, which Sage
 /// answers from the picture with no model: what is going on, what is pending, how one sol is
-/// getting on, and what a sol's result was. Letter case, punctuation and the usual filler are
+/// getting on, what a sol's result was, and what happened since the person last spoke. Letter case, punctuation and the usual filler are
 /// left aside, as in `quick`. Anything more in the sentence ("what's going on with the
 /// invoice app and can you fix it") is no match: the model reads it.
 pub fn status_ask(heard: &str) -> Option<StatusAsk> {
@@ -612,6 +641,9 @@ pub fn status_ask(heard: &str) -> Option<StatusAsk> {
     }
     if PENDING.contains(&j) {
         return Some(StatusAsk::Pending);
+    }
+    if CATCH_UP.contains(&j) {
+        return Some(StatusAsk::CatchUp);
     }
     if RESULT_ALONE.contains(&j) {
         return Some(StatusAsk::Result(None));
@@ -829,6 +861,65 @@ mod tests {
             "What was the result of it?",
         ] {
             assert_eq!(status_ask(said), Some(StatusAsk::Result(None)), "{said}");
+        }
+    }
+
+    #[test]
+    fn catch_me_up_is_matched_whole() {
+        for said in [
+            "Catch me up.",
+            "catch me up",
+            "Hey Sage, catch me up please.",
+            "Okay, catch me up!",
+            "Can you catch me up?",
+            "Catch me up on everything.",
+            "What did I miss?",
+            "So, what did I miss?",
+            "What have I missed?",
+            "Tell me what I missed.",
+            "Did I miss anything?",
+            "What did I miss while I was away?",
+            "What have I missed while I was gone?",
+            "What happened while I was away?",
+            "What happened while I was gone?",
+            "What's new?",
+            "whats new",
+            "What is new?",
+            "WHAT'S NEW, SAGE?",
+            "Anything new?",
+            "Is there anything new right now?",
+            "Brief me.",
+            "Give me a briefing, please.",
+            "Fill me in.",
+            "Sage, fill me in. Thanks.",
+        ] {
+            assert_eq!(status_ask(said), Some(StatusAsk::CatchUp), "{said}");
+            // None of them is a stop, a yes or the like.
+            assert_eq!(quick(said, &[]), None, "{said}");
+        }
+        // More in the sentence, or a thing it is about: the model reads it.
+        for said in [
+            "Catch me up on the invoice app and fix it.",
+            "Catch me up on the invoice app.",
+            "Catch me up on research.",
+            "Catch up.",
+            "Catch me.",
+            "What's new in Rust?",
+            "What's new with research?",
+            "Anything new from the backup sol?",
+            "What did I miss in the meeting?",
+            "What did you miss?",
+            "What happened?",
+            "What happened to research?",
+            "What happened while I was away and can you fix it?",
+            "Brief me on the deploy.",
+            "Give me a briefing on sales and email it.",
+            "Fill me in on the plan.",
+            "Fill in the form.",
+            "New.",
+            "Brief.",
+        ] {
+            assert_eq!(status_ask(said), None, "{said}");
         }
     }
 

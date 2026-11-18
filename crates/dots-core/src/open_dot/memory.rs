@@ -5,11 +5,16 @@
 //! It is kept in one small file on this computer. Nothing of what was said is kept: a note
 //! is one sentence about the person, and the tally is counts. The person sees the notes in
 //! Settings, removes any of them, forgets them all, or turns the learning off.
+//!
+//! The file also holds the time the person last said something to Sage, so that "catch me
+//! up" knows where to begin after a restart. It is forgotten with the rest, and with the
+//! learning off it is kept only while the app runs.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::picture::clean;
@@ -53,6 +58,10 @@ struct Known {
     /// How often each kind of thing was asked for.
     #[serde(default)]
     asks: BTreeMap<String, u64>,
+    /// When the person last said something to Sage, as the store writes a time. A file
+    /// written before this was kept has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    last_spoke: Option<String>,
 }
 
 impl Default for Known {
@@ -63,8 +72,19 @@ impl Default for Known {
             turns: 0,
             words: 0,
             asks: BTreeMap::new(),
+            last_spoke: None,
         }
     }
+}
+
+/// When the person talked to Sage, kept while the app runs.
+#[derive(Debug, Clone, Copy, Default)]
+struct Talk {
+    /// What happened after this is news to the person: the last turn of the conversation
+    /// before this one, or the last time Sage caught them up, whichever is later.
+    since: Option<DateTime<Utc>>,
+    /// The latest turn.
+    last: Option<DateTime<Utc>>,
 }
 
 /// What the person sees of it in Settings.
@@ -79,6 +99,7 @@ pub struct Memory {
     /// Where it is kept; `None` keeps it for this run only (tests, a core with no folder).
     path: Option<PathBuf>,
     known: Mutex<Known>,
+    talk: Mutex<Talk>,
 }
 
 impl Memory {
@@ -87,6 +108,7 @@ impl Memory {
         Self {
             path: None,
             known: Mutex::new(Known::default()),
+            talk: Mutex::new(Talk::default()),
         }
     }
 
@@ -109,6 +131,7 @@ impl Memory {
         Self {
             path: Some(path),
             known: Mutex::new(known),
+            talk: Mutex::new(Talk::default()),
         }
     }
 
@@ -174,13 +197,61 @@ impl Memory {
         });
     }
 
-    /// Forgets the notes and the tally. Whether learning is on stays as it is.
+    /// Forgets the notes, the tally and when the person last spoke. Whether learning is on
+    /// stays as it is.
     pub fn forget_all(&self) {
         self.change(|known| {
             *known = Known {
                 learning: known.learning,
                 ..Known::default()
             };
+        });
+        *self.talk.lock().unwrap_or_else(|e| e.into_inner()) = Talk::default();
+    }
+
+    /// The person said something to Sage at `at`. `fresh`: it is the first turn of a
+    /// conversation, so what happened since the turn before it (the last of the conversation
+    /// before, in this run of the app or in the file) is news from now on.
+    pub fn spoke(&self, at: DateTime<Utc>, fresh: bool) {
+        {
+            let mut talk = self.talk.lock().unwrap_or_else(|e| e.into_inner());
+            if fresh {
+                talk.since = talk.last.or_else(|| self.kept_last_spoke());
+            }
+            talk.last = Some(at);
+        }
+        self.keep_last_spoke(at);
+    }
+
+    /// Sage told the person at `at` what happened up to then: only what comes after is news.
+    pub fn caught_up(&self, at: DateTime<Utc>) {
+        {
+            let mut talk = self.talk.lock().unwrap_or_else(|e| e.into_inner());
+            talk.since = Some(at);
+            talk.last = Some(at);
+        }
+        self.keep_last_spoke(at);
+    }
+
+    /// The time after which what happened is news to the person; `None` when Sage does not
+    /// know when they last spoke.
+    pub fn since(&self) -> Option<DateTime<Utc>> {
+        self.talk.lock().unwrap_or_else(|e| e.into_inner()).since
+    }
+
+    /// The time in the file, when it holds one that can be read.
+    fn kept_last_spoke(&self) -> Option<DateTime<Utc>> {
+        let known = self.known.lock().unwrap_or_else(|e| e.into_inner());
+        let at = DateTime::parse_from_rfc3339(known.last_spoke.as_deref()?).ok()?;
+        Some(at.with_timezone(&Utc))
+    }
+
+    /// Writes the time to the file, unless learning is off.
+    fn keep_last_spoke(&self, at: DateTime<Utc>) {
+        self.change(|known| {
+            if known.learning {
+                known.last_spoke = Some(crate::util::timestamp(at));
+            }
         });
     }
 
@@ -397,5 +468,77 @@ mod tests {
             }
         );
         assert!(!path.with_extension("json.new").exists());
+    }
+
+    fn at(time: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(time)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[test]
+    fn news_begins_at_the_last_turn_of_the_conversation_before() {
+        let memory = Memory::passing();
+        // The first conversation ever: nothing is known of a time before it.
+        memory.spoke(at("2026-11-18T09:00:00Z"), true);
+        memory.spoke(at("2026-11-18T09:05:00Z"), false);
+        assert_eq!(memory.since(), None);
+        // The next one begins: its news begins at the last turn of the one before, and
+        // stays there however long this one goes on.
+        memory.spoke(at("2026-11-18T12:00:00Z"), true);
+        memory.spoke(at("2026-11-18T12:01:00Z"), false);
+        assert_eq!(memory.since(), Some(at("2026-11-18T09:05:00Z")));
+        // Caught up: only what comes after is news, in this conversation and the next.
+        memory.caught_up(at("2026-11-18T12:02:00Z"));
+        assert_eq!(memory.since(), Some(at("2026-11-18T12:02:00Z")));
+        memory.spoke(at("2026-11-18T15:00:00Z"), true);
+        assert_eq!(memory.since(), Some(at("2026-11-18T12:02:00Z")));
+        // Forgotten with the rest.
+        memory.forget_all();
+        assert_eq!(memory.since(), None);
+        memory.spoke(at("2026-11-18T15:01:00Z"), false);
+        assert_eq!(memory.since(), None);
+    }
+
+    #[test]
+    fn when_the_person_last_spoke_is_kept_in_the_file_and_an_old_file_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("open-sage-memory.json");
+        // A file written before the time was kept: it loads, with what it held.
+        std::fs::write(
+            &path,
+            r#"{"learning":true,"notes":["Likes tea."],"turns":2,"words":5,"asks":{}}"#,
+        )
+        .unwrap();
+        let memory = Memory::kept_in(path.clone());
+        assert_eq!(memory.learned().notes, vec!["Likes tea."]);
+        memory.spoke(at("2026-11-18T09:00:00Z"), true);
+        assert_eq!(memory.since(), None);
+        memory.spoke(at("2026-11-18T09:05:00Z"), false);
+        drop(memory);
+        let file = |path: &PathBuf| -> serde_json::Value {
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+        };
+        assert_eq!(file(&path)["last_spoke"], "2026-11-18T09:05:00.000Z");
+        // After a restart the first turn finds it.
+        let again = Memory::kept_in(path.clone());
+        assert_eq!(again.since(), None);
+        again.spoke(at("2026-11-18T12:00:00Z"), true);
+        assert_eq!(again.since(), Some(at("2026-11-18T09:05:00Z")));
+        assert_eq!(again.learned().notes, vec!["Likes tea."]);
+        // Forgetting takes it out of the file too.
+        again.forget_all();
+        assert!(file(&path).get("last_spoke").is_none());
+        // With learning off no time is written; it is known while the app runs.
+        again.set_learning(false);
+        again.spoke(at("2026-11-18T13:00:00Z"), true);
+        again.spoke(at("2026-11-18T14:00:00Z"), true);
+        assert_eq!(again.since(), Some(at("2026-11-18T13:00:00Z")));
+        assert!(file(&path).get("last_spoke").is_none());
+        // A time that cannot be read is no time.
+        std::fs::write(&path, r#"{"learning":true,"last_spoke":"yesterday"}"#).unwrap();
+        let odd = Memory::kept_in(path.clone());
+        odd.spoke(at("2026-11-18T12:00:00Z"), true);
+        assert_eq!(odd.since(), None);
     }
 }

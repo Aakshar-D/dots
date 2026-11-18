@@ -43,6 +43,8 @@ pub const RESULT_BYTES: usize = 160;
 /// How many of a dot's newest runs are read to find the last one that ended, when its newest
 /// run is still going.
 const RECENT_RUNS: i64 = 10;
+/// Most ended runs read to tell what happened since the person last spoke (`ended_since`).
+const MAX_ENDED: i64 = 200;
 /// Most dots `dots_like` offers.
 const MAX_LIKE: usize = 4;
 /// Largest edit distance `dots_like` takes for a close name; 1 for a query of
@@ -822,6 +824,44 @@ async fn activities(
         }
     }
     out
+}
+
+/// The dots `picture` lists that had a run succeed or fail from `since` on and before `now`,
+/// by dot id, the latest to end first. A run that ends at `now` itself is told the next time,
+/// asked from this `now`: none is told twice and none is left out. Each dot is there once, with how its latest
+/// such run went (`last_run`, so its line is cleaned, scrubbed and cut as any result line
+/// is); a run the person stopped is not counted. Only the `MAX_ENDED` newest runs are read:
+/// in a busier time the oldest are left out.
+pub(super) async fn ended_since(
+    rt: &Runtime,
+    picture: &Picture,
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<Vec<(String, LastRun)>> {
+    let runs = rt
+        .store()
+        .runs_ended_between(
+            &crate::util::timestamp(since),
+            &crate::util::timestamp(now),
+            MAX_ENDED,
+        )
+        .await?;
+    let listed: HashSet<&str> = picture.dots.iter().map(|d| d.id.as_str()).collect();
+    let mut seen = HashSet::new();
+    Ok(runs
+        .into_iter()
+        .filter(|run| listed.contains(run.dot_id.as_str()) && seen.insert(run.dot_id.clone()))
+        .filter_map(|run| {
+            let last = last_run(
+                run.status,
+                run.ended_at.as_deref(),
+                run.summary.as_deref(),
+                run.error.as_deref(),
+                now,
+            )?;
+            Some((run.dot_id, last))
+        })
+        .collect())
 }
 
 /// The latest step of a run, from its tool call: the tool's name, and its target as an

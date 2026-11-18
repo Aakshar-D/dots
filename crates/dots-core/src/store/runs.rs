@@ -472,6 +472,30 @@ impl Store {
         rows.iter().map(run_from_row).collect()
     }
 
+    /// The `limit` newest runs that succeeded or failed and ended at or after `from` and
+    /// before `before`, latest end first. A run the person stopped is not among them. The
+    /// rows are found by their status (`runs_status_queued`) and the newest are kept: Open
+    /// Sage asks this to tell what happened since the person last spoke to it. Asked again
+    /// from the last `before`, it gives each run once: none twice, and none is left out.
+    pub async fn runs_ended_between(
+        &self,
+        from: &str,
+        before: &str,
+        limit: i64,
+    ) -> Result<Vec<Run>> {
+        let rows = sqlx::query(&format!(
+            "SELECT {RUN_COLUMNS} FROM runs WHERE status IN ('succeeded', 'failed') \
+             AND ended_at >= ? AND ended_at < ? \
+             ORDER BY ended_at DESC, id DESC LIMIT ?"
+        ))
+        .bind(from)
+        .bind(before)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter().map(run_from_row).collect()
+    }
+
     /// The newest run of `dot_id`, optionally only among queued, running and awaiting runs.
     pub async fn latest_run(&self, dot_id: &str, active_only: bool) -> Result<Option<Run>> {
         let filter = if active_only {
