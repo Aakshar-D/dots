@@ -72,7 +72,8 @@ use think::{cap_hit, Thinker};
 ///
 /// A question about the sols that Sage answers itself (`quick::status_ask`) sends the step
 /// "Looking at your workspace", as a model turn does, then its `Say` and `SayEnd`, with no
-/// `Thinking`: no model is asked.
+/// `Thinking`: no model is asked. "Catch me up" is one of them; when a sol's run ended since
+/// the person last spoke, a `Card` listing those sols comes between its `Say` and `SayEnd`.
 ///
 /// A turn ended by a newer turn, `lapse` or `reset` before its end sends nothing more, so it
 /// has no `SayEnd`; the newer turn's events follow. A deed already carried out is the one
@@ -157,6 +158,8 @@ const STEP_REMEMBER: &str = "Saving that to memory";
 
 /// Turns and what waits are forgotten after this long without a turn.
 pub const IDLE_FORGET: Duration = Duration::from_secs(600);
+/// The furthest back "catch me up" tells: what happened before it is not news any more.
+const CATCH_UP_REACH: chrono::Duration = chrono::Duration::hours(24);
 /// A step that waits on the person is dropped this long after it was asked: silence is no,
 /// whether or not the app calls `lapse`.
 pub const PENDING_LIMIT: Duration = Duration::from_secs(60);
@@ -248,13 +251,18 @@ struct State {
     /// The sol the last turn told about, when Sage answered it itself (`Mind::tell`): the
     /// "it" of the next turn's "what did it say". Any other turn ends it.
     spoke_of: Option<String>,
+    /// A conversation is under way: a turn began and nothing was forgotten since. The turn
+    /// that finds it off is the first of a conversation (`Mind::begin`).
+    talking: bool,
 }
 
 impl State {
     /// Forgets turns, replies and what waits; returns whether a step that waited was dropped.
+    /// The conversation is over: the next turn begins another.
     fn forget(&mut self) -> bool {
         self.turns.clear();
         self.spoke_of = None;
+        self.talking = false;
         self.last_said.clear();
         self.last_then = Then::Rest;
         self.read_aloud.clear();
@@ -698,29 +706,42 @@ impl Mind {
     /// `lapse` or `reset` dropped what was in flight since the turn arrived (`drops` is the
     /// count it saw then): checked under the same lock that begins it, so a dropped turn never
     /// begins.
+    ///
+    /// A conversation is the turns the mind holds together: it is over when they are
+    /// forgotten (after the idle period, or by `reset`, which the app calls when the stage
+    /// closes) and when the app ends. The first turn of the next one tells the memory so:
+    /// what happened since the last turn of the conversation before is what "catch me up"
+    /// tells, however many turns this conversation has had by then.
     fn begin(
         &self,
         rt: &Runtime,
         drops: u64,
     ) -> Option<(u64, CancellationToken, bool, Vec<String>)> {
-        let mut s = lock(&self.state);
-        if s.drops != drops {
-            return None;
-        }
-        let now = Instant::now();
-        let forgot = s
-            .last_heard
-            .is_some_and(|at| now.duration_since(at) > self.idle_forget)
-            && s.forget();
-        s.last_heard = Some(now);
-        s.turn += 1;
-        if let Some(c) = s.cancel.take() {
-            c.cancel();
-        }
-        let cancel = rt.shutdown_token().child_token();
-        s.cancel = Some(cancel.clone());
-        let read_before = std::mem::take(&mut s.read_aloud);
-        Some((s.turn, cancel, forgot, read_before))
+        let (begun, fresh) = {
+            let mut s = lock(&self.state);
+            if s.drops != drops {
+                return None;
+            }
+            let now = Instant::now();
+            // The idle period ends the conversation whether or not a step waited.
+            let idle = s
+                .last_heard
+                .is_some_and(|at| now.duration_since(at) > self.idle_forget);
+            let forgot = idle && s.forget();
+            s.last_heard = Some(now);
+            let fresh = !std::mem::replace(&mut s.talking, true);
+            s.turn += 1;
+            if let Some(c) = s.cancel.take() {
+                c.cancel();
+            }
+            let cancel = rt.shutdown_token().child_token();
+            s.cancel = Some(cancel.clone());
+            let read_before = std::mem::take(&mut s.read_aloud);
+            ((s.turn, cancel, forgot, read_before), fresh)
+        };
+        // Written to the memory's file outside the state's lock.
+        self.memory.spoke(chrono::Utc::now(), fresh);
+        Some(begun)
     }
 
     /// Ends the turn in flight, if any, without beginning one: its remaining events go
@@ -1353,6 +1374,7 @@ impl Mind {
                 o.step(STEP_NEEDS);
                 return Ok(self.needs(&picture, heard, &status::waiting_runs(&picture), o));
             }
+            StatusAsk::CatchUp => return Ok(self.catch_up(rt, &picture, heard, o).await),
             StatusAsk::Sol(name) | StatusAsk::Result(name) => {
                 let dot = match name {
                     Some(name) => status::named(&picture, name),
@@ -1386,6 +1408,53 @@ impl Mind {
             s.spoke_of = about;
         }
         Ok("told")
+    }
+
+    /// The answer to "catch me up": what finished and failed since the person last spoke to
+    /// Sage, what waits for them and what runs now, said and listed on a card, with no model.
+    ///
+    /// "Since they last spoke" is the last turn of the conversation before this one (see
+    /// `begin`), kept by the memory so that it outlives the app. When that is not known, or
+    /// was more than `CATCH_UP_REACH` ago, the answer covers that long and says so.
+    ///
+    /// Once the answer is said, the time moves to now: asked again, only what came after is
+    /// told, in this conversation and in the next. It does not move for an answer that was
+    /// never said (a newer turn began, or the runs could not be read).
+    async fn catch_up(
+        &self,
+        rt: &Runtime,
+        picture: &Picture,
+        heard: &str,
+        o: &Out<'_>,
+    ) -> &'static str {
+        let now = chrono::Utc::now();
+        let spoke = self
+            .memory
+            .since()
+            .filter(|at| now.signed_duration_since(*at) <= CATCH_UP_REACH);
+        let from = spoke.unwrap_or(now - CATCH_UP_REACH);
+        let Ok(ended) = picture::ended_since(rt, picture, from, now).await else {
+            tracing::warn!("open sage could not read the runs that ended");
+            self.finish(o, heard, WENT_WRONG, Then::Rest);
+            return "catch up failed";
+        };
+        let minutes_ago = spoke.map(|at| (now - at).num_minutes().max(0) as u64);
+        let told = status::catch_up(picture, &ended, minutes_ago);
+        o.say(&told.said);
+        if !told.lines.is_empty() {
+            o.send(MindEvent::Card {
+                card: Card::List {
+                    title: told.title.into(),
+                    lines: told.lines,
+                },
+            });
+        }
+        o.end(Then::FollowUp);
+        self.record(o, heard, Then::FollowUp);
+        if lock(&self.state).turn == o.turn {
+            self.memory.caught_up(now);
+        }
+        "caught up"
     }
 
     /// A model turn: the caps, the picture (`taken`, when this turn took it already), the

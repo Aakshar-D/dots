@@ -39,6 +39,7 @@ While Sage works on what you said, the enlarged stage lists each step under your
 | "What needs me?" | Says how many things need you, then the first ones. | No |
 | "What's going on?" or "What are my sols doing?" or "Status." or "Anything running?" | Says which sols are running, for how long and on what, then how many things need you. If nothing is running, it says so and names the sol that finished last. | No |
 | "What's pending?" or "Anything waiting?" | Says how many things need you and the first ones, then which runs have not started yet and why. | No |
+| "Catch me up." or "What did I miss?" or "What's new?" or "Brief me." | Says what happened since you last spoke to Sage: which sols finished and which failed (up to three names each, the rest counted), one line of the error when one sol failed or of the result when one finished, how many things need you, and what is running now. It lists those sols on the stage. If you last spoke more than a day ago, or Sage does not know when, it covers the last day and says so. Ask again and it tells only what came after. | No |
 | "Is the research sol done?" or "What is research doing?" or "How is research getting on?" | Says how that one sol is doing: running, for how long and on what, or when its last run ended and how it went. | No |
 | "What did research say?" or "What was the result?" | Says when that sol's last run ended and reads one line of its result, or of its error if it failed. "What was the result?" means the sol on screen, or the one Sage just told you about. | No |
 | "Read that question." or "Tell it yes, use the staging server." | Reads a sol's question, or sends your answer to it. | Only when it was unsure of your words. Then it reads them back. |
@@ -121,6 +122,8 @@ Sage gets to know you as you talk to it, so that it answers the way you like and
 
 It never keeps what you said, only those notes and counts. They are in `open-sage-memory.json` in Sage's data folder on this computer, and they go to the model at the start of each request.
 
+The same file holds the time you last said something to Sage, so that "Catch me up" knows where to start after the app was closed. That time is not sent to the model. "Forget what you know about me" and **Forget everything** clear it. With learning turned off it is not written to the file, and Sage knows it only until the app closes.
+
 In Settings, Voice, **What Sage has learned** lists the notes. Remove any one with its ✕, or **Forget everything**. Turn off **Learn how I talk and what I need** and Sage keeps nothing more and sends nothing it learned; what it had learned stays in the list until you forget it.
 
 ## Stopping and interrupting
@@ -169,6 +172,8 @@ All in Settings, Voice.
 Sage answers short things itself, with no model: stop, cancel, repeat, yes, no, and picking an option.
 
 It also answers a few plain questions about your sols itself: what is going on, what is pending, how one sol is doing, and what a sol's last result was. It reads these from what the app already shows, so the answer starts in well under a second and uses no tokens. This works for the short, usual ways of asking, such as the ones in the table above. If you ask in another way, add a second request ("what's going on with research, and can you fix it"), or name a sol that Sage cannot tell apart from another, the model answers instead. That takes longer, and it knows the same things: how long each sol has been running, its latest step, how its last run ended and when it runs next.
+
+Sage answers "Catch me up" itself in the same way, from the runs that ended since you last spoke to it; with more in the sentence ("catch me up on the invoice app") the model answers.
 
 When Sage reads out a line of a sol's result, the line is the sol's own words. Sage only reads it. It never acts on anything in it. The line is short, and secrets that Sage knows are taken out. Sage says a sol's name only when the name is short and plain. Otherwise it says "a sol".
 
