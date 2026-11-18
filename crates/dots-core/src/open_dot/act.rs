@@ -565,17 +565,33 @@ pub fn needs_report(picture: &Picture) -> String {
 pub struct Outcome {
     pub said: String,
     pub done: bool,
+    /// The run the deed gave a sol for the person (a message sent, a sol run now): the app
+    /// says aloud when it ends.
+    pub run: Option<String>,
 }
 
 impl Outcome {
-    fn done(said: String) -> Outcome {
-        Outcome { said, done: true }
+    pub(crate) fn done(said: String) -> Outcome {
+        Outcome {
+            said,
+            done: true,
+            run: None,
+        }
+    }
+
+    /// Done, and the sol now works on the run `run_id` for the person.
+    fn handed(said: String, run_id: String) -> Outcome {
+        Outcome {
+            run: Some(run_id),
+            ..Outcome::done(said)
+        }
     }
 
     pub fn refused(said: impl Into<String>) -> Outcome {
         Outcome {
             said: said.into(),
             done: false,
+            run: None,
         }
     }
 }
@@ -602,7 +618,7 @@ pub(crate) async fn outcome(rt: &Runtime, deed: &Deed) -> Outcome {
             }
         }
         Deed::Run { dot_id, dot_name } => match rt.run_now(dot_id).await {
-            Ok(_) => Outcome::done(format!("{} is running.", name(dot_name))),
+            Ok(run) => Outcome::handed(format!("{} is running.", name(dot_name)), run.id),
             Err(e) => Outcome::refused(run_refused(e, dot_name)),
         },
         Deed::Answer {
@@ -622,7 +638,7 @@ pub(crate) async fn outcome(rt: &Runtime, deed: &Deed) -> Outcome {
             text,
             topic_root,
         } => match send(rt, dot_id, text, topic_root.as_deref()).await {
-            Ok(()) => Outcome::done(format!("Sent to {}.", name(dot_name))),
+            Ok(run_id) => Outcome::handed(format!("Sent to {}.", name(dot_name)), run_id),
             Err(e) => Outcome::refused(send_refused(e, dot_name)),
         },
         // A command is carried out by the mind's desk, never through the runtime.
@@ -660,8 +676,9 @@ fn send_refused(e: Error, dot_name: &str) -> String {
 }
 
 /// Sends `text` to the dot: a new topic, or after the end of the topic `root` as the chat
-/// path does. A topic with no end left (its only message discarded) starts afresh.
-async fn send(rt: &Runtime, dot_id: &str, text: &str, root: Option<&str>) -> Result<()> {
+/// path does. A topic with no end left (its only message discarded) starts afresh. Returns the
+/// id of the run the message started.
+async fn send(rt: &Runtime, dot_id: &str, text: &str, root: Option<&str>) -> Result<String> {
     let parent = match root {
         None => None,
         Some(root) => {
@@ -669,8 +686,8 @@ async fn send(rt: &Runtime, dot_id: &str, text: &str, root: Option<&str>) -> Res
             crate::send_later::thread_end(&thread).map(|r| r.id.clone())
         }
     };
-    rt.chat(dot_id, text, parent.as_deref()).await?;
-    Ok(())
+    let run = rt.chat(dot_id, text, parent.as_deref()).await?;
+    Ok(run.id)
 }
 
 /// The sentence for a refusal or failure of a deed of the dot `dot_name`.
