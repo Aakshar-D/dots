@@ -286,6 +286,16 @@ describe("a sol's conversation", () => {
     expect(screen.queryByRole("button", { name: /New activity/ })).toBeNull();
   });
 
+  it("holds what is placed absolutely in it, so that nothing of it scrolls the window", async () => {
+    home([chat("a", "10:00")]);
+    renderApp(`/home/${dot.id}`);
+    // A working sol's line has a part for screen readers that is placed absolutely. The
+    // conversation must be what it is placed in: placed in the pane, it stands below the
+    // pane's foot in a long conversation and the whole window scrolls (found in WebView2;
+    // jsdom lays nothing out, so this checks the class that does it).
+    expect(await screen.findByRole("region", { name: "Conversation" })).toHaveClass("relative");
+  });
+
   it("lets go at the first few pixels of a scroll up, and follows again at the bottom", async () => {
     const runs = home([chat("a", "10:00")]);
     renderApp(`/home/${dot.id}`);
