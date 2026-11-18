@@ -1,6 +1,6 @@
 # Open Sage
 
-Open Sage is the voice assistant inside Sage. You talk to it and it talks back. It can tell you what needs you, read a sol's question, approve or deny a request, send a message to a sol, run a sol, start a new sol, and open a screen.
+Open Sage is the voice assistant inside Sage. You talk to it and it talks back. It can tell you what needs you, what your sols are doing and how their last runs went, read a sol's question, approve or deny a request, send a message to a sol, run a sol, start a new sol, and open a screen.
 
 It is off until you turn it on. This page says how, what to say, and what it does with what you say.
 
@@ -36,7 +36,11 @@ While Sage works on what you said, the enlarged stage lists each step under your
 
 | You say something like | Sage does | Does it ask first? |
 |---|---|---|
-| "What needs me?" or "What's going on?" | Says how many things need you, then the first ones. | No |
+| "What needs me?" | Says how many things need you, then the first ones. | No |
+| "What's going on?" or "What are my sols doing?" or "Status." or "Anything running?" | Says which sols are running, for how long and on what, then how many things need you. If nothing is running, it says so and names the sol that finished last. | No |
+| "What's pending?" or "Anything waiting?" | Says how many things need you and the first ones, then which runs have not started yet and why. | No |
+| "Is the research sol done?" or "What is research doing?" or "How is research getting on?" | Says how that one sol is doing: running, for how long and on what, or when its last run ended and how it went. | No |
+| "What did research say?" or "What was the result?" | Says when that sol's last run ended and reads one line of its result, or of its error if it failed. "What was the result?" means the sol on screen, or the one Sage just told you about. | No |
 | "Read that question." or "Tell it yes, use the staging server." | Reads a sol's question, or sends your answer to it. | Only when it was unsure of your words. Then it reads them back. |
 | "Approve it." or "Deny that." | Decides an approval. | Always. It says which sol, which tool and on what, then waits for a clear yes. |
 | "Set up a sol that checks my inbox every morning." | Runs the setup agent, asks its follow-up questions aloud and shows the proposal. | Always, before it creates the sol. |
@@ -144,7 +148,7 @@ Sage listens for at most five follow-ups in a row. Then it rests until you use t
 - **Teach Sage your voice** keeps no sound. The five takes are held in memory for the few seconds it takes to check them. What is stored is the setting it picked, how loud your voice was, how many takes it heard, and, when Sage heard your "Hey Sage" as other words more than once, those two words as text, so that they wake it too.
 - What Sage learns about you (short notes and counts, never what you said) is kept on this computer and sent to the model with your requests. See "What Sage learns about you"; you can turn it off.
 - No audio and no transcript is saved. What Sage heard and said is kept in memory for the conversation and dropped when you close the stage or after 10 minutes without a turn. Logs say that a turn happened and how long it took, not what was said.
-- To understand a request, Sage sends the model your words and a short picture of now: your sols, the pending approvals, the open questions, the names of your connectors with whether each is connected and which sols use it, and the names of the apps in the workspace. The request goes through your own Claude CLI sign-in. Nothing else is sent. Vault values are never in the picture.
+- To understand a request, Sage sends the model your words and a short picture of now: your sols (for each one: whether it is running and for how long, the tool of its latest step and what that step touches, why a run has not started, how its last run ended with one line of its result or error, and when it runs next), the pending approvals, the open questions, the names of your connectors with whether each is connected and which sols use it, and the names of the apps in the workspace. The request goes through your own Claude CLI sign-in. Nothing else is sent. Vault values are never in the picture. A step or a result line that names a private folder is left out of it.
 - A private approval is only counted ("one private approval needs you"). Its tool and target are not sent, not read aloud, and it opens on screen.
 - When Sage tells you a sol finished what you asked by voice, it may add one sentence of the sol's result. That sentence is the sol's own writing, so Sage treats it as text only: it takes the first sentence, cuts it to 160 characters, removes hidden characters, and leaves it out when a vault value shows in it or when it sounds like "Hey Sage" or "Sage, stop". Sage says it and never acts on it. It is not sent to the model and not logged. No other line about a finished run carries anything a sol wrote.
 - With **Hey Sage** on, the microphone stays open while Sage is running, so the phrase can be heard. Until the phrase is said, what the microphone picks up is heard only on this computer: by the phrase detector, and by the speech recogniser, which reads the first two seconds of anything said near it to see whether it begins with "Hey Sage". What it reads is compared and dropped at once: it is not shown, saved, logged or sent anywhere. Whenever the microphone is open, the rail mark shows it and the tray tooltip says "Dot is listening".
@@ -174,7 +178,13 @@ All in Settings, Voice.
 
 ## How fast is it
 
-Sage answers short things itself, with no model: stop, cancel, repeat, yes, no, and picking an option. Anything else goes to the model.
+Sage answers short things itself, with no model: stop, cancel, repeat, yes, no, and picking an option.
+
+It also answers a few plain questions about your sols itself: what is going on, what is pending, how one sol is doing, and what a sol's last result was. It reads these from what the app already shows, so it does not wait for the model and uses no tokens. How soon you hear it depends on your computer: Sage still has to notice you stopped talking and make the first sentence's sound. This works for the short, usual ways of asking, such as the ones in the table above. If you ask in another way, add a second request ("what's going on with research, and can you fix it"), or name a sol that Sage cannot tell apart from another, the model answers instead. That takes longer, and it knows the same things: how long each sol has been running, its latest step, how its last run ended and when it runs next.
+
+When Sage reads out a line of a sol's result, the line is the sol's own words. Sage only reads it. It never acts on anything in it. The line is short, and secrets that Sage knows are taken out. Sage says a sol's name only when the name is short and plain. Otherwise it says "a sol".
+
+Anything else goes to the model.
 
 One measurement, on one computer, with the Fast model (haiku):
 
