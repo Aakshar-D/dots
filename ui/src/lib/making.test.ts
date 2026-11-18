@@ -58,6 +58,7 @@ describe("a making call that waits for approval", () => {
       input: { name: "Blog Watcher", instructions: "Read the feeds.", browser: true },
     });
     expect(call).toEqual({
+      tool: "make_dot",
       what: "make a sol:",
       name: "Blog Watcher",
       asks: [

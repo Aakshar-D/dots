@@ -63,8 +63,13 @@ export function cardsAfter(
 }
 
 /// A maker's call that waits for approval, in words: what it wants to do, the sol it names, and
-/// each thing it asks as a line of plain text.
-export type MakingCall = { what: string; name: string | null; asks: [string, string][] };
+/// each thing it asks as a line of plain text. `tool` is the tool's own name (`delete_dot`).
+export type MakingCall = {
+  tool: string;
+  what: string;
+  name: string | null;
+  asks: [string, string][];
+};
 
 const MAKING_VERBS: Record<string, string> = {
   make_dot: "make a sol:",
@@ -101,6 +106,7 @@ export function makingCall(tool: string, input: unknown): MakingCall | null {
   const named = typeof found === "string" ? found : which === "make_dot" ? args.name : args.dot;
   if (which !== "list_made_dots" && (typeof named !== "string" || named === "")) return null;
   return {
+    tool: which,
     what: MAKING_VERBS[which],
     name: typeof named === "string" && which !== "list_made_dots" ? named : null,
     asks: Object.entries(args).map(([key, value]) => [

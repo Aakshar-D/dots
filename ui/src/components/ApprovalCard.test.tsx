@@ -47,8 +47,10 @@ describe("an approval of a maker's call", () => {
     // A sol wrote the instructions: text only.
     expect(asks).toHaveTextContent("[x](javascript:alert(1)) <img src=x onerror=alert(2)>");
     expect(card.querySelector("img, a")).toBeNull();
-    // No raw JSON of the call.
+    // No raw JSON of the call, in the card's body or in its header.
     expect(card.querySelector("pre")).toBeNull();
+    expect(card.querySelector("header")).toHaveTextContent(/^Making sols\s*make_dot$/);
+    expect(card.textContent).not.toContain('{"');
     expect(within(card).getByRole("button", { name: "Approve" })).toBeVisible();
   });
 
@@ -66,6 +68,10 @@ describe("an approval of a maker's call", () => {
     expect(asked(screen.getByLabelText("What it asks"), "message")).toHaveTextContent(
       "Read today's feeds.",
     );
+    // The header names the tool, not the JSON the policy checked with the sol's id in it.
+    const header = document.querySelector("article header") as HTMLElement;
+    expect(header).toHaveTextContent(/^Making sols\s*give_job$/);
+    expect(document.querySelector("article")!.textContent).not.toContain("01J0MADE");
   });
 
   it("shows a shape it does not know as every other call", async () => {

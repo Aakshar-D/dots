@@ -103,9 +103,10 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
       className="flex flex-col gap-2 rounded-xl border border-needs-border bg-needs-surface p-3"
     >
       <header className="flex items-baseline gap-2">
-        <span className="font-semibold text-needs">{tool}</span>
+        <span className="font-semibold text-needs">{making !== null ? "Making sols" : tool}</span>
         <span className="min-w-0 flex-1 truncate font-mono text-xs">
-          {toolPreview(approval.input)}
+          {/* A making call's arguments are listed below in words: no JSON, no id, up here. */}
+          {making !== null ? making.tool : toolPreview(approval.input)}
         </span>
       </header>
       {guard.data && <GuardSentence guard={guard.data} dotName={dotName} />}
