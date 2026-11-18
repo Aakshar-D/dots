@@ -20,6 +20,33 @@ import { StatusMark } from "@/screens/home/StatusMark";
 import { UnreadBadge } from "@/screens/home/UnreadBadge";
 import { NewDotDialog } from "@/screens/setup/NewDotDialog";
 
+/// The rows with each made sol right under its maker, one step in for each maker above it
+/// (dots-make-dots design section 11). The order given is kept among the sols at the top and
+/// among the sols of one maker. A made sol whose maker is deleted, or is not in the list, stays
+/// at the top.
+export function underMakers(rows: DotOverview[]): { row: DotOverview; depth: number }[] {
+  const ids = new Set(rows.map((row) => row.dot.id));
+  const makerOf = (row: DotOverview) => {
+    const by = row.dot.made?.by_dot_id ?? null;
+    return by !== null && by !== row.dot.id && ids.has(by) ? by : null;
+  };
+  const placed: { row: DotOverview; depth: number }[] = [];
+  const seen = new Set<string>();
+  const place = (row: DotOverview, depth: number) => {
+    if (seen.has(row.dot.id)) return;
+    seen.add(row.dot.id);
+    placed.push({ row, depth });
+    for (const made of rows) if (makerOf(made) === row.dot.id) place(made, depth + 1);
+  };
+  for (const row of rows) if (makerOf(row) === null) place(row, 0);
+  // Makers that name each other in a ring have no top: their sols still show.
+  for (const row of rows) place(row, 0);
+  return placed;
+}
+
+/// The step in of a made sol's row; a chain of makers stops stepping in at the second.
+const STEP_IN = ["", "ml-4", "ml-8"];
+
 /// The home's list of dots, like a list of chat contacts (chat-first home spec, section 3).
 /// `rows` come sorted; `openId` is the dot whose conversation is open.
 export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: string | undefined }) {
@@ -48,8 +75,13 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
   // Select turns the list into one of check boxes, to delete several sols at once: the ids
   // picked so far, or null while the list is the usual one of links.
   const [picked, setPicked] = useState<ReadonlySet<string> | null>(null);
+  // Each made sol stands under its maker.
+  const placed = underMakers(rows);
   // Only the sols still in the list count: one deleted elsewhere meanwhile is not asked for.
-  const chosen = picked === null ? [] : rows.filter((row) => picked.has(row.dot.id));
+  // In the list's order, so a maker is deleted before the sols it made: deleting a made sol
+  // first can wake its maker, which starts a run of the maker just before it is deleted.
+  const chosen =
+    picked === null ? [] : placed.map(({ row }) => row).filter((row) => picked.has(row.dot.id));
   const qc = useQueryClient();
   const navigate = useNavigate();
   // One sol after the other, each on its own: one that cannot be deleted does not keep the
@@ -86,6 +118,8 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
     setPicked(next);
   }
   const everyPicked = rows.length > 0 && chosen.length === rows.length;
+  // Makers among the sols picked: what they made is not deleted with them.
+  const pickedMakers = chosen.filter((row) => row.made_dots > 0);
   // With no dot in view the home already shows the setup view: New dot goes there rather than
   // opening a second one.
   function newDot() {
@@ -189,12 +223,14 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
         )}
       </div>
       <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto px-2 pb-2" onKeyDown={onKeyDown}>
-        {rows.map((row) => {
+        {placed.map(({ row, depth }) => {
           const open = row.dot.id === openId;
           const next = nextLine(row, followUps);
+          const stepIn = STEP_IN[Math.min(depth, STEP_IN.length - 1)];
+          const { made, making } = row.dot;
           if (picked !== null) {
             return (
-              <li key={row.dot.id} aria-label={row.dot.name}>
+              <li key={row.dot.id} aria-label={row.dot.name} data-depth={depth} className={stepIn}>
                 <label
                   className={cn(
                     "flex cursor-pointer items-center gap-2 rounded-[10px] p-2.5 hover:bg-sidebar-accent/60",
@@ -215,7 +251,7 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
             );
           }
           return (
-            <li key={row.dot.id} aria-label={row.dot.name}>
+            <li key={row.dot.id} aria-label={row.dot.name} data-depth={depth} className={stepIn}>
               <Link
                 to={`/home/${row.dot.id}`}
                 data-dot={row.dot.id}
@@ -235,6 +271,17 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                   {lastLine(row)}
                 </span>
                 {next && <span className="pl-10.5 text-xs text-muted-foreground">{next}</span>}
+                {made && (
+                  <span className="truncate pl-10.5 text-xs text-muted-foreground">
+                    made by {made.by_name}
+                    {made.by_dot_id === null && " (deleted)"}
+                  </span>
+                )}
+                {making.on && (
+                  <span className="pl-10.5 text-xs text-muted-foreground">
+                    can make sols · {row.made_dots} of {making.total}
+                  </span>
+                )}
                 {row.dot.org_id !== null && orgRemoved(row.dot, orgs) && (
                   <span
                     className="pl-10.5 text-xs text-destructive"
@@ -262,6 +309,14 @@ export function DotsColumn({ rows, openId }: { rows: DotOverview[]; openId: stri
                   and branches its runs left behind stay in your repository. This cannot be
                   undone.
                 </span>
+                {pickedMakers.length > 0 && (
+                  <span className="mt-2 block">
+                    {pickedMakers.map((row) => row.dot.name).join(", ")} made sols. Those are
+                    not deleted with their maker: only the sols you selected are. A made sol
+                    that stays shows its maker as deleted, and a maker's requests that wait for
+                    your answer are dropped.
+                  </span>
+                )}
               </>
             }
             confirmLabel="Delete"

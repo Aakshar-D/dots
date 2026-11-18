@@ -337,7 +337,13 @@ function ExistingDot({ dotId }: { dotId: string }) {
         <>
           <ConfirmButton
             title={`Delete ${dot.data.name}?`}
-            description="The sol, its runs, their transcripts and its memories are deleted. Worktrees and branches its runs left behind stay in your repository."
+            description={
+              "The sol, its runs, their transcripts and its memories are deleted. Worktrees and branches its runs left behind stay in your repository." +
+              // What the core does with a maker's sols and requests (dots-make-dots design 9).
+              (dot.data.making.on
+                ? " The sols it made are not deleted with it, and its requests that wait for your answer are dropped."
+                : "")
+            }
             confirmLabel="Delete the sol"
             onConfirm={() => remove.mutate()}
             disabled={remove.isPending}

@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { useRunRefusal } from "@/lib/access";
 import { parkedNote } from "@/lib/approvals";
 import { browserAsk } from "@/lib/browser";
+import { makingCall } from "@/lib/making";
 import { notifyError } from "@/lib/notify";
 import { invalidate, invalidateDots, keys } from "@/lib/query";
 import { onSingleClick } from "@/lib/single-click";
@@ -93,6 +94,9 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
   const noteId = `approval-note-${approval.id}`;
   const rulesId = `approval-rules-${approval.id}`;
   const tool = callLabel(approval.tool, approval.input);
+  // A maker's call to make, change, delete or give a job to a sol: said in words, with what it
+  // asks as plain text. Any other shape shows as every call does.
+  const making = makingCall(approval.tool, approval.input);
   return (
     <article
       aria-label={`Approval for ${tool}`}
@@ -114,9 +118,29 @@ function ToolApprovalCard({ approval, dotName }: { approval: Approval; dotName?:
           </p>
         </div>
       )}
-      <pre className="max-h-60 overflow-auto rounded-md bg-background/60 p-2 text-xs whitespace-pre-wrap">
-        {JSON.stringify(approval.input, null, 2)}
-      </pre>
+      {making !== null && !guard.data && (
+        <p aria-label="What this does">
+          <span className="font-semibold">{dotName ?? "The sol"}</span> wants to {making.what}
+          {making.name !== null && <span className="font-semibold"> {making.name}</span>}
+        </p>
+      )}
+      {making !== null ? (
+        <dl
+          aria-label="What it asks"
+          className="max-h-60 overflow-auto rounded-md bg-background/60 p-2 text-xs"
+        >
+          {making.asks.map(([key, value]) => (
+            <div key={key} className="flex gap-2">
+              <dt className="shrink-0 text-muted-foreground">{key}</dt>
+              <dd className="min-w-0 break-words whitespace-pre-wrap">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <pre className="max-h-60 overflow-auto rounded-md bg-background/60 p-2 text-xs whitespace-pre-wrap">
+          {JSON.stringify(approval.input, null, 2)}
+        </pre>
+      )}
       {approval.parked && <p className="text-xs text-muted-foreground">{parkedNote(approval)}</p>}
       <div className="flex flex-wrap items-center gap-2">
         <label htmlFor={noteId} className="sr-only">

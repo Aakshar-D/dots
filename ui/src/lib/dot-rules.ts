@@ -6,6 +6,7 @@ import {
   LIMITS,
   type ContextRules,
   type DotSpec,
+  type Making,
   type Schedule,
   type ScheduleRule,
 } from "@/api/types";
@@ -99,7 +100,22 @@ export function specErrors(spec: DotSpec, isNew = false): SpecErrors {
   if (cap) errors.spend_cap = cap;
   const context = spec.context_rules && contextRulesError(spec.context_rules);
   if (context) errors.context_rules = context;
+  const making = makingError(spec.making);
+  if (making) errors.making = making;
   return errors;
+}
+
+/// The core's words for a making limit out of its range (`Making::validate`).
+export const MAKE_PER_RUN_RULE = `A sol may make 1 to ${LIMITS.max_make_per_run} sols in one run.`;
+export const MAKE_TOTAL_RULE = `A sol may keep 1 to ${LIMITS.max_make_total} made sols.`;
+
+/// Why the limits of "Can make sols" cannot be saved, as the core says it. They are checked
+/// while the switch is off too: the core keeps them for when it is turned on.
+export function makingError(making: Making): string | undefined {
+  const within = (n: number, max: number) => Number.isInteger(n) && n >= 1 && n <= max;
+  if (!within(making.per_run, LIMITS.max_make_per_run)) return MAKE_PER_RUN_RULE;
+  if (!within(making.total, LIMITS.max_make_total)) return MAKE_TOTAL_RULE;
+  return undefined;
 }
 
 /// The core's words when context rules are out of bounds (context rules spec section 4).
