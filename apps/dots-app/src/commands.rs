@@ -34,6 +34,8 @@ use dots_core::library::{LibraryConfig, LibraryItem, McpCatalog, McpServerConfig
 use dots_core::library_service::{
     ContextDocuments, EnvVariable, LibraryEntry, McpProbe, ScannedSkill,
 };
+use dots_core::making::cards::MakingCard;
+use dots_core::making::requests::{MakeDecision, MakeRequest, MakeRequestCard};
 use dots_core::model::{
     Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind, FollowUp,
     Inbox, Intent, Memory, Message, Project, ProjectSpec, Run, RunEventRecord, ScheduleSkip,
@@ -2332,6 +2334,47 @@ pub async fn app_proposal_decide(
     decision: Decision,
 ) -> Res<AppProposal> {
     Ok(state.rt()?.decide_app_proposal(&id, decision).await?.0)
+}
+
+/// The ask card of a maker's request, waiting or answered (dots-make-dots design section 7.2),
+/// built against the maker as it is now. Anyone may read it; the card itself says which answers
+/// this PC's role allows. Reading may mark a waiting request gone: `making_updated` says so.
+#[tauri::command]
+pub async fn make_request_card(state: State<'_, AppState>, id: String) -> Res<MakeRequestCard> {
+    Ok(state.rt()?.make_request_card(&id).await?)
+}
+
+/// The ask cards of every request that waits for the person, newest first: the Inbox's section
+/// (dots-make-dots design section 11). The Inbox's own items are slim; these carry the buttons.
+#[tauri::command]
+pub async fn make_requests_waiting(state: State<'_, AppState>) -> Res<Vec<MakeRequestCard>> {
+    Ok(state.rt()?.waiting_make_requests().await?)
+}
+
+/// The person's answer on the ask card: `allow`, `without` or `refuse`. `limit` and `shown` are
+/// those of the card the person answered, exactly as it was read: the core refuses an answer
+/// (kind `conflict`) when the request would now give something that card did not show. The
+/// core checks the rights too: allowing needs the right to change sols, refusing needs none.
+#[tauri::command]
+pub async fn make_request_decide(
+    state: State<'_, AppState>,
+    id: String,
+    decision: MakeDecision,
+    limit: Option<String>,
+    shown: Option<String>,
+) -> Res<MakeRequest> {
+    Ok(state
+        .rt()?
+        .decide_make_request(&id, decision, limit.as_deref(), shown.as_deref())
+        .await?)
+}
+
+/// The making cards of the chat topic `root_run_id`, oldest first (dots-make-dots design
+/// section 11): made, the ask, working and finished, changed and deleted. Empty for a topic no
+/// maker did anything in.
+#[tauri::command]
+pub async fn making_cards(state: State<'_, AppState>, root_run_id: String) -> Res<Vec<MakingCard>> {
+    Ok(state.rt()?.making_cards(&root_run_id).await?)
 }
 
 /// The instructions dots proposed, of one dot or of all, newest first (conversational chat

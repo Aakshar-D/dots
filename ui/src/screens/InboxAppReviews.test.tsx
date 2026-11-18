@@ -18,6 +18,7 @@ const only = (app_reviews: PendingAppReview[]): Inbox => ({
   app_reviews,
   team_scope: [],
   workflows: [],
+  make_requests: [],
   not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
 });
 

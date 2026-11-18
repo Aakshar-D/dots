@@ -42,6 +42,7 @@ const emptyInbox: Inbox = {
   app_reviews: [],
   team_scope: [],
   workflows: [],
+  make_requests: [],
   not_delivered: [],
   back: [],
   snoozed: [],

@@ -159,6 +159,10 @@ export const keys = {
   /// The instructions a dot proposed (conversational chat spec section 4).
   instructionProposals: (dotId: string) => ["instruction-proposals", dotId] as const,
   watchers: (dotId: string) => ["watchers", dotId] as const,
+  /// The making cards of a chat topic (dots-make-dots design section 11), by its root run.
+  makingCards: (rootRunId: string) => ["making-cards", rootRunId] as const,
+  /// The ask cards of every request of a maker that waits for the person (the Inbox).
+  makeRequestsWaiting: ["make-requests-waiting"] as const,
   /// The apps dots proposed, of one dot or of all (null).
   appProposals: (dotId: string | null) => ["app-proposals", dotId] as const,
   /// The installed apps (the Apps screen), and below them the data removed apps kept.

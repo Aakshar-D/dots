@@ -15,6 +15,7 @@ export const overview: DotOverview = {
   schedule_state: null,
   needs_you: 0,
   unread: 0,
+  made_dots: 0,
 };
 
 /// A root run of the dot queued at `at` ("HH:MM" on 9 October, UTC): a chat run asking

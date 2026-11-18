@@ -151,6 +151,23 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       invalidate(qc, keys.instructionProposals(event.dot_id));
       invalidate(qc, keys.inbox);
       break;
+    case "making_updated":
+    case "make_requested":
+    case "dot_made":
+      // A maker made, changed or deleted a sol, gave a job, asked the person or got an answer,
+      // or a read marked a request gone: the topic's making cards (an open ask card is one of
+      // them), the Inbox's ask cards and its items, and the sols list with its "N of M".
+      for (const queryKey of [
+        keys.makingCards(event.root_run_id),
+        keys.makeRequestsWaiting,
+        keys.inbox,
+        keys.overview,
+      ]) {
+        invalidate(qc, queryKey);
+      }
+      // A new sol is in the lists that name every sol.
+      if (event.type === "dot_made") invalidate(qc, keys.dots);
+      break;
     case "watcher_updated":
       // The dot's Watchers tab, the Inbox's paused watchers and the dots' needs-you counts.
       invalidate(qc, keys.watchers(event.dot_id));

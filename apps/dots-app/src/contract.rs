@@ -1652,6 +1652,8 @@ pub fn samples() -> Value {
             "max_memories": dots_core::memory::MAX_PER_DOT,
             "max_memory_text": dots_core::memory::MAX_TEXT,
             "max_watcher_name": dots_core::watchers::MAX_NAME_CHARS,
+            "max_make_per_run": MAKE_PER_RUN_MAX,
+            "max_make_total": MAKE_TOTAL_MAX,
         },
         "StartupError": to(StartupError {
             message: "Sage could not start: database disk image is malformed".into(),
@@ -2116,6 +2118,7 @@ pub fn samples() -> Value {
     samples["Enums"]["EntryKind"] = to(EntryKind::ALL);
     connector_samples(&mut samples);
     apps_samples(&mut samples);
+    making_samples(&mut samples);
     teams::teams_samples(&mut samples);
     // What `approval_guard` answers for the `Approval` sample (`git push origin main`).
     let guarded = classify(&approval().tool, &approval().input).expect("git push is guarded");
@@ -2920,6 +2923,227 @@ fn inbox_marks_samples(samples: &mut Value) {
             to(RuntimeEvent::InboxUpdated),
             to(RuntimeEvent::SnoozeEnded { items: vec![back] }),
         ]);
+}
+
+/// Sols that make sols (dots-make-dots design section 11): a made sol, a request of each kind
+/// as stored, its ask card with the buttons on, off and gone, and a card of every kind of a
+/// maker's chat topic.
+fn making_samples(samples: &mut Value) {
+    use dots_core::making::cards::{CardWhat, JobCard, MakingCard};
+    use dots_core::making::jobs::{JobEnd, JobStatus};
+    use dots_core::making::manage::ChangeDot;
+    use dots_core::making::reach::{Extra, Wanted};
+    use dots_core::making::requests::{
+        job_result_line, MakeDecision, MakeRequest, MakeRequestCard, RequestKind, RequestStatus,
+    };
+    use dots_core::making::service::OverLimit;
+
+    samples["DotMade"] = to(Dot {
+        id: "01J0MADE".into(),
+        made: Some(Made {
+            by_dot_id: Some("01J0DOT".into()),
+            by_name: "Researcher".into(),
+            run_id: "01J0RUN".into(),
+            purpose: "Reads the feeds".into(),
+            spend_parent_dot_id: None,
+        }),
+        ..dot()
+    });
+    let mut asked = spec();
+    asked.name = "Blog Watcher".into();
+    asked.instructions = "Read the feeds each morning.\nReport what is new.".into();
+    asked.browser = true;
+    let mut without = asked.clone();
+    without.browser = false;
+    let request = |id: &str, kind: RequestKind, status: RequestStatus| MakeRequest {
+        id: id.into(),
+        maker_dot_id: "01J0DOT".into(),
+        run_id: "01J0RUN".into(),
+        root_run_id: "01J0RUN".into(),
+        kind,
+        dot_id: (kind != RequestKind::Make).then(|| "01J0MADE".into()),
+        name: "Blog Watcher".into(),
+        purpose: "Reads the feeds".into(),
+        spec: asked.clone(),
+        without: without.clone(),
+        extras: vec![Extra::Browser],
+        over: (kind == RequestKind::Make).then_some(OverLimit::PerRun { nth: 4, limit: 3 }),
+        create_folder: None,
+        first_job: (kind != RequestKind::Change).then(|| "Read today's feeds.".into()),
+        status,
+        gone_reason: (status == RequestStatus::Gone)
+            .then(|| "The folder C:\\feeds no longer exists.".into()),
+        created_at: TS.into(),
+        decided_at: matches!(status, RequestStatus::Allowed | RequestStatus::Refused)
+            .then(|| TS.into()),
+        made_dot_id: (status == RequestStatus::Allowed).then(|| "01J0MADE".into()),
+        ask: (kind == RequestKind::Change).then(|| ChangeDot {
+            dot: "Blog Watcher".into(),
+            purpose: None,
+            wanted: Wanted {
+                browser: Some(true),
+                instructions: Some(asked.instructions.clone()),
+                ..Wanted::default()
+            },
+        }),
+        make_ask: None,
+    };
+    let browser = dots_core::util::json_hash(&json!(["The browser"]));
+    let limit = "4th sol in this run; the limit is 3".to_string();
+    let card = |request: MakeRequest| MakeRequestCard {
+        maker_name: "Researcher".into(),
+        name: "Blog Watcher".into(),
+        title: request.title("Researcher"),
+        lines: request.lines("Researcher"),
+        asked: Vec::new(),
+        instructions: Some(asked.instructions.clone()),
+        schedule: None,
+        limit: (request.kind == RequestKind::Make).then(|| limit.clone()),
+        shown: Some(browser.clone()),
+        can_allow: request.status == RequestStatus::Waiting,
+        can_without: request.status == RequestStatus::Waiting && request.kind != RequestKind::Job,
+        blocked: request.gone_reason.clone(),
+        request,
+    };
+    let mut change = card(request(
+        "01J0MRQ2",
+        RequestKind::Change,
+        RequestStatus::Waiting,
+    ));
+    change.asked = vec!["New instructions".into(), "The browser".into()];
+    change.schedule = Some("daily at 09:00".into());
+    let mut job = card(request(
+        "01J0MRQ3",
+        RequestKind::Job,
+        RequestStatus::Waiting,
+    ));
+    job.instructions = None;
+    assert_eq!(job.lines.last(), Some(&job_result_line("Researcher")));
+    // Allow is off for this PC's role; making it without the extras is off with it.
+    let mut blocked = card(request(
+        "01J0MRQ4",
+        RequestKind::Make,
+        RequestStatus::Waiting,
+    ));
+    blocked.can_allow = false;
+    blocked.can_without = false;
+    blocked.blocked = Some("Acme: a Viewer can't change sols. Ask an Admin or Owner.".into());
+    let cards = [
+        card(request(
+            "01J0MRQ",
+            RequestKind::Make,
+            RequestStatus::Waiting,
+        )),
+        change,
+        job,
+        blocked,
+        card(request("01J0MRQ5", RequestKind::Make, RequestStatus::Gone)),
+        card(request(
+            "01J0MRQ6",
+            RequestKind::Make,
+            RequestStatus::Allowed,
+        )),
+        card(request(
+            "01J0MRQ7",
+            RequestKind::Make,
+            RequestStatus::Refused,
+        )),
+    ];
+    samples["MakeRequest"] = to(cards.iter().map(|c| &c.request).collect::<Vec<_>>());
+    samples["MakeRequestCard"] = to(&cards);
+
+    let making = |id: &str, dot_id: Option<&str>, what: CardWhat| MakingCard {
+        id: id.into(),
+        maker_dot_id: "01J0DOT".into(),
+        maker_name: "Researcher".into(),
+        run_id: "01J0RUN".into(),
+        root_run_id: "01J0RUN".into(),
+        dot_id: dot_id.map(Into::into),
+        dot_name: "Blog Watcher".into(),
+        created_at: TS.into(),
+        what,
+    };
+    let job_card = |status: Option<JobStatus>, how: Option<JobEnd>| JobCard {
+        job_id: "01J0JOB".into(),
+        message: "Read today's feeds.".into(),
+        job_run_id: Some("01J0RUN2".into()),
+        run_exists: status.is_some(),
+        status,
+        how,
+    };
+    let made = Some("01J0MADE");
+    samples["MakingCard"] = to([
+        making(
+            "01J0MEV1",
+            made,
+            CardWhat::Made {
+                purpose: "Reads the feeds".into(),
+                schedule: Some("daily at 09:00".into()),
+                uses: Some("Uses: the browser, folder research/blogs. No secrets.".into()),
+            },
+        ),
+        // The made sol is gone: the purpose it was made with, and nothing of what it used.
+        making(
+            "01J0MEV2",
+            None,
+            CardWhat::Made {
+                purpose: "Reads the feeds".into(),
+                schedule: None,
+                uses: None,
+            },
+        ),
+        making(
+            "01J0MEV3",
+            None,
+            CardWhat::Asked {
+                request_id: "01J0MRQ".into(),
+                card: Some(cards[0].clone()),
+            },
+        ),
+        // The request went with the made sol a change was asked for.
+        making(
+            "01J0MEV4",
+            None,
+            CardWhat::Asked {
+                request_id: "01J0MRQ8".into(),
+                card: None,
+            },
+        ),
+        making(
+            "01J0MEV5",
+            made,
+            CardWhat::Changed {
+                what: vec!["New instructions".into(), "Schedule: daily at 09:00".into()],
+            },
+        ),
+        making("01J0MEV6", None, CardWhat::Deleted),
+        making(
+            "01J0MEV7",
+            made,
+            CardWhat::JobStarted(job_card(Some(JobStatus::Working), None)),
+        ),
+        making(
+            "01J0MEV8",
+            made,
+            CardWhat::JobWaiting(job_card(Some(JobStatus::WaitingAnswer), None)),
+        ),
+        making(
+            "01J0MEV9",
+            made,
+            CardWhat::JobEnded(job_card(Some(JobStatus::Ended), Some(JobEnd::Succeeded))),
+        ),
+        // The job went with its made sol: only the entry of its end says how it ended.
+        making(
+            "01J0MEV10",
+            None,
+            CardWhat::JobEnded(job_card(None, Some(JobEnd::Deleted))),
+        ),
+    ]);
+    samples["Enums"]["MakeDecision"] = to(MakeDecision::ALL);
+    samples["Enums"]["RequestStatus"] = to(RequestStatus::ALL);
+    samples["Enums"]["RequestKind"] = to(RequestKind::ALL);
+    samples["Enums"]["JobStatus"] = to(JobStatus::ALL);
+    samples["Enums"]["JobEnd"] = to(JobEnd::ALL);
 }
 
 /// The person's goals: an urgent one handed to a dot, one with a due date, and a done one;

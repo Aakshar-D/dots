@@ -1246,9 +1246,8 @@ export const DotOverview = z.strictObject({
   needs_you: z.number().int(),
   // `needs_you`, plus its runs that ended and its notes posted since it was last seen.
   unread: z.number().int(),
-  // How many dots it made that exist now: the "2" of "can make dots · 2 of 10". Optional until
-  // the dots list shows it: the core always sends the count.
-  made_dots: z.number().int().optional(),
+  // How many dots it made that exist now: the "2" of "can make sols · 2 of 10".
+  made_dots: z.number().int(),
 });
 
 export const PendingApproval = z.strictObject({
@@ -1338,10 +1337,26 @@ export const Inbox = z.strictObject({
   // Workflow runs that wait for the person (a check, the budget, the send-back cap or a failed
   // step), newest first.
   workflows: z.array(z.lazy(() => WaitingWorkflowRun)),
-  // Requests of makers that wait for the person, newest first. Optional until the Inbox lists
-  // them: the core always sends the list.
-  make_requests: z.array(z.lazy(() => PendingMakeRequest)).optional(),
+  // Requests of makers that wait for the person, newest first.
+  make_requests: z.array(z.lazy(() => PendingMakeRequest)),
 });
+// What a maker's request asks for: a new dot, a change to a dot it made, or a job for one.
+export const RequestKind = z.enum(["make", "change", "job"]);
+export type RequestKind = z.infer<typeof RequestKind>;
+// Where a request stands: it waits; it was allowed, made without the extras or refused;
+// something it names has gone, so only refusing is left; or it was dropped without an answer.
+export const RequestStatus = z.enum([
+  "waiting",
+  "allowed",
+  "made_without",
+  "refused",
+  "gone",
+  "discarded",
+]);
+export type RequestStatus = z.infer<typeof RequestStatus>;
+// The person's answer on an ask card.
+export const MakeDecision = z.enum(["allow", "without", "refuse"]);
+export type MakeDecision = z.infer<typeof MakeDecision>;
 // A make request, a request to change a made dot, or a job for a made dot that holds more than
 // its maker, that waits for the person, as the Inbox lists it. `dot_id` and `dot_name` are the
 // maker's; `name` is the dot's as it is called now; `status` is "waiting" or "gone".
@@ -1350,7 +1365,7 @@ export const PendingMakeRequest = z.strictObject({
   dot_id: z.string(),
   dot_name: z.string(),
   root_run_id: z.string(),
-  kind: z.enum(["make", "change", "job"]),
+  kind: RequestKind,
   name: z.string(),
   purpose: z.string(),
   title: z.string(),
@@ -1358,10 +1373,117 @@ export const PendingMakeRequest = z.strictObject({
   // What the card shows beyond the maker's reach, as a digest: an answer sends it back, as it
   // sends the card's limit line, and is refused when the request would now give something else.
   shown: nullable(z.string()),
-  status: z.enum(["waiting", "allowed", "made_without", "refused", "gone", "discarded"]),
+  status: RequestStatus,
   created_at: z.string(),
 });
 export type PendingMakeRequest = z.infer<typeof PendingMakeRequest>;
+// A maker's request as stored (dots-make-dots design section 7). `spec` is the dot as asked and
+// `without` the same with the extras removed. `extras`, `over` and `ask` are the core's own
+// record of what is beyond reach, of the limit and of a change as asked: the card says all of
+// it in words (`MakeRequestCard`), so the UI reads none of them. Everything a maker wrote is
+// here as it wrote it: `name`, `purpose`, `first_job` and the spec's instructions and model.
+export const MakeRequest = z.strictObject({
+  id: z.string(),
+  maker_dot_id: z.string(),
+  run_id: z.string(),
+  root_run_id: z.string(),
+  kind: RequestKind,
+  // The made dot a change or a job is for; null for a new dot.
+  dot_id: nullable(z.string()),
+  name: z.string(),
+  purpose: z.string(),
+  spec: DotSpec,
+  without: DotSpec,
+  extras: z.array(z.unknown()),
+  over: nullable(z.unknown()),
+  create_folder: nullable(z.string()),
+  // The first job given with a new dot; for a request of the kind `job`, the job itself.
+  first_job: nullable(z.string()),
+  status: RequestStatus,
+  gone_reason: nullable(z.string()),
+  created_at: z.string(),
+  decided_at: nullable(z.string()),
+  // The dot an answer made, changed or gave the job to; null once it is deleted.
+  made_dot_id: nullable(z.string()),
+  ask: nullable(z.unknown()),
+});
+export type MakeRequest = z.infer<typeof MakeRequest>;
+// The ask card (design section 7.2), built by the core on each read against the maker as it
+// is then. `limit` and `shown` go back with the answer exactly as they were read: the core
+// refuses an answer to a card that no longer says what the request would give.
+export const MakeRequestCard = z.strictObject({
+  request: MakeRequest,
+  maker_name: z.string(),
+  // The dot's name now.
+  name: z.string(),
+  title: z.string(),
+  // What is beyond the maker's reach, one per line, then the limit when one is passed. A
+  // job's lines end with where the made dot's final message goes.
+  lines: z.array(z.string()),
+  // For a change: every setting it names, one short line each.
+  asked: z.array(z.string()),
+  instructions: nullable(z.string()),
+  schedule: nullable(z.string()),
+  limit: nullable(z.string()),
+  shown: nullable(z.string()),
+  can_allow: z.boolean(),
+  can_without: z.boolean(),
+  // Why Allow is off: what this PC's role does not allow, or what has gone.
+  blocked: nullable(z.string()),
+});
+export type MakeRequestCard = z.infer<typeof MakeRequestCard>;
+// Where a job stands, and how it ended (design section 8).
+export const JobStatus = z.enum(["working", "waiting_answer", "ended"]);
+export const JobEnd = z.enum(["succeeded", "failed", "cancelled", "deleted"]);
+export type JobEnd = z.infer<typeof JobEnd>;
+const makingCardShape = {
+  // The log entry the card is built from: the same from read to read.
+  id: z.string(),
+  maker_dot_id: z.string(),
+  maker_name: z.string(),
+  // The maker's run that did it: the card shows after that run.
+  run_id: z.string(),
+  root_run_id: z.string(),
+  // The made dot while it exists; null once it is gone, and for an ask for a new dot.
+  dot_id: nullable(z.string()),
+  dot_name: z.string(),
+  created_at: z.string(),
+};
+const jobCardShape = {
+  job_id: z.string(),
+  // The job's text, as the maker wrote it.
+  message: z.string(),
+  // The made dot's run the card opens, and whether it still exists.
+  job_run_id: nullable(z.string()),
+  run_exists: z.boolean(),
+  // Null when the job went with its made dot.
+  status: nullable(JobStatus),
+  how: nullable(JobEnd),
+};
+// One card of a maker's chat topic (design section 11), oldest first in `making_cards`.
+export const MakingCard = z.discriminatedUnion("kind", [
+  z.strictObject({
+    ...makingCardShape,
+    kind: z.literal("made"),
+    purpose: z.string(),
+    schedule: nullable(z.string()),
+    // What it uses, in one line; null once the dot is gone.
+    uses: nullable(z.string()),
+  }),
+  z.strictObject({
+    ...makingCardShape,
+    kind: z.literal("asked"),
+    request_id: z.string(),
+    // The whole ask card as it is now; null when the request is gone.
+    card: nullable(MakeRequestCard),
+  }),
+  z.strictObject({ ...makingCardShape, kind: z.literal("changed"), what: z.array(z.string()) }),
+  z.strictObject({ ...makingCardShape, kind: z.literal("deleted") }),
+  z.strictObject({ ...makingCardShape, ...jobCardShape, kind: z.literal("job_started") }),
+  z.strictObject({ ...makingCardShape, ...jobCardShape, kind: z.literal("job_waiting") }),
+  z.strictObject({ ...makingCardShape, ...jobCardShape, kind: z.literal("job_ended") }),
+]);
+export type MakingCard = z.infer<typeof MakingCard>;
 // A member dot that is not in its team's account or workspace, as the Inbox lists it.
 export const TeamScopeIssue = z.strictObject({
   team_id: z.string(),
@@ -2847,6 +2969,8 @@ export const LIMITS = {
   max_memories: 200,
   max_memory_text: 500,
   max_watcher_name: 80,
+  max_make_per_run: 10,
+  max_make_total: 50,
   min_cap_usd: 0.01,
   max_cap_usd: 100000,
   max_cap_tokens: 10000000000,

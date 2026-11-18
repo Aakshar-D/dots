@@ -203,6 +203,7 @@ export function installDefaults(): void {
     attention: [],
     tools_changed: [],
     watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [],
+    make_requests: [],
     not_delivered: [], back: [], snoozed: [], done: [], hidden_messages: [],
   }));
   // No dot proposed instructions.
@@ -243,6 +244,10 @@ export function installDefaults(): void {
   // No company Claude Code policy is installed on this PC.
   backend.on("managed_policy", () => noManagedPolicy);
   backend.on("managed_policy_check", () => ({ managed: noManagedPolicy, conflicts: [] }));
+  // A conversation asks for its topics' making cards; by default no maker worked in them.
+  backend.on("making_cards", () => []);
+  // The Inbox asks for the ask cards that wait; by default none.
+  backend.on("make_requests_waiting", () => []);
   // A conversation asks for the dot's app proposals; by default it has none.
   backend.on("app_proposals_list", () => []);
   // A conversation and the dot menu ask for the dot's scheduled messages; by default none.

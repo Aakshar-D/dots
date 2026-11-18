@@ -18,6 +18,7 @@ const row = (status: "running" | "idle"): DotOverview => ({
   schedule_state: null,
   needs_you: 0,
   unread: 0,
+  made_dots: 0,
 });
 
 describe("the rail (deep-teal spec section 4)", () => {
@@ -35,7 +36,7 @@ describe("the rail (deep-teal spec section 4)", () => {
       review_runs: [],
       attention: [],
       tools_changed: [],
-      watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [],
+      watchers: [], held: [], instructions: [], app_reviews: [], team_scope: [], workflows: [], make_requests: [],
     }));
     renderApp("/library");
     const rail = within(await nav());
@@ -73,6 +74,7 @@ describe("the rail (deep-teal spec section 4)", () => {
       app_reviews: [],
       team_scope: [],
       workflows: [],
+      make_requests: [],
     }));
     renderApp("/library");
     const rail = within(await nav());

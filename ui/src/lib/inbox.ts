@@ -75,7 +75,7 @@ export function inboxKeys(inbox: Inbox, messages: Message[]): InboxKey[] {
     ...inbox.instructions.map(instructionsKey),
     ...inbox.app_reviews.map(appReviewKey),
     ...inbox.team_scope.map(teamScopeKey),
-    ...(inbox.make_requests ?? []).map(makeRequestKey),
+    ...inbox.make_requests.map(makeRequestKey),
   ];
 }
 
@@ -116,7 +116,7 @@ export function inboxWaiting(inbox: Inbox | undefined, messages: Message[] | und
       inbox.app_reviews.length +
       inbox.team_scope.length +
       // A dot asking to make, change or give a job to a dot beyond its reach.
-      (inbox.make_requests?.length ?? 0) +
+      inbox.make_requests.length +
       // A workflow run waiting on the person: a check, a limit or a failed step.
       inbox.workflows.length
     : 0;

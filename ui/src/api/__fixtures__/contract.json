@@ -1234,6 +1234,10 @@
     "app_proposal_decide",
     "instruction_proposals_list",
     "instruction_proposal_decide",
+    "make_request_card",
+    "make_requests_waiting",
+    "make_request_decide",
+    "making_cards",
     "app_preview_open",
     "app_preview_call",
     "app_preview_close",
@@ -2317,6 +2321,198 @@
       "run": null
     }
   ],
+  "DotMade": {
+    "approval_wait_secs": 240,
+    "browser": false,
+    "check_results": true,
+    "context_rules": {
+      "clear_at": 75,
+      "compact_at": 50,
+      "enabled": true
+    },
+    "created_at": "2026-10-09T12:00:00.000Z",
+    "enabled": true,
+    "endpoint_url": null,
+    "engine": "claude",
+    "has_webhook_token": true,
+    "id": "01J0MADE",
+    "instructions": "Run the tests and summarize failures.",
+    "made": {
+      "by_dot_id": "01J0DOT",
+      "by_name": "Researcher",
+      "purpose": "Reads the feeds",
+      "run_id": "01J0RUN"
+    },
+    "making": {
+      "on": false,
+      "per_run": 3,
+      "total": 10
+    },
+    "max_turns": 40,
+    "model": "sonnet",
+    "name": "nightly-tests",
+    "org_id": null,
+    "policy": {
+      "ask_send_delete": true,
+      "default": "ask",
+      "mcp_default": "ask",
+      "preset": "sandboxed",
+      "rules": [
+        {
+          "action": "allow",
+          "tool": "Read"
+        },
+        {
+          "action": "allow",
+          "tool": "LS"
+        },
+        {
+          "action": "allow",
+          "tool": "Glob"
+        },
+        {
+          "action": "allow",
+          "tool": "Grep"
+        },
+        {
+          "action": "allow",
+          "tool": "Write(./**)"
+        },
+        {
+          "action": "allow",
+          "tool": "Edit(./**)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git status:*)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git diff:*)"
+        },
+        {
+          "action": "allow",
+          "tool": "Bash(git add:*)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.git/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.git)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.git/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.git)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.claude/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Write(**/.claude)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.claude/**)"
+        },
+        {
+          "action": "deny",
+          "tool": "Edit(**/.claude)"
+        },
+        {
+          "action": "allow",
+          "tool": "Skill"
+        },
+        {
+          "action": "allow",
+          "tool": "Context"
+        },
+        {
+          "action": "allow",
+          "tool": "Notify"
+        },
+        {
+          "action": "allow",
+          "tool": "Ask"
+        },
+        {
+          "action": "allow",
+          "tool": "FollowUp"
+        },
+        {
+          "action": "allow",
+          "tool": "Memory"
+        },
+        {
+          "action": "ask",
+          "tool": "Workflow"
+        },
+        {
+          "action": "allow",
+          "tool": "App"
+        },
+        {
+          "action": "allow",
+          "tool": "ProposeApp"
+        },
+        {
+          "action": "allow",
+          "tool": "Instructions"
+        },
+        {
+          "action": "allow",
+          "tool": "MakeDots"
+        }
+      ]
+    },
+    "quiet_limit_secs": null,
+    "schedule": {
+      "catch_up": false,
+      "rule": {
+        "expr": "0 0 2 * * *",
+        "kind": "cron"
+      },
+      "until": null
+    },
+    "seen_at": "2026-10-09T12:00:00.000Z",
+    "spend_cap": {
+      "daily_tokens": null,
+      "daily_usd": 2.0
+    },
+    "timeout_secs": 1800,
+    "updated_at": "2026-10-09T12:00:00.000Z",
+    "use_global_instructions": true,
+    "use_graph": true,
+    "use_user_settings": false,
+    "uses": {
+      "apps": [
+        "projects"
+      ],
+      "context": [
+        "company"
+      ],
+      "mcp_servers": [
+        "github"
+      ],
+      "plugins": [
+        "pdf-tools"
+      ],
+      "skills": [
+        "pdf"
+      ]
+    },
+    "variables": {},
+    "workdir": "C:/dev/app",
+    "workspace_id": "default",
+    "workspace_mode": "worktree"
+  },
   "DotOverview": {
     "active_run": null,
     "dot": {
@@ -2941,12 +3137,28 @@
       "expired",
       "revoked"
     ],
+    "JobEnd": [
+      "succeeded",
+      "failed",
+      "cancelled",
+      "deleted"
+    ],
+    "JobStatus": [
+      "working",
+      "waiting_answer",
+      "ended"
+    ],
     "LibraryKind": [
       "mcp_server",
       "skill",
       "plugin",
       "context",
       "app"
+    ],
+    "MakeDecision": [
+      "allow",
+      "without",
+      "refuse"
     ],
     "MemorySource": [
       "dot",
@@ -2975,6 +3187,19 @@
       "pending",
       "added",
       "changes_asked",
+      "discarded"
+    ],
+    "RequestKind": [
+      "make",
+      "change",
+      "job"
+    ],
+    "RequestStatus": [
+      "waiting",
+      "allowed",
+      "made_without",
+      "refused",
+      "gone",
       "discarded"
     ],
     "RolePermission": [
@@ -4851,6 +5076,8 @@
     "max_cap_usd": 100000.0,
     "max_concurrent_runs": 16,
     "max_global_instructions": 32768,
+    "max_make_per_run": 10,
+    "max_make_total": 50,
     "max_memories": 200,
     "max_memory_text": 500,
     "max_quiet_limit_secs": 86400,
@@ -4962,6 +5189,6079 @@
           "window": "seven_day_opus"
         }
       ]
+    }
+  ],
+  "MakeRequest": [
+    {
+      "ask": null,
+      "create_folder": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": null,
+      "dot_id": null,
+      "extras": [
+        {
+          "kind": "browser"
+        }
+      ],
+      "first_job": "Read today's feeds.",
+      "gone_reason": null,
+      "id": "01J0MRQ",
+      "kind": "make",
+      "made_dot_id": null,
+      "maker_dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "over": {
+        "limit": "per_run",
+        "max": 3,
+        "nth": 4
+      },
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "spec": {
+        "approval_wait_secs": 240,
+        "browser": true,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      },
+      "status": "waiting",
+      "without": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      }
+    },
+    {
+      "ask": {
+        "browser": true,
+        "dot": "Blog Watcher",
+        "instructions": "Read the feeds each morning.\nReport what is new."
+      },
+      "create_folder": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": null,
+      "dot_id": "01J0MADE",
+      "extras": [
+        {
+          "kind": "browser"
+        }
+      ],
+      "first_job": null,
+      "gone_reason": null,
+      "id": "01J0MRQ2",
+      "kind": "change",
+      "made_dot_id": null,
+      "maker_dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "over": null,
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "spec": {
+        "approval_wait_secs": 240,
+        "browser": true,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      },
+      "status": "waiting",
+      "without": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      }
+    },
+    {
+      "ask": null,
+      "create_folder": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": null,
+      "dot_id": "01J0MADE",
+      "extras": [
+        {
+          "kind": "browser"
+        }
+      ],
+      "first_job": "Read today's feeds.",
+      "gone_reason": null,
+      "id": "01J0MRQ3",
+      "kind": "job",
+      "made_dot_id": null,
+      "maker_dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "over": null,
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "spec": {
+        "approval_wait_secs": 240,
+        "browser": true,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      },
+      "status": "waiting",
+      "without": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      }
+    },
+    {
+      "ask": null,
+      "create_folder": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": null,
+      "dot_id": null,
+      "extras": [
+        {
+          "kind": "browser"
+        }
+      ],
+      "first_job": "Read today's feeds.",
+      "gone_reason": null,
+      "id": "01J0MRQ4",
+      "kind": "make",
+      "made_dot_id": null,
+      "maker_dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "over": {
+        "limit": "per_run",
+        "max": 3,
+        "nth": 4
+      },
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "spec": {
+        "approval_wait_secs": 240,
+        "browser": true,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      },
+      "status": "waiting",
+      "without": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      }
+    },
+    {
+      "ask": null,
+      "create_folder": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": null,
+      "dot_id": null,
+      "extras": [
+        {
+          "kind": "browser"
+        }
+      ],
+      "first_job": "Read today's feeds.",
+      "gone_reason": "The folder C:\\feeds no longer exists.",
+      "id": "01J0MRQ5",
+      "kind": "make",
+      "made_dot_id": null,
+      "maker_dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "over": {
+        "limit": "per_run",
+        "max": 3,
+        "nth": 4
+      },
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "spec": {
+        "approval_wait_secs": 240,
+        "browser": true,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      },
+      "status": "gone",
+      "without": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      }
+    },
+    {
+      "ask": null,
+      "create_folder": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "extras": [
+        {
+          "kind": "browser"
+        }
+      ],
+      "first_job": "Read today's feeds.",
+      "gone_reason": null,
+      "id": "01J0MRQ6",
+      "kind": "make",
+      "made_dot_id": "01J0MADE",
+      "maker_dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "over": {
+        "limit": "per_run",
+        "max": 3,
+        "nth": 4
+      },
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "spec": {
+        "approval_wait_secs": 240,
+        "browser": true,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      },
+      "status": "allowed",
+      "without": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      }
+    },
+    {
+      "ask": null,
+      "create_folder": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "decided_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "extras": [
+        {
+          "kind": "browser"
+        }
+      ],
+      "first_job": "Read today's feeds.",
+      "gone_reason": null,
+      "id": "01J0MRQ7",
+      "kind": "make",
+      "made_dot_id": null,
+      "maker_dot_id": "01J0DOT",
+      "name": "Blog Watcher",
+      "over": {
+        "limit": "per_run",
+        "max": 3,
+        "nth": 4
+      },
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "spec": {
+        "approval_wait_secs": 240,
+        "browser": true,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      },
+      "status": "refused",
+      "without": {
+        "approval_wait_secs": 240,
+        "browser": false,
+        "check_results": true,
+        "context_rules": {
+          "clear_at": 75,
+          "compact_at": 50,
+          "enabled": true
+        },
+        "enabled": true,
+        "endpoint_url": null,
+        "engine": "claude",
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "making": {
+          "on": false,
+          "per_run": 3,
+          "total": 10
+        },
+        "max_turns": 40,
+        "model": "sonnet",
+        "name": "Blog Watcher",
+        "policy": {
+          "ask_send_delete": true,
+          "default": "ask",
+          "mcp_default": "ask",
+          "preset": "sandboxed",
+          "rules": [
+            {
+              "action": "allow",
+              "tool": "Read"
+            },
+            {
+              "action": "allow",
+              "tool": "LS"
+            },
+            {
+              "action": "allow",
+              "tool": "Glob"
+            },
+            {
+              "action": "allow",
+              "tool": "Grep"
+            },
+            {
+              "action": "allow",
+              "tool": "Write(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Edit(./**)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git status:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git diff:*)"
+            },
+            {
+              "action": "allow",
+              "tool": "Bash(git add:*)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.git)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Write(**/.claude)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude/**)"
+            },
+            {
+              "action": "deny",
+              "tool": "Edit(**/.claude)"
+            },
+            {
+              "action": "allow",
+              "tool": "Skill"
+            },
+            {
+              "action": "allow",
+              "tool": "Context"
+            },
+            {
+              "action": "allow",
+              "tool": "Notify"
+            },
+            {
+              "action": "allow",
+              "tool": "Ask"
+            },
+            {
+              "action": "allow",
+              "tool": "FollowUp"
+            },
+            {
+              "action": "allow",
+              "tool": "Memory"
+            },
+            {
+              "action": "ask",
+              "tool": "Workflow"
+            },
+            {
+              "action": "allow",
+              "tool": "App"
+            },
+            {
+              "action": "allow",
+              "tool": "ProposeApp"
+            },
+            {
+              "action": "allow",
+              "tool": "Instructions"
+            },
+            {
+              "action": "allow",
+              "tool": "MakeDots"
+            }
+          ]
+        },
+        "quiet_limit_secs": null,
+        "schedule": {
+          "catch_up": false,
+          "rule": {
+            "expr": "0 0 2 * * *",
+            "kind": "cron"
+          },
+          "until": null
+        },
+        "spend_cap": {
+          "daily_tokens": null,
+          "daily_usd": 2.0
+        },
+        "timeout_secs": 1800,
+        "use_global_instructions": true,
+        "use_graph": true,
+        "use_user_settings": false,
+        "uses": {
+          "apps": [
+            "projects"
+          ],
+          "context": [
+            "company"
+          ],
+          "mcp_servers": [
+            "github"
+          ],
+          "plugins": [
+            "pdf-tools"
+          ],
+          "skills": [
+            "pdf"
+          ]
+        },
+        "variables": {},
+        "workdir": "C:/dev/app",
+        "workspace_mode": "worktree"
+      }
+    }
+  ],
+  "MakeRequestCard": [
+    {
+      "asked": [],
+      "blocked": null,
+      "can_allow": true,
+      "can_without": true,
+      "instructions": "Read the feeds each morning.\nReport what is new.",
+      "limit": "4th sol in this run; the limit is 3",
+      "lines": [
+        "The browser",
+        "4th sol in this run; the limit is 3"
+      ],
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "request": {
+        "ask": null,
+        "create_folder": null,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": null,
+        "dot_id": null,
+        "extras": [
+          {
+            "kind": "browser"
+          }
+        ],
+        "first_job": "Read today's feeds.",
+        "gone_reason": null,
+        "id": "01J0MRQ",
+        "kind": "make",
+        "made_dot_id": null,
+        "maker_dot_id": "01J0DOT",
+        "name": "Blog Watcher",
+        "over": {
+          "limit": "per_run",
+          "max": 3,
+          "nth": 4
+        },
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "spec": {
+          "approval_wait_secs": 240,
+          "browser": true,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        },
+        "status": "waiting",
+        "without": {
+          "approval_wait_secs": 240,
+          "browser": false,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        }
+      },
+      "schedule": null,
+      "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+      "title": "Researcher wants to make a sol with more than it has"
+    },
+    {
+      "asked": [
+        "New instructions",
+        "The browser"
+      ],
+      "blocked": null,
+      "can_allow": true,
+      "can_without": true,
+      "instructions": "Read the feeds each morning.\nReport what is new.",
+      "limit": null,
+      "lines": [
+        "The browser"
+      ],
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "request": {
+        "ask": {
+          "browser": true,
+          "dot": "Blog Watcher",
+          "instructions": "Read the feeds each morning.\nReport what is new."
+        },
+        "create_folder": null,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": null,
+        "dot_id": "01J0MADE",
+        "extras": [
+          {
+            "kind": "browser"
+          }
+        ],
+        "first_job": null,
+        "gone_reason": null,
+        "id": "01J0MRQ2",
+        "kind": "change",
+        "made_dot_id": null,
+        "maker_dot_id": "01J0DOT",
+        "name": "Blog Watcher",
+        "over": null,
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "spec": {
+          "approval_wait_secs": 240,
+          "browser": true,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        },
+        "status": "waiting",
+        "without": {
+          "approval_wait_secs": 240,
+          "browser": false,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        }
+      },
+      "schedule": "daily at 09:00",
+      "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+      "title": "Researcher wants to give Blog Watcher more than it has"
+    },
+    {
+      "asked": [],
+      "blocked": null,
+      "can_allow": true,
+      "can_without": false,
+      "instructions": null,
+      "limit": null,
+      "lines": [
+        "The browser",
+        "Its final message goes back to Researcher."
+      ],
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "request": {
+        "ask": null,
+        "create_folder": null,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": null,
+        "dot_id": "01J0MADE",
+        "extras": [
+          {
+            "kind": "browser"
+          }
+        ],
+        "first_job": "Read today's feeds.",
+        "gone_reason": null,
+        "id": "01J0MRQ3",
+        "kind": "job",
+        "made_dot_id": null,
+        "maker_dot_id": "01J0DOT",
+        "name": "Blog Watcher",
+        "over": null,
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "spec": {
+          "approval_wait_secs": 240,
+          "browser": true,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        },
+        "status": "waiting",
+        "without": {
+          "approval_wait_secs": 240,
+          "browser": false,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        }
+      },
+      "schedule": null,
+      "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+      "title": "Researcher wants to give a job to Blog Watcher, which has more than Researcher has"
+    },
+    {
+      "asked": [],
+      "blocked": "Acme: a Viewer can't change sols. Ask an Admin or Owner.",
+      "can_allow": false,
+      "can_without": false,
+      "instructions": "Read the feeds each morning.\nReport what is new.",
+      "limit": "4th sol in this run; the limit is 3",
+      "lines": [
+        "The browser",
+        "4th sol in this run; the limit is 3"
+      ],
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "request": {
+        "ask": null,
+        "create_folder": null,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": null,
+        "dot_id": null,
+        "extras": [
+          {
+            "kind": "browser"
+          }
+        ],
+        "first_job": "Read today's feeds.",
+        "gone_reason": null,
+        "id": "01J0MRQ4",
+        "kind": "make",
+        "made_dot_id": null,
+        "maker_dot_id": "01J0DOT",
+        "name": "Blog Watcher",
+        "over": {
+          "limit": "per_run",
+          "max": 3,
+          "nth": 4
+        },
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "spec": {
+          "approval_wait_secs": 240,
+          "browser": true,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        },
+        "status": "waiting",
+        "without": {
+          "approval_wait_secs": 240,
+          "browser": false,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        }
+      },
+      "schedule": null,
+      "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+      "title": "Researcher wants to make a sol with more than it has"
+    },
+    {
+      "asked": [],
+      "blocked": "The folder C:\\feeds no longer exists.",
+      "can_allow": false,
+      "can_without": false,
+      "instructions": "Read the feeds each morning.\nReport what is new.",
+      "limit": "4th sol in this run; the limit is 3",
+      "lines": [
+        "The browser",
+        "4th sol in this run; the limit is 3"
+      ],
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "request": {
+        "ask": null,
+        "create_folder": null,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": null,
+        "dot_id": null,
+        "extras": [
+          {
+            "kind": "browser"
+          }
+        ],
+        "first_job": "Read today's feeds.",
+        "gone_reason": "The folder C:\\feeds no longer exists.",
+        "id": "01J0MRQ5",
+        "kind": "make",
+        "made_dot_id": null,
+        "maker_dot_id": "01J0DOT",
+        "name": "Blog Watcher",
+        "over": {
+          "limit": "per_run",
+          "max": 3,
+          "nth": 4
+        },
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "spec": {
+          "approval_wait_secs": 240,
+          "browser": true,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        },
+        "status": "gone",
+        "without": {
+          "approval_wait_secs": 240,
+          "browser": false,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        }
+      },
+      "schedule": null,
+      "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+      "title": "Researcher wants to make a sol with more than it has"
+    },
+    {
+      "asked": [],
+      "blocked": null,
+      "can_allow": false,
+      "can_without": false,
+      "instructions": "Read the feeds each morning.\nReport what is new.",
+      "limit": "4th sol in this run; the limit is 3",
+      "lines": [
+        "The browser",
+        "4th sol in this run; the limit is 3"
+      ],
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "request": {
+        "ask": null,
+        "create_folder": null,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": null,
+        "extras": [
+          {
+            "kind": "browser"
+          }
+        ],
+        "first_job": "Read today's feeds.",
+        "gone_reason": null,
+        "id": "01J0MRQ6",
+        "kind": "make",
+        "made_dot_id": "01J0MADE",
+        "maker_dot_id": "01J0DOT",
+        "name": "Blog Watcher",
+        "over": {
+          "limit": "per_run",
+          "max": 3,
+          "nth": 4
+        },
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "spec": {
+          "approval_wait_secs": 240,
+          "browser": true,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        },
+        "status": "allowed",
+        "without": {
+          "approval_wait_secs": 240,
+          "browser": false,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        }
+      },
+      "schedule": null,
+      "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+      "title": "Researcher wants to make a sol with more than it has"
+    },
+    {
+      "asked": [],
+      "blocked": null,
+      "can_allow": false,
+      "can_without": false,
+      "instructions": "Read the feeds each morning.\nReport what is new.",
+      "limit": "4th sol in this run; the limit is 3",
+      "lines": [
+        "The browser",
+        "4th sol in this run; the limit is 3"
+      ],
+      "maker_name": "Researcher",
+      "name": "Blog Watcher",
+      "request": {
+        "ask": null,
+        "create_folder": null,
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "decided_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": null,
+        "extras": [
+          {
+            "kind": "browser"
+          }
+        ],
+        "first_job": "Read today's feeds.",
+        "gone_reason": null,
+        "id": "01J0MRQ7",
+        "kind": "make",
+        "made_dot_id": null,
+        "maker_dot_id": "01J0DOT",
+        "name": "Blog Watcher",
+        "over": {
+          "limit": "per_run",
+          "max": 3,
+          "nth": 4
+        },
+        "purpose": "Reads the feeds",
+        "root_run_id": "01J0RUN",
+        "run_id": "01J0RUN",
+        "spec": {
+          "approval_wait_secs": 240,
+          "browser": true,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        },
+        "status": "refused",
+        "without": {
+          "approval_wait_secs": 240,
+          "browser": false,
+          "check_results": true,
+          "context_rules": {
+            "clear_at": 75,
+            "compact_at": 50,
+            "enabled": true
+          },
+          "enabled": true,
+          "endpoint_url": null,
+          "engine": "claude",
+          "instructions": "Read the feeds each morning.\nReport what is new.",
+          "making": {
+            "on": false,
+            "per_run": 3,
+            "total": 10
+          },
+          "max_turns": 40,
+          "model": "sonnet",
+          "name": "Blog Watcher",
+          "policy": {
+            "ask_send_delete": true,
+            "default": "ask",
+            "mcp_default": "ask",
+            "preset": "sandboxed",
+            "rules": [
+              {
+                "action": "allow",
+                "tool": "Read"
+              },
+              {
+                "action": "allow",
+                "tool": "LS"
+              },
+              {
+                "action": "allow",
+                "tool": "Glob"
+              },
+              {
+                "action": "allow",
+                "tool": "Grep"
+              },
+              {
+                "action": "allow",
+                "tool": "Write(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Edit(./**)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git status:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git diff:*)"
+              },
+              {
+                "action": "allow",
+                "tool": "Bash(git add:*)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.git)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Write(**/.claude)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude/**)"
+              },
+              {
+                "action": "deny",
+                "tool": "Edit(**/.claude)"
+              },
+              {
+                "action": "allow",
+                "tool": "Skill"
+              },
+              {
+                "action": "allow",
+                "tool": "Context"
+              },
+              {
+                "action": "allow",
+                "tool": "Notify"
+              },
+              {
+                "action": "allow",
+                "tool": "Ask"
+              },
+              {
+                "action": "allow",
+                "tool": "FollowUp"
+              },
+              {
+                "action": "allow",
+                "tool": "Memory"
+              },
+              {
+                "action": "ask",
+                "tool": "Workflow"
+              },
+              {
+                "action": "allow",
+                "tool": "App"
+              },
+              {
+                "action": "allow",
+                "tool": "ProposeApp"
+              },
+              {
+                "action": "allow",
+                "tool": "Instructions"
+              },
+              {
+                "action": "allow",
+                "tool": "MakeDots"
+              }
+            ]
+          },
+          "quiet_limit_secs": null,
+          "schedule": {
+            "catch_up": false,
+            "rule": {
+              "expr": "0 0 2 * * *",
+              "kind": "cron"
+            },
+            "until": null
+          },
+          "spend_cap": {
+            "daily_tokens": null,
+            "daily_usd": 2.0
+          },
+          "timeout_secs": 1800,
+          "use_global_instructions": true,
+          "use_graph": true,
+          "use_user_settings": false,
+          "uses": {
+            "apps": [
+              "projects"
+            ],
+            "context": [
+              "company"
+            ],
+            "mcp_servers": [
+              "github"
+            ],
+            "plugins": [
+              "pdf-tools"
+            ],
+            "skills": [
+              "pdf"
+            ]
+          },
+          "variables": {},
+          "workdir": "C:/dev/app",
+          "workspace_mode": "worktree"
+        }
+      },
+      "schedule": null,
+      "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+      "title": "Researcher wants to make a sol with more than it has"
+    }
+  ],
+  "MakingCard": [
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0MADE",
+      "dot_name": "Blog Watcher",
+      "id": "01J0MEV1",
+      "kind": "made",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "schedule": "daily at 09:00",
+      "uses": "Uses: the browser, folder research/blogs. No secrets."
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "dot_name": "Blog Watcher",
+      "id": "01J0MEV2",
+      "kind": "made",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "purpose": "Reads the feeds",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "schedule": null,
+      "uses": null
+    },
+    {
+      "card": {
+        "asked": [],
+        "blocked": null,
+        "can_allow": true,
+        "can_without": true,
+        "instructions": "Read the feeds each morning.\nReport what is new.",
+        "limit": "4th sol in this run; the limit is 3",
+        "lines": [
+          "The browser",
+          "4th sol in this run; the limit is 3"
+        ],
+        "maker_name": "Researcher",
+        "name": "Blog Watcher",
+        "request": {
+          "ask": null,
+          "create_folder": null,
+          "created_at": "2026-10-09T12:00:00.000Z",
+          "decided_at": null,
+          "dot_id": null,
+          "extras": [
+            {
+              "kind": "browser"
+            }
+          ],
+          "first_job": "Read today's feeds.",
+          "gone_reason": null,
+          "id": "01J0MRQ",
+          "kind": "make",
+          "made_dot_id": null,
+          "maker_dot_id": "01J0DOT",
+          "name": "Blog Watcher",
+          "over": {
+            "limit": "per_run",
+            "max": 3,
+            "nth": 4
+          },
+          "purpose": "Reads the feeds",
+          "root_run_id": "01J0RUN",
+          "run_id": "01J0RUN",
+          "spec": {
+            "approval_wait_secs": 240,
+            "browser": true,
+            "check_results": true,
+            "context_rules": {
+              "clear_at": 75,
+              "compact_at": 50,
+              "enabled": true
+            },
+            "enabled": true,
+            "endpoint_url": null,
+            "engine": "claude",
+            "instructions": "Read the feeds each morning.\nReport what is new.",
+            "making": {
+              "on": false,
+              "per_run": 3,
+              "total": 10
+            },
+            "max_turns": 40,
+            "model": "sonnet",
+            "name": "Blog Watcher",
+            "policy": {
+              "ask_send_delete": true,
+              "default": "ask",
+              "mcp_default": "ask",
+              "preset": "sandboxed",
+              "rules": [
+                {
+                  "action": "allow",
+                  "tool": "Read"
+                },
+                {
+                  "action": "allow",
+                  "tool": "LS"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Glob"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Grep"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Write(./**)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Edit(./**)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Bash(git status:*)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Bash(git diff:*)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Bash(git add:*)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Write(**/.git/**)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Write(**/.git)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Edit(**/.git/**)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Edit(**/.git)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Write(**/.claude/**)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Write(**/.claude)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Edit(**/.claude/**)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Edit(**/.claude)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Skill"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Context"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Notify"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Ask"
+                },
+                {
+                  "action": "allow",
+                  "tool": "FollowUp"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Memory"
+                },
+                {
+                  "action": "ask",
+                  "tool": "Workflow"
+                },
+                {
+                  "action": "allow",
+                  "tool": "App"
+                },
+                {
+                  "action": "allow",
+                  "tool": "ProposeApp"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Instructions"
+                },
+                {
+                  "action": "allow",
+                  "tool": "MakeDots"
+                }
+              ]
+            },
+            "quiet_limit_secs": null,
+            "schedule": {
+              "catch_up": false,
+              "rule": {
+                "expr": "0 0 2 * * *",
+                "kind": "cron"
+              },
+              "until": null
+            },
+            "spend_cap": {
+              "daily_tokens": null,
+              "daily_usd": 2.0
+            },
+            "timeout_secs": 1800,
+            "use_global_instructions": true,
+            "use_graph": true,
+            "use_user_settings": false,
+            "uses": {
+              "apps": [
+                "projects"
+              ],
+              "context": [
+                "company"
+              ],
+              "mcp_servers": [
+                "github"
+              ],
+              "plugins": [
+                "pdf-tools"
+              ],
+              "skills": [
+                "pdf"
+              ]
+            },
+            "variables": {},
+            "workdir": "C:/dev/app",
+            "workspace_mode": "worktree"
+          },
+          "status": "waiting",
+          "without": {
+            "approval_wait_secs": 240,
+            "browser": false,
+            "check_results": true,
+            "context_rules": {
+              "clear_at": 75,
+              "compact_at": 50,
+              "enabled": true
+            },
+            "enabled": true,
+            "endpoint_url": null,
+            "engine": "claude",
+            "instructions": "Read the feeds each morning.\nReport what is new.",
+            "making": {
+              "on": false,
+              "per_run": 3,
+              "total": 10
+            },
+            "max_turns": 40,
+            "model": "sonnet",
+            "name": "Blog Watcher",
+            "policy": {
+              "ask_send_delete": true,
+              "default": "ask",
+              "mcp_default": "ask",
+              "preset": "sandboxed",
+              "rules": [
+                {
+                  "action": "allow",
+                  "tool": "Read"
+                },
+                {
+                  "action": "allow",
+                  "tool": "LS"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Glob"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Grep"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Write(./**)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Edit(./**)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Bash(git status:*)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Bash(git diff:*)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Bash(git add:*)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Write(**/.git/**)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Write(**/.git)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Edit(**/.git/**)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Edit(**/.git)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Write(**/.claude/**)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Write(**/.claude)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Edit(**/.claude/**)"
+                },
+                {
+                  "action": "deny",
+                  "tool": "Edit(**/.claude)"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Skill"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Context"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Notify"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Ask"
+                },
+                {
+                  "action": "allow",
+                  "tool": "FollowUp"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Memory"
+                },
+                {
+                  "action": "ask",
+                  "tool": "Workflow"
+                },
+                {
+                  "action": "allow",
+                  "tool": "App"
+                },
+                {
+                  "action": "allow",
+                  "tool": "ProposeApp"
+                },
+                {
+                  "action": "allow",
+                  "tool": "Instructions"
+                },
+                {
+                  "action": "allow",
+                  "tool": "MakeDots"
+                }
+              ]
+            },
+            "quiet_limit_secs": null,
+            "schedule": {
+              "catch_up": false,
+              "rule": {
+                "expr": "0 0 2 * * *",
+                "kind": "cron"
+              },
+              "until": null
+            },
+            "spend_cap": {
+              "daily_tokens": null,
+              "daily_usd": 2.0
+            },
+            "timeout_secs": 1800,
+            "use_global_instructions": true,
+            "use_graph": true,
+            "use_user_settings": false,
+            "uses": {
+              "apps": [
+                "projects"
+              ],
+              "context": [
+                "company"
+              ],
+              "mcp_servers": [
+                "github"
+              ],
+              "plugins": [
+                "pdf-tools"
+              ],
+              "skills": [
+                "pdf"
+              ]
+            },
+            "variables": {},
+            "workdir": "C:/dev/app",
+            "workspace_mode": "worktree"
+          }
+        },
+        "schedule": null,
+        "shown": "aa4ed06e2a7313fc050d34ba2d5d4b5ca56a1a7c0eb97c0a52286db1ddf0ee59",
+        "title": "Researcher wants to make a sol with more than it has"
+      },
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "dot_name": "Blog Watcher",
+      "id": "01J0MEV3",
+      "kind": "asked",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "request_id": "01J0MRQ",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN"
+    },
+    {
+      "card": null,
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "dot_name": "Blog Watcher",
+      "id": "01J0MEV4",
+      "kind": "asked",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "request_id": "01J0MRQ8",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0MADE",
+      "dot_name": "Blog Watcher",
+      "id": "01J0MEV5",
+      "kind": "changed",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN",
+      "what": [
+        "New instructions",
+        "Schedule: daily at 09:00"
+      ]
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "dot_name": "Blog Watcher",
+      "id": "01J0MEV6",
+      "kind": "deleted",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "root_run_id": "01J0RUN",
+      "run_id": "01J0RUN"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0MADE",
+      "dot_name": "Blog Watcher",
+      "how": null,
+      "id": "01J0MEV7",
+      "job_id": "01J0JOB",
+      "job_run_id": "01J0RUN2",
+      "kind": "job_started",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "message": "Read today's feeds.",
+      "root_run_id": "01J0RUN",
+      "run_exists": true,
+      "run_id": "01J0RUN",
+      "status": "working"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0MADE",
+      "dot_name": "Blog Watcher",
+      "how": null,
+      "id": "01J0MEV8",
+      "job_id": "01J0JOB",
+      "job_run_id": "01J0RUN2",
+      "kind": "job_waiting",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "message": "Read today's feeds.",
+      "root_run_id": "01J0RUN",
+      "run_exists": true,
+      "run_id": "01J0RUN",
+      "status": "waiting_answer"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": "01J0MADE",
+      "dot_name": "Blog Watcher",
+      "how": "succeeded",
+      "id": "01J0MEV9",
+      "job_id": "01J0JOB",
+      "job_run_id": "01J0RUN2",
+      "kind": "job_ended",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "message": "Read today's feeds.",
+      "root_run_id": "01J0RUN",
+      "run_exists": true,
+      "run_id": "01J0RUN",
+      "status": "ended"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "dot_id": null,
+      "dot_name": "Blog Watcher",
+      "how": "deleted",
+      "id": "01J0MEV10",
+      "job_id": "01J0JOB",
+      "job_run_id": "01J0RUN2",
+      "kind": "job_ended",
+      "maker_dot_id": "01J0DOT",
+      "maker_name": "Researcher",
+      "message": "Read today's feeds.",
+      "root_run_id": "01J0RUN",
+      "run_exists": false,
+      "run_id": "01J0RUN",
+      "status": null
     }
   ],
   "ManagedCheck": {

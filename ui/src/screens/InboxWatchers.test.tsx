@@ -16,7 +16,7 @@ const inbox = (watchers: PausedWatcher[]) => ({
   held: [], instructions: [],
   app_reviews: [],
   team_scope: [],
-  workflows: [],
+  workflows: [], make_requests: [],
 });
 
 describe("paused watchers in the Inbox", () => {

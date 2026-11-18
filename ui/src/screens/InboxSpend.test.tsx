@@ -18,7 +18,7 @@ const only = (held: HeldRun[]): Inbox => ({
   instructions: [],
   app_reviews: [],
   team_scope: [],
-  workflows: [],
+  workflows: [], make_requests: [],
   not_delivered: [],
 });
 
