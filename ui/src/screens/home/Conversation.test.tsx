@@ -294,6 +294,9 @@ describe("a sol's conversation", () => {
     // pane's foot in a long conversation and the whole window scrolls (found in WebView2;
     // jsdom lays nothing out, so this checks the class that does it).
     expect(await screen.findByRole("region", { name: "Conversation" })).toHaveClass("relative");
+    // The same for the area every screen scrolls in: a run's own page shows that line too,
+    // and without this the window gets a second scroll bar beside the screen's.
+    expect(screen.getByRole("main")).toHaveClass("relative");
   });
 
   it("lets go at the first few pixels of a scroll up, and follows again at the bottom", async () => {
