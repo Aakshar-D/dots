@@ -1166,7 +1166,9 @@ impl Runtime {
             .iter()
             .rev()
         {
-            match self.makers.request_card(&request.id).await {
+            // Boxed: the card's future is large (it runs the reach check), and inline it made
+            // every read of the Inbox so deep that a long voice test overflowed its stack.
+            match Box::pin(self.makers.request_card(&request.id)).await {
                 Ok(card) => make_requests.push(PendingMakeRequest::of(&card)),
                 // Answered, or gone with its maker, since the list was read.
                 Err(Error::NotFound(_)) => {}
