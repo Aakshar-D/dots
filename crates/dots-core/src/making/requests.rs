@@ -1266,7 +1266,9 @@ impl Makers {
     /// the request still waits. `limit` is the limit line of the card the person answered
     /// (`MakeRequestCard::limit`), or `None` when it showed none: an answer that makes the dot
     /// is refused (`Conflict`) when it passes a limit now that is not that line, and the card
-    /// read again shows it. `shown` is what that card showed beyond the maker's reach
+    /// read again shows it. It is refused too (`CARD_CHANGED`) when it carries a limit line and
+    /// the card as it is now shows none, for a change or a job as well, whose cards never show
+    /// one: an answer is for the card it names, whichever way the two differ. `shown` is what that card showed beyond the maker's reach
     /// (`MakeRequestCard::shown`): an answer that makes, changes or starts something is
     /// refused (`Conflict`, `CARD_CHANGED`) when the request would now give something else, and
     /// the card read again shows it. Allow covers this one dot, also past a limit the card showed
@@ -1322,6 +1324,13 @@ impl Makers {
             }
             _ => return Err(Error::Conflict(ALREADY_ANSWERED.into())),
         }
+        // The card of a change or a job shows no limit line: an answer that carries one, and
+        // gives something, was not given to that card.
+        if request.kind != RequestKind::Make && decision != MakeDecision::Refuse && limit.is_some()
+        {
+            self.updated(&request.maker_dot_id, &request.root_run_id);
+            return Err(Error::Conflict(CARD_CHANGED.into()));
+        }
         match request.kind {
             RequestKind::Change => {
                 let (request, maker_name, left_out) =
@@ -1373,12 +1382,18 @@ impl Makers {
                 }
                 self.as_shown(&request, shown, &maker.spec.name, &standing.reach.extras)?;
                 // A limit passed now that the card the person answered did not show: the card
-                // read again shows it, and the person answers again.
-                if let Some(over) = &standing.over {
-                    if limit != Some(over.line().as_str()) {
+                // read again shows it, and the person answers again. So does a limit line the
+                // card as it is now does not show: the answer was not given to this card.
+                match &standing.over {
+                    Some(over) if limit != Some(over.line().as_str()) => {
                         self.updated(&request.maker_dot_id, &request.root_run_id);
                         return Err(Error::Conflict(limit_reached(over)));
                     }
+                    None if limit.is_some() => {
+                        self.updated(&request.maker_dot_id, &request.root_run_id);
+                        return Err(Error::Conflict(CARD_CHANGED.into()));
+                    }
+                    _ => {}
                 }
                 let without_folder = without_folder(&standing.reach);
                 let reach = standing.reach;

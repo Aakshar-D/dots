@@ -22,7 +22,7 @@ use dots_core::making::log::{MakingEvent, MakingEventKind};
 use dots_core::making::manage::{ChangeDot, ChangeOutcome};
 use dots_core::making::reach::{real_path, Extra, Wanted, WantedPermissions};
 use dots_core::making::requests::{
-    MakeDecision, MakeRequest, RequestKind, RequestStatus, MAX_WAITING_REQUESTS,
+    MakeDecision, MakeRequest, RequestKind, RequestStatus, CARD_CHANGED, MAX_WAITING_REQUESTS,
 };
 use dots_core::making::service::{MakeDot, MakeOutcome, OverLimit};
 use dots_core::model::{Dot, DotSpec, Making, NewRun, Run, RunStatus, TriggerKind, WorkspaceMode};
@@ -1504,6 +1504,27 @@ async fn a_limit_raised_while_a_request_waits_leaves_the_card() {
     assert!(card.lines.is_empty(), "{:?}", card.lines);
     assert_eq!(card.limit, None);
     assert!(card.can_allow);
+    // An answer to the card that showed the limit, or one that carries a limit line nobody
+    // was shown, is not an answer to this card: refused, and nothing is made.
+    let mut rx = t.rt.subscribe();
+    for stale in ["2nd sol in this run; the limit is 1", "made up"] {
+        assert_eq!(
+            conflict(
+                t.rt.makers()
+                    .decide_request(
+                        &request.id,
+                        MakeDecision::Allow,
+                        Some(stale),
+                        card.shown.as_deref()
+                    )
+                    .await
+            ),
+            CARD_CHANGED
+        );
+    }
+    assert!(updated(&mut rx).contains(&(maker.id.clone(), run.root_run_id.clone())));
+    assert_eq!(stored(&t, &request).await.status, RequestStatus::Waiting);
+    assert_eq!(dot_names(&t).await, ["One", "Researcher"]);
     decide(&t, &request, MakeDecision::Allow).await;
     assert_eq!(dot_names(&t).await, ["One", "Researcher", "Two"]);
 }
