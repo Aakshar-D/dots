@@ -286,6 +286,46 @@ describe("a sol's conversation", () => {
     expect(screen.queryByRole("button", { name: /New activity/ })).toBeNull();
   });
 
+  it("lets go at the first few pixels of a scroll up, and follows again at the bottom", async () => {
+    const runs = home([chat("a", "10:00")]);
+    renderApp(`/home/${dot.id}`);
+    const view = await screen.findByRole("region", { name: "Conversation" });
+    await within(view).findByText("question a");
+    // 1000 px tall in a 200 px window: the bottom is at 800.
+    let top = 800;
+    Object.defineProperty(view, "scrollHeight", { configurable: true, value: 1000 });
+    Object.defineProperty(view, "clientHeight", { configurable: true, value: 200 });
+    Object.defineProperty(view, "scrollTop", {
+      configurable: true,
+      get: () => top,
+      set: (value: number) => {
+        top = Math.min(value, 800);
+      },
+    });
+    const arrive = (run: Run) => {
+      runs.push(run);
+      act(() => backend.emit("runtime", { type: "run_updated", run }));
+    };
+    fireEvent.scroll(view);
+
+    // Ten pixels up, as a touchpad or a smooth wheel begins: what arrives must not take the
+    // person back down.
+    top = 790;
+    fireEvent.scroll(view);
+    arrive(scheduled("one", "11:00"));
+    await card(runs[1]);
+    expect(await screen.findByRole("button", { name: /New activity/ })).toBeVisible();
+    expect(top).toBe(790);
+
+    // Back down to within reach of the bottom: it follows again.
+    top = 795;
+    fireEvent.scroll(view);
+    await waitFor(() => expect(screen.queryByRole("button", { name: /New activity/ })).toBeNull());
+    arrive(scheduled("two", "12:00"));
+    await card(runs[2]);
+    await waitFor(() => expect(top).toBe(800));
+  });
+
   it("shows an older topic alone, with the way back", async () => {
     const old = chat("old", "08:00");
     home([old, reply("old2", old, "08:30"), chat("current", "10:00")]);
