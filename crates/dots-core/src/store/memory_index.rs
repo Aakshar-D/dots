@@ -182,7 +182,10 @@ impl Store {
             .collect()
     }
 
-    /// Notes that `recall` answered with the memories `ids` of `owner` in `scope`, now.
+    /// Notes that `recall` answered with the memories `ids` of `owner` in `scope`, now. A
+    /// memory the index does not know yet (it was read by its id, or listed, before any
+    /// search) gets its row here, with an empty stamp, so the next search indexes it and the
+    /// recall is not lost.
     pub async fn mark_memories_recalled(
         &self,
         scope: MemoryScope,
@@ -192,13 +195,14 @@ impl Store {
         let ts = now();
         for id in ids {
             sqlx::query(
-                "UPDATE memory_docs SET last_recalled_at = ? \
-                 WHERE scope = ? AND owner = ? AND memory_id = ?",
+                "INSERT INTO memory_docs (scope, owner, memory_id, stamp, last_recalled_at) \
+                 VALUES (?, ?, ?, '', ?) ON CONFLICT (scope, owner, memory_id) \
+                 DO UPDATE SET last_recalled_at = excluded.last_recalled_at",
             )
-            .bind(&ts)
             .bind(scope.as_str())
             .bind(owner)
             .bind(id)
+            .bind(&ts)
             .execute(&self.pool)
             .await?;
         }

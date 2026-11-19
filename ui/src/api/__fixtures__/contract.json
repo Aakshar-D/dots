@@ -13008,6 +13008,17 @@
       "tokens_in": 900,
       "tokens_out": 40,
       "verdict": "looks_good"
+    },
+    {
+      "cache_read": 0,
+      "cost_usd": 0.002,
+      "episodic": true,
+      "kind": "memory_capture",
+      "model": "haiku",
+      "saved": 2,
+      "skipped": null,
+      "tokens_in": 1200,
+      "tokens_out": 90
     }
   ],
   "RunEventRecord": {
@@ -14434,6 +14445,7 @@
       "http://127.0.0.1:1234"
     ],
     "max_concurrent_runs": 2,
+    "memory_capture": true,
     "notify_on_notes": true,
     "open_dot_commands": true,
     "open_dot_model": "haiku",
@@ -14488,6 +14500,7 @@
         "http://127.0.0.1:1234"
       ],
       "max_concurrent_runs": 2,
+      "memory_capture": true,
       "notify_on_notes": true,
       "open_dot_commands": true,
       "open_dot_model": "haiku",

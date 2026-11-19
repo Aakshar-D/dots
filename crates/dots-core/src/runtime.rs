@@ -417,6 +417,9 @@ impl Runtime {
             Err(e) => tracing::warn!("marking unfinished result checks failed: {e}"),
         }
         let _ = std::fs::remove_dir_all(cfg.data_dir.join(crate::result_check::CHECKS_DIR));
+        // So do the folders of capture requests an exit interrupted (memory spec section 8):
+        // such a capture is not tried again.
+        let _ = std::fs::remove_dir_all(cfg.data_dir.join(crate::memory::capture::CAPTURES_DIR));
         // A scheduled message a crash left being sent: sent if its run was stored, else
         // scheduled again (send later spec section 4.5). Never sent twice, never lost.
         let recovered = store.recover_sending_messages(cfg.clock.now()).await?;
@@ -585,6 +588,15 @@ impl Runtime {
                 shutdown.clone(),
             )));
         }
+        // The capture step asks the cheapest model of a dot's engine, with no tools (memory
+        // spec section 8): the CLI for a Claude dot, the dot's own endpoint for a local one.
+        runner.set_capturer(Arc::new(crate::memory::capture::EngineCapture::new(
+            store.clone(),
+            claude_program.clone(),
+            cfg.claude_env.clone(),
+            cfg.data_dir.join(crate::memory::capture::CAPTURES_DIR),
+            shutdown.clone(),
+        )));
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {

@@ -258,7 +258,7 @@ pub fn parse_verdict(reply: &str) -> Option<Parsed> {
 
 /// The JSON objects in `text`, in order: the text itself if it is one, then each balanced
 /// `{…}` (outermost first) that parses.
-fn objects(text: &str) -> Vec<Value> {
+pub(crate) fn objects(text: &str) -> Vec<Value> {
     let mut out = Vec::new();
     if let Ok(v @ Value::Object(_)) = serde_json::from_str::<Value>(text.trim()) {
         out.push(v);

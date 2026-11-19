@@ -893,3 +893,62 @@ async fn dots_of_one_project_share_its_memory_and_a_dot_elsewhere_does_not() {
         );
     }
 }
+
+/// Memory spec section 3: a dot whose folder is a linked worktree of a repository works in
+/// that repository's project, whose folder is not above its own; and a dot in a subfolder of
+/// a project reads the memory kept at the project's top.
+#[tokio::test]
+async fn a_linked_worktree_and_a_subfolder_read_the_main_checkouts_memory() {
+    let t = setup().await;
+    let repo = t.folder("repo");
+    std::fs::create_dir_all(repo.join("crates").join("core")).unwrap();
+    std::fs::write(repo.join("a.txt"), "a").unwrap();
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "t@t"],
+        vec!["config", "user.name", "t"],
+        vec!["add", "a.txt"],
+        vec!["commit", "-q", "-m", "first"],
+    ] {
+        common::git_out(&repo, &args);
+    }
+    let linked = t.dir.path().join("linked");
+    common::git_out(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            linked.to_str().unwrap(),
+            "-b",
+            "side",
+        ],
+    );
+    let fact = t
+        .memories
+        .project_save(&repo, fact("The core crate has no network code."))
+        .await
+        .unwrap();
+    let in_worktree = t.dot("side", &linked).await;
+    let in_subfolder = t.dot("core", &repo.join("crates").join("core")).await;
+    for dot in [&in_worktree, &in_subfolder] {
+        let readable = t.memories.readable(dot).await.unwrap();
+        assert_eq!(readable, vec![fact.clone()], "{}", dot.spec.name);
+    }
+    // What the worktree's dot saves for the project is in the main checkout, not in its own
+    // folder.
+    let run = t.run(&in_worktree).await;
+    t.memories
+        .call(
+            &run,
+            Tool::Remember,
+            &json!({"text": "Branches are cut from main.", "scope": "project"}),
+        )
+        .await
+        .unwrap();
+    assert_eq!(file_names(&repo).len(), 2);
+    assert!(!linked.join(".sage").exists());
+    // A folder with no memory at or above it is not a project anyone has to look for.
+    let plain = t.dot("plain", &t.folder("plain")).await;
+    assert!(t.memories.readable(&plain).await.unwrap().is_empty());
+}

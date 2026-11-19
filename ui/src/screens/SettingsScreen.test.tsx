@@ -137,6 +137,19 @@ describe("the Settings screen", () => {
     });
   });
 
+  it("saves memories after each run until the person turns it off", async () => {
+    saving();
+    const { user } = renderApp("/settings/runs");
+    const box = await screen.findByLabelText("Save memories after each run");
+    expect(box).toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Saved")).toBeVisible();
+    expect(backend.callsTo("update_settings")).toEqual([
+      { settings: { ...stored, memory_capture: false } },
+    ]);
+  });
+
   it("maps Auto's sizes to models and allows Auto as the default", async () => {
     saving();
     const { user } = renderApp("/settings/claude");

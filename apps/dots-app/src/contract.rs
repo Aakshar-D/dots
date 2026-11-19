@@ -1174,10 +1174,21 @@ fn engine_events() -> Value {
         cache_read: 0,
         cost_usd: Some(0.002),
     };
-    events
-        .as_array_mut()
-        .expect("the samples are a list")
-        .push(to(checked));
+    // Nor is this one: the capture step's record, with what its model used.
+    let captured = dots_core::memory::capture::CaptureEvent {
+        kind: dots_core::memory::capture::EVENT_KIND.into(),
+        model: Some("haiku".into()),
+        episodic: true,
+        saved: 2,
+        skipped: None,
+        tokens_in: 1200,
+        tokens_out: 90,
+        cache_read: 0,
+        cost_usd: Some(0.002),
+    };
+    let list = events.as_array_mut().expect("the samples are a list");
+    list.push(to(checked));
+    list.push(to(captured));
     events
 }
 

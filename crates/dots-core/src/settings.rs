@@ -108,6 +108,9 @@ pub struct Settings {
     pub check_results: bool,
     /// The Claude model the result check uses: the cheapest by default.
     pub checker_model: String,
+    /// After a run that did some work, Sage saves what it learned as memories with one small
+    /// model call (memory spec section 8). On by default; off, no run is captured.
+    pub memory_capture: bool,
     /// The Claude model Open Dot, the voice assistant, thinks with: a fast one by default.
     pub open_dot_model: String,
     /// Open Dot listens and speaks (Open Dot design spec section 10). Off by default; with it
@@ -177,6 +180,7 @@ impl Default for Settings {
             phone_port: crate::phone::DEFAULT_PORT,
             check_results: true,
             checker_model: crate::result_check::DEFAULT_CHECKER_MODEL.to_string(),
+            memory_capture: true,
             open_dot_model: crate::open_dot::think::DEFAULT_MODEL.to_string(),
             voice_enabled: false,
             voice_id: 0,

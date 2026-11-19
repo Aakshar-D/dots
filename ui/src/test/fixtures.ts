@@ -62,6 +62,9 @@ export const sample = {
   followUps: T.FollowUp.array().parse(contract.FollowUp),
   /// A pinned memory the dot saved in a run, and one the person wrote.
   memories: T.Memory.array().parse(contract.Memory),
+  /// A project's memory: a how-to a run saved about two files, a line the capture step wrote,
+  /// and one file that could not be read.
+  projectMemories: T.ProjectMemories.parse(contract.ProjectMemories),
   /// An urgent goal handed to a dot, one with a due date, and a done one.
   intents: T.Intent.array().parse(contract.Intent),
   /// A folder watcher that is on, an email one paused on an error, a GitHub one paused on a flood.

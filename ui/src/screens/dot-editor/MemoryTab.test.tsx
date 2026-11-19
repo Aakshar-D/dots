@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Memory } from "@/api/types";
+import type { Memory, ProjectMemories } from "@/api/types";
 import { localDateTime } from "@/lib/format";
 import { applyRuntimeEvent } from "@/lib/runtime-events";
 import { backend } from "@/test/backend";
@@ -12,13 +12,28 @@ import { renderApp } from "@/test/render";
 // A pinned memory the dot saved in a run, and one the person wrote.
 const [dots, persons] = sample.memories as [Memory, Memory];
 
-/// A backend holding the dot and `memories`, changed in place as the core would.
+/// A backend holding the dot and `memories`, changed in place as the core would. The dot has
+/// no project unless the test gives it one (`inProject`).
 function holding(memories: Memory[]) {
   const held = { memories };
   backend.on("get_dot", () => sample.dot);
   backend.on("memories_list", (args) => (args.dotId === sample.dot.id ? held.memories : []));
+  backend.on("project_memories", () => null);
   return held;
 }
+
+// A how-to a run saved about two files, and a line the capture step wrote.
+const [howTo, episode] = sample.projectMemories.memories as [Memory, Memory];
+
+/// The dot works in a project that remembers `project`, changed in place as the core would.
+function inProject(project: ProjectMemories) {
+  const held = { project };
+  backend.on("project_memories", (args) => (args.dotId === sample.dot.id ? held.project : null));
+  return held;
+}
+
+const projectItems = () =>
+  within(screen.getByRole("list", { name: "Project memories" })).getAllByRole("listitem");
 
 /// The editor of the dot, opened on its Memory tab.
 async function openTab() {
@@ -299,5 +314,254 @@ describe("a sol's Memory tab", () => {
     expect(router.state.location.search).toBe("?tab=memory");
     expect(await screen.findByRole("tab", { name: "Memory", selected: true })).toBeVisible();
     expect(await screen.findByRole("listitem", { name: persons.text })).toBeVisible();
+  });
+});
+
+describe("a sol's Memory tab, by kind", () => {
+  const core = { ...persons, id: "01J0C", text: "The person wants short answers.", kind: "core" as const };
+  const how = { ...persons, id: "01J0H", text: "Restart with pm2 restart api.", kind: "procedural" as const };
+
+  it("groups the memories by kind, under a heading each", async () => {
+    // As the core lists them: newest first, whatever the kind.
+    holding([how, persons, core]);
+    await openTab();
+    await screen.findByRole("list", { name: "Memories" });
+    expect(items().map((i) => i.getAttribute("aria-label"))).toEqual([
+      core.text,
+      persons.text,
+      how.text,
+    ]);
+    const list = screen.getByRole("list", { name: "Memories" });
+    expect(within(list).getAllByRole("heading").map((h) => h.textContent)).toEqual([
+      "Core",
+      "Facts and decisions",
+      "How-to",
+    ]);
+  });
+
+  it("adds a core memory, which is at most 160 characters", async () => {
+    const held = holding([]);
+    backend.on("memory_add", (args) => {
+      const saved = { ...core, id: "01J0NEW", text: String(args.text).trim() };
+      held.memories = [saved];
+      return saved;
+    });
+    const { user } = await openTab();
+    await user.click(await screen.findByRole("button", { name: "Add memory" }));
+    const box = screen.getByRole("textbox", { name: "New memory" });
+    expect(screen.getByRole("combobox", { name: "Kind" })).toHaveValue("semantic");
+    await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "core");
+    expect(screen.getByText("0 / 160")).toBeVisible();
+    const save = within(screen.getByRole("group", { name: "New memory" })).getByRole("button", {
+      name: "Save",
+    });
+    fireEvent.change(box, { target: { value: "x".repeat(161) } });
+    expect(screen.getByText("161 / 160")).toBeVisible();
+    expect(save).toBeDisabled();
+    fireEvent.change(box, { target: { value: "The shop is built with Next.js." } });
+    await user.click(save);
+    expect(await screen.findByRole("listitem", { name: "The shop is built with Next.js." })).toBeVisible();
+    expect(backend.callsTo("memory_add")).toEqual([
+      { dotId: sample.dot.id, text: "The shop is built with Next.js.", kind: "core" },
+    ]);
+  });
+
+  it("changes a memory's kind in its box", async () => {
+    const held = holding([persons]);
+    backend.on("memory_update", (args) => {
+      const next = { ...persons, kind: args.kind as Memory["kind"] };
+      held.memories = [next];
+      return next;
+    });
+    const { user } = await openTab();
+    const item = await screen.findByRole("listitem", { name: persons.text });
+    await user.click(within(item).getByRole("button", { name: "Edit" }));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Kind" }), "procedural");
+    await user.click(
+      within(screen.getByRole("group", { name: "Edit memory" })).getByRole("button", { name: "Save" }),
+    );
+    expect(await screen.findByRole("heading", { name: "How-to" })).toBeVisible();
+    expect(backend.callsTo("memory_update")).toEqual([
+      { id: persons.id, text: persons.text, pinned: null, kind: "procedural" },
+    ]);
+  });
+
+  it("shows a memory's text as plain text", async () => {
+    const markup = '<img src="x" onerror="alert(1)"> <a href="https://example.com">here</a> [go](javascript:alert(1))';
+    holding([{ ...persons, text: markup }]);
+    inProject({ ...sample.projectMemories, memories: [{ ...howTo, text: "<b>bold</b> <script>x()</script>" }] });
+    await openTab();
+    const item = await screen.findByRole("listitem", { name: markup });
+    expect(item).toHaveTextContent(markup);
+    const tab = screen.getByRole("tabpanel");
+    expect(tab.querySelector("img, script, b")).toBeNull();
+    // The only links are the ones the tab makes itself, to runs.
+    for (const link of within(tab).queryAllByRole("link")) {
+      expect(link.getAttribute("href")).toMatch(/^\/runs\//);
+    }
+    expect(await screen.findByRole("listitem", { name: "<b>bold</b> <script>x()</script>" })).toBeVisible();
+  });
+});
+
+describe("the project's memory in a sol's Memory tab", () => {
+  it("says so when the sol has no project", async () => {
+    holding([persons]);
+    await openTab();
+    expect(
+      await screen.findByText("This sol's folder is missing, so it has no project memory."),
+    ).toBeVisible();
+    expect(screen.queryByRole("list", { name: "Project memories" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Open folder" })).toBeNull();
+  });
+
+  it("lists the project's memories by kind, with their files, their folder and what was skipped", async () => {
+    holding([persons]);
+    inProject(sample.projectMemories);
+    const { user } = await openTab();
+    await screen.findByRole("list", { name: "Project memories" });
+    const [first, second] = projectItems();
+    expect(first).toHaveAccessibleName(howTo.text);
+    expect(first).toHaveTextContent("About ui/package.json, ui/vitest.config.ts");
+    expect(first).toHaveTextContent("by a sol · from run");
+    expect(second).toHaveAccessibleName(episode.text);
+    expect(second).toHaveTextContent("saved by Sage after run");
+    const list = screen.getByRole("list", { name: "Project memories" });
+    expect(within(list).getAllByRole("heading").map((h) => h.textContent)).toEqual([
+      "How-to",
+      "What runs did",
+    ]);
+    expect(screen.getByText("2 of 300")).toBeVisible();
+    expect(screen.getByText(sample.projectMemories.dir)).toBeVisible();
+    expect(screen.getByText("1 file in the folder is not a memory Sage can read.")).toBeVisible();
+    expect(screen.getByText(/Commit \.sage\/memory to share them/)).toBeVisible();
+    // The sol's own list is still there, apart.
+    expect(items().map((i) => i.getAttribute("aria-label"))).toEqual([persons.text]);
+
+    backend.on("open_memory_folder", () => null);
+    await user.click(screen.getByRole("button", { name: "Open folder" }));
+    await waitFor(() =>
+      expect(backend.callsTo("open_memory_folder")).toEqual([{ dotId: sample.dot.id }]),
+    );
+  });
+
+  it("adds, edits, pins and deletes a project memory through the sol", async () => {
+    holding([]);
+    const held = inProject({ ...sample.projectMemories, memories: [howTo], skipped: 0 });
+    const put = (next: Memory) => {
+      const others = held.project.memories.filter((m) => m.id !== next.id);
+      held.project = { ...held.project, memories: [next, ...others] };
+      return next;
+    };
+    backend.on("project_memory_add", (args) =>
+      put({ ...howTo, id: "01J0PNEW", text: String(args.text), kind: args.kind as Memory["kind"], source: "person", run_id: null, files: [] }),
+    );
+    backend.on("project_memory_update", (args) => {
+      const now = held.project.memories.find((m) => m.id === args.id)!;
+      return put({
+        ...now,
+        text: (args.text as string | null) ?? now.text,
+        pinned: (args.pinned as boolean | null) ?? now.pinned,
+      });
+    });
+    backend.on("project_memory_delete", (args) => {
+      held.project = {
+        ...held.project,
+        memories: held.project.memories.filter((m) => m.id !== args.id),
+      };
+      return null;
+    });
+    const { user } = await openTab();
+    await user.click(await screen.findByRole("button", { name: "Add project memory" }));
+    await user.type(screen.getByRole("textbox", { name: "New memory" }), "We deploy on Fridays.");
+    await user.click(
+      within(screen.getByRole("group", { name: "New memory" })).getByRole("button", { name: "Save" }),
+    );
+    const added = await screen.findByRole("listitem", { name: "We deploy on Fridays." });
+    expect(added).toHaveTextContent("by you");
+
+    await user.click(within(added).getByRole("button", { name: "Edit" }));
+    const box = screen.getByRole("textbox", { name: "Edit memory" });
+    await user.clear(box);
+    await user.type(box, "We deploy on Mondays.");
+    await user.click(
+      within(screen.getByRole("group", { name: "Edit memory" })).getByRole("button", { name: "Save" }),
+    );
+    const edited = await screen.findByRole("listitem", { name: "We deploy on Mondays." });
+    await user.click(within(edited).getByRole("button", { name: "Pinned" }));
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("listitem", { name: "We deploy on Mondays." })).getByRole("button", {
+          name: "Pinned",
+        }),
+      ).toHaveAttribute("aria-pressed", "true"),
+    );
+    await user.click(
+      within(screen.getByRole("listitem", { name: howTo.text })).getByRole("button", { name: "Delete" }),
+    );
+    await user.click(
+      within(await screen.findByRole("alertdialog", { name: "Delete this memory?" })).getByRole(
+        "button",
+        { name: "Delete" },
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole("listitem", { name: howTo.text })).toBeNull());
+    expect(backend.callsTo("project_memory_add")).toEqual([
+      { dotId: sample.dot.id, text: "We deploy on Fridays.", kind: "semantic", files: [] },
+    ]);
+    expect(backend.callsTo("project_memory_update")).toEqual([
+      { dotId: sample.dot.id, id: "01J0PNEW", text: "We deploy on Mondays.", pinned: null, kind: null },
+      { dotId: sample.dot.id, id: "01J0PNEW", text: null, pinned: true, kind: null },
+    ]);
+    expect(backend.callsTo("project_memory_delete")).toEqual([{ dotId: sample.dot.id, id: howTo.id }]);
+    // Nothing of it went to the sol's own memory.
+    expect(backend.callsTo("memory_add")).toEqual([]);
+  });
+
+  it("shows the core's refusal under the box, and an empty project's own words", async () => {
+    holding([]);
+    inProject({ ...sample.projectMemories, memories: [], skipped: 0 });
+    backend.on("project_memory_add", () => {
+      throw { kind: "invalid", message: "That looks like a secret. Don't store secrets in memory; ask the person to keep it in the vault." };
+    });
+    const { user } = await openTab();
+    expect(await screen.findByText(/Nothing remembered for this project yet\./)).toBeVisible();
+    expect(screen.getByText("0 of 300")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Add project memory" }));
+    await user.type(screen.getByRole("textbox", { name: "New memory" }), "password: hunter2hunter2");
+    await user.click(
+      within(screen.getByRole("group", { name: "New memory" })).getByRole("button", { name: "Save" }),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("That looks like a secret.");
+  });
+
+  it("refreshes when the core says a project's memory changed", async () => {
+    holding([]);
+    const held = inProject({ ...sample.projectMemories, memories: [howTo] });
+    const { queryClient } = await openTab();
+    await screen.findByRole("listitem", { name: howTo.text });
+    held.project = { ...held.project, memories: [howTo, episode] };
+    act(() =>
+      applyRuntimeEvent(queryClient, { type: "project_memories_updated", root: held.project.root }),
+    );
+    expect(await screen.findByRole("listitem", { name: episode.text })).toBeVisible();
+    // It leaves the sol's own list alone.
+    expect(backend.callsTo("memories_list")).toHaveLength(1);
+  });
+
+  it("reads the project's files again each time the tab is shown, since a hand edit announces nothing", async () => {
+    holding([]);
+    const held = inProject({ ...sample.projectMemories, memories: [howTo], skipped: 0 });
+    const { user } = await openTab();
+    await screen.findByRole("listitem", { name: howTo.text });
+    // The person edits the folder in an editor: a fact changed, a file that is no memory.
+    const edited = { ...howTo, text: "Edited by hand in the folder." };
+    held.project = { ...held.project, memories: [edited], skipped: 1 };
+    await user.click(screen.getByRole("tab", { name: "Runs" }));
+    await user.click(screen.getByRole("tab", { name: "Memory" }));
+    expect(await screen.findByRole("listitem", { name: edited.text })).toBeVisible();
+    expect(screen.getByText("1 file in the folder is not a memory Sage can read.")).toBeVisible();
+    expect(screen.queryByRole("listitem", { name: howTo.text })).toBeNull();
+    // The sol's own list is the database's, which announces its changes: not asked again.
+    expect(backend.callsTo("memories_list")).toHaveLength(1);
   });
 });

@@ -24,6 +24,8 @@ async fn an_empty_table_gives_the_defaults() {
     assert_eq!(s.auto_archive_days, 30);
     assert_eq!(s.default_model, "sonnet");
     assert_eq!(s.checker_model, "haiku");
+    // Memories are saved after each run until the person turns that off.
+    assert!(s.memory_capture);
     assert_eq!(s.open_dot_model, "haiku");
     // Voice is off, and so is everything it would do.
     assert!(!s.voice_enabled);
@@ -68,6 +70,7 @@ async fn settings_round_trip() {
         phone_port: 50001,
         check_results: false,
         checker_model: "sonnet".into(),
+        memory_capture: false,
         open_dot_model: "sonnet".into(),
         voice_enabled: true,
         voice_id: 9,

@@ -167,6 +167,8 @@ export function transcriptItems(events: RunEventRecord[]): TranscriptItem[] {
       case "finished":
       // The result check shows as a badge on the reply, not as a transcript line.
       case "result_check":
+      // What the capture step saved shows in the Memory tab.
+      case "memory_capture":
         break;
     }
   }
