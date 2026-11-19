@@ -424,6 +424,9 @@ fn memories() -> Vec<Memory> {
         run_id: Some("01J0RUN".into()),
         created_at: TS.into(),
         updated_at: TS.into(),
+        kind: MemoryKind::Core,
+        scope: MemoryScope::Dot,
+        files: Vec::new(),
     };
     vec![
         dots.clone(),
@@ -433,9 +436,43 @@ fn memories() -> Vec<Memory> {
             pinned: false,
             source: MemorySource::Person,
             run_id: None,
+            kind: MemoryKind::Semantic,
             ..dots
         },
     ]
+}
+
+/// A project's memory: a how-to a run saved about two files, and a line the capture step wrote.
+fn project_memories() -> ProjectMemories {
+    let how_to = Memory {
+        id: "01J0PMEM1".into(),
+        dot_id: String::new(),
+        text: "Run the UI tests with bun x vitest run.".into(),
+        pinned: false,
+        source: MemorySource::Dot,
+        run_id: Some("01J0RUN".into()),
+        created_at: TS.into(),
+        updated_at: TS.into(),
+        kind: MemoryKind::Procedural,
+        scope: MemoryScope::Project,
+        files: vec!["ui/package.json".into(), "ui/vitest.config.ts".into()],
+    };
+    ProjectMemories {
+        root: "C:/Users/me/code/shop".into(),
+        dir: "C:/Users/me/code/shop/.sage/memory".into(),
+        memories: vec![
+            how_to.clone(),
+            Memory {
+                id: "01J0PMEM2".into(),
+                text: "2026-10-10: Added the checkout page.".into(),
+                source: MemorySource::Capture,
+                kind: MemoryKind::Episodic,
+                files: Vec::new(),
+                ..how_to
+            },
+        ],
+        skipped: 1,
+    }
 }
 
 /// Weekdays, nine to six, in the computer's local time.
@@ -1651,6 +1688,8 @@ pub fn samples() -> Value {
             "max_global_instructions": MAX_GLOBAL_INSTRUCTIONS,
             "max_memories": dots_core::memory::MAX_PER_DOT,
             "max_memory_text": dots_core::memory::MAX_TEXT,
+            "max_core_memory_text": dots_core::memory::CORE_MAX_TEXT,
+            "max_project_memories": dots_core::memory::MAX_PER_PROJECT,
             "max_watcher_name": dots_core::watchers::MAX_NAME_CHARS,
             "max_make_per_run": MAKE_PER_RUN_MAX,
             "max_make_total": MAKE_TOTAL_MAX,
@@ -1739,6 +1778,7 @@ pub fn samples() -> Value {
     samples["Message"] = to(messages());
     samples["FollowUp"] = to(follow_ups());
     samples["Memory"] = to(memories());
+    samples["ProjectMemories"] = to(project_memories());
     samples["Watcher"] = to(watchers());
     samples["WatchHours"] = to(watch_hours());
     // Usage and limits (spec sections 5 and 6).
@@ -1794,6 +1834,8 @@ pub fn samples() -> Value {
     samples["Enums"]["MessageKind"] = to(MessageKind::ALL);
     samples["Enums"]["FollowUpStatus"] = to(FollowUpStatus::ALL);
     samples["Enums"]["MemorySource"] = to(MemorySource::ALL);
+    samples["Enums"]["MemoryKind"] = to(MemoryKind::ALL);
+    samples["Enums"]["MemoryScope"] = to(MemoryScope::ALL);
     samples["Enums"]["WatcherKind"] = to(WatcherKind::ALL);
     samples["Enums"]["PausedReason"] = to(PausedReason::ALL);
     samples["Enums"]["UsagePeriod"] = to(UsagePeriod::ALL);
@@ -1825,6 +1867,9 @@ pub fn samples() -> Value {
             }),
             to(RuntimeEvent::MemoriesUpdated {
                 dot_id: "01J0DOT".into(),
+            }),
+            to(RuntimeEvent::ProjectMemoriesUpdated {
+                root: "C:/Users/me/code/shop".into(),
             }),
             to(RuntimeEvent::AppDataChanged {
                 app: "projects".into(),

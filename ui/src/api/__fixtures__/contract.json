@@ -1214,6 +1214,11 @@
     "memory_add",
     "memory_update",
     "memory_delete",
+    "project_memories",
+    "project_memory_add",
+    "project_memory_update",
+    "project_memory_delete",
+    "open_memory_folder",
     "search",
     "intents_list",
     "intent_create",
@@ -3160,9 +3165,20 @@
       "without",
       "refuse"
     ],
+    "MemoryKind": [
+      "core",
+      "episodic",
+      "semantic",
+      "procedural"
+    ],
+    "MemoryScope": [
+      "sol",
+      "project"
+    ],
     "MemorySource": [
       "dot",
-      "person"
+      "person",
+      "capture"
     ],
     "MessageKind": [
       "note",
@@ -5075,11 +5091,13 @@
     "max_cap_tokens": 10000000000,
     "max_cap_usd": 100000.0,
     "max_concurrent_runs": 16,
+    "max_core_memory_text": 160,
     "max_global_instructions": 32768,
     "max_make_per_run": 10,
     "max_make_total": 50,
     "max_memories": 200,
     "max_memory_text": 500,
+    "max_project_memories": 300,
     "max_quiet_limit_secs": 86400,
     "max_schedule_attempts": 6,
     "max_timeout_secs": 604800,
@@ -11472,9 +11490,12 @@
     {
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
+      "files": [],
       "id": "01J0MEM1",
+      "kind": "core",
       "pinned": true,
       "run_id": "01J0RUN",
+      "scope": "sol",
       "source": "dot",
       "text": "Prefers invoices as PDF.",
       "updated_at": "2026-10-09T12:00:00.000Z"
@@ -11482,9 +11503,12 @@
     {
       "created_at": "2026-10-09T12:00:00.000Z",
       "dot_id": "01J0DOT",
+      "files": [],
       "id": "01J0MEM2",
+      "kind": "semantic",
       "pinned": false,
       "run_id": null,
+      "scope": "sol",
       "source": "person",
       "text": "The staging server is staging.example.com.",
       "updated_at": "2026-10-09T12:00:00.000Z"
@@ -12339,6 +12363,42 @@
     "repo_path": "C:/Users/u/src/dots",
     "team_id": "01J0TEAM",
     "updated_at": "2026-10-09T12:00:00.000Z"
+  },
+  "ProjectMemories": {
+    "dir": "C:/Users/me/code/shop/.sage/memory",
+    "memories": [
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "",
+        "files": [
+          "ui/package.json",
+          "ui/vitest.config.ts"
+        ],
+        "id": "01J0PMEM1",
+        "kind": "procedural",
+        "pinned": false,
+        "run_id": "01J0RUN",
+        "scope": "project",
+        "source": "dot",
+        "text": "Run the UI tests with bun x vitest run.",
+        "updated_at": "2026-10-09T12:00:00.000Z"
+      },
+      {
+        "created_at": "2026-10-09T12:00:00.000Z",
+        "dot_id": "",
+        "files": [],
+        "id": "01J0PMEM2",
+        "kind": "episodic",
+        "pinned": false,
+        "run_id": "01J0RUN",
+        "scope": "project",
+        "source": "capture",
+        "text": "2026-10-10: Added the checkout page.",
+        "updated_at": "2026-10-09T12:00:00.000Z"
+      }
+    ],
+    "root": "C:/Users/me/code/shop",
+    "skipped": 1
   },
   "ProjectSpec": [
     {
@@ -13448,6 +13508,10 @@
     {
       "dot_id": "01J0DOT",
       "type": "memories_updated"
+    },
+    {
+      "root": "C:/Users/me/code/shop",
+      "type": "project_memories_updated"
     },
     {
       "app": "projects",
