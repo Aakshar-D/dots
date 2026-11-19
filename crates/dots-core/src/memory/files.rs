@@ -366,14 +366,7 @@ fn new_name(dir: &Path, memory: &Memory) -> String {
     if stem.is_empty() {
         stem = memory.kind.as_str().to_string();
     }
-    let id: String = memory
-        .id
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .collect::<String>()
-        .to_ascii_lowercase();
-    let tail = &id[id.len().saturating_sub(8)..];
-    let base = format!("{stem}-{tail}");
+    let base = format!("{stem}-{}", id_tail(&memory.id));
     let mut name = format!("{base}.md");
     let mut n = 2;
     while dir.join(&name).exists() {
@@ -381,6 +374,66 @@ fn new_name(dir: &Path, memory: &Memory) -> String {
         n += 1;
     }
     name
+}
+
+/// The end of a file's name that `new_name` takes from `id`: its last 8 letters and digits, in
+/// lower case.
+fn id_tail(id: &str) -> String {
+    let id: String = id
+        .chars()
+        .filter(char::is_ascii_alphanumeric)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    id[id.len().saturating_sub(8)..].to_string()
+}
+
+/// Whether `file_name` is a name Sage gives the file of the memory `id` (`new_name`): it ends
+/// in the end of the id, or in that and a number.
+fn named_for(file_name: &str, id: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    let stem = name.strip_suffix(".md").unwrap_or(&name);
+    let tail = format!("-{}", id_tail(id));
+    stem.ends_with(&tail)
+        || stem.rsplit_once('-').is_some_and(|(before, n)| {
+            before.ends_with(&tail) && !n.is_empty() && n.chars().all(|c| c.is_ascii_digit())
+        })
+}
+
+/// The id a memory file's frontmatter carries, when it is one a memory may have.
+fn claimed_id(content: &str) -> Option<String> {
+    split(content)?.0.id.filter(|id| valid_id(id))
+}
+
+/// What a read of a project's memory folder depends on: the entries `load` looks at, each
+/// with whether it is a plain file, its size and when it was changed, as the folder lists
+/// them, without opening one. While it stays the same, `load` finds the same memories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stamp(Vec<(String, bool, u64, Option<std::time::SystemTime>)>);
+
+/// The stamp of the project's memory folder as it is now. `None` for a project with no
+/// memory folder, or one whose folder leads out of the project: `load` finds nothing there.
+pub fn stamp(root: &Path) -> Option<Stamp> {
+    let dir = inside(root).ok()?;
+    let mut entries: Vec<_> = std::fs::read_dir(&dir)
+        .ok()?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name().into_string().ok()?;
+            if !plain_name(&name) {
+                return None;
+            }
+            // As the folder lists it: a link is not followed.
+            let meta = entry.metadata().ok();
+            Some((
+                name,
+                meta.as_ref().is_some_and(|m| m.is_file()),
+                meta.as_ref().map_or(0, |m| m.len()),
+                meta.and_then(|m| m.modified().ok()),
+            ))
+        })
+        .collect();
+    entries.sort();
+    Some(Stamp(entries))
 }
 
 /// `path` without Windows' `\\?\` in front, so two canonical paths compare.
@@ -428,7 +481,8 @@ pub fn load(root: &Path) -> Loaded {
     let mut out = Loaded::default();
     out.skipped += names.len().saturating_sub(MAX_SCANNED);
     names.truncate(MAX_SCANNED);
-    let mut seen = HashSet::new();
+    // (the file's name, its text, when it was changed, whether Sage named it for its id)
+    let mut read = Vec::new();
     for name in names {
         let path = dir.join(&name);
         // A link is not followed: it could name a file anywhere.
@@ -440,10 +494,20 @@ pub fn load(root: &Path) -> Loaded {
             }
         };
         let modified = meta.modified().ok().map(DateTime::<Utc>::from);
-        let memory = std::fs::read_to_string(&path)
-            .ok()
-            .and_then(|content| parse(&name, &content, modified, &mut seen));
-        match memory {
+        match std::fs::read_to_string(&path) {
+            Ok(content) => {
+                let own = claimed_id(&content).is_some_and(|id| named_for(&name, &id));
+                read.push((name, content, modified, own));
+            }
+            Err(_) => out.skipped += 1,
+        }
+    }
+    // When two files carry one id, the file Sage named for that id keeps it, whatever the
+    // other is called: a copy made by hand never takes a memory's id from it.
+    read.sort_by_key(|(_, _, _, own)| !own);
+    let mut seen = HashSet::new();
+    for (name, content, modified, _) in read {
+        match parse(&name, &content, modified, &mut seen) {
             Some(memory) => out.facts.push(Fact {
                 memory,
                 file_name: name,

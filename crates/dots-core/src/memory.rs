@@ -10,6 +10,7 @@ pub mod rank;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use regex::Regex;
@@ -183,6 +184,101 @@ fn invalid(rule: &'static str) -> Error {
     Error::Invalid(rule.into())
 }
 
+/// A memory folder that leads out of the project is a refusal with its sentence
+/// (`files::OUTSIDE`), for a person and for a dot, not a failure of the disk.
+fn outside(e: Error) -> Error {
+    match e {
+        Error::Io(io) if io.to_string() == files::OUTSIDE => invalid(files::OUTSIDE),
+        other => other,
+    }
+}
+
+/// The most projects whose answers `Reads` keeps.
+const READS_KEPT: usize = 64;
+
+/// What a `.git` entry of a folder is, as far as the project of a folder below depends on it:
+/// whether it is a file (a linked checkout, which names its repository) and then its size and
+/// when it was changed.
+type GitEntry = Option<(bool, u64, Option<std::time::SystemTime>)>;
+
+/// What the project of the folder `dir` depends on, told without asking git: the `.git` entry
+/// of `dir` and of every folder above it.
+fn git_stamp(dir: &Path) -> Vec<GitEntry> {
+    dir.ancestors()
+        .map(|at| {
+            let meta = std::fs::symlink_metadata(at.join(".git")).ok()?;
+            Some(match meta.is_file() {
+                true => (true, meta.len(), meta.modified().ok()),
+                false => (false, 0, None),
+            })
+        })
+        .collect()
+}
+
+/// What a run's reads of a project's memory cost, kept between reads (memory spec section
+/// 16): the project a folder is in, which git is asked for in a process of its own, and the
+/// memories read from the project's files. Neither is a copy that can go stale: each answer
+/// is used only while what it was read from looks the same on disk (`git_stamp`,
+/// `files::stamp`), so a file changed by hand is read again by the next use.
+#[derive(Default)]
+struct Reads {
+    projects: std::sync::Mutex<HashMap<PathBuf, (Vec<GitEntry>, Project)>>,
+    files: std::sync::Mutex<HashMap<PathBuf, (files::Stamp, Vec<Memory>)>>,
+    /// How many times git was asked, and how many times a folder's files were read.
+    asked: AtomicUsize,
+    loaded: AtomicUsize,
+}
+
+impl Reads {
+    /// The project of the folder `dir` (`Project::resolve`); `None` when the folder is missing.
+    async fn project(&self, dir: &Path) -> Option<Project> {
+        if !dir.is_dir() {
+            return None;
+        }
+        let stamp = git_stamp(dir);
+        if let Some((kept, project)) = self.projects.lock().unwrap().get(dir) {
+            if *kept == stamp {
+                return Some(project.clone());
+            }
+        }
+        self.asked.fetch_add(1, Ordering::Relaxed);
+        let project = Project::resolve(dir).await?;
+        let mut projects = self.projects.lock().unwrap();
+        if projects.len() >= READS_KEPT {
+            projects.clear();
+        }
+        projects.insert(dir.to_path_buf(), (stamp, project.clone()));
+        Some(project)
+    }
+
+    /// The memories of the project at `root`, as its files are now (`files::load`).
+    fn memories(&self, root: &Path) -> Vec<Memory> {
+        // The stamp is taken before the files are read: a file changed in between gives the
+        // next read another stamp, and so another read.
+        let Some(stamp) = files::stamp(root) else {
+            return Vec::new();
+        };
+        if let Some((kept, memories)) = self.files.lock().unwrap().get(root) {
+            if *kept == stamp {
+                return memories.clone();
+            }
+        }
+        self.loaded.fetch_add(1, Ordering::Relaxed);
+        let memories = files::load(root).memories();
+        let mut files = self.files.lock().unwrap();
+        if files.len() >= READS_KEPT {
+            files.clear();
+        }
+        files.insert(root.to_path_buf(), (stamp, memories.clone()));
+        memories
+    }
+
+    /// Forgets what was read from the files of the project at `root`: Sage changed them.
+    fn changed(&self, root: &Path) {
+        self.files.lock().unwrap().remove(root);
+    }
+}
+
 /// The dots' and the projects' memories, for the person's commands and the dot's tools. Every
 /// change publishes `MemoriesUpdated` or `ProjectMemoriesUpdated`. Cheap to clone.
 #[derive(Clone)]
@@ -191,6 +287,7 @@ pub struct Memories {
     bus: Bus,
     /// One writer of memory files at a time: a check and the write it allows are one step.
     writing: Arc<tokio::sync::Mutex<()>>,
+    reads: Arc<Reads>,
 }
 
 impl Memories {
@@ -199,7 +296,18 @@ impl Memories {
             store,
             bus,
             writing: Arc::default(),
+            reads: Arc::default(),
         }
+    }
+
+    /// How many times git was asked for a dot's project, and how many times a project's
+    /// memory files were read, since this was made. A run's reads do either only when what
+    /// they depend on changed on disk; tests hold that.
+    pub fn reads(&self) -> (usize, usize) {
+        (
+            self.reads.asked.load(Ordering::Relaxed),
+            self.reads.loaded.load(Ordering::Relaxed),
+        )
     }
 
     /// The dot's memories, pinned first, then newest. `NotFound` for an unknown dot.
@@ -334,6 +442,7 @@ impl Memories {
     }
 
     fn project_changed(&self, root: &Path) {
+        self.reads.changed(root);
         let _ = self.bus.send(RuntimeEvent::ProjectMemoriesUpdated {
             root: root.to_string_lossy().into_owned(),
         });
@@ -356,13 +465,13 @@ impl Memories {
         if workdir.is_empty() {
             return None;
         }
-        Project::resolve(Path::new(workdir)).await
+        self.reads.project(Path::new(workdir)).await
     }
 
     /// The memories of the project at `root`, as its files are now, pinned first, then newest.
     pub async fn project_memories(&self, root: &Path) -> Result<Vec<Memory>> {
-        let root = root.to_path_buf();
-        Ok(blocking(move || files::load(&root)).await?.memories())
+        let (reads, root) = (self.reads.clone(), root.to_path_buf());
+        blocking(move || reads.memories(&root)).await
     }
 
     /// The memory of the project the dot works in, for the Memory tab; `None` when the dot's
@@ -443,7 +552,8 @@ impl Memories {
             write_index(&at);
             Ok(None)
         })
-        .await??;
+        .await?
+        .map_err(outside)?;
         if let Some(rule) = refused {
             return Err(Error::Conflict(rule.into()));
         }
@@ -493,7 +603,8 @@ impl Memories {
                 Ok(Ok(memory))
             },
         )
-        .await??;
+        .await?
+        .map_err(outside)?;
         let memory = changed.map_err(|rule| match rule {
             PROJECT_DUPLICATE => Error::Conflict(rule.into()),
             _ => invalid(rule),
@@ -516,7 +627,8 @@ impl Memories {
             write_index(&at);
             Ok(fact.memory.clone())
         })
-        .await??;
+        .await?
+        .map_err(outside)?;
         self.project_changed(root);
         Ok(memory)
     }
@@ -525,7 +637,9 @@ impl Memories {
     pub async fn project_folder(&self, root: &Path) -> Result<PathBuf> {
         let _writing = self.writing.lock().await;
         let at = root.to_path_buf();
-        Ok(blocking(move || files::ensure_dir(&at)).await??)
+        blocking(move || files::ensure_dir(&at))
+            .await?
+            .map_err(|e| outside(e.into()))
     }
 
     /// What a run of `dot` may read, by scope. A project whose files cannot be read gives
@@ -1316,7 +1430,21 @@ impl Memories {
                     self.recalled(&dot, &scopes, &named).await;
                     return Ok(recall_ids(&all, &ids));
                 }
-                let (query, file) = (arg("query").trim(), arg("file").trim());
+                let (query, asked) = (arg("query").trim(), arg("file").trim());
+                // A whole path at or below the project's folder, or the run's own checkout,
+                // is the path inside the project: a model that edits files names them so.
+                let whole = if Path::new(asked).is_absolute() || asked.starts_with('/') {
+                    let root = self.project_root(&dot).await;
+                    let roots = root
+                        .iter()
+                        .map(PathBuf::as_path)
+                        .chain(run.workspace_path.as_deref().map(Path::new));
+                    // The folder itself names no file of it.
+                    rank::in_project(asked, roots).filter(|inside| !inside.is_empty())
+                } else {
+                    None
+                };
+                let file = whole.as_deref().unwrap_or(asked);
                 // Asked about a file: only the memories linked to it.
                 let pool: Vec<&Memory> = all
                     .iter()

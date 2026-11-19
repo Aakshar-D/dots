@@ -283,6 +283,22 @@ async fn recall_finds_memories_by_the_project_file_they_are_about() {
         t.recall(&run, json!({"file": "../../etc/passwd"})).await,
         NOTHING
     );
+    // A whole path inside the project, as a model that edits files names one, is that file;
+    // a whole path elsewhere is no file of the project.
+    let whole = root.join("ui").join("src").join("api").join("types.ts");
+    assert_eq!(
+        ids_of(
+            &t.recall(&run, json!({"file": whole.to_string_lossy()}))
+                .await
+        ),
+        [ui.id.as_str(), types.id.as_str()]
+    );
+    let elsewhere = t.dir.path().join("elsewhere").join("ui");
+    assert_eq!(
+        t.recall(&run, json!({"file": elsewhere.to_string_lossy()}))
+            .await,
+        NOTHING
+    );
     // With words too: the file's memories, the best match first, and all of them when no
     // word matches.
     assert_eq!(

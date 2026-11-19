@@ -77,6 +77,30 @@ fn norm(path: &str) -> String {
     p.trim_end_matches('/').to_lowercase()
 }
 
+/// `path` as a path inside the project when it is a whole path at or below one of `roots`
+/// (the project's folder, a run's own checkout): the part after the root. A model that works
+/// with whole paths names a file that way. `None` for any other path: it is taken as given.
+pub fn in_project<'a>(
+    path: &str,
+    roots: impl IntoIterator<Item = &'a std::path::Path>,
+) -> Option<String> {
+    let slashed = |p: &str| {
+        p.trim()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .to_string()
+    };
+    let path = slashed(path);
+    roots.into_iter().find_map(|root| {
+        let root = slashed(&root.to_string_lossy());
+        let (head, rest) = path.split_at_checked(root.len())?;
+        // Windows ignores case in a path; elsewhere two roots that differ only by case are
+        // not worth telling apart for a search.
+        let below = head.eq_ignore_ascii_case(&root) && (rest.is_empty() || rest.starts_with('/'));
+        (!root.is_empty() && below).then(|| rest.trim_start_matches('/').to_string())
+    })
+}
+
 /// Whether `memory` is linked to the project path `path`: it names that path, a folder above
 /// it, or a file below it.
 pub fn linked_to(memory: &Memory, path: &str) -> bool {
@@ -180,6 +204,25 @@ pub fn fallback_scores(memories: &[Memory], terms: &[String]) -> Vec<(String, f6
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_whole_path_below_a_root_is_the_path_inside_the_project() {
+        use std::path::Path;
+        let roots = [Path::new(r"C:\work\shop"), Path::new("/home/me/shop")];
+        let inside = |p: &str| in_project(p, roots);
+        assert_eq!(
+            inside(r"c:/Work/shop/ui\src\Total.tsx").as_deref(),
+            Some("ui/src/Total.tsx")
+        );
+        assert_eq!(inside("/home/me/shop/ui/").as_deref(), Some("ui"));
+        assert_eq!(inside(r"C:\work\shop").as_deref(), Some(""));
+        // Not below a root: another folder, a folder whose name only starts the same, a
+        // path inside the project already.
+        assert_eq!(inside("C:/work/other/a.rs"), None);
+        assert_eq!(inside("C:/work/shop-old/a.rs"), None);
+        assert_eq!(inside("ui/src/Total.tsx"), None);
+        assert_eq!(in_project("/a/b", [Path::new("")]), None);
+    }
     use crate::model::{MemoryKind, MemoryScope, MemorySource};
 
     fn memory(text: &str, files: &[&str]) -> Memory {
