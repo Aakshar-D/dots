@@ -1636,7 +1636,7 @@ dependencies = [
 
 [[package]]
 name = "dots-app"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "async-trait",
  "axum",
@@ -1667,7 +1667,7 @@ dependencies = [
 
 [[package]]
 name = "dots-core"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "aes-gcm",
  "age",

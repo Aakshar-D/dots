@@ -1,8 +1,6 @@
-<!-- dots:notes 0.5.3 -->
-- Sols that make sols: switch on "Can make sols" for a sol and it can make, change and hand jobs to sols of its own, within what it may itself reach. Anything beyond that asks you first, with a card in the chat and in the Inbox. Made sols sit under their maker in the list and share its daily spend cap (#123, #124)
-- Open Sage tells you when a sol's work is done, by itself. Settings choose between the work you started, all work, or off (#120)
-- Ask Open Sage "what's going on", "what's pending" or about one sol, and it answers at once from what is running, waiting and just finished (#121)
-- "Catch me up" tells you what ended since Open Sage last spoke to you (#122)
-- A sol's chat no longer scrolls without end while it works in a maximized window, and the second scroll bar is gone (#117)
-- Delete many sols at once: "Select" in the sols list (#118)
-- A document an app makes, such as an invoice, can be saved: its download links and buttons open Sage's Save dialog (#119)
+<!-- dots:notes 0.5.4 -->
+- Project memory: sols that work in the same project folder now share what they learn about it. Each fact is a small file in the project's `.sage/memory` folder, which you can read, edit or delete yourself (#127)
+- Memory has kinds: core facts that are always there, what each run did, facts and decisions, and steps that worked. A sol's Memory tab shows "This sol" and "The project", grouped by kind (#127, #129)
+- Sols remember by themselves: after a run that did real work, Sage saves one line of what it did and at most three facts worth keeping. Settings > Runs & server > Memory turns this off (#129)
+- Memory costs less on every run: a sol gets a short list of the memories that fit its task and reads the rest only when it needs them, instead of everything each time (#127, #128)
+- Recall finds memories by how well they match, and by the file they are about. The project graph names the memories about a file (#128)
