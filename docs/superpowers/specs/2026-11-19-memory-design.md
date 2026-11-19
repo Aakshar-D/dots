@@ -165,3 +165,16 @@ Embeddings; memory shared across projects or across computers by Sage itself; im
 - Checkpoints were left as they are (section 4).
 - The UI's bindings and types are in A (the contract test needs them); the tab itself is C.
 - Existing tests changed, each because the design changes the behaviour: `memory_prompt_test` (the section's budgets and its head sentence; `PROMPT_BUDGET` 4096 became 2400), `memory_tools_test` (the head sentence), and the `Memory` literals in tests and the contract (three new fields).
+
+**Pull request B** (ranked recall, file links, migration 0060):
+
+- `memory/rank.rs` is the ranking without disk or store: the query's words, the boosts, linked files, and the count of matching words used when the index cannot be. `store/memory_index.rs` is the index: `memory_docs`, `memory_fts`.
+- **The index is filled on use, not by triggers.** Before a search the memories of the sol (the table) and of its project (the files, read then) are compared with `memory_docs` by a stamp of their text and files. Nothing is written when nothing changed, which is the common case, so a search usually takes no write lock. A change is applied under `BEGIN IMMEDIATE`, as `search_fts` is kept. The rows of sols that were deleted leave with the next change.
+- **`recall` no longer needs every word.** Any word of the query counts and the best match comes first; a word of four characters or more also matches the words it starts. A query made only of very common words (`the is`) is matched as before: the memories that contain every one of them.
+- **A memory linked to a file the text names** but matching none of its words is scored at 0.75 of the best match's score (1.0 when nothing matches), so it comes high but not first.
+- **A file is named** by its path as written, by a single name as a word of its own, or by its last part when that has a `.` and five characters or more (`Total.tsx`). Paths are compared in lower case.
+- **`recall`'s answer** names a memory's files after its text, the first three; it ends with `(N more: ask with more words, or read some by ids.)` when it left some out. `recall(file)` with words that match nothing answers the file's memories anyway.
+- **The text a run's titles are ranked against** is its payload's `message` or `answer`, else the sol's instructions. A manual or scheduled run of a sol whose instructions share no word with its memories gets the order of A: pinned first, then newest.
+- **The graph line** is in `RunGraph::call`, which both engines' `graph` tool now go through. It counts the project's memories only (a sol's own memories that name files are not counted), names at most 10 ids, and is left out for a sol with memory off. Only the `file` action has it.
+- When a fact was last recalled is written by every `recall` answer; C reads it.
+- Existing tests changed: two of A's assertions on `recall`'s line for a memory that names files (`memory_project_test`, `memory_server_test`) now expect the files after the text.

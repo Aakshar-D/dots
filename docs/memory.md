@@ -68,14 +68,24 @@ A run's first prompt has a short section, "What you remember", of at most 2400 b
 - the core memories in full (up to 600 bytes);
 - the titles of other memories (up to 1500 bytes), each with its id.
 
+The titles are chosen by what the run is about: the facts that match the words of the message come first, and so do facts about a file the message names. The rest follow, pinned first, then newest.
+
 The sol reads a fact's full text only when it calls `recall`. Sage never stores a transcript as memory and never reads one to build memory.
+
+## Facts about files
+
+A fact can name the project files it is about (`files:` in its file). Then:
+
+- `recall` with a file gives the facts about that file, about a folder above it, or about files below it.
+- A run whose message names the file gets those facts among its titles.
+- When a sol asks the project graph about a file, the answer ends with how many facts are about it.
 
 ## The tools
 
 A sol has three tools, under the one permission **Memory**:
 
 - `remember` saves a fact. It can say the kind, whether the fact is the project's or the sol's own, and which project files it is about.
-- `recall` searches the sol's memory and its project's, or reads facts by id.
+- `recall` searches the sol's memory and its project's. The best matches come first, at most 20. It can also give the facts about one project file, or read facts by id.
 - `forget` deletes a fact. A sol cannot delete a fact you wrote.
 
 Without a scope, a fact that names project files goes to the project. Any other fact goes to the sol.
