@@ -208,7 +208,14 @@ const ARGS: &[(&str, Params)] = &[
         ],
     ),
     ("forget", &[("id", Str, true)]),
-    ("recall", &[("query", Str, false), ("ids", List, false)]),
+    (
+        "recall",
+        &[
+            ("query", Str, false),
+            ("file", Str, false),
+            ("ids", List, false),
+        ],
+    ),
     (
         "propose_app",
         &[("path", PathStr, true), ("note", Str, true)],

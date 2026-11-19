@@ -205,6 +205,33 @@ pub struct RunGraph {
     pub project: crate::graph::Project,
     /// What of it the run may see: its dot's folder, less what its policy denies reading.
     pub scope: crate::graph::Scope,
+    /// The folder of the project whose memory the run reads (the main checkout, also for a
+    /// worktree's graph); `None` when the dot's memory is off.
+    pub memory_root: Option<std::path::PathBuf>,
+}
+
+impl RunGraph {
+    /// Answers a `graph` call (`Graphs::call`). An answer about a file ends with how many of
+    /// the project's memories are linked to that file and their ids (memory spec section 7).
+    pub async fn call(&self, input: &serde_json::Value) -> std::result::Result<String, String> {
+        let answer = self.graphs.call(&self.project, &self.scope, input).await?;
+        let text = |key: &str| input.get(key).and_then(serde_json::Value::as_str);
+        let (Some("file"), Some(path), Some(root)) =
+            (text("action"), text("path"), &self.memory_root)
+        else {
+            return Ok(answer);
+        };
+        let (root, path) = (root.clone(), path.to_string());
+        let note =
+            tokio::task::spawn_blocking(move || crate::memory::files::linked_note(&root, &path))
+                .await
+                .ok()
+                .flatten();
+        Ok(match note {
+            Some(note) => format!("{answer}\n\n{note}"),
+            None => answer,
+        })
+    }
 }
 
 impl fmt::Debug for RunTools {

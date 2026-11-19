@@ -47,6 +47,7 @@ async fn run_graph(
     use crate::graph::{Project, Scope};
     let workdir = std::path::Path::new(&dot.spec.workdir);
     let base = Project::resolve(workdir).await?;
+    let memory_root = base.root.clone();
     let prefix = base.relative(workdir).unwrap_or_default();
     graphs.ensure(&base);
     let own = (dot.spec.workspace_mode == WorkspaceMode::Worktree && prepared.branch.is_some())
@@ -71,10 +72,18 @@ async fn run_graph(
         root: project.root.clone(),
         workspace: prepared.path.clone(),
     };
+    // A `file` answer says how many of the project's memories are about that file, unless
+    // the dot's memory is off (memory spec sections 7 and 10).
+    let memory_off = dot
+        .spec
+        .policy
+        .resolve(crate::memory::POLICY_NAME, &Value::Null)
+        == crate::policy::Action::Deny;
     Some(crate::run_tools::RunGraph {
         graphs: graphs.clone(),
         project,
         scope,
+        memory_root: (!memory_off).then_some(memory_root),
     })
 }
 
@@ -2267,7 +2276,19 @@ impl Runner {
                 ));
         let memories = match self.checkins() {
             _ if memory_off || message_only => Vec::new(),
-            Some(checkins) => checkins.memories().for_prompt(&dot).await,
+            Some(checkins) => {
+                // The titles are chosen by what the run is about: its message, or the dot's
+                // instructions when nothing was said (memory spec section 7).
+                let said = run
+                    .payload
+                    .as_ref()
+                    .and_then(|p| p.get("message").or_else(|| p.get("answer")))
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty());
+                let about = said.unwrap_or(dot.spec.instructions.as_str());
+                checkins.memories().for_prompt(&dot, about).await
+            }
             None => self.store.list_memories(&dot.id).await?,
         };
         let recent = self.recent_runs(run).await;

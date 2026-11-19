@@ -428,7 +428,10 @@ async fn dots_own_server_takes_a_memorys_kind_scope_and_files() {
     // An argument that is not the tool's own never reaches it.
     assert!(!fact.pinned);
     let read = call(&e, &secret, "recall", json!({"ids": [id]})).await;
-    assert_eq!(text(&read), format!("[{id}] Tests run with cargo test."));
+    assert_eq!(
+        text(&read),
+        format!("[{id}] Tests run with cargo test. (files: Cargo.toml)")
+    );
     let refused_files = call(
         &e,
         &secret,

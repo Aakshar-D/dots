@@ -27,6 +27,7 @@ mod library;
 mod limits;
 mod making;
 mod memories;
+mod memory_index;
 mod messages;
 mod open_dot;
 mod orgs;

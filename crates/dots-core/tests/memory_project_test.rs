@@ -764,7 +764,7 @@ async fn dots_of_one_project_share_its_memory_and_a_dot_elsewhere_does_not() {
     };
     assert_eq!(
         recall(&r_run).await,
-        format!("[{id}] The UI is built with Vite.")
+        format!("[{id}] The UI is built with Vite. (files: ui/vite.config.ts)")
     );
     assert!(recall(&b_run).await.contains("I am the builder."));
     assert_eq!(recall(&s_run).await, "Nothing remembered about that.");
@@ -779,7 +779,7 @@ async fn dots_of_one_project_share_its_memory_and_a_dot_elsewhere_does_not() {
     };
     assert_eq!(
         by_id(&r_run).await,
-        format!("[{id}] The UI is built with Vite.")
+        format!("[{id}] The UI is built with Vite. (files: ui/vite.config.ts)")
     );
     assert_eq!(by_id(&s_run).await, format!("No memory {id}."));
     assert_eq!(
