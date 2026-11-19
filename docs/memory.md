@@ -92,6 +92,36 @@ Without a scope, a fact that names project files goes to the project. Any other 
 
 Set **Memory** to deny in a sol's permissions to turn its memory off: no section in the prompt, no tools.
 
+## Saved after each run
+
+When a run that did some work ends, Sage saves what it learned without the sol having to ask:
+
+- one dated line about the run, taken from the first line of its answer;
+- up to three facts, picked by one small request to the cheapest model of the sol's engine.
+
+They go to the project's memory when the sol has a project, otherwise to the sol's own.
+
+The request is made after the run has ended, so it never holds a run. It reads the run's final answer and a short list of what the run did (which tools, which files). It never reads the conversation. Its usage counts toward the run.
+
+A run is skipped when it failed, when its answer is shorter than 200 characters, when it called no tool, or when the sol's **Memory** permission is not allow.
+
+A fact the memory has already is not saved again. A fact that corrects an older one replaces it.
+
+Turn this off in **Settings > Runs & server > Memory > Save memories after each run**.
+
+## Keeping it small
+
+A sol or a project keeps the newest 50 dated lines. When there is no room, the oldest line that no sol ever recalled goes first. Facts you wrote, and anything pinned, are never removed this way.
+
+## The Memory tab
+
+Open a sol's editor and choose **Memory**. It shows two lists:
+
+- **This sol**: what the sol itself remembers.
+- **The project**: what the project remembers, with the path of the memory folder and **Open folder**.
+
+Each list is grouped by kind. You can add, edit, pin and delete in both. Choose the kind in the box when you add or edit.
+
 ## Secrets
 
 Sage refuses a memory that looks like a password, a key or a token, whoever writes it. Keep secrets in the vault.

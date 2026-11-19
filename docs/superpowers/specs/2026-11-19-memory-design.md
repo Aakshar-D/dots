@@ -111,9 +111,9 @@ When a run ends, Sage may save what it learned without the sol having called `re
 - **Once**: a run is claimed in the database before anything is written (`runs.memory_capture`), in one statement, so a restart or a second finish never captures it again. A capture that Sage's exit interrupts is not retried.
 - **It never holds the run**: it starts after the run's row is final and announced, on a task of its own, with a 30 second limit. Its failure is logged and changes nothing.
 - **Without a model**: one `episodic` line, `<date>: <first line of the answer>` (at most 200 characters), to the project when the sol has one, else to the sol.
-- **With one model call**: the cheapest model of the sol's engine (Claude: the small model of Settings, `haiku` by default, through the CLI with no tools, as the result check does; local: the sol's own model at its endpoint). It reads the final answer (at most 4000 characters), a compact list of what the run did taken from the store (tool names with counts, and the paths of files it edited), and the titles of the few existing memories nearest to the answer. It never reads the transcript. It answers JSON: at most 3 facts, each `kind` (`semantic` or `procedural`), `text`, `files`, `scope`, and optionally `replaces`, the id of an existing memory the fact corrects.
+- **With one model call**: the cheapest model of the sol's engine (Claude: the small model of Settings, `haiku` by default, through the CLI with no tools, as the result check does; local: the sol's own model at its endpoint). It reads the final answer (at most 4000 characters), a compact list of what the run did taken from the store (tool names with counts, and the paths of files it wrote or edited, made relative to the project), and the titles of the at most 8 existing memories nearest to the answer. It never reads the transcript. It answers JSON: at most 3 facts, each `kind` (`semantic` or `procedural`), `text`, `files`, `scope`, and optionally `replaces`, the id of an existing memory the fact corrects.
 - **Its answer is untrusted text**: each fact passes the same rules as `remember` (length, secret patterns, files inside the project). A fact that breaks one is dropped.
-- **Dedupe**: a fact whose text is one the scope has already (the `same_key` rule) is dropped, and so is one that shares most of its words with one of its nearest matches in the search index. A fact replaces an older one only when it names that memory's id, the memory is one the run may read, and the person did not write it.
+- **Dedupe**: a fact is dropped when the sol or its project has its text already (the `same_key` rule: case and spacing aside), or shares at least 80% of its words with a memory the run may read or with a fact kept earlier in the same reply (`rank::word_overlap`, common words aside). A fact replaces an older one only when it names that memory's id, the memory is one the run may read, and the person did not write it; the memory keeps its id, its file and its kind, and gets the new text.
 - **Cost**: the call's tokens and cost are added to the run's usage and recorded as a `memory_capture` event, so they count toward spend and caps as any call.
 
 ## 9. Upkeep (pull request C)
@@ -144,7 +144,7 @@ When a run ends, Sage may save what it learned without the sol having called `re
 
 ## 13. Open Sage
 
-Decided in pull request C against its prompt budget; see section 16.
+Left out. Open Sage's picture of the world (`open_dot/picture.rs`) is capped by counts (40 sols, 10 approvals, 10 questions, 12 connectors, 12 apps) and has no line for memory. A memory summary would be a line for each sol, so up to 40 more lines in every voice turn's prompt, and reading it means resolving each sol's project and reading its memory folder on every turn. That is not a small addition within its budget, so its prompt is unchanged. Open Sage keeps its own notes about the person as before (`open_dot/memory.rs`).
 
 ## 14. Testing
 
@@ -178,3 +178,20 @@ Embeddings; memory shared across projects or across computers by Sage itself; im
 - **The graph line** is in `RunGraph::call`, which both engines' `graph` tool now go through. It counts the project's memories only (a sol's own memories that name files are not counted), names at most 10 ids, and is left out for a sol with memory off. Only the `file` action has it.
 - When a fact was last recalled is written by every `recall` answer; C reads it.
 - Existing tests changed: two of A's assertions on `recall`'s line for a memory that names files (`memory_project_test`, `memory_server_test`) now expect the files after the text.
+
+**Pull request C** (capture, upkeep, the Memory tab, the setting, migration 0061):
+
+- `memory/capture.rs` is the rules of the step and the model call; `Memories::capture` saves; the runner's `start_capture` spawns it from `execute`, after the run's row is final, and waits for nothing: the reads that decide whether a run is captured are on the task too.
+- **Which runs**: as section 8. A workflow step's run is captured like any other (the result check skips those; a step's work is as worth remembering). A run that ends waiting for an approval is not `succeeded` and is not captured; the run that resumes it is, on its own.
+- **Once**: `claim_memory_capture` is one `UPDATE … WHERE memory_capture IS NULL AND status = 'succeeded'`. A run left at `started` by an exit is not retried: at most once, never twice.
+- **The model's reply** is read as the result check reads its verdict: the first JSON object with a `facts` list, wherever it is in the text. A kind other than `procedural` is `semantic`, so the model never writes a `core` or an `episodic` memory. A scope it does not name is the project's when the sol has one. A fact over 500 characters is dropped, not cut.
+- **Nothing is asked without a model**: with no CLI (a Claude sol) or no endpoint (a local one) the run still gets its line.
+- **The episodic line** is the date the run ended (UTC) and the answer's first line that has words, without Markdown marks in front. An answer whose first line looks like a secret gets no line.
+- **The capture's event** is `memory_capture`: the model, whether the line was saved, how many facts, why none, and the usage. The transcript does not show it.
+- **Upkeep** runs inside the write that needs the room: a sol's in `make_room` before the insert, a project's in the step that writes the file, under the writers' lock. One memory goes for one that comes. A text the scope has already is refused before anything goes.
+- **The Memory tab** has two lists, "This sol" and "The project", each grouped by kind under a heading, each with its own search, count and Add. The box has a Kind choice; a core memory's counter is 160. The project's part shows the memory folder's path, **Open folder**, the two git choices, and how many files were skipped. After a delete, focus moves once the list no longer shows the memory (the dialog gives focus back to its Delete button first).
+- **The setting** is `memory_capture` in Settings, tab Runs & server, section Memory: **Save memories after each run**, on by default.
+- **A run's start asks git nothing unless there is memory to read.** Reading for a prompt or a `recall` first looks, with no process started, whether a folder at or above the sol's has a memory folder, or is a linked checkout (its `.git` is a file). Only then is the project resolved. Writes and the tab always resolve it.
+- **`recall` by ids or with an empty query** now records the recall for a memory the index did not know yet (B only updated a row that existed).
+- **Open Sage**: section 13.
+- Existing tests changed: `MemoryTab.test.tsx`'s helper answers `project_memories` (the tab now asks it), nothing else in it.
