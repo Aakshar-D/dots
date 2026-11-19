@@ -496,11 +496,17 @@ async fn a_mirror_holds_while_others_write() {
         tokio::spawn(async move {
             let mut n = 0u32;
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                store
+                // The mirrors can hold the write lock for the writer's whole busy timeout on a
+                // slow disk. That is the same unfair wait from the other side, and still not
+                // what this test is about: the writer tries again. Any other error fails it.
+                match store
                     .rename_workspace("personal", "default", &format!("Mine {n}"))
                     .await
-                    .unwrap();
-                n += 1;
+                {
+                    Ok(_) => n += 1,
+                    Err(e) if e.to_string().contains("database is locked") => {}
+                    Err(e) => panic!("writer {n}: {e}"),
+                }
                 tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
             n
