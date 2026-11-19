@@ -591,13 +591,123 @@ async fn a_memory_folder_that_leads_out_of_the_project_is_not_used() {
     let dot = t.dot("builder", &root).await;
     assert!(t.memories.readable(&dot).await.unwrap().is_empty());
     let refused = t.memories.project_save(&root, fact("A fact.")).await;
+    // A refusal with its sentence, not a failure of the disk: for the person, and for a dot.
     assert!(
-        refused
-            .as_ref()
-            .is_err_and(|e| e.to_string().contains(files::OUTSIDE)),
+        matches!(&refused, Err(Error::Invalid(m)) if m == files::OUTSIDE),
         "{refused:?}"
     );
+    let run = t.run(&dot).await;
+    let input = json!({"text": "A fact.", "scope": "project"});
+    assert_eq!(
+        t.memories.call(&run, Tool::Remember, &input).await,
+        Err(files::OUTSIDE.to_string())
+    );
+    let folder = t.memories.project_folder(&root).await;
+    assert!(
+        matches!(&folder, Err(Error::Invalid(m)) if m == files::OUTSIDE),
+        "{folder:?}"
+    );
     assert_eq!(tree(&target), ["memory/theirs.md"]);
+}
+
+#[tokio::test]
+async fn a_copy_of_a_memory_file_does_not_take_its_id() {
+    let t = setup().await;
+    let root = t.folder("shop");
+    let saved = t
+        .memories
+        .project_save(&root, fact("Zebra crossings are tested on Mondays."))
+        .await
+        .unwrap();
+    let dir = files::dir_of(&root);
+    let name = file_names(&root).remove(0);
+    // A person copies the file to start a new fact from it. The copy's name sorts first.
+    let copied = std::fs::read_to_string(dir.join(&name))
+        .unwrap()
+        .replace("Zebra crossings", "Aardvark crossings");
+    std::fs::write(dir.join("a-copy.md"), copied).unwrap();
+
+    let loaded = files::load(&root);
+    assert_eq!(loaded.facts.len(), 2);
+    assert_eq!(loaded.skipped, 0);
+    // The file Sage named for the id keeps it; the copy gets an id of its own.
+    let kept = loaded.find(&saved.id).unwrap();
+    assert_eq!(kept.file_name, name);
+    assert_eq!(kept.memory.text, "Zebra crossings are tested on Mondays.");
+    let copy = loaded
+        .facts
+        .iter()
+        .find(|f| f.file_name == "a-copy.md")
+        .unwrap();
+    assert_ne!(copy.memory.id, saved.id);
+    assert!(copy.memory.id.starts_with('f'), "{}", copy.memory.id);
+    // So deleting by the id deletes the fact that had it.
+    t.memories.project_delete(&root, &saved.id).await.unwrap();
+    assert_eq!(file_names(&root), ["a-copy.md"]);
+}
+
+#[tokio::test]
+async fn a_runs_reads_ask_git_and_read_the_files_only_when_something_changed() {
+    let t = setup().await;
+    let repo = t.folder("repo");
+    std::fs::create_dir_all(repo.join("ui")).unwrap();
+    common::git_out(&repo, &["init", "-q"]);
+    let dot = t.dot("builder", &repo.join("ui")).await;
+    let root = t.memories.project_root(&dot).await.unwrap();
+    let dir = files::dir_of(&root);
+    let first = t.memories.project_save(&root, fact("One.")).await.unwrap();
+    let read = |t: &Setup| {
+        let (memories, dot) = (t.memories.clone(), dot.clone());
+        async move { memories.readable(&dot).await.unwrap() }
+    };
+
+    // Read three times: git was asked once (by `project_root` above), the files read once.
+    for _ in 0..3 {
+        assert_eq!(texts(&read(&t).await), ["One."]);
+    }
+    assert_eq!(t.memories.reads(), (1, 1));
+
+    // A file changed by hand, one added and one deleted are each seen by the next read.
+    let name = file_names(&root).remove(0);
+    let edited = std::fs::read_to_string(dir.join(&name))
+        .unwrap()
+        .replace("One.", "One, edited by hand.");
+    std::fs::write(dir.join(&name), edited).unwrap();
+    assert_eq!(texts(&read(&t).await), ["One, edited by hand."]);
+    std::fs::write(dir.join("by-hand.md"), "Two, by hand.").unwrap();
+    assert_eq!(read(&t).await.len(), 2);
+    std::fs::remove_file(dir.join("by-hand.md")).unwrap();
+    assert_eq!(texts(&read(&t).await), ["One, edited by hand."]);
+    assert_eq!(texts(&read(&t).await), ["One, edited by hand."]);
+    assert_eq!(t.memories.reads(), (1, 4));
+
+    // What Sage writes is seen at once, whatever the files' times say.
+    t.memories
+        .project_update(&root, &first.id, Some("One, by Sage."), None, None)
+        .await
+        .unwrap();
+    assert_eq!(texts(&read(&t).await), ["One, by Sage."]);
+    let second = t.memories.project_save(&root, fact("Two.")).await.unwrap();
+    assert_eq!(read(&t).await.len(), 2);
+    t.memories.project_delete(&root, &second.id).await.unwrap();
+    assert_eq!(texts(&read(&t).await), ["One, by Sage."]);
+    // The folder deleted: nothing, and nothing is made by reading.
+    std::fs::remove_dir_all(root.join(".sage")).unwrap();
+    assert!(read(&t).await.is_empty());
+    assert!(!dir.exists());
+    assert_eq!(t.memories.reads().0, 1);
+
+    // The dot's folder becomes a checkout of its own: git is asked again, and the project
+    // is that folder, with a memory of its own.
+    common::git_out(&repo.join("ui"), &["init", "-q"]);
+    let own = t.memories.project_root(&dot).await.unwrap();
+    assert_ne!(own, root);
+    assert_eq!(t.memories.reads().0, 2);
+    assert!(read(&t).await.is_empty());
+    assert_eq!(t.memories.reads().0, 2);
+    // A folder that is gone has no project, whatever was known of it.
+    std::fs::remove_dir_all(repo.join("ui")).unwrap();
+    assert_eq!(t.memories.project_root(&dot).await, None);
 }
 
 #[tokio::test]

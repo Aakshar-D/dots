@@ -50,7 +50,9 @@ You can edit the fact files by hand:
 - **Delete a fact**: delete its file.
 - **Add a fact**: add a `.md` file with the text in it. The part between the `---` lines is optional. Without it the fact is semantic and written by you.
 
-Sage reads the files again each time it uses them, so there is nothing to refresh.
+Sage looks at the folder each time it uses the memory and reads the files again when one was added, changed or deleted, so there is nothing to refresh.
+
+If you copy a fact's file to start a new fact, the copy gets an id of its own; the original keeps its id.
 
 Sage skips a file it cannot read as a fact: one that is empty, larger than 16 KB, not text, or that looks like it holds a secret. The Memory tab says how many it skipped.
 
