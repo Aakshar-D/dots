@@ -92,17 +92,39 @@ pub fn should_capture(
 }
 
 /// The `episodic` line of a run that ended on `date` (`YYYY-MM-DD`) with `summary`: the date
-/// and the answer's first line that has words, without Markdown marks in front, cut to
-/// `EPISODIC_CHARS`. `None` when the answer has no such line or the line looks like a secret.
+/// and the answer's first line that says something, without Markdown marks, cut to
+/// `EPISODIC_CHARS`. A heading, one or two words ("Done.") and a line that only leads into a
+/// list ("Here is what changed:") say nothing of the run, so the first line that is none of
+/// these is taken, and the first line with words when there is no other. `None` when the
+/// answer has no line with words, or when its first line or the line taken looks like a
+/// secret.
 pub fn episodic_text(date: &str, summary: &str) -> Option<String> {
-    let first = summary
+    // (the line without Markdown marks, whether it says something of the run)
+    let lines: Vec<(String, bool)> = summary
         .lines()
-        .map(|l| {
-            l.trim()
+        .filter_map(|raw| {
+            let raw = raw.trim();
+            let line = raw
                 .trim_start_matches(['#', '*', '-', '>', ' '])
-                .trim()
+                .replace("**", "")
+                .replace('`', "");
+            let line = line.trim().to_string();
+            if !line.chars().any(char::is_alphanumeric) {
+                return None;
+            }
+            let words = line
+                .split_whitespace()
+                .filter(|w| w.chars().any(char::is_alphanumeric))
+                .count();
+            let says = !raw.starts_with('#') && words >= 3 && !line.ends_with(':');
+            Some((line, says))
         })
-        .find(|l| l.chars().any(char::is_alphanumeric))?;
+        .collect();
+    // An answer that opens with a secret gets no line at all, whichever line would be taken.
+    if looks_secret(&lines.first()?.0) {
+        return None;
+    }
+    let (first, _) = lines.iter().find(|(_, says)| *says).or(lines.first())?;
     let room = EPISODIC_CHARS.saturating_sub(date.chars().count() + 2);
     let text = format!("{date}: {}", one_line(first, room));
     (!looks_secret(&text)).then_some(text)
@@ -467,14 +489,33 @@ mod tests {
 
     #[test]
     fn the_episodic_line_is_the_date_and_the_answers_first_words() {
+        let line = |summary: &str| episodic_text("2026-11-19", summary);
+        // A heading, a word or two, and a line that leads into a list are passed over.
         assert_eq!(
-            episodic_text("2026-11-19", "\n## Done\n\nAdded the checkout page.\nMore.").unwrap(),
-            "2026-11-19: Done"
+            line("\n## Done\n\nAdded the checkout page.\nMore.").unwrap(),
+            "2026-11-19: Added the checkout page."
         );
         assert_eq!(
-            episodic_text("2026-11-19", "- **Added** the checkout page.").unwrap(),
-            "2026-11-19: Added** the checkout page."
+            line("Done.\n\nThe checkout page now checks the cart.").unwrap(),
+            "2026-11-19: The checkout page now checks the cart."
         );
+        assert_eq!(
+            line("Here is what I changed:\n- **Added** the `checkout` page.\n- Fixed the cart.")
+                .unwrap(),
+            "2026-11-19: Added the checkout page."
+        );
+        // When no line says more, the first one with words is the line.
+        assert_eq!(
+            line("## Summary\n\nAll done!").unwrap(),
+            "2026-11-19: Summary"
+        );
+        assert_eq!(line("Done").unwrap(), "2026-11-19: Done");
+        // The line that is taken is checked for a secret, and so is the answer's first.
+        assert_eq!(
+            line("token: abcdefgh12345678\nAdded the checkout page."),
+            None
+        );
+        assert_eq!(line("## Done\nThe password: hunter2hunter2 was set."), None);
         let long = episodic_text("2026-11-19", &"word ".repeat(100)).unwrap();
         assert_eq!(long.chars().count(), EPISODIC_CHARS);
         assert!(long.ends_with('…'));
