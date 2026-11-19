@@ -299,6 +299,32 @@ async fn recall_finds_memories_by_the_project_file_they_are_about() {
             .await,
         NOTHING
     );
+    // A dot whose folder is written through a link (as a temporary folder is on macOS)
+    // names files below the folder as written: still the files of the project.
+    let link = t.dir.path().join("shop-link");
+    #[cfg(windows)]
+    let linked = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&root)
+        .output()
+        .is_ok_and(|o| o.status.success());
+    #[cfg(not(windows))]
+    let linked = std::os::unix::fs::symlink(&root, &link).is_ok();
+    if linked {
+        let through = t.dot("through a link", &link).await;
+        let run = t.run(&through).await;
+        let whole = link.join("ui").join("src").join("api").join("types.ts");
+        assert_eq!(
+            ids_of(
+                &t.recall(&run, json!({"file": whole.to_string_lossy()}))
+                    .await
+            ),
+            [ui.id.as_str(), types.id.as_str()]
+        );
+    } else {
+        eprintln!("skipped: this system does not let the test make a link");
+    }
     // With words too: the file's memories, the best match first, and all of them when no
     // word matches.
     assert_eq!(

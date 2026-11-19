@@ -1435,12 +1435,19 @@ impl Memories {
                 // is the path inside the project: a model that edits files names them so.
                 let whole = if Path::new(asked).is_absolute() || asked.starts_with('/') {
                     let root = self.project_root(&dot).await;
+                    // The dot's folder may be written through a link (on macOS `/var` is
+                    // one): a path below the folder as written is below it as it resolves.
+                    let written = Path::new(dot.spec.workdir.trim());
+                    let resolved = rank::in_project(asked, [written])
+                        .zip(files::canonical(written).ok())
+                        .map(|(below, folder)| folder.join(below).to_string_lossy().into_owned());
                     let roots = root
                         .iter()
                         .map(PathBuf::as_path)
                         .chain(run.workspace_path.as_deref().map(Path::new));
                     // The folder itself names no file of it.
-                    rank::in_project(asked, roots).filter(|inside| !inside.is_empty())
+                    rank::in_project(resolved.as_deref().unwrap_or(asked), roots)
+                        .filter(|inside| !inside.is_empty())
                 } else {
                     None
                 };
