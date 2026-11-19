@@ -332,6 +332,12 @@ fn the_memory_tools_are_local_tools_under_one_policy_name() {
     let prepared = tools::prepare("remember", &full, ws.path()).unwrap();
     assert_eq!(prepared.input, full);
     assert_eq!(of(full), Some("remember"));
+    let by_file = json!({"query": "tests", "file": "ui/package.json"});
+    assert_eq!(
+        tools::prepare("recall", &by_file, ws.path()).unwrap().input,
+        by_file
+    );
+    assert_eq!(of(by_file), Some("recall"));
     let by_ids = json!({"ids": ["01HX"]});
     assert_eq!(
         tools::prepare("recall", &by_ids, ws.path()).unwrap().input,

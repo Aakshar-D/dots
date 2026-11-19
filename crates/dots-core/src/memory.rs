@@ -5,7 +5,9 @@
 //! rows of the database; a project's are files in its folder (`files`).
 
 pub mod files;
+pub mod rank;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
@@ -282,11 +284,16 @@ impl Memories {
     /// The folder of the project `dot` works in: the main checkout of its repository, or its
     /// folder outside git. `None` when the dot's folder is missing.
     pub async fn project_root(&self, dot: &Dot) -> Option<PathBuf> {
+        self.project(dot).await.map(|p| p.root)
+    }
+
+    /// The project `dot` works in, with the key its rows of the index are kept under.
+    async fn project(&self, dot: &Dot) -> Option<Project> {
         let workdir = dot.spec.workdir.trim();
         if workdir.is_empty() {
             return None;
         }
-        Project::resolve(Path::new(workdir)).await.map(|p| p.root)
+        Project::resolve(Path::new(workdir)).await
     }
 
     /// The memories of the project at `root`, as its files are now, pinned first, then newest.
@@ -438,31 +445,177 @@ impl Memories {
         Ok(blocking(move || files::ensure_dir(&at)).await??)
     }
 
-    /// What a run of `dot` may read: the dot's memories and those of the project it works in,
-    /// pinned first, then newest. A project whose files cannot be read gives none.
-    pub async fn readable(&self, dot: &Dot) -> Result<Vec<Memory>> {
-        let mut all = self.store.list_memories(&dot.id).await?;
-        if let Some(root) = self.project_root(dot).await {
-            match self.project_memories(&root).await {
-                Ok(project) => all.extend(project),
-                Err(e) => tracing::warn!(dot = %dot.id, "reading the project's memory failed: {e}"),
+    /// What a run of `dot` may read, by scope. A project whose files cannot be read gives
+    /// none.
+    async fn scopes(&self, dot: &Dot) -> Result<Scopes> {
+        let sol = self.store.list_memories(&dot.id).await?;
+        let Some(project) = self.project(dot).await else {
+            return Ok(Scopes {
+                sol,
+                project: Vec::new(),
+                key: None,
+            });
+        };
+        let facts = match self.project_memories(&project.root).await {
+            Ok(facts) => facts,
+            Err(e) => {
+                tracing::warn!(dot = %dot.id, "reading the project's memory failed: {e}");
+                Vec::new()
             }
+        };
+        Ok(Scopes {
+            sol,
+            project: facts,
+            key: Some(project.key),
+        })
+    }
+
+    /// What a run of `dot` may read: the dot's memories and those of the project it works in,
+    /// pinned first, then newest.
+    pub async fn readable(&self, dot: &Dot) -> Result<Vec<Memory>> {
+        Ok(self.scopes(dot).await?.all())
+    }
+
+    /// The bm25 score of each memory of `scopes` that matches `matching`, by its id, after
+    /// the index was brought up to the memories as they are now.
+    async fn indexed(
+        &self,
+        dot: &Dot,
+        scopes: &Scopes,
+        matching: &str,
+    ) -> Result<HashMap<String, f64>> {
+        self.store
+            .sync_memory_index(MemoryScope::Dot, &dot.id, &scopes.sol)
+            .await?;
+        if let Some(key) = &scopes.key {
+            self.store
+                .sync_memory_index(MemoryScope::Project, key, &scopes.project)
+                .await?;
         }
-        all.sort_by(by_pin_then_newest);
-        Ok(all)
+        let rows = self
+            .store
+            .rank_memories(matching, &dot.id, scopes.key.as_deref())
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter(|(scope, id, _)| {
+                let of_scope = match scope {
+                    MemoryScope::Dot => &scopes.sol,
+                    MemoryScope::Project => &scopes.project,
+                };
+                of_scope.iter().any(|m| m.id == *id)
+            })
+            .map(|(_, id, score)| (id, score))
+            .collect())
+    }
+
+    /// How well each memory of `scopes` answers `text` (memory spec section 7), by its id: its
+    /// bm25 score from the index, raised for a pin, a recent change and a linked file the text
+    /// names. A memory that matches no word but is linked to a file the text names is scored
+    /// just under the best match. A memory that does neither has no score. When the index
+    /// cannot be used the matching words are counted instead; never an error.
+    async fn scores(&self, dot: &Dot, scopes: &Scopes, text: &str) -> HashMap<String, f64> {
+        let terms = rank::query_terms(text);
+        let all = scopes.all();
+        let raw: HashMap<String, f64> = match rank::fts_query(&terms) {
+            None => HashMap::new(),
+            Some(matching) => match self.indexed(dot, scopes, &matching).await {
+                Ok(found) => found,
+                Err(e) => {
+                    tracing::warn!(dot = %dot.id, "the memory index could not be used: {e}");
+                    rank::fallback_scores(&all, &terms).into_iter().collect()
+                }
+            },
+        };
+        let best = raw.values().copied().fold(0.0, f64::max);
+        let link_only = if best > 0.0 {
+            best * rank::LINK_ONLY_SHARE
+        } else {
+            rank::LINK_ONLY
+        };
+        let now = chrono::Utc::now();
+        all.iter()
+            .filter_map(|m| {
+                let linked = rank::names_file(text, m);
+                let score = match raw.get(&m.id) {
+                    Some(score) => rank::boost(*score, m, now, linked),
+                    None if linked => rank::boost(link_only, m, now, false),
+                    None => return None,
+                };
+                Some((m.id.clone(), score))
+            })
+            .collect()
     }
 
     /// The memories a first prompt of `dot` is built from (`prompt_section`), in the order the
-    /// section takes its titles: pinned first, then newest. Never an error: what cannot be
-    /// read is left out, and the run goes on.
-    pub async fn for_prompt(&self, dot: &Dot) -> Vec<Memory> {
-        match self.readable(dot).await {
-            Ok(all) => all,
+    /// section takes its titles (memory spec section 7): those that answer `text`, the run's
+    /// own words, best first; then the rest, pinned first, then newest. Never an error: what
+    /// cannot be read is left out, and the run goes on.
+    pub async fn for_prompt(&self, dot: &Dot, text: &str) -> Vec<Memory> {
+        let scopes = match self.scopes(dot).await {
+            Ok(scopes) => scopes,
             Err(e) => {
                 tracing::warn!(dot = %dot.id, "reading the memories for the prompt failed: {e}");
-                Vec::new()
+                return Vec::new();
             }
+        };
+        let scores = self.scores(dot, &scopes, text).await;
+        let mut all = scopes.all();
+        // The sort keeps the order of what it does not move: pinned first, then newest.
+        all.sort_by(|a, b| by_score(scores.get(&a.id), scores.get(&b.id)));
+        all
+    }
+
+    /// Notes in the index that `recall` answered with `shown`. The answer stands when this
+    /// fails.
+    async fn recalled(&self, dot: &Dot, scopes: &Scopes, shown: &[&Memory]) {
+        let ids = |scope: MemoryScope| -> Vec<String> {
+            shown
+                .iter()
+                .filter(|m| m.scope == scope)
+                .map(|m| m.id.clone())
+                .collect()
+        };
+        let mut noted = self
+            .store
+            .mark_memories_recalled(MemoryScope::Dot, &dot.id, &ids(MemoryScope::Dot))
+            .await;
+        if let (Ok(()), Some(key)) = (&noted, &scopes.key) {
+            noted = self
+                .store
+                .mark_memories_recalled(MemoryScope::Project, key, &ids(MemoryScope::Project))
+                .await;
         }
+        if let Err(e) = noted {
+            tracing::warn!(dot = %dot.id, "noting what was recalled failed: {e}");
+        }
+    }
+}
+
+/// A dot's memories and its project's, as a run may read them, and the project's key.
+struct Scopes {
+    sol: Vec<Memory>,
+    project: Vec<Memory>,
+    key: Option<String>,
+}
+
+impl Scopes {
+    /// Both scopes together, pinned first, then newest.
+    fn all(&self) -> Vec<Memory> {
+        let mut all: Vec<Memory> = self.sol.iter().chain(&self.project).cloned().collect();
+        all.sort_by(by_pin_then_newest);
+        all
+    }
+}
+
+/// A higher score first; a memory with a score before one without.
+fn by_score(a: Option<&f64>, b: Option<&f64>) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (a, b) {
+        (Some(a), Some(b)) => b.partial_cmp(a).unwrap_or(Ordering::Equal),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
     }
 }
 
@@ -572,9 +725,10 @@ const REMEMBER_DESCRIPTION: &str = "Save one fact worth keeping for later runs, 
     as a password or a key.";
 const FORGET_DESCRIPTION: &str = "Delete a memory by its id, when it is wrong or no longer \
     true. The ids are in \"What you remember\" and in recall's answers.";
-const RECALL_DESCRIPTION: &str = "Read your memories and the project's in full: those whose \
-    text contains every word of `query`, or those named in `ids`, pinned first, then newest, \
-    at most 20. An empty query lists the newest 20.";
+const RECALL_DESCRIPTION: &str = "Search your memories and the project's and read them in \
+    full: the best matches for the words of `query` first, at most 20. `file` gives the \
+    memories about one of the project's files, `ids` the memories named. An empty query lists \
+    the newest.";
 
 /// One of the three memory tools.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -658,7 +812,8 @@ impl Tool {
             }),
             Tool::Forget => json!({ "id": s("The memory's id, as the prompt or recall shows it") }),
             Tool::Recall => json!({
-                "query": s("Words the memories must contain; empty lists the newest"),
+                "query": s("Words to look for; empty lists the newest"),
+                "file": s("A file or folder of the project: the memories about it"),
                 "ids": list("Ids of memories to read in full, as the prompt shows them"),
             }),
         }
@@ -686,10 +841,55 @@ impl Tool {
     }
 }
 
-/// One memory as a line of `recall`'s answer: `[<id>] <text>`, the text on one line.
+/// The most bytes `recall` answers with (memory spec section 7).
+pub const RECALL_BUDGET: usize = 6000;
+/// How many of a memory's files its line of `recall`'s answer names.
+const RECALL_FILES: usize = 3;
+
+/// One memory as a line of `recall`'s answer: `[<id>] <text>`, the text on one line, and the
+/// files it is about after it, the first three by name.
 fn recall_line(memory: &Memory) -> String {
     let text = memory.text.split_whitespace().collect::<Vec<_>>().join(" ");
-    format!("[{}] {text}", memory.id)
+    let files = match memory.files.len() {
+        0 => String::new(),
+        n if n <= RECALL_FILES => format!(" (files: {})", memory.files.join(", ")),
+        n => format!(
+            " (files: {} and {} more)",
+            memory.files[..RECALL_FILES].join(", "),
+            n - RECALL_FILES
+        ),
+    };
+    format!("[{}] {text}{files}", memory.id)
+}
+
+/// `recall`'s answer for the memories `found`, best first: one per line, at most
+/// `RECALL_LIMIT` of them and `RECALL_BUDGET` bytes, with a last line that says how many more
+/// there are when some were left out; `NOTHING` for none. With it, the memories it shows.
+pub fn recall_answer<'a>(found: &[&'a Memory]) -> (String, Vec<&'a Memory>) {
+    if found.is_empty() {
+        return (NOTHING.to_string(), Vec::new());
+    }
+    let mut out = String::new();
+    let mut shown = Vec::new();
+    for memory in found.iter().take(RECALL_LIMIT) {
+        let line = recall_line(memory);
+        // Room is kept for the line that counts the ones left out.
+        if !out.is_empty() && out.len() + line.len() + 80 > RECALL_BUDGET {
+            break;
+        }
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&line);
+        shown.push(*memory);
+    }
+    let left = found.len() - shown.len();
+    if left > 0 {
+        out.push_str(&format!(
+            "\n({left} more: ask with more words, or read some by ids.)"
+        ));
+    }
+    (out, shown)
 }
 
 /// `recall`'s answer: the memories whose text contains every word of `query` (any case), in
@@ -839,13 +1039,54 @@ impl Memories {
             }
             Tool::Recall => {
                 let dot = self.store.get_dot(&run.dot_id).await?;
-                let memories = self.readable(&dot).await?;
+                let scopes = self.scopes(&dot).await?;
+                let all = scopes.all();
                 let ids = strings(input, "ids").unwrap_or_default();
-                Ok(if ids.is_empty() {
-                    recall(&memories, arg("query"))
+                if !ids.is_empty() {
+                    let named: Vec<&Memory> = ids
+                        .iter()
+                        .take(RECALL_LIMIT)
+                        .filter_map(|id| all.iter().find(|m| m.id == id.trim()))
+                        .collect();
+                    self.recalled(&dot, &scopes, &named).await;
+                    return Ok(recall_ids(&all, &ids));
+                }
+                let (query, file) = (arg("query").trim(), arg("file").trim());
+                // Asked about a file: only the memories linked to it.
+                let pool: Vec<&Memory> = all
+                    .iter()
+                    .filter(|m| file.is_empty() || rank::linked_to(m, file))
+                    .collect();
+                let found: Vec<&Memory> = if query.is_empty() {
+                    pool
+                } else if rank::query_terms(query).is_empty() {
+                    // Only words too common to rank by: those that hold every one of them.
+                    let words: Vec<String> =
+                        query.split_whitespace().map(str::to_lowercase).collect();
+                    pool.into_iter()
+                        .filter(|m| {
+                            let text = m.text.to_lowercase();
+                            words.iter().all(|w| text.contains(w.as_str()))
+                        })
+                        .collect()
                 } else {
-                    recall_ids(&memories, &ids)
-                })
+                    let scores = self.scores(&dot, &scopes, query).await;
+                    let mut hits: Vec<&Memory> = pool
+                        .iter()
+                        .copied()
+                        .filter(|m| scores.contains_key(&m.id))
+                        .collect();
+                    hits.sort_by(|a, b| by_score(scores.get(&a.id), scores.get(&b.id)));
+                    // Asked about a file, its memories are the answer whatever the words.
+                    if hits.is_empty() && !file.is_empty() {
+                        pool
+                    } else {
+                        hits
+                    }
+                };
+                let (answer, shown) = recall_answer(&found);
+                self.recalled(&dot, &scopes, &shown).await;
+                Ok(answer)
             }
         }
     }

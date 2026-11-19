@@ -556,6 +556,37 @@ pub fn index_text(facts: &[Fact]) -> String {
     out
 }
 
+/// The most ids the line under a `graph` answer about a file names.
+const NOTE_IDS: usize = 10;
+
+/// What a `graph` answer about the project file `path` ends with (memory spec section 7): how
+/// many of the project's memories are linked to that file, and their ids. `None` when none
+/// is.
+pub fn linked_note(root: &Path, path: &str) -> Option<String> {
+    let loaded = load(root);
+    let ids: Vec<&str> = loaded
+        .facts
+        .iter()
+        .filter(|f| super::rank::linked_to(&f.memory, path))
+        .map(|f| f.memory.id.as_str())
+        .collect();
+    let (n, named) = (ids.len(), ids.iter().take(NOTE_IDS));
+    let list = named
+        .map(|id| format!("[{id}]"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let more = if n > NOTE_IDS { " and more" } else { "" };
+    match n {
+        0 => None,
+        1 => Some(format!(
+            "1 memory is about this file: {list}. recall with `file` reads it."
+        )),
+        n => Some(format!(
+            "{n} memories are about this file: {list}{more}. recall with `file` reads them."
+        )),
+    }
+}
+
 /// Rewrites `MEMORY.md` from the project's files as they are now, when it differs. Nothing
 /// for a project without a memory folder.
 pub fn write_index(root: &Path) -> std::io::Result<()> {
