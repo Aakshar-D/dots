@@ -7,11 +7,25 @@ use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
 use super::Store;
-use crate::model::{Memory, MemorySource};
+use crate::model::{Memory, MemoryKind, MemoryScope, MemorySource};
 use crate::util::{new_id, now};
 use crate::{Error, Result};
 
-const COLUMNS: &str = "id, dot_id, text, pinned, source, run_id, created_at, updated_at";
+const COLUMNS: &str =
+    "id, dot_id, text, pinned, source, run_id, created_at, updated_at, kind, files";
+
+/// A memory to store (`add_memory_as`): the text with its `key` (`memory::same_key`), what
+/// kind it is, the project's files it is about, and who wrote it.
+#[derive(Debug, Clone, Copy)]
+pub struct NewMemory<'a> {
+    pub dot_id: &'a str,
+    pub text: &'a str,
+    pub key: &'a str,
+    pub kind: MemoryKind,
+    pub files: &'a [String],
+    pub source: MemorySource,
+    pub run_id: Option<&'a str>,
+}
 
 /// The text of `column` as `memory::same_key` compares it: without spaces, tabs and line ends,
 /// ASCII letters in lower case.
@@ -42,6 +56,10 @@ fn memory_from_row(row: &SqliteRow) -> Result<Memory> {
         run_id: row.try_get("run_id")?,
         created_at: row.try_get("created_at")?,
         updated_at: row.try_get("updated_at")?,
+        kind: MemoryKind::parse(&row.try_get::<String, _>("kind")?)?,
+        scope: MemoryScope::Dot,
+        // A list that cannot be read is no list: the memory is still the dot's.
+        files: serde_json::from_str(&row.try_get::<String, _>("files")?).unwrap_or_default(),
     })
 }
 
@@ -67,8 +85,7 @@ impl Store {
         memory_from_row(&row)
     }
 
-    /// Stores a memory of the dot, unless the dot has `max` already or remembers the same text
-    /// (`key` is `memory::same_key` of `text`). Both are checked in the insert's own statement.
+    /// Stores a `semantic` memory of the dot that names no file (`add_memory_as`).
     pub async fn add_memory(
         &self,
         dot_id: &str,
@@ -78,13 +95,35 @@ impl Store {
         run_id: Option<&str>,
         max: usize,
     ) -> Result<Added> {
+        let new = NewMemory {
+            dot_id,
+            text,
+            key,
+            kind: MemoryKind::Semantic,
+            files: &[],
+            source,
+            run_id,
+        };
+        self.add_memory_as(new, max).await
+    }
+
+    /// Stores a memory of the dot, unless the dot has `max` already or remembers the same text
+    /// (`key` is `memory::same_key` of `text`). Both are checked in the insert's own statement.
+    pub async fn add_memory_as(&self, new: NewMemory<'_>, max: usize) -> Result<Added> {
+        let NewMemory {
+            dot_id,
+            text,
+            key,
+            kind,
+            files,
+            source,
+            run_id,
+        } = new;
         let id = new_id();
         let ts = now();
+        let files = serde_json::to_string(files)?;
         let res = sqlx::query(&format!(
-            "INSERT INTO memories (id, dot_id, text, pinned, source, run_id, created_at, \
-             updated_at) SELECT ?, ?, ?, 0, ?, ?, ?, ? WHERE \
-             (SELECT COUNT(*) FROM memories WHERE dot_id = ?) < ? AND NOT EXISTS \
-             (SELECT 1 FROM memories WHERE dot_id = ? AND {} = ?)",
+            "INSERT INTO memories (id, dot_id, text, pinned, source, run_id, created_at,              updated_at, kind, files) SELECT ?, ?, ?, 0, ?, ?, ?, ?, ?, ? WHERE              (SELECT COUNT(*) FROM memories WHERE dot_id = ?) < ? AND NOT EXISTS              (SELECT 1 FROM memories WHERE dot_id = ? AND {} = ?)",
             key_of("text")
         ))
         .bind(&id)
@@ -94,6 +133,8 @@ impl Store {
         .bind(run_id)
         .bind(&ts)
         .bind(&ts)
+        .bind(kind.as_str())
+        .bind(&files)
         .bind(dot_id)
         .bind(max as i64)
         .bind(dot_id)
@@ -118,23 +159,33 @@ impl Store {
         })
     }
 
-    /// Changes the memory's text (`text` with its `key`) and/or its pin. `None` when the new
-    /// text is one of the dot's other memories already; checked in the update's own statement.
+    /// Changes the memory's text (`text` with its `key`) and/or its pin (`update_memory_as`).
     pub async fn update_memory(
         &self,
         id: &str,
         text: Option<(&str, &str)>,
         pinned: Option<bool>,
     ) -> Result<Option<Memory>> {
+        self.update_memory_as(id, text, pinned, None).await
+    }
+
+    /// Changes the memory's text (`text` with its `key`), its pin and/or its kind. `None` when
+    /// the new text is one of the dot's other memories already; checked in the update's own
+    /// statement.
+    pub async fn update_memory_as(
+        &self,
+        id: &str,
+        text: Option<(&str, &str)>,
+        pinned: Option<bool>,
+        kind: Option<MemoryKind>,
+    ) -> Result<Option<Memory>> {
         let res = sqlx::query(&format!(
-            "UPDATE memories SET text = COALESCE(?, text), pinned = COALESCE(?, pinned), \
-             updated_at = ? WHERE id = ? AND (? IS NULL OR NOT EXISTS \
-             (SELECT 1 FROM memories m WHERE m.dot_id = memories.dot_id AND m.id <> memories.id \
-             AND {} = ?))",
+            "UPDATE memories SET text = COALESCE(?, text), pinned = COALESCE(?, pinned),              kind = COALESCE(?, kind), updated_at = ? WHERE id = ? AND (? IS NULL OR NOT EXISTS              (SELECT 1 FROM memories m WHERE m.dot_id = memories.dot_id AND m.id <> memories.id              AND {} = ?))",
             key_of("m.text")
         ))
         .bind(text.map(|(t, _)| t))
         .bind(pinned.map(i64::from))
+        .bind(kind.map(|k| k.as_str()))
         .bind(now())
         .bind(id)
         .bind(text.map(|(_, k)| k))

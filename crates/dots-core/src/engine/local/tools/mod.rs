@@ -198,9 +198,17 @@ const ARGS: &[(&str, Params)] = &[
         "follow_up",
         &[("note", Str, true), ("at", Str, false), ("in", Str, false)],
     ),
-    ("remember", &[("text", Str, true)]),
+    (
+        "remember",
+        &[
+            ("text", Str, true),
+            ("kind", Str, false),
+            ("scope", Str, false),
+            ("files", List, false),
+        ],
+    ),
     ("forget", &[("id", Str, true)]),
-    ("recall", &[("query", Str, false)]),
+    ("recall", &[("query", Str, false), ("ids", List, false)]),
     (
         "propose_app",
         &[("path", PathStr, true), ("note", Str, true)],

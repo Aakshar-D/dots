@@ -4220,6 +4220,113 @@ impl Runtime {
         let dot_id = self.store.get_memory(id).await?.dot_id;
         self.require_for_dot(&dot_id, Permission::EditDots).await
     }
+
+    /// The person's memory of the dot, of `kind`.
+    pub async fn memory_add_as(
+        &self,
+        dot_id: &str,
+        text: &str,
+        kind: crate::model::MemoryKind,
+    ) -> Result<crate::model::Memory> {
+        self.require_for_dot(dot_id, Permission::EditDots).await?;
+        let new = crate::memory::NewFact {
+            kind,
+            ..crate::memory::NewFact::plain(text, crate::model::MemorySource::Person, None)
+        };
+        self.checkins.memories().save_as(dot_id, new).await
+    }
+
+    /// Changes any memory's text, its pin and/or its kind.
+    pub async fn memory_update_as(
+        &self,
+        id: &str,
+        text: Option<&str>,
+        pinned: Option<bool>,
+        kind: Option<crate::model::MemoryKind>,
+    ) -> Result<crate::model::Memory> {
+        self.require_for_memory(id).await?;
+        self.checkins
+            .memories()
+            .update_as(id, text, pinned, kind)
+            .await
+    }
+}
+
+/// What a project remembers, the person's side (memory spec sections 4 and 11). The project
+/// is the one the dot works in: the person reaches a project's memory through a dot of it,
+/// and changing it needs a role that may change that dot.
+impl Runtime {
+    /// The memory of the project the dot works in, read from its files as they are now;
+    /// `None` when the dot's folder is missing. `NotFound` for an unknown dot.
+    pub async fn project_memories(
+        &self,
+        dot_id: &str,
+    ) -> Result<Option<crate::model::ProjectMemories>> {
+        self.checkins.memories().project_list(dot_id).await
+    }
+
+    /// The folder of the project the dot works in, for a change the person makes.
+    async fn project_root_for(&self, dot_id: &str) -> Result<PathBuf> {
+        let dot = self.store.get_dot(dot_id).await?;
+        self.require_dot(&dot, Permission::EditDots).await?;
+        self.checkins
+            .memories()
+            .project_root(&dot)
+            .await
+            .ok_or_else(|| Error::Invalid(crate::memory::NO_FOLDER.into()))
+    }
+
+    /// The person's memory of the project the dot works in (source `person`).
+    pub async fn project_memory_add(
+        &self,
+        dot_id: &str,
+        text: &str,
+        kind: crate::model::MemoryKind,
+        files: &[String],
+    ) -> Result<crate::model::Memory> {
+        let root = self.project_root_for(dot_id).await?;
+        let new = crate::memory::NewFact {
+            text,
+            kind,
+            files,
+            source: crate::model::MemorySource::Person,
+            run_id: None,
+        };
+        self.checkins.memories().project_save(&root, new).await
+    }
+
+    /// Changes a memory of the project the dot works in: its text, its pin and/or its kind.
+    pub async fn project_memory_update(
+        &self,
+        dot_id: &str,
+        id: &str,
+        text: Option<&str>,
+        pinned: Option<bool>,
+        kind: Option<crate::model::MemoryKind>,
+    ) -> Result<crate::model::Memory> {
+        let root = self.project_root_for(dot_id).await?;
+        self.checkins
+            .memories()
+            .project_update(&root, id, text, pinned, kind)
+            .await
+    }
+
+    /// Deletes a memory of the project the dot works in. `NotFound` for an unknown id.
+    pub async fn project_memory_delete(&self, dot_id: &str, id: &str) -> Result<()> {
+        let root = self.project_root_for(dot_id).await?;
+        self.checkins
+            .memories()
+            .project_delete(&root, id)
+            .await
+            .map(|_| ())
+    }
+
+    /// The folder the memory files of the dot's project are in, made when missing, for the
+    /// Memory tab's "Open folder".
+    pub async fn project_memory_folder(&self, dot_id: &str) -> Result<PathBuf> {
+        let root = self.project_root_for(dot_id).await?;
+        self.checkins.memories().project_folder(&root).await
+    }
 }
 
 /// Watchers, the person's side (watchers spec sections 7 and 8).

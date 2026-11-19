@@ -2250,8 +2250,26 @@ impl Runner {
             run
         };
         ctx.session_id = run.session_id.clone();
-        // The memories as they are now: a run's prompt does not change while it runs.
-        let memories = self.store.list_memories(&dot.id).await?;
+        // The memories as they are now, the dot's and its project's: a run's prompt does not
+        // change while it runs. A dot with memory off reads none (memory spec section 10).
+        let memory_off = dot
+            .spec
+            .policy
+            .resolve(crate::memory::POLICY_NAME, &Value::Null)
+            == crate::policy::Action::Deny;
+        // A prompt that only carries its message into a session has no memory section
+        // (`build_prompt_full`), so nothing is read for it.
+        let message_only = run.trigger == TriggerKind::Resume
+            || (run.session_id.is_some()
+                && matches!(
+                    run.trigger,
+                    TriggerKind::Chat | TriggerKind::FollowUp | TriggerKind::Workflow
+                ));
+        let memories = match self.checkins() {
+            _ if memory_off || message_only => Vec::new(),
+            Some(checkins) => checkins.memories().for_prompt(&dot).await,
+            None => self.store.list_memories(&dot.id).await?,
+        };
         let recent = self.recent_runs(run).await;
         let instructions_changed = self.instructions_changed(run, &dot).await;
         let startable = crate::team_tools::prompt_section(tools.startable(), dot.spec.engine);

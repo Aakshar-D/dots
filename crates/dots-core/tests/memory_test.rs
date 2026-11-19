@@ -378,4 +378,223 @@ fn the_event_is_memories_updated_with_the_dot() {
         serde_json::to_value(&event).unwrap(),
         serde_json::json!({"type": "memories_updated", "dot_id": "D1"})
     );
+    let event = RuntimeEvent::ProjectMemoriesUpdated {
+        root: "C:/code/shop".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&event).unwrap(),
+        serde_json::json!({"type": "project_memories_updated", "root": "C:/code/shop"})
+    );
+}
+
+/// Memory spec section 2: a dot's memory has a kind and may name files; a core memory is
+/// short, since every prompt carries it.
+#[tokio::test]
+async fn a_dots_memory_has_a_kind_and_may_name_files() {
+    use dots_core::memory::{NewFact, CORE_RULE};
+    use dots_core::model::{MemoryKind, MemoryScope};
+    let t = setup().await;
+    let dot = t.dot("kinds").await;
+    let plain = t.memories.add(&dot.id, "A plain note.").await.unwrap();
+    assert_eq!(
+        (plain.kind, plain.scope, plain.files.len()),
+        (MemoryKind::Semantic, MemoryScope::Dot, 0)
+    );
+    let files = vec!["src\\main.rs".to_string(), "src/main.rs".to_string()];
+    let how = t
+        .memories
+        .save_as(
+            &dot.id,
+            NewFact {
+                text: "Build with cargo build --release.",
+                kind: MemoryKind::Procedural,
+                files: &files,
+                source: MemorySource::Dot,
+                run_id: Some("RUN1"),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(how.kind, MemoryKind::Procedural);
+    assert_eq!(how.files, ["src/main.rs"]);
+    assert_eq!(t.store.get_memory(&how.id).await.unwrap(), how);
+
+    // The kind changes by itself; the text and the pin stay.
+    let core = t
+        .memories
+        .update_as(&plain.id, None, None, Some(MemoryKind::Core))
+        .await
+        .unwrap();
+    assert_eq!(
+        (core.kind, core.text.as_str()),
+        (MemoryKind::Core, "A plain note.")
+    );
+    // A core memory is at most 160 characters, whichever of the two changes.
+    let long = "x".repeat(161);
+    let e = t
+        .memories
+        .update_as(&plain.id, Some(&long), None, None)
+        .await
+        .unwrap_err();
+    assert_eq!(message(e), CORE_RULE);
+    let e = t
+        .memories
+        .update_as(&how.id, Some(&long), None, Some(MemoryKind::Core))
+        .await
+        .unwrap_err();
+    assert_eq!(message(e), CORE_RULE);
+    let new = NewFact {
+        kind: MemoryKind::Core,
+        ..NewFact::plain(&long, MemorySource::Person, None)
+    };
+    assert_eq!(
+        message(t.memories.save_as(&dot.id, new).await.unwrap_err()),
+        CORE_RULE
+    );
+    t.memories
+        .update_as(&plain.id, Some(&long), None, Some(MemoryKind::Semantic))
+        .await
+        .unwrap();
+    // A file outside the project is refused.
+    let outside = vec!["../secrets.txt".to_string()];
+    let new = NewFact {
+        files: &outside,
+        ..NewFact::plain("A fact.", MemorySource::Dot, None)
+    };
+    assert_eq!(
+        message(t.memories.save_as(&dot.id, new).await.unwrap_err()),
+        dots_core::memory::files::FILES_RULE
+    );
+    assert_eq!(t.memories.list(&dot.id).await.unwrap().len(), 2);
+}
+
+/// Memory spec section 12: what was remembered before kinds is `semantic`; a pinned memory
+/// becomes `core` while the dot's pinned ones fit what a prompt gives core memories.
+#[tokio::test]
+async fn memories_stored_before_kinds_keep_everything_and_get_a_kind() {
+    use dots_core::model::MemoryKind;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("dots.db");
+    let wide = "é".repeat(150);
+    let too_long = "x".repeat(161);
+    {
+        let pool = SqlitePoolOptions::new()
+            .connect_with(
+                SqliteConnectOptions::new()
+                    .filename(&path)
+                    .create_if_missing(true),
+            )
+            .await
+            .unwrap();
+        let all = sqlx::migrate!("./migrations");
+        let before = sqlx::migrate::Migrator {
+            migrations: all
+                .migrations
+                .iter()
+                .filter(|m| m.version < 59)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into(),
+            ..sqlx::migrate::Migrator::DEFAULT
+        };
+        before.run(&pool).await.unwrap();
+        let ts = "2026-11-01T09:00:00.000Z";
+        for dot in ["d1", "d2"] {
+            sqlx::query(
+                "INSERT INTO dots (id, name, instructions, engine, model, workdir, \
+                 workspace_mode, webhook_token, policy, max_turns, timeout_secs, \
+                 approval_wait_secs, created_at, updated_at) VALUES (?, ?, 'x', 'claude', 'm', \
+                 'C:/tmp', 'folder', ?, '{}', 1, 1, 1, ?, ?)",
+            )
+            .bind(dot)
+            .bind(dot)
+            .bind(dot)
+            .bind(ts)
+            .bind(ts)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        // (id, dot, text, pinned, minute): the newest has the highest minute. `plain` is the
+        // one a run saved.
+        let rows: Vec<(&str, &str, &str, i64, u32)> = vec![
+            ("p-new", "d1", "Prefers invoices as PDF.", 1, 50),
+            ("p-long", "d1", &too_long, 1, 40),
+            ("p-wide-1", "d1", &wide, 1, 30),
+            ("p-wide-2", "d1", &wide, 1, 20),
+            ("p-old", "d1", "An old pinned note.", 1, 10),
+            ("plain", "d1", "Not pinned.", 0, 45),
+            ("other", "d2", "Another sol's pinned note.", 1, 5),
+        ];
+        for (id, dot, text, pinned, minute) in &rows {
+            let run = (*id == "plain").then_some("r2");
+            let source = if run.is_some() { "dot" } else { "person" };
+            let at = format!("2026-11-01T09:{minute:02}:00.000Z");
+            sqlx::query(
+                "INSERT INTO memories (id, dot_id, text, pinned, source, run_id, created_at, \
+                 updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(dot)
+            .bind(text)
+            .bind(pinned)
+            .bind(source)
+            .bind(run)
+            .bind(&at)
+            .bind(&at)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        pool.close().await;
+    }
+    let store = Store::open(&path).await.unwrap();
+    let list = store.list_memories("d1").await.unwrap();
+    assert_eq!(list.len(), 6);
+    let get = |id: &str| list.iter().find(|m| m.id == id).unwrap();
+    // Nothing but the kind changed.
+    let newest = get("p-new");
+    assert_eq!(newest.text, "Prefers invoices as PDF.");
+    assert!(newest.pinned && newest.files.is_empty());
+    assert_eq!(newest.source, MemorySource::Person);
+    assert_eq!(newest.created_at, "2026-11-01T09:50:00.000Z");
+    assert_eq!(get("plain").run_id.as_deref(), Some("r2"));
+    // Newest first: the short one's line is 65 bytes, the first wide one's 341 (406 so far),
+    // and the second wide one's would pass 600. The sum runs on from there, so the older one
+    // behind it stays as it was too. The one of 161 characters is too long to be core.
+    let kinds: Vec<(&str, MemoryKind)> =
+        ["p-new", "p-long", "p-wide-1", "p-wide-2", "p-old", "plain"]
+            .into_iter()
+            .map(|id| (id, get(id).kind))
+            .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("p-new", MemoryKind::Core),
+            ("p-long", MemoryKind::Semantic),
+            ("p-wide-1", MemoryKind::Core),
+            ("p-wide-2", MemoryKind::Semantic),
+            ("p-old", MemoryKind::Semantic),
+            ("plain", MemoryKind::Semantic),
+        ]
+    );
+    // Every pin is kept, core or not.
+    assert_eq!(list.iter().filter(|m| m.pinned).count(), 5);
+    // Each dot's pinned memories are counted on their own.
+    assert_eq!(
+        store.list_memories("d2").await.unwrap()[0].kind,
+        MemoryKind::Core
+    );
+    // What became core fits in a prompt's core lines.
+    let section = dots_core::memory::prompt_section(&list);
+    assert!(
+        section.contains("- [p-new] Prefers invoices as PDF. (pinned)\n"),
+        "{section}"
+    );
+    assert!(
+        section.contains(&format!("- [p-wide-1] {wide} (pinned)\n")),
+        "{section}"
+    );
+    store.close().await;
 }
