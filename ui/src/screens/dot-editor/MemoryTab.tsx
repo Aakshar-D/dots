@@ -423,9 +423,12 @@ function SolMemory({ dotId }: { dotId: string }) {
 /// that works in the project shares them. Nothing is shown for a sol whose folder is missing.
 function ProjectMemory({ dotId }: { dotId: string }) {
   const qc = useQueryClient();
+  // Asked again each time the tab is shown: the facts are files a person may change by hand,
+  // and a hand edit announces nothing (memory spec section 11).
   const project = useQuery({
     queryKey: keys.projectMemories(dotId),
     queryFn: () => commands.projectMemories(dotId),
+    refetchOnMount: "always",
   });
   const open = useMutation({
     mutationFn: () => commands.openMemoryFolder(dotId),

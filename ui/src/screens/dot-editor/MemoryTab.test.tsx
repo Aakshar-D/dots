@@ -547,4 +547,21 @@ describe("the project's memory in a sol's Memory tab", () => {
     // It leaves the sol's own list alone.
     expect(backend.callsTo("memories_list")).toHaveLength(1);
   });
+
+  it("reads the project's files again each time the tab is shown, since a hand edit announces nothing", async () => {
+    holding([]);
+    const held = inProject({ ...sample.projectMemories, memories: [howTo], skipped: 0 });
+    const { user } = await openTab();
+    await screen.findByRole("listitem", { name: howTo.text });
+    // The person edits the folder in an editor: a fact changed, a file that is no memory.
+    const edited = { ...howTo, text: "Edited by hand in the folder." };
+    held.project = { ...held.project, memories: [edited], skipped: 1 };
+    await user.click(screen.getByRole("tab", { name: "Runs" }));
+    await user.click(screen.getByRole("tab", { name: "Memory" }));
+    expect(await screen.findByRole("listitem", { name: edited.text })).toBeVisible();
+    expect(screen.getByText("1 file in the folder is not a memory Sage can read.")).toBeVisible();
+    expect(screen.queryByRole("listitem", { name: howTo.text })).toBeNull();
+    // The sol's own list is the database's, which announces its changes: not asked again.
+    expect(backend.callsTo("memories_list")).toHaveLength(1);
+  });
 });
