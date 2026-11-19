@@ -1,7 +1,7 @@
 # Memory for each dot
 
 - Date: 2026-10-23
-- Status: approved in conversation, awaiting review of this document
+- Status: built. `2026-11-19-memory-design.md` builds on it and changes sections 3 and 5: memories have kinds, a project has a memory of its own, and the prompt's section is smaller
 - Builds on: `2026-10-20-checkins-followups-design.md` (the pattern of Dots' own tools: served to Claude runs, built into the local engine, under policy names), `2026-10-19-context-library-design.md` (what all dots share: unchanged), `2026-10-22-chat-home-design.md` and `2026-10-22-deep-teal-design.md` (the editor, the conversation).
 
 ## 1. Goal

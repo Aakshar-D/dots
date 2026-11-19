@@ -597,11 +597,33 @@ export const commands = {
   memoriesList: (dotId: string) => call(T.Memory.array(), "memories_list", { dotId }),
   /// The person's memory of the dot. Rejects with the core's sentence (kind `invalid` for a
   /// blank, too long or secret text, `conflict` for a duplicate or the 200th).
-  memoryAdd: (dotId: string, text: string) => call(T.Memory, "memory_add", { dotId, text }),
-  /// Changes a memory's text and/or its pin; null leaves it as it is.
-  memoryUpdate: (id: string, text: string | null, pinned: boolean | null) =>
-    call(T.Memory, "memory_update", { id, text, pinned }),
+  /// `kind` is semantic when left out; a core memory is at most 160 characters.
+  memoryAdd: (dotId: string, text: string, kind?: T.MemoryKind) =>
+    call(T.Memory, "memory_add", kind ? { dotId, text, kind } : { dotId, text }),
+  /// Changes a memory's text, its pin and/or its kind; null leaves it as it is.
+  memoryUpdate: (id: string, text: string | null, pinned: boolean | null, kind?: T.MemoryKind) =>
+    call(T.Memory, "memory_update", kind ? { id, text, pinned, kind } : { id, text, pinned }),
   memoryDelete: (id: string) => call(nothing, "memory_delete", { id }),
+  /// What the project the dot works in remembers, read from its memory files as they are now
+  /// (memory spec section 4); null when the dot's folder is missing.
+  projectMemories: (dotId: string) =>
+    call(T.ProjectMemories.nullable(), "project_memories", { dotId }),
+  /// The person's memory of the dot's project, written to a file of its own. Rejects as
+  /// `memoryAdd` does; `files` are paths inside the project.
+  projectMemoryAdd: (dotId: string, text: string, kind: T.MemoryKind, files: string[]) =>
+    call(T.Memory, "project_memory_add", { dotId, text, kind, files }),
+  /// Changes a memory of the dot's project; null leaves a part as it is.
+  projectMemoryUpdate: (
+    dotId: string,
+    id: string,
+    text: string | null,
+    pinned: boolean | null,
+    kind: T.MemoryKind | null,
+  ) => call(T.Memory, "project_memory_update", { dotId, id, text, pinned, kind }),
+  projectMemoryDelete: (dotId: string, id: string) =>
+    call(nothing, "project_memory_delete", { dotId, id }),
+  /// Opens the folder of the project's memory files, made when missing.
+  openMemoryFolder: (dotId: string) => call(nothing, "open_memory_folder", { dotId }),
   /// The hits of `query` in the workspace `workspace` of `scope` ("personal" or an org id),
   /// best first (search spec section 3).
   search: (scope: string, workspace: string, query: SearchQuery) =>

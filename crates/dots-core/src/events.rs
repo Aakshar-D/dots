@@ -92,6 +92,11 @@ pub enum RuntimeEvent {
     MemoriesUpdated {
         dot_id: String,
     },
+    /// A memory of the project whose folder is `root` was saved, changed or deleted through
+    /// Sage, by a run or by the person (memory spec section 11).
+    ProjectMemoriesUpdated {
+        root: String,
+    },
     /// A call changed the app's data (app library spec section 5): its screen reads again.
     AppDataChanged {
         app: String,

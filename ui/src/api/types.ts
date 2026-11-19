@@ -701,19 +701,39 @@ export const SearchHit = z.strictObject({
   snippet: z.string(),
 });
 
-export const MemorySource = z.enum(["dot", "person"]);
-// One thing a dot remembers across runs (dot memory spec section 2). Times are RFC 3339 UTC.
+// Who wrote a memory: a run of a sol, the person, or the capture step after a run.
+export const MemorySource = z.enum(["dot", "person", "capture"]);
+// What kind of thing a memory is (memory spec section 2): core is small and in every prompt,
+// episodic is what a run did, semantic is a fact or a decision, procedural is a how-to.
+export const MemoryKind = z.enum(["core", "episodic", "semantic", "procedural"]);
+// Whose a memory is: one sol's, or a project's, shared by every sol that works there.
+export const MemoryScope = z.enum(["sol", "project"]);
+// One thing a dot or a project remembers across runs (dot memory spec section 2, memory spec
+// sections 2 and 3). Times are RFC 3339 UTC.
 export const Memory = z.strictObject({
   id: z.string(),
+  // Empty for a project's memory.
   dot_id: z.string(),
   text: z.string(),
   pinned: z.boolean(),
-  // Who wrote it: a run of the dot, or the person in the Memory tab.
+  // Who wrote it: a run of the dot, the person in the Memory tab, or the capture step.
   source: MemorySource,
   // The run that saved it; null for the person's own.
   run_id: nullable(z.string()),
   created_at: z.string(),
   updated_at: z.string(),
+  kind: MemoryKind,
+  scope: MemoryScope,
+  // The project's files the memory is about, relative to the project's folder.
+  files: z.array(z.string()),
+});
+// A project's memory (memory spec section 4): the project's folder, the folder of its memory
+// files, the memories read from them, and how many files could not be read as a memory.
+export const ProjectMemories = z.strictObject({
+  root: z.string(),
+  dir: z.string(),
+  memories: z.array(Memory),
+  skipped: z.number().int(),
 });
 
 // Watchers (watchers spec sections 3 and 4): what starts a dot when a folder, a Gmail label or a
@@ -1001,6 +1021,8 @@ export const RuntimeEvent = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("dot_seen"), dot_id: z.string() }),
   // A memory of the dot was saved, changed or deleted, by a run or by the person.
   z.strictObject({ type: z.literal("memories_updated"), dot_id: z.string() }),
+  // A memory of the project in the folder `root` was saved, changed or deleted through Sage.
+  z.strictObject({ type: z.literal("project_memories_updated"), root: z.string() }),
   // A call changed the app's data: its screen reads again.
   z.strictObject({ type: z.literal("app_data_changed"), app: z.string() }),
   // A dot proposed an app, or the person decided a proposal: the review card reads it again.
@@ -2968,6 +2990,8 @@ export const LIMITS = {
   max_global_instructions: 32768,
   max_memories: 200,
   max_memory_text: 500,
+  max_core_memory_text: 160,
+  max_project_memories: 300,
   max_watcher_name: 80,
   max_make_per_run: 10,
   max_make_total: 50,
@@ -3225,7 +3249,10 @@ export type FollowUpStatus = z.infer<typeof FollowUpStatus>;
 export type Message = z.infer<typeof Message>;
 export type FollowUp = z.infer<typeof FollowUp>;
 export type MemorySource = z.infer<typeof MemorySource>;
+export type MemoryKind = z.infer<typeof MemoryKind>;
+export type MemoryScope = z.infer<typeof MemoryScope>;
 export type Memory = z.infer<typeof Memory>;
+export type ProjectMemories = z.infer<typeof ProjectMemories>;
 export type Intent = z.infer<typeof Intent>;
 export type IntentsView = z.infer<typeof IntentsView>;
 export type IntentFields = z.infer<typeof IntentFields>;

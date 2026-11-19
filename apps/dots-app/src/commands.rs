@@ -38,10 +38,10 @@ use dots_core::making::cards::MakingCard;
 use dots_core::making::requests::{MakeDecision, MakeRequest, MakeRequestCard};
 use dots_core::model::{
     Approval, ConversationFile, DeliveryCounts, Dot, DotOverview, DotSpec, EngineKind, FollowUp,
-    Inbox, Intent, Memory, Message, Project, ProjectSpec, Run, RunEventRecord, ScheduleSkip,
-    ScheduledMessage, SettingsSaved, StagedAttachment, Status, StepDotRun, Team, TeamSpec,
-    TopicInfo, WatchHours, Watcher, WatcherConfig, Workflow, WorkflowRun, WorkflowRunFilter,
-    WorkflowSpec, WorkflowTrigger, WorktreeDiff,
+    Inbox, Intent, Memory, MemoryKind, Message, Project, ProjectMemories, ProjectSpec, Run,
+    RunEventRecord, ScheduleSkip, ScheduledMessage, SettingsSaved, StagedAttachment, Status,
+    StepDotRun, Team, TeamSpec, TopicInfo, WatchHours, Watcher, WatcherConfig, Workflow,
+    WorkflowRun, WorkflowRunFilter, WorkflowSpec, WorkflowTrigger, WorktreeDiff,
 };
 use dots_core::phone::{PairingView, PhoneStatus};
 use dots_core::policy::{Policy, Preset, RuleCandidate};
@@ -2053,25 +2053,99 @@ pub async fn memories_list(state: State<'_, AppState>, dot_id: String) -> Res<Ve
     Ok(state.rt()?.memories_list(&dot_id).await?)
 }
 
-/// The person's memory of the dot. Refused, with the core's sentence, when the text is blank,
-/// longer than 500 characters, a duplicate, past the 200 or a secret.
+/// The person's memory of the dot, `semantic` unless `kind` says otherwise. Refused, with the
+/// core's sentence, when the text is blank, longer than 500 characters (160 for a core
+/// memory), a duplicate, past the 200 or a secret.
 #[tauri::command]
-pub async fn memory_add(state: State<'_, AppState>, dot_id: String, text: String) -> Res<Memory> {
-    Ok(state.rt()?.memory_add(&dot_id, &text).await?)
+pub async fn memory_add(
+    state: State<'_, AppState>,
+    dot_id: String,
+    text: String,
+    kind: Option<MemoryKind>,
+) -> Res<Memory> {
+    let kind = kind.unwrap_or(MemoryKind::Semantic);
+    Ok(state.rt()?.memory_add_as(&dot_id, &text, kind).await?)
 }
 
-/// Changes any memory's text and/or its pin; the text rules of `memory_add` apply.
+/// Changes any memory's text, its pin and/or its kind; the text rules of `memory_add` apply.
 #[tauri::command]
 pub async fn memory_update(
     state: State<'_, AppState>,
     id: String,
     text: Option<String>,
     pinned: Option<bool>,
+    kind: Option<MemoryKind>,
 ) -> Res<Memory> {
     Ok(state
         .rt()?
-        .memory_update(&id, text.as_deref(), pinned)
+        .memory_update_as(&id, text.as_deref(), pinned, kind)
         .await?)
+}
+
+/// What the project the dot works in remembers, read from its memory files as they are now
+/// (memory spec section 4); null when the dot's folder is missing.
+#[tauri::command]
+pub async fn project_memories(
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<Option<ProjectMemories>> {
+    Ok(state.rt()?.project_memories(&dot_id).await?)
+}
+
+/// The person's memory of the project the dot works in, written to a file of its own. The
+/// text rules of `memory_add` apply; `files` are paths inside the project.
+#[tauri::command]
+pub async fn project_memory_add(
+    state: State<'_, AppState>,
+    dot_id: String,
+    text: String,
+    kind: Option<MemoryKind>,
+    files: Option<Vec<String>>,
+) -> Res<Memory> {
+    let kind = kind.unwrap_or(MemoryKind::Semantic);
+    Ok(state
+        .rt()?
+        .project_memory_add(&dot_id, &text, kind, &files.unwrap_or_default())
+        .await?)
+}
+
+/// Changes a memory of the project the dot works in: its text, its pin and/or its kind.
+#[tauri::command]
+pub async fn project_memory_update(
+    state: State<'_, AppState>,
+    dot_id: String,
+    id: String,
+    text: Option<String>,
+    pinned: Option<bool>,
+    kind: Option<MemoryKind>,
+) -> Res<Memory> {
+    Ok(state
+        .rt()?
+        .project_memory_update(&dot_id, &id, text.as_deref(), pinned, kind)
+        .await?)
+}
+
+#[tauri::command]
+pub async fn project_memory_delete(
+    state: State<'_, AppState>,
+    dot_id: String,
+    id: String,
+) -> Res<()> {
+    Ok(state.rt()?.project_memory_delete(&dot_id, &id).await?)
+}
+
+/// Opens the folder the memory files of the dot's project are in, made when missing. The path
+/// comes from the core's records, never the UI.
+#[tauri::command]
+pub async fn open_memory_folder(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    dot_id: String,
+) -> Res<()> {
+    let path = state.rt()?.project_memory_folder(&dot_id).await?;
+    app.opener()
+        .open_path(path.to_string_lossy(), None::<&str>)
+        .map_err(|e| CmdError::internal(format!("could not open {}: {e}", path.display())))
 }
 
 #[tauri::command]

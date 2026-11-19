@@ -145,6 +145,11 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       // The dot's Memory tab.
       invalidate(qc, keys.memories(event.dot_id));
       break;
+    case "project_memories_updated":
+      // The Memory tab of every dot: several may work in the project, and the UI does not
+      // know which.
+      invalidate(qc, ["project-memories"]);
+      break;
     case "instruction_proposal_changed":
       // The dot's proposal cards and the Inbox's group of them. Approving changes the dot,
       // which the card that decided reads again itself.

@@ -144,6 +144,8 @@ export const keys = {
   /// The rows of a dot's topics: names and archive marks.
   topics: (dotId: string) => ["topics", dotId] as const,
   memories: (dotId: string) => ["memories", dotId] as const,
+  /// The memory of the project a dot works in (memory spec section 4).
+  projectMemories: (dotId: string) => ["project-memories", dotId] as const,
   /// The hits of one search in one workspace of an account (search spec section 3).
   search: (scope: string, workspace: string, text: string) =>
     ["search", scope, workspace, text] as const,

@@ -364,3 +364,86 @@ async fn a_memory_call_is_checked_with_its_own_argument_only() {
         );
     }
 }
+
+/// Memory spec section 6: the `dots` server lists the tools with their kinds, scopes and
+/// files, as the local engine does, and a Claude run's call saves to the project's files.
+#[tokio::test]
+async fn dots_own_server_takes_a_memorys_kind_scope_and_files() {
+    use dots_core::engine::local::tools;
+    use dots_core::memory::files;
+    let e = env(json!([]), false).await;
+    let dot = claude_dot(&e, "builder", |_| {}).await;
+    let (_run, secret) = registered(&e, &dot).await;
+    let listed = rpc(
+        &e,
+        &secret,
+        json!({"jsonrpc": "2.0", "id": 1, "method": "tools/list"}),
+    )
+    .await;
+    let served: Vec<&Value> = listed["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| ["remember", "forget", "recall"].contains(&t["name"].as_str().unwrap()))
+        .collect();
+    let local = tools::memory::schemas();
+    assert_eq!(served.len(), 3);
+    // Both engines offer the same three tools: the same arguments, the same words.
+    for (mcp, local) in served.iter().zip(&local) {
+        assert_eq!(mcp["name"], local["function"]["name"]);
+        assert_eq!(mcp["description"], local["function"]["description"]);
+        assert_eq!(
+            mcp["inputSchema"]["properties"],
+            local["function"]["parameters"]["properties"]
+        );
+    }
+    let remember = &served[0]["inputSchema"]["properties"];
+    for key in ["text", "kind", "scope", "files"] {
+        assert!(remember.get(key).is_some(), "{key} in {remember}");
+    }
+    assert_eq!(
+        remember["kind"]["enum"],
+        json!(["core", "episodic", "semantic", "procedural"])
+    );
+    assert_eq!(remember["scope"]["enum"], json!(["project", "sol"]));
+    assert!(served[2]["inputSchema"]["properties"].get("ids").is_some());
+
+    let saved = call(
+        &e,
+        &secret,
+        "remember",
+        json!({"text": "Tests run with cargo test.", "kind": "procedural",
+               "files": ["Cargo.toml"], "pinned": true}),
+    )
+    .await;
+    let id = text(&saved)
+        .strip_prefix("Remembered ")
+        .and_then(|s| s.strip_suffix(" for the project."))
+        .unwrap_or_else(|| panic!("{saved}"))
+        .to_string();
+    let loaded = files::load(e.dir.path());
+    let fact = &loaded.find(&id).unwrap().memory;
+    assert_eq!(fact.files, ["Cargo.toml"]);
+    assert_eq!(fact.source, MemorySource::Dot);
+    // An argument that is not the tool's own never reaches it.
+    assert!(!fact.pinned);
+    let read = call(&e, &secret, "recall", json!({"ids": [id]})).await;
+    assert_eq!(text(&read), format!("[{id}] Tests run with cargo test."));
+    let refused_files = call(
+        &e,
+        &secret,
+        "remember",
+        json!({"text": "A fact.", "files": ["../outside.txt"]}),
+    )
+    .await;
+    assert_eq!(refused(&refused_files), files::FILES_RULE);
+    let secret_text = call(
+        &e,
+        &secret,
+        "remember",
+        json!({"text": "token: abcdefgh12345678", "scope": "project"}),
+    )
+    .await;
+    assert_eq!(refused(&secret_text), dots_core::memory::SECRET);
+    assert_eq!(files::load(e.dir.path()).facts.len(), 1);
+}

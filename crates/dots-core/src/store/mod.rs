@@ -68,7 +68,7 @@ pub use context_rules::{ContextEvent, LastFill, NewContextEvent, ThreadState};
 pub use held::HeldEvent;
 pub use invites::{DraftRow, InviteRow};
 pub use limits::LimitReading;
-pub use memories::Added;
+pub use memories::{Added, NewMemory};
 pub use open_dot::OpenDotUsage;
 pub use phone::{PhoneAction, PhoneDevice, PhoneTls};
 pub use report::ReportCounts;

@@ -1318,13 +1318,31 @@ pub struct FollowUp {
     pub created_at: String,
 }
 
-str_enum!(MemorySource { Dot => "dot", Person => "person" });
+// Who wrote a memory: a run of a dot (`remember`), the person (the Memory tab, or a file
+// written by hand), or the capture step after a run (memory spec section 8). A project's
+// memory file says `sol` for `Dot`.
+str_enum!(MemorySource { Dot => "dot", Person => "person", Capture => "capture" });
 
-/// One thing a dot remembers across runs (dot memory spec section 2): one fact, 1 to 500
-/// characters. Times are RFC 3339 UTC (`util::now`).
+// What kind of thing a memory is (memory spec section 2): `Core` is small and in every
+// prompt, `Episodic` is one dated line of what a run did, `Semantic` is a fact or a decision,
+// `Procedural` is steps that worked or a pitfall.
+str_enum!(MemoryKind {
+    Core => "core",
+    Episodic => "episodic",
+    Semantic => "semantic",
+    Procedural => "procedural",
+});
+
+// Whose a memory is (memory spec section 3): one dot's, kept in the database, or a
+// project's, kept as files in the project's folder and shared by every dot that works there.
+str_enum!(MemoryScope { Dot => "sol", Project => "project" });
+
+/// One thing a dot or a project remembers across runs (dot memory spec section 2, memory spec
+/// sections 2 and 3): one fact, 1 to 500 characters. Times are RFC 3339 UTC (`util::now`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Memory {
     pub id: String,
+    /// The dot it belongs to; empty for a project's memory.
     pub dot_id: String,
     pub text: String,
     /// Shown first, in the prompt and the Memory tab.
@@ -1335,6 +1353,21 @@ pub struct Memory {
     pub run_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    pub kind: MemoryKind,
+    pub scope: MemoryScope,
+    /// The project's files the memory is about, relative to the project's folder, with `/`.
+    pub files: Vec<String>,
+}
+
+/// A project's memory as the Memory tab shows it (memory spec section 4): the project's
+/// folder, the folder its memory files are in (which exists once a memory was saved), the
+/// memories read from the files, and how many files could not be read as a memory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectMemories {
+    pub root: String,
+    pub dir: String,
+    pub memories: Vec<Memory>,
+    pub skipped: usize,
 }
 
 /// One of the person's goals (Intents): 1 to 500 characters, in the account (`org_id`, `None`
