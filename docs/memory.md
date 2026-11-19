@@ -98,7 +98,7 @@ Set **Memory** to deny in a sol's permissions to turn its memory off: no section
 
 When a run that did some work ends, Sage saves what it learned without the sol having to ask:
 
-- one dated line about the run, taken from the first line of its answer;
+- one dated line about the run, taken from the first line of its answer that says something (a heading or a bare "Done." is passed over);
 - up to three facts, picked by one small request to the cheapest model of the sol's engine.
 
 They go to the project's memory when the sol has a project, otherwise to the sol's own.
