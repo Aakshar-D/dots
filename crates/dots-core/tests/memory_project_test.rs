@@ -185,7 +185,14 @@ async fn a_project_memory_is_a_file_in_the_projects_folder_and_the_list_names_it
     let listed = t.memories.project_list(&dot.id).await.unwrap().unwrap();
     assert_eq!(listed.memories, vec![saved.clone()]);
     assert_eq!(listed.skipped, 0);
-    assert_eq!(PathBuf::from(&listed.dir), files::dir_of(&root));
+    // The list names the project's folder as it resolves (on macOS a temporary folder is
+    // under `/var`, a link to `/private/var`), so the two are compared resolved.
+    let resolved = |path: &Path| std::fs::canonicalize(path).unwrap();
+    assert_eq!(
+        resolved(Path::new(&listed.dir)),
+        resolved(&files::dir_of(&root))
+    );
+    assert_eq!(resolved(Path::new(&listed.root)), resolved(&root));
     assert_eq!(t.changed().len(), 1);
 
     // Changed: the same file, the new text, a later time; pinned and made core.
