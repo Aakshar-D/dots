@@ -1165,7 +1165,21 @@ impl Memories {
                     self.recalled(&dot, &scopes, &named).await;
                     return Ok(recall_ids(&all, &ids));
                 }
-                let (query, file) = (arg("query").trim(), arg("file").trim());
+                let (query, asked) = (arg("query").trim(), arg("file").trim());
+                // A whole path at or below the project's folder, or the run's own checkout,
+                // is the path inside the project: a model that edits files names them so.
+                let whole = if Path::new(asked).is_absolute() || asked.starts_with('/') {
+                    let root = self.project_root(&dot).await;
+                    let roots = root
+                        .iter()
+                        .map(PathBuf::as_path)
+                        .chain(run.workspace_path.as_deref().map(Path::new));
+                    // The folder itself names no file of it.
+                    rank::in_project(asked, roots).filter(|inside| !inside.is_empty())
+                } else {
+                    None
+                };
+                let file = whole.as_deref().unwrap_or(asked);
                 // Asked about a file: only the memories linked to it.
                 let pool: Vec<&Memory> = all
                     .iter()
