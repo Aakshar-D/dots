@@ -898,6 +898,10 @@ async fn a_full_scope_lets_its_oldest_line_go_and_keeps_what_was_recalled() {
     s.workdir = root.to_string_lossy().to_string();
     s.workspace_mode = WorkspaceMode::Folder;
     let dot = store.create_dot(&s, None, "default").await.unwrap();
+    // The project's folder as Sage resolves it, which is how every caller names a project:
+    // what was recalled is kept under that folder's key (on macOS a temporary folder is
+    // under `/var`, a link to `/private/var`).
+    let root = memories.project_root(&dot).await.unwrap();
     let run = store
         .create_run(&NewRun::new(&dot.id, TriggerKind::Manual))
         .await
