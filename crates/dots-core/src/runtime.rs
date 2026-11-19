@@ -417,6 +417,9 @@ impl Runtime {
             Err(e) => tracing::warn!("marking unfinished result checks failed: {e}"),
         }
         let _ = std::fs::remove_dir_all(cfg.data_dir.join(crate::result_check::CHECKS_DIR));
+        // So do the folders of capture requests an exit interrupted (memory spec section 8):
+        // such a capture is not tried again.
+        let _ = std::fs::remove_dir_all(cfg.data_dir.join(crate::memory::capture::CAPTURES_DIR));
         // A scheduled message a crash left being sent: sent if its run was stored, else
         // scheduled again (send later spec section 4.5). Never sent twice, never lost.
         let recovered = store.recover_sending_messages(cfg.clock.now()).await?;

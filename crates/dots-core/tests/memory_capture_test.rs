@@ -1045,3 +1045,59 @@ async fn sages_capture_model_asks_a_local_sols_own_endpoint_once_with_no_tools()
     assert!(why.contains("claude CLI not found"), "{why}");
     assert_eq!(stub.requests().len(), 1);
 }
+
+#[tokio::test]
+async fn sages_capture_model_asks_the_cli_for_a_claude_sol_on_the_small_model() {
+    use dots_core::memory::capture::{parse_facts, EngineCapture};
+    let (dir, store) = temp_store().await;
+    // The stand-in CLI answers a capture request with two facts and what it used.
+    let script = dir.path().join("script.json");
+    let steps = json!([
+        {"emit": {"type": "system", "subtype": "init", "session_id": "s"}},
+        {"emit": {"type": "result", "subtype": "success", "is_error": false, "result": TWO_FACTS,
+                  "usage": {"input_tokens": 120, "output_tokens": 30}, "total_cost_usd": 0.002}},
+    ]);
+    std::fs::write(&script, steps.to_string()).unwrap();
+    let captures = dir.path().join("captures");
+    let model = EngineCapture::new(
+        store.clone(),
+        Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_fake-claude"))),
+        vec![(
+            "FAKE_CLAUDE_SCRIPT".to_string(),
+            script.to_string_lossy().into_owned(),
+        )],
+        captures.clone(),
+        CancellationToken::new(),
+    );
+    let dot = store
+        .create_dot(&spec("claude"), None, "default")
+        .await
+        .unwrap();
+    assert_eq!(dot.spec.engine, EngineKind::Claude);
+    let reply = model.ask(&dot, INSTRUCTIONS, "The prompt.").await.unwrap();
+    // The small model of Settings, not the sol's own.
+    assert_eq!(reply.model, "haiku");
+    assert_eq!(parse_facts(&reply.text).len(), 2);
+    assert_eq!((reply.usage.tokens_in, reply.usage.tokens_out), (120, 30));
+    assert_eq!(reply.usage.cost_usd, Some(0.002));
+    // The folder the request ran in is gone.
+    let left: Vec<_> = std::fs::read_dir(&captures).unwrap().collect();
+    assert!(left.is_empty(), "{left:?}");
+}
+
+#[tokio::test]
+async fn folders_left_by_interrupted_captures_go_when_sage_starts() {
+    use dots_core::runtime::{Config, Runtime};
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    // A capture's request was running when Sage was stopped: its folder stayed.
+    let left = data.join("captures").join("01LEFT");
+    std::fs::create_dir_all(&left).unwrap();
+    std::fs::write(left.join("note.txt"), "x").unwrap();
+    let mut cfg = Config::new(data.clone());
+    cfg.port = 0;
+    cfg.claude_path = Some(std::path::PathBuf::from(env!("CARGO_BIN_EXE_fake-claude")));
+    cfg.new_dot_root = dir.path().join("Dots");
+    let _rt = Runtime::start(cfg).await.unwrap();
+    assert!(!left.exists());
+}
