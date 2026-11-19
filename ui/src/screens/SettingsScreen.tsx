@@ -719,6 +719,24 @@ function Form({
             error={errors.context}
           />
         </Section>
+
+        <Section title="Memory">
+          <div className="flex items-center gap-2">
+            <Switch
+              id="settings-memory-capture"
+              checked={draft.memory_capture}
+              onCheckedChange={(memory_capture) => set({ memory_capture })}
+            />
+            <Label htmlFor="settings-memory-capture">Save memories after each run</Label>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            When a run that did some work ends, Sage saves one line about it and up to three
+            facts worth keeping, for the project the sol works in. One small request to the
+            cheapest model does this, after the run has ended, and its usage counts toward the
+            run. It reads the run's final answer, never the whole conversation. Short replies
+            and failed runs are skipped, and so is a sol whose Memory permission is not allow.
+          </p>
+        </Section>
       </>
     ),
     phone: (

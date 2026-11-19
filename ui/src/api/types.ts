@@ -567,6 +567,18 @@ export const RunEventData = z.discriminatedUnion("kind", [
     cache_read: z.number().int(),
     cost_usd: nullable(z.number()),
   }),
+  // The capture step's record, with what its model used; not shown in the transcript.
+  z.strictObject({
+    kind: z.literal("memory_capture"),
+    model: nullable(z.string()),
+    episodic: z.boolean(),
+    saved: z.number().int(),
+    skipped: nullable(z.string()),
+    tokens_in: z.number().int(),
+    tokens_out: z.number().int(),
+    cache_read: z.number().int(),
+    cost_usd: nullable(z.number()),
+  }),
 ]);
 
 const approvalShape = {
@@ -1189,6 +1201,9 @@ export const Settings = z.strictObject({
   check_results: z.boolean(),
   // The Claude model the result check uses.
   checker_model: z.string(),
+  // After a run that did some work, Sage saves what it learned as memories (memory spec
+  // section 8).
+  memory_capture: z.boolean(),
   // The Claude model Open Dot, the voice assistant, thinks with.
   open_dot_model: z.string(),
   // Open Dot listens and speaks; off by default, and with it off nothing voice-related runs.
