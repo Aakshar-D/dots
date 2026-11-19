@@ -437,7 +437,7 @@ pub fn stamp(root: &Path) -> Option<Stamp> {
 }
 
 /// `path` without Windows' `\\?\` in front, so two canonical paths compare.
-fn canonical(path: &Path) -> std::io::Result<PathBuf> {
+pub(crate) fn canonical(path: &Path) -> std::io::Result<PathBuf> {
     let c = std::fs::canonicalize(path)?;
     let text = c.to_string_lossy();
     Ok(match text.strip_prefix(r"\\?\") {
