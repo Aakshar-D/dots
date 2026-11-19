@@ -4,10 +4,11 @@
 //! through, the prompt's section, and the event every change publishes. A dot's memories are
 //! rows of the database; a project's are files in its folder (`files`).
 
+pub mod capture;
 pub mod files;
 pub mod rank;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
@@ -17,9 +18,9 @@ use serde_json::{json, Value};
 use crate::events::{Bus, RuntimeEvent};
 use crate::graph::Project;
 use crate::model::{
-    Dot, EngineKind, Memory, MemoryKind, MemoryScope, MemorySource, ProjectMemories,
+    Dot, EngineKind, Memory, MemoryKind, MemoryScope, MemorySource, ProjectMemories, Run,
 };
-use crate::store::{Added, NewMemory, Store};
+use crate::store::{Added, Doings, NewMemory, Store};
 use crate::{Error, Result};
 
 /// The most memories a dot keeps.
@@ -30,6 +31,9 @@ pub const MAX_PER_PROJECT: usize = files::MAX_PER_PROJECT;
 pub const MAX_TEXT: usize = 500;
 /// The longest `core` memory, in characters: core memories are in every prompt.
 pub const CORE_MAX_TEXT: usize = 160;
+/// The most `episodic` memories a dot or a project keeps: a newer one takes an older one's
+/// place (memory spec section 9).
+pub const EPISODIC_KEEP: usize = 50;
 
 /// The refusal of a text that is blank or too long.
 pub const LENGTH_RULE: &str = "A memory is 1 to 500 characters.";
@@ -130,6 +134,36 @@ impl<'a> NewFact<'a> {
     }
 }
 
+/// Whether room has to be made before a memory of kind `adding` joins `memories`, which may
+/// hold `max`: the scope is full, or its share of `episodic` memories is.
+pub fn needs_room(memories: &[Memory], adding: MemoryKind, max: usize) -> bool {
+    let episodic = || {
+        memories
+            .iter()
+            .filter(|m| m.kind == MemoryKind::Episodic)
+            .count()
+    };
+    memories.len() >= max || (adding == MemoryKind::Episodic && episodic() >= EPISODIC_KEEP)
+}
+
+/// The memory that goes to make room (memory spec section 9): the oldest `episodic` one that
+/// is not pinned, was not written by the person and was never recalled (`recalled` holds the
+/// ids that were); when every such one was recalled, the oldest of them. `None` when no
+/// memory may go.
+pub fn evictable<'a>(memories: &'a [Memory], recalled: &HashSet<String>) -> Option<&'a Memory> {
+    let may_go = |m: &&Memory| {
+        m.kind == MemoryKind::Episodic && !m.pinned && m.source != MemorySource::Person
+    };
+    let oldest = |never_recalled: bool| {
+        memories
+            .iter()
+            .filter(may_go)
+            .filter(|m| !never_recalled || !recalled.contains(&m.id))
+            .min_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)))
+    };
+    oldest(true).or_else(|| oldest(false))
+}
+
 /// Pinned first, then newest: the order every list of memories has.
 fn by_pin_then_newest(a: &Memory, b: &Memory) -> std::cmp::Ordering {
     b.pinned
@@ -193,6 +227,7 @@ impl Memories {
         check_kind(new.kind, &text).map_err(invalid)?;
         let files = files::clean_files(new.files).map_err(invalid)?;
         self.store.get_dot(dot_id).await?;
+        self.make_room(dot_id, &text, new.kind).await;
         let row = NewMemory {
             dot_id,
             text: &text,
@@ -262,6 +297,34 @@ impl Memories {
         let memory = self.store.delete_memory(id).await?;
         self.changed(&memory.dot_id);
         Ok(())
+    }
+
+    /// Upkeep before a memory of `kind` with `text` is saved for the dot (memory spec section
+    /// 9): when the dot is full, or has its share of `episodic` memories, one that may go
+    /// goes (`evictable`). Nothing goes for a text the dot remembers already, since that
+    /// save is refused. A failure here is logged and the save goes on, to be refused if the
+    /// dot is still full.
+    async fn make_room(&self, dot_id: &str, text: &str, kind: MemoryKind) {
+        let made = async {
+            let list = self.store.list_memories(dot_id).await?;
+            let key = same_key(text);
+            if !needs_room(&list, kind, MAX_PER_DOT)
+                || list.iter().any(|m| same_key(&m.text) == key)
+            {
+                return Ok(());
+            }
+            let recalled = self
+                .store
+                .recalled_memories(MemoryScope::Dot, dot_id)
+                .await?;
+            if let Some(going) = evictable(&list, &recalled) {
+                self.store.delete_memory(&going.id).await?;
+            }
+            Result::Ok(())
+        };
+        if let Err(e) = made.await {
+            tracing::warn!(dot = %dot_id, "making room for a memory failed: {e}");
+        }
     }
 
     fn changed(&self, dot_id: &str) {
@@ -345,6 +408,14 @@ impl Memories {
             scope: MemoryScope::Project,
             files: files::clean_files(new.files).map_err(invalid)?,
         };
+        // What `recall` ever answered with, for the upkeep below; without it every memory
+        // counts as never recalled.
+        let key = crate::graph::project::key_of(root);
+        let recalled = self
+            .store
+            .recalled_memories(MemoryScope::Project, &key)
+            .await
+            .unwrap_or_default();
         let _writing = self.writing.lock().await;
         let (at, fact) = (root.to_path_buf(), memory.clone());
         let refused = blocking(move || -> Result<Option<&'static str>> {
@@ -353,7 +424,19 @@ impl Memories {
             if loaded.facts.iter().any(|f| same_key(&f.memory.text) == key) {
                 return Ok(Some(PROJECT_DUPLICATE));
             }
-            if loaded.facts.len() >= MAX_PER_PROJECT {
+            // Upkeep (memory spec section 9): a full project, or one with its share of
+            // episodic memories, lets one that may go make room.
+            let mut count = loaded.facts.len();
+            let memories = loaded.memories();
+            if needs_room(&memories, fact.kind, MAX_PER_PROJECT) {
+                if let Some(going) = evictable(&memories, &recalled) {
+                    if let Some(file) = loaded.find(&going.id) {
+                        files::remove(&at, &file.file_name)?;
+                        count -= 1;
+                    }
+                }
+            }
+            if count >= MAX_PER_PROJECT {
                 return Ok(Some(PROJECT_FULL));
             }
             files::save_new(&at, &fact)?;
@@ -446,10 +529,15 @@ impl Memories {
     }
 
     /// What a run of `dot` may read, by scope. A project whose files cannot be read gives
-    /// none.
+    /// none. The project is not even looked for when no folder at or above the dot's can hold
+    /// its memory (`may_have_memory`): most runs start without asking git anything.
     async fn scopes(&self, dot: &Dot) -> Result<Scopes> {
         let sol = self.store.list_memories(&dot.id).await?;
-        let Some(project) = self.project(dot).await else {
+        let project = match may_have_memory(Path::new(dot.spec.workdir.trim())) {
+            true => self.project(dot).await,
+            false => None,
+        };
+        let Some(project) = project else {
             return Ok(Scopes {
                 sol,
                 project: Vec::new(),
@@ -592,6 +680,170 @@ impl Memories {
     }
 }
 
+/// The capture step (memory spec section 8): what a run learned is saved after it ended.
+impl Memories {
+    /// Saves what the run `run` of `dot` learned: one `episodic` line from the run's own row,
+    /// and at most three facts that `model`, asked once, picks from the run's final answer and
+    /// from `doings`, the short list of what it did. Without a model only the line is saved.
+    /// The facts pass the rules of `remember`, are dropped when the dot or its project has
+    /// them already, and replace an older memory only when the reply names its id. Never an
+    /// error: what cannot be saved is left out, and the outcome says what was.
+    pub async fn capture(
+        &self,
+        run: &Run,
+        dot: &Dot,
+        doings: &Doings,
+        model: Option<Arc<dyn capture::CaptureModel>>,
+    ) -> capture::Outcome {
+        let mut out = capture::Outcome::default();
+        let summary = run.summary.clone().unwrap_or_default();
+        let project = self.project(dot).await;
+        // The line for the run: to the project when the dot has one, else to the dot.
+        let ended = run.ended_at.clone().unwrap_or_else(crate::util::now);
+        let date: String = ended.chars().take(10).collect();
+        if let Some(text) = capture::episodic_text(&date, &summary) {
+            let line = NewFact {
+                text: &text,
+                kind: MemoryKind::Episodic,
+                files: &[],
+                source: MemorySource::Capture,
+                run_id: Some(&run.id),
+            };
+            let saved = match &project {
+                Some(project) => self.project_save(&project.root, line).await,
+                None => self.save_as(&dot.id, line).await,
+            };
+            match saved {
+                Ok(_) => out.episodic = true,
+                Err(e) => tracing::debug!(run = %run.id, "the run's line was not saved: {e}"),
+            }
+        }
+        let Some(model) = model else {
+            return out;
+        };
+        let scopes = match self.scopes(dot).await {
+            Ok(scopes) => scopes,
+            Err(e) => {
+                out.skipped = Some(format!("the memories could not be read: {e}"));
+                return out;
+            }
+        };
+        let all = scopes.all();
+        // The model sees the titles of the memories nearest to the answer, to leave out what
+        // is known and to name what a fact corrects.
+        let scores = self.scores(dot, &scopes, &summary).await;
+        let mut known: Vec<&Memory> = all
+            .iter()
+            .filter(|m| m.kind != MemoryKind::Episodic && scores.contains_key(&m.id))
+            .collect();
+        known.sort_by(|a, b| by_score(scores.get(&a.id), scores.get(&b.id)));
+        known.truncate(capture::MAX_KNOWN);
+        let id = crate::util::new_id();
+        let nonce = &id[id.len().saturating_sub(10)..];
+        let mut roots: Vec<&Path> = project.iter().map(|p| p.root.as_path()).collect();
+        roots.extend(run.workspace_path.as_deref().map(Path::new));
+        let doings = capture::in_project(doings, &roots);
+        let prompt = capture::build_prompt(&summary, &doings, &known, nonce);
+        // On a task of its own, so a model that panics leaves nothing saved, not a capture
+        // that never ends.
+        let asked_dot = dot.clone();
+        let mut asking =
+            tokio::spawn(
+                async move { model.ask(&asked_dot, capture::INSTRUCTIONS, &prompt).await },
+            );
+        let limit = capture::CAPTURE_LIMIT + std::time::Duration::from_secs(5);
+        let asked = tokio::time::timeout(limit, &mut asking).await;
+        if asked.is_err() {
+            asking.abort();
+        }
+        let reply = match asked {
+            Err(_) => Err("the capture took too long".to_string()),
+            Ok(Err(_)) => Err("the capture model stopped unexpectedly".to_string()),
+            Ok(Ok(reply)) => reply,
+        };
+        let reply = match reply {
+            Ok(reply) => reply,
+            Err(reason) => {
+                out.skipped = Some(reason);
+                return out;
+            }
+        };
+        out.model = Some(reply.model.clone());
+        out.usage = reply.usage;
+        // The texts kept in this capture: two facts of one reply may say the same.
+        let mut kept: Vec<String> = Vec::new();
+        for fact in capture::parse_facts(&reply.text) {
+            let saved = self
+                .keep_captured(run, dot, project.as_ref(), &all, &kept, &fact)
+                .await;
+            if let Some(text) = saved {
+                kept.push(text);
+            }
+        }
+        out.saved = kept.len();
+        out
+    }
+
+    /// Saves one fact of a capture's reply, which is a model's text and trusted no more than
+    /// a `remember` call: the text rules and the secret patterns apply, and files outside
+    /// the project are dropped. `all` is what the run may read and `kept` what this capture
+    /// saved before. The text as saved, or `None` for a fact that was left out: one that
+    /// breaks a rule, one that is known already, or one whose scope is full.
+    async fn keep_captured(
+        &self,
+        run: &Run,
+        dot: &Dot,
+        project: Option<&Project>,
+        all: &[Memory],
+        kept: &[String],
+        fact: &capture::Captured,
+    ) -> Option<String> {
+        let text = check_text(&fact.text).ok()?;
+        let files = files::lenient_files(&fact.files);
+        let key = same_key(&text);
+        let same = |other: &str| {
+            same_key(other) == key || rank::word_overlap(&text, other) >= capture::NEAR_DUPLICATE
+        };
+        // A correction names the memory it replaces: one the run may read, not the person's.
+        let replaced = fact
+            .replaces
+            .as_deref()
+            .and_then(|id| all.iter().find(|m| m.id == id))
+            .filter(|m| m.source != MemorySource::Person);
+        let known = kept.iter().any(|k| same(k))
+            || all
+                .iter()
+                .any(|m| replaced.is_none_or(|r| r.id != m.id) && same(&m.text));
+        if known {
+            return None;
+        }
+        if let Some(old) = replaced {
+            let changed = match (old.scope, project) {
+                (MemoryScope::Dot, _) => self.update_as(&old.id, Some(&text), None, None).await,
+                (MemoryScope::Project, Some(project)) => {
+                    self.project_update(&project.root, &old.id, Some(&text), None, None)
+                        .await
+                }
+                (MemoryScope::Project, None) => return None,
+            };
+            return changed.ok().map(|m| m.text);
+        }
+        let new = NewFact {
+            text: &text,
+            kind: fact.kind,
+            files: &files,
+            source: MemorySource::Capture,
+            run_id: Some(&run.id),
+        };
+        // What the run learned is the project's unless the reply says it is the dot's own.
+        let saved = match (fact.scope, project) {
+            (Some(MemoryScope::Dot), _) | (_, None) => self.save_as(&dot.id, new).await,
+            (_, Some(project)) => self.project_save(&project.root, new).await,
+        };
+        saved.ok().map(|m| m.text)
+    }
+}
+
 /// A dot's memories and its project's, as a run may read them, and the project's key.
 struct Scopes {
     sol: Vec<Memory>,
@@ -617,6 +869,19 @@ fn by_score(a: Option<&f64>, b: Option<&f64>) -> std::cmp::Ordering {
         (None, Some(_)) => Ordering::Greater,
         (None, None) => Ordering::Equal,
     }
+}
+
+/// Whether the project a dot in `workdir` works in can have memory files, told without
+/// asking git: some folder at or above `workdir` has a memory folder, or is a linked git
+/// checkout (its `.git` is a file), whose project is elsewhere. A project is its dot's folder
+/// or one above it in every other case, so `false` means there is nothing to read.
+fn may_have_memory(workdir: &Path) -> bool {
+    if workdir.as_os_str().is_empty() {
+        return false;
+    }
+    workdir
+        .ancestors()
+        .any(|dir| files::dir_of(dir).is_dir() || dir.join(".git").is_file())
 }
 
 /// Brings `MEMORY.md` up to the files after a change. The change stands when this fails.

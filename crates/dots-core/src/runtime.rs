@@ -585,6 +585,15 @@ impl Runtime {
                 shutdown.clone(),
             )));
         }
+        // The capture step asks the cheapest model of a dot's engine, with no tools (memory
+        // spec section 8): the CLI for a Claude dot, the dot's own endpoint for a local one.
+        runner.set_capturer(Arc::new(crate::memory::capture::EngineCapture::new(
+            store.clone(),
+            claude_program.clone(),
+            cfg.claude_env.clone(),
+            cfg.data_dir.join(crate::memory::capture::CAPTURES_DIR),
+            shutdown.clone(),
+        )));
         // Decisions parked before a restart (decided, but the resume never happened) are
         // turned into resume runs now; failures are logged and never block startup.
         match store.list_runs_by_status(RunStatus::AwaitingApproval).await {

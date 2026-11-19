@@ -732,7 +732,7 @@ async fn memories_stored_before_the_index_are_found_after_the_migration() {
     for sql in [
         "DROP TABLE memory_fts",
         "DROP TABLE memory_docs",
-        "DELETE FROM _sqlx_migrations WHERE version >= 60",
+        "DELETE FROM _sqlx_migrations WHERE version = 60",
     ] {
         sqlx::query(sql).execute(&raw).await.unwrap();
     }

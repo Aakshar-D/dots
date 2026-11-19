@@ -115,7 +115,7 @@ pub fn clean_files(raw: &[String]) -> Result<Vec<String>, &'static str> {
 
 /// The files a hand-written list names: those that are inside the project, the first
 /// `MAX_FILES` of them.
-fn lenient_files(raw: &[String]) -> Vec<String> {
+pub fn lenient_files(raw: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for file in raw.iter().filter_map(|f| clean_file(f)) {
         if !out.contains(&file) && out.len() < MAX_FILES {

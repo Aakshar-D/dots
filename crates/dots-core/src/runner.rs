@@ -248,6 +248,9 @@ pub struct Runner {
     /// Claude's usage limits (usage and limits spec section 4), set once by the runtime
     /// (`set_limits`). Without them no run is held.
     limits: OnceLock<Arc<Limits>>,
+    /// The model the capture step asks (memory spec section 8), set once by the runtime
+    /// (`set_capturer`). Without one a captured run gets its `episodic` line only.
+    capturer: OnceLock<Arc<dyn crate::memory::capture::CaptureModel>>,
     /// What gives a succeeded Claude run's answer its result check (result check spec), set
     /// once by the runtime (`set_checker`). Without one no run is checked.
     checker: OnceLock<Arc<dyn ResultChecker>>,
@@ -284,9 +287,16 @@ impl Runner {
             watcher_files: OnceLock::new(),
             chat_files: OnceLock::new(),
             limits: OnceLock::new(),
+            capturer: OnceLock::new(),
             checker: OnceLock::new(),
             graphs: OnceLock::new(),
         })
+    }
+
+    /// The model the capture step asks after a run (memory spec section 8). Set once, before
+    /// any run starts.
+    pub fn set_capturer(&self, capturer: Arc<dyn crate::memory::capture::CaptureModel>) {
+        let _ = self.capturer.set(capturer);
     }
 
     /// What checks the runs' answers (result check spec). Set once, before any run starts.
@@ -1139,6 +1149,7 @@ impl Runner {
         cancel.cancel();
         if result.is_ok() {
             self.start_check(&run_id).await;
+            self.start_capture(&run_id);
         }
         if let Err(e) = result {
             tracing::warn!(run = %run_id, "run failed: {e}");
@@ -2671,6 +2682,98 @@ impl Runner {
         )
         .ok()?;
         Some(settings.checker_model)
+    }
+
+    /// Starts the capture step of the run (memory spec section 8) on a task of its own. The
+    /// run's row is final and announced by now, and the runner waits for nothing here: not
+    /// for the reads that decide whether the run is captured, nor for the model.
+    fn start_capture(self: &Arc<Self>, run_id: &str) {
+        let Some(checkins) = self.checkins().cloned() else {
+            return;
+        };
+        let (this, run_id) = (self.clone(), run_id.to_string());
+        tokio::spawn(async move {
+            this.capture_run(&checkins, &run_id).await;
+        });
+    }
+
+    /// Saves what the run learned, when it is one that is captured
+    /// (`memory::capture::should_capture`) and was not taken before: the claim is one
+    /// statement, so a run is captured at most once, also across a restart. What the model
+    /// used is added to the run's usage and recorded as a `memory_capture` event. Nothing
+    /// here changes how the run ended; every failure is logged and leaves the run as it was.
+    async fn capture_run(&self, checkins: &CheckIns, run_id: &str) {
+        use crate::memory::capture;
+        let read = async {
+            let run = self.store.get_run(run_id).await?;
+            let dot = self.store.get_dot(&run.dot_id).await?;
+            let settings = self.store.get_settings().await?;
+            let doings = self.store.run_doings(run_id).await?;
+            Result::Ok((run, dot, settings, doings))
+        };
+        let (run, dot, settings, doings) = match read.await {
+            Ok(read) => read,
+            Err(e) => {
+                tracing::warn!(run = %run_id, "reading the run to capture failed: {e}");
+                return;
+            }
+        };
+        let taken = capture::should_capture(
+            settings.memory_capture,
+            &dot,
+            run.status,
+            run.summary.as_deref(),
+            doings.calls,
+        );
+        if taken.is_err() {
+            return;
+        }
+        match self.store.claim_memory_capture(run_id).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!(run = %run_id, "taking the run for capture failed: {e}");
+                return;
+            }
+        }
+        let outcome = checkins
+            .memories()
+            .capture(&run, &dot, &doings, self.capturer.get().cloned())
+            .await;
+        let usage = outcome.usage;
+        if usage.tokens_in > 0 || usage.tokens_out > 0 || usage.cost_usd.is_some() {
+            let added = self
+                .store
+                .add_usage(
+                    run_id,
+                    usage.tokens_in as i64,
+                    usage.tokens_out as i64,
+                    usage.cache_read as i64,
+                    usage.cost_usd,
+                )
+                .await;
+            match added {
+                Ok(_) => self.announce(run_id).await,
+                Err(e) => tracing::warn!(run = %run_id, "adding the capture's usage failed: {e}"),
+            }
+        }
+        let recorded = match serde_json::to_value(capture::CaptureEvent::from(&outcome)) {
+            Ok(data) => {
+                self.store
+                    .append_event(run_id, capture::EVENT_KIND, &data)
+                    .await
+            }
+            Err(e) => Err(e.into()),
+        };
+        match recorded {
+            Ok(rec) => {
+                let _ = self.bus.send(RuntimeEvent::RunEvent { event: rec });
+            }
+            Err(e) => tracing::warn!(run = %run_id, "recording the capture failed: {e}"),
+        }
+        if let Err(e) = self.store.finish_memory_capture(run_id).await {
+            tracing::warn!(run = %run_id, "closing the capture failed: {e}");
+        }
     }
 
     /// Starts the result check of the run, when it ended succeeded and is marked as being
