@@ -26,7 +26,7 @@ impl Awake {
         let spawned = std::thread::Builder::new()
             .name("sage-awake".into())
             .spawn(move || {
-                let mut holder = Holder::default();
+                let mut holder = Holder::new();
                 let mut on = false;
                 // Ends when the `Awake` is dropped: the request goes with the thread.
                 while let Ok(want) = rx.recv() {
@@ -51,11 +51,14 @@ impl Awake {
 }
 
 #[cfg(windows)]
-#[derive(Default)]
 struct Holder;
 
 #[cfg(windows)]
 impl Holder {
+    fn new() -> Holder {
+        Holder
+    }
+
     fn hold(&mut self, on: bool) {
         use windows_sys::Win32::System::Power::{
             SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
@@ -73,13 +76,16 @@ impl Holder {
 }
 
 #[cfg(target_os = "macos")]
-#[derive(Default)]
 struct Holder {
     child: Option<std::process::Child>,
 }
 
 #[cfg(target_os = "macos")]
 impl Holder {
+    fn new() -> Holder {
+        Holder { child: None }
+    }
+
     fn hold(&mut self, on: bool) {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
@@ -95,11 +101,14 @@ impl Holder {
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]
-#[derive(Default)]
 struct Holder;
 
 #[cfg(not(any(windows, target_os = "macos")))]
 impl Holder {
+    fn new() -> Holder {
+        Holder
+    }
+
     fn hold(&mut self, _on: bool) {}
 }
 
