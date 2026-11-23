@@ -435,6 +435,7 @@ async fn a_workflow_without_a_webhook_trigger_turned_off_or_with_a_problem_is_40
         id: "work".into(),
         name: "Work".into(),
         kind: StepKind::Agent {
+            options: Default::default(),
             member: t.other.id.clone(),
             job: "Fix it.".into(),
             can_send_back_to: vec![],

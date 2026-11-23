@@ -358,6 +358,7 @@ async fn run_step(t: &T, member: &Dot) -> WorkflowRun {
         id: "research".into(),
         name: "Research it".into(),
         kind: StepKind::Agent {
+            options: Default::default(),
             member: member.id.clone(),
             job: "Research it.".into(),
             can_send_back_to: Vec::new(),

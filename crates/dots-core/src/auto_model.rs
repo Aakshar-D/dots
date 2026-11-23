@@ -346,10 +346,18 @@ fn route_fresh(signals: &Signals, words: &[String]) -> Fresh {
 /// wrote for its step.
 fn message_of(run: &Run) -> Option<String> {
     let payload = run.payload.as_ref()?;
+    // A workflow step is sized by its task and job (`/workflow/route`), not by the summaries
+    // of the steps before it; a run queued before that was written has its section only.
     let text = payload
         .get("message")
         .or_else(|| payload.get("answer"))
         .and_then(Value::as_str)
+        .or_else(|| {
+            payload
+                .pointer("/workflow/route")
+                .and_then(Value::as_str)
+                .filter(|t| !t.trim().is_empty())
+        })
         .or_else(|| payload.pointer("/workflow/section").and_then(Value::as_str))?;
     let text = text.trim();
     (!text.is_empty()).then(|| text.to_string())
@@ -412,6 +420,34 @@ pub fn choose(dot: &Dot, run: &Run, thread: Option<ModelTier>, settings: &Settin
     ModelChoice {
         model: settings.auto_models.model(route.tier).to_string(),
         auto: Some(route),
+    }
+}
+
+/// The reason shown for a model a workflow step set.
+pub const STEP_REASON: &str = "set on the workflow step";
+
+/// The model for `run`, a run of a workflow step whose step asks for the size `step`
+/// (lean workflows spec section 3): the settings' model of that size for a Claude dot, Auto
+/// or not. Without a size, a run that goes on in the thread of one that had a size keeps it
+/// (a send-back, an answered question, a delegate's results), so a session never changes
+/// model between turns; else `choose`.
+pub fn choose_for_step(
+    dot: &Dot,
+    run: &Run,
+    thread: Option<ModelTier>,
+    settings: &Settings,
+    step: Option<ModelTier>,
+) -> ModelChoice {
+    if dot.spec.engine != EngineKind::Claude {
+        return choose(dot, run, thread, settings);
+    }
+    let kept = thread.filter(|_| !is_auto(&dot.spec.model) && run.workflow_step_run_id.is_some());
+    match step.or(kept) {
+        Some(tier) => ModelChoice {
+            model: settings.auto_models.model(tier).to_string(),
+            auto: Some(Route::new(tier, STEP_REASON)),
+        },
+        None => choose(dot, run, thread, settings),
     }
 }
 

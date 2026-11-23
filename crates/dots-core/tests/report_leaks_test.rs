@@ -327,6 +327,7 @@ async fn the_report_hides_the_names_of_workflows_and_teams() {
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                options: Default::default(),
                 member: dot.id.clone(),
                 job: "Work.".into(),
                 can_send_back_to: vec![],

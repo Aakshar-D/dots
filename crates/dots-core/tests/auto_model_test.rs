@@ -5,7 +5,7 @@ mod common;
 
 use common::{fake_dot, fake_run};
 use dots_core::auto_model::{
-    choose, fallback_tier, is_auto, model_unavailable, route, signals, AutoModels, Signals,
+    choose, choose_for_step, fallback_tier, is_auto, model_unavailable, route, signals, AutoModels, Signals,
     AUTO_MODEL,
 };
 use dots_core::model::{EngineKind, ModelTier, TriggerKind, WorkspaceMode};
@@ -415,4 +415,81 @@ async fn auto_is_listed_first_for_claude_and_not_for_a_local_endpoint() {
     assert!(!models[0].hint.is_empty());
     let err = list_models(EngineKind::Local, None).await.unwrap_err();
     assert!(err.to_string().contains("endpoint"));
+}
+
+#[test]
+fn a_workflow_step_sets_the_size_of_its_model_and_its_thread_keeps_it() {
+    let mut dot = fake_dot(
+        "d",
+        std::path::Path::new("C:/tmp/repo"),
+        WorkspaceMode::Folder,
+    );
+    let settings = Settings::default();
+    let mut step = fake_run(
+        TriggerKind::Workflow,
+        Some(json!({"workflow": {"section": "## Workflow", "route": "Post it."}})),
+        None,
+    );
+    step.workflow_step_run_id = Some("sr".into());
+    // A dot with its own model, and one on Auto: the step's size wins for both.
+    for model in ["opus", "Auto"] {
+        dot.spec.model = model.into();
+        let c = choose_for_step(&dot, &step, None, &settings, Some(Small));
+        assert_eq!(c.model, "haiku");
+        let auto = c.auto.unwrap();
+        assert_eq!((auto.tier, auto.reason.as_str()), (Small, "set on the workflow step"));
+    }
+    // No size on the step: the dot's own model, as before.
+    dot.spec.model = "opus".into();
+    let c = choose_for_step(&dot, &step, None, &settings, None);
+    assert_eq!((c.model.as_str(), c.auto), ("opus", None));
+    // A run that goes on in the thread of a sized step keeps the size, so its session keeps
+    // its model; an ordinary run of the dot does not.
+    let c = choose_for_step(&dot, &step, Some(Small), &settings, None);
+    assert_eq!(c.model, "haiku");
+    let chat = fake_run(Chat, Some(json!({"message": "hi"})), None);
+    let c = choose_for_step(&dot, &chat, Some(Small), &settings, None);
+    assert_eq!(c.model, "opus");
+    // Another engine has no sizes.
+    dot.spec.engine = EngineKind::Local;
+    let c = choose_for_step(&dot, &step, None, &settings, Some(Small));
+    assert_eq!((c.model.as_str(), c.auto), ("opus", None));
+}
+
+#[test]
+fn a_workflow_step_is_sized_by_its_task_and_job_not_by_earlier_summaries() {
+    let dot = fake_dot(
+        "d",
+        std::path::Path::new("C:/tmp/repo"),
+        WorkspaceMode::Folder,
+    );
+    // The section holds an earlier step's words ("refactor", "debug"); the route does not.
+    let run = fake_run(
+        TriggerKind::Workflow,
+        Some(json!({"workflow": {
+            "section": "## Workflow
+
+### Earlier steps
+
+I had to refactor and debug the code.",
+            "route": "Post the update.
+
+Send it to the channel.",
+        }})),
+        None,
+    );
+    let s = signals(&dot, &run, None);
+    assert_eq!(s.text, "Post the update.
+
+Send it to the channel.");
+    assert!(s.is_message);
+    // A run queued before the route was written is sized by its section, as it was.
+    let old = fake_run(
+        TriggerKind::Workflow,
+        Some(json!({"workflow": {"section": "## Workflow
+
+Design the API"}})),
+        None,
+    );
+    assert!(signals(&dot, &old, None).text.contains("Design the API"));
 }

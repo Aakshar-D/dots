@@ -7,6 +7,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::model::ModelTier;
 use crate::schedule::Schedule;
 use crate::workflows::MAX_TASK;
 use crate::{Error, Result};
@@ -73,6 +74,10 @@ pub enum StepKind {
         outcomes: Vec<String>,
         #[serde(default)]
         delegate: Option<Delegate>,
+        /// What makes its run cheaper (lean workflows spec section 2). Left out of the JSON
+        /// while every one is at its default, so a workflow saved before them reads the same.
+        #[serde(default, skip_serializing_if = "StepOptions::is_default")]
+        options: StepOptions,
     },
     /// The workflow waits for the person to approve or send back.
     Check {
@@ -94,6 +99,33 @@ pub enum StepKind {
         #[serde(default)]
         otherwise: Vec<Step>,
     },
+}
+
+/// What makes an agent step's run cheaper (lean workflows spec section 2). Every default is
+/// the step as it ran before these existed.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StepOptions {
+    /// The size of model its run starts with, mapped by the settings' Auto models; `None`:
+    /// the member's own model. Only a member on the Claude engine has sizes: another engine's
+    /// keeps its own model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<ModelTier>,
+    /// Its prompt carries the member's instructions and the workflow only: no memories and no
+    /// project map, and its run saves no memory.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub lean: bool,
+    /// The ids of the earlier steps whose summaries its prompt carries, each in full. `None`:
+    /// every earlier step's, the newest in full and the older ones cut short
+    /// (`workflows::MAX_OLDER_SUMMARY`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reads: Option<Vec<String>>,
+}
+
+impl StepOptions {
+    /// Whether every option is at its default.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// What a delegate step's member may start (section 5.3).
@@ -448,8 +480,25 @@ impl Definition {
                 can_send_back_to,
                 outcomes,
                 delegate,
+                options,
             } => {
                 member_and_job(m, job)?;
+                if let Some(reads) = &options.reads {
+                    // A summary comes from a step a member worked on: an agent step, anywhere
+                    // before this one in run order (a path a run did not take hands on nothing).
+                    let all = self.all();
+                    let here = all.iter().position(|s| s.id == step.id).unwrap_or(0);
+                    let earlier = |id: &str| {
+                        all[..here]
+                            .iter()
+                            .any(|s| s.id == id && matches!(s.kind, StepKind::Agent { .. }))
+                    };
+                    if let Some(id) = reads.iter().find(|id| !earlier(id)) {
+                        return invalid(format!(
+                            "step \"{name}\": it can read only an agent step before it, not {id:?}"
+                        ));
+                    }
+                }
                 let mut seen = HashSet::new();
                 for outcome in outcomes {
                     let outcome = outcome.trim();
@@ -619,6 +668,14 @@ impl Definition {
             && way
                 .into_iter()
                 .any(|(list, i)| list[..i].iter().any(passes_check))
+    }
+
+    /// The options of the agent step `id`; `None` for a step of another kind or an unknown id.
+    pub fn options(&self, id: &str) -> Option<&StepOptions> {
+        match &self.step(id)?.kind {
+            StepKind::Agent { options, .. } => Some(options),
+            _ => None,
+        }
     }
 
     /// Whether the member `dot_id` may start this workflow from a chat.
