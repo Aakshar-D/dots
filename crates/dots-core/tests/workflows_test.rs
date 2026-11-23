@@ -5941,10 +5941,13 @@ async fn refused_start(w: &World, flow: &str, inputs: Vec<(&str, &str)>) -> Stri
     }
 }
 
+/// What a hook server was sent: each request's method, path and query, `x-key` header and body.
+type Sent = Arc<Mutex<Vec<(String, String, String, String)>>>;
+
 /// A local HTTP server that keeps what it is sent (method, path and query, the `x-key`
 /// header, the body) and answers 200 `ok`, or 500 `nope` on a path that starts with `/fail`.
-async fn hook_server() -> (String, Arc<Mutex<Vec<(String, String, String, String)>>>) {
-    let got: Arc<Mutex<Vec<(String, String, String, String)>>> = Arc::default();
+async fn hook_server() -> (String, Sent) {
+    let got: Sent = Arc::default();
     let keep = got.clone();
     let app = axum::Router::new().fallback(
         move |method: axum::http::Method,
