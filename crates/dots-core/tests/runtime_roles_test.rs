@@ -508,11 +508,13 @@ fn flow(member: &str) -> WorkflowSpec {
     WorkflowSpec {
         name: "fix".into(),
         definition: Definition {
+            inputs: vec![],
             trigger: Trigger::Manual,
             steps: vec![Step {
                 id: "a".into(),
                 name: "Work".into(),
                 kind: StepKind::Agent {
+                    produces: vec![],
                     options: Default::default(),
                     member: member.into(),
                     job: "Fix it.".into(),
@@ -601,7 +603,8 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
             workflow_id: workflow.id.clone(),
             team_id: team.id.clone(),
             definition: workflow.spec.definition.clone(),
-            project_id: project.id.clone(),
+            project_id: Some(project.id.clone()),
+            inputs: Default::default(),
             project: project_spec.clone(),
             task: "Fix it.".into(),
             trigger: WorkflowTrigger::Manual,
@@ -700,7 +703,8 @@ async fn viewer_cannot_answer_or_change_through_the_other_doors() {
     // Workflow runs.
     let start = StartRequest {
         workflow_id: workflow.id.clone(),
-        project_id: project.id.clone(),
+        project_id: Some(project.id.clone()),
+        inputs: Default::default(),
         task: "Fix it again.".into(),
         trigger: WorkflowTrigger::Manual,
         origin_run_id: None,

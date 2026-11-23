@@ -175,7 +175,9 @@ impl Harness {
         WorkflowSpec {
             name: name.into(),
             definition: Definition {
+                inputs: vec![],
                 trigger: Trigger::Schedule {
+                    catch_up: false,
                     schedule,
                     task: TASK.into(),
                     project: project.into(),
@@ -184,6 +186,7 @@ impl Harness {
                     id: "fix".into(),
                     name: "Fix it".into(),
                     kind: StepKind::Agent {
+                        produces: vec![],
                         options: Default::default(),
                         member: member.id.clone(),
                         job: "Fix the bug.".into(),
@@ -598,6 +601,7 @@ async fn an_every_schedule_saved_gets_its_anchor_and_keeps_it() {
     let teams = Teams::new(h.store.clone(), h.bus.clone());
     let anchor = |w: &dots_core::model::Workflow| match &w.spec.definition.trigger {
         Trigger::Schedule {
+            catch_up: false,
             schedule:
                 Schedule {
                     rule: Rule::Every { anchor, .. },

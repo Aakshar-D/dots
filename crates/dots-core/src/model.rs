@@ -1668,6 +1668,10 @@ pub struct Handoff {
     pub summary: String,
     pub branches: Vec<BranchRef>,
     pub outcome: Option<String>,
+    /// The outputs an agent step gave, by name (general workflows spec section 5), with what
+    /// the person changed at a check.
+    #[serde(default)]
+    pub outputs: std::collections::BTreeMap<String, String>,
     /// For a delegate step, what each member it started handed back, in the order started.
     #[serde(default)]
     pub members: Vec<MemberHandoff>,
@@ -1750,6 +1754,10 @@ pub struct WorkflowRun {
     pub project_id: Option<String>,
     pub project: ProjectSpec,
     pub task: String,
+    /// What it was started with besides the task, by input name (general workflows spec
+    /// section 3).
+    #[serde(default)]
+    pub inputs: std::collections::BTreeMap<String, String>,
     pub trigger: WorkflowTrigger,
     pub origin_run_id: Option<String>,
     /// A test run: its deploy steps push nothing (section 5.1).
@@ -1804,9 +1812,12 @@ pub struct NewWorkflowRun {
     pub workflow_id: String,
     pub team_id: String,
     pub definition: crate::workflow::Definition,
-    pub project_id: String,
+    /// `None`: the run works in the team's own folder, and `project` names that.
+    pub project_id: Option<String>,
     pub project: ProjectSpec,
     pub task: String,
+    /// Each input's name and text, the defaults filled in.
+    pub inputs: std::collections::BTreeMap<String, String>,
     pub trigger: WorkflowTrigger,
     pub origin_run_id: Option<String>,
     pub test: bool,

@@ -422,11 +422,13 @@ async fn ended_step_thread(rt: &Runtime, dot: &Dot, dir: &TempDir) -> Run {
     };
     let project_id = store.add_project(&team.id, &project).await.unwrap().id;
     let definition = Definition {
+        inputs: vec![],
         trigger: Trigger::Manual,
         steps: vec![Step {
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                produces: vec![],
                 options: Default::default(),
                 member: dot.id.clone(),
                 job: "Fix it.".into(),
@@ -453,7 +455,8 @@ async fn ended_step_thread(rt: &Runtime, dot: &Dot, dir: &TempDir) -> Run {
             workflow_id: workflow.id,
             team_id: team.id,
             definition,
-            project_id,
+            project_id: Some(project_id),
+            inputs: Default::default(),
             project,
             task: "The tray icon is invisible.".into(),
             trigger: WorkflowTrigger::Manual,

@@ -1018,11 +1018,13 @@ async fn renaming_or_deleting_a_member_dot_announces_its_teams() {
     let fix = WorkflowSpec {
         name: "Fix".into(),
         definition: Definition {
+            inputs: vec![],
             trigger: Trigger::Manual,
             steps: vec![Step {
                 id: "a".into(),
                 name: "Work".into(),
                 kind: StepKind::Agent {
+                    produces: vec![],
                     options: Default::default(),
                     member: dev.id.clone(),
                     job: "Fix it.".into(),

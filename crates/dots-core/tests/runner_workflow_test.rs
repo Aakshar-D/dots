@@ -75,11 +75,13 @@ async fn step_run_in(
         .await
         .unwrap();
     let definition = Definition {
+        inputs: vec![],
         trigger: Trigger::Manual,
         steps: vec![FlowStep {
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                produces: vec![],
                 options: Default::default(),
                 member: dot.id.clone(),
                 job: "Work.".into(),
@@ -112,7 +114,8 @@ async fn step_run_in(
             workflow_id: workflow.id,
             team_id: team.id,
             definition,
-            project_id: "p".into(),
+            project_id: Some("p".into()),
+            inputs: Default::default(),
             project,
             task: "t".into(),
             trigger: WorkflowTrigger::Manual,

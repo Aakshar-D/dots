@@ -2789,8 +2789,9 @@ pub async fn workflow_run_dot_runs(state: State<'_, AppState>, id: String) -> Re
 pub async fn workflow_run_start(
     state: State<'_, AppState>,
     workflow_id: String,
-    project_id: String,
+    project_id: Option<String>,
     task: String,
+    inputs: Option<std::collections::BTreeMap<String, String>>,
     test: bool,
 ) -> Res<WorkflowRun> {
     Ok(state
@@ -2799,6 +2800,7 @@ pub async fn workflow_run_start(
         .start(StartRequest {
             workflow_id,
             project_id,
+            inputs: inputs.unwrap_or_default(),
             task,
             trigger: WorkflowTrigger::Manual,
             origin_run_id: None,

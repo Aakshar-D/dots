@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::ModelTier;
 use crate::schedule::Schedule;
+use crate::step_template::{self, Mark};
 use crate::workflows::MAX_TASK;
 use crate::{Error, Result};
 
@@ -20,6 +21,20 @@ pub const MAX_NAME: usize = 80;
 pub const MAX_JOB: usize = 8_000;
 /// The longest outcome label, in characters after trimming.
 pub const MAX_OUTCOME: usize = 40;
+/// The most inputs a workflow asks for, and the most outputs an agent step gives.
+pub const MAX_INPUTS: usize = 20;
+pub const MAX_OUTPUTS: usize = 10;
+/// The longest URL of an action, the most headers it sends, and its longest header value and
+/// body, in characters.
+pub const MAX_URL: usize = 2_000;
+pub const MAX_HEADERS: usize = 20;
+pub const MAX_HEADER_VALUE: usize = 2_000;
+pub const MAX_BODY: usize = 20_000;
+/// The longest path and content of a file an action writes, in characters.
+pub const MAX_FILE_PATH: usize = 200;
+pub const MAX_FILE_CONTENT: usize = 100_000;
+/// The longest wait of a wait step: a year, in minutes.
+pub const MAX_WAIT_MINUTES: u32 = 366 * 24 * 60;
 
 /// What starts a workflow run (section 5.1).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,11 +46,15 @@ pub enum Trigger {
     /// the members (dot ids) that may.
     Chat { starters: Vec<String> },
     /// Dots starts it at each slot of `schedule`, with this task, on the project named
-    /// `project`. The schedule's `catch_up` is ignored: a workflow schedule never catches up.
+    /// `project` (blank: the team's own folder). The schedule's own `catch_up` is ignored;
+    /// with this `catch_up`, the newest slot missed while Dots was closed starts once, when
+    /// it is less than a day old (general workflows spec section 9).
     Schedule {
         schedule: Schedule,
         task: String,
         project: String,
+        #[serde(default)]
+        catch_up: bool,
     },
     /// A `POST` to the workflow's URL with its token starts it. The body's `task` and `project`
     /// (by name) are used; these are the fallbacks for a body without them.
@@ -78,6 +97,25 @@ pub enum StepKind {
         /// before these existed has none, and reads as one with every default.
         #[serde(default)]
         options: StepOptions,
+        /// The names of the outputs it gives (general workflows spec section 5): its reply ends
+        /// with each in a block of its name, and a later action uses them.
+        #[serde(default)]
+        produces: Vec<String>,
+    },
+    /// Dots itself does one thing, with no model (general workflows spec section 6).
+    Action {
+        #[serde(flatten)]
+        action: Action,
+        /// It may run with no check before it. Off, an action that sends something out needs
+        /// a check before it on every path, as a deploy does.
+        #[serde(default)]
+        unattended: bool,
+    },
+    /// The workflow waits for a time, with no model and no one to ask (general workflows spec
+    /// section 7).
+    Wait {
+        #[serde(flatten)]
+        wait: Wait,
     },
     /// The workflow waits for the person to approve or send back.
     Check {
@@ -99,6 +137,114 @@ pub enum StepKind {
         #[serde(default)]
         otherwise: Vec<Step>,
     },
+}
+
+/// What an action step does (general workflows spec section 6). JSON: `"action"` beside the
+/// step's other fields. Each text may hold `{{…}}` marks (`step_template`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+pub enum Action {
+    /// Sends one HTTP request. The step succeeds on a 2xx answer.
+    Http {
+        method: HttpMethod,
+        url: String,
+        #[serde(default)]
+        headers: Vec<Header>,
+        #[serde(default)]
+        body: String,
+    },
+    /// Writes a text file into the project's folder, replacing one of that path.
+    File { path: String, content: String },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HttpMethod {
+    Get,
+    Post,
+    Put,
+    Patch,
+    Delete,
+}
+
+impl HttpMethod {
+    /// The method as HTTP writes it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HttpMethod::Get => "GET",
+            HttpMethod::Post => "POST",
+            HttpMethod::Put => "PUT",
+            HttpMethod::Patch => "PATCH",
+            HttpMethod::Delete => "DELETE",
+        }
+    }
+}
+
+/// One header of an HTTP action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Header {
+    pub name: String,
+    pub value: String,
+}
+
+/// How long a wait step waits (general workflows spec section 7). JSON: `"wait"` beside the
+/// step's other fields.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "wait", rename_all = "snake_case")]
+pub enum Wait {
+    /// For this many minutes from when the step begins.
+    Minutes { minutes: u32 },
+    /// Until the next `at` (`HH:MM`, this PC's time) after the step begins, on `weekday` when
+    /// one is set.
+    Time {
+        at: String,
+        #[serde(default)]
+        weekday: Option<chrono::Weekday>,
+    },
+    /// Until the date and time the run's input `input` holds.
+    Input { input: String },
+}
+
+/// The time of day `at` names, written `HH:MM`.
+pub fn time_of_day(at: &str) -> Option<chrono::NaiveTime> {
+    chrono::NaiveTime::parse_from_str(at.trim(), "%H:%M").ok()
+}
+
+/// Something a run is started with besides its task (general workflows spec section 3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputField {
+    /// How steps name it: 1 to 40 of `a-z`, `0-9`, `-` and `_`.
+    pub name: String,
+    /// What the person is asked for.
+    pub label: String,
+    #[serde(default)]
+    pub kind: InputKind,
+    #[serde(default)]
+    pub required: bool,
+    /// What a start that gives none uses.
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputKind {
+    /// One line.
+    #[default]
+    Text,
+    /// Several lines.
+    LongText,
+    /// A date and a time of this PC, written `YYYY-MM-DDTHH:MM`.
+    DateTime,
+}
+
+/// The date and time `value` names, written `YYYY-MM-DDTHH:MM` (seconds allowed), as this
+/// PC's clock reads it.
+pub fn date_time_of(value: &str) -> Option<chrono::NaiveDateTime> {
+    let value = value.trim();
+    ["%Y-%m-%dT%H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M"]
+        .iter()
+        .find_map(|f| chrono::NaiveDateTime::parse_from_str(value, f).ok())
 }
 
 /// What makes an agent step's run cheaper (lean workflows spec section 2). Every default is
@@ -218,6 +364,9 @@ pub struct Definition {
     pub steps: Vec<Step>,
     #[serde(default)]
     pub budget: Budget,
+    /// What a start is asked for besides the task (general workflows spec section 3).
+    #[serde(default)]
+    pub inputs: Vec<InputField>,
 }
 
 /// The first rule of section 5.8 a workflow breaks, and the step it is about, so the builder
@@ -242,6 +391,19 @@ impl WorkflowProblem {
             },
         }
     }
+}
+
+/// Whether `path`, a file an action writes, stays inside the folder it is joined to: relative,
+/// with no drive, no `..` and no empty part. Checked again on the filled path when the step
+/// runs.
+pub fn relative_path_ok(path: &str) -> bool {
+    let path = path.trim();
+    !path.is_empty()
+        && !path.starts_with(['/', '\\'])
+        && !path.contains(':')
+        && path
+            .split(['/', '\\'])
+            .all(|part| !part.is_empty() && part != ".." && part != ".")
 }
 
 fn invalid<T>(message: String) -> Result<T> {
@@ -365,6 +527,9 @@ impl Definition {
         if let Err(e) = self.validate_trigger(&member) {
             return whole(e);
         }
+        if let Err(e) = self.validate_inputs() {
+            return whole(e);
+        }
         if self.steps.is_empty() {
             return whole(Error::Invalid("a workflow needs at least one step".into()));
         }
@@ -415,6 +580,7 @@ impl Definition {
                 schedule,
                 task,
                 project,
+                ..
             } => {
                 match schedule.validate() {
                     Err(Error::Invalid(m)) => {
@@ -425,9 +591,8 @@ impl Definition {
                 if task.trim().is_empty() || too_long(task, MAX_TASK) {
                     return invalid("the trigger's task must be 1 to 8,000 characters".into());
                 }
-                if project.trim().is_empty() {
-                    return invalid("the trigger needs a project".into());
-                }
+                // A blank project: the team's own folder (general workflows spec section 2).
+                let _ = project;
             }
             Trigger::Webhook { task, .. } => {
                 // A blank fallback is no fallback: the body must then carry the task.
@@ -474,8 +639,28 @@ impl Definition {
                 outcomes,
                 delegate,
                 options,
+                produces,
             } => {
                 member_and_job(m, job)?;
+                if produces.len() > MAX_OUTPUTS {
+                    return invalid(format!(
+                        "step \"{name}\": a step gives at most {MAX_OUTPUTS} outputs"
+                    ));
+                }
+                let mut given = HashSet::new();
+                for output in produces {
+                    if !step_template::name_ok(output) || output == "summary" {
+                        return invalid(format!(
+                            "step \"{name}\": an output's name must be 1 to 40 of a-z, 0-9, '-' \
+                             and '_', and not \"summary\": {output:?}"
+                        ));
+                    }
+                    if !given.insert(output.as_str()) {
+                        return invalid(format!(
+                            "step \"{name}\": the output \"{output}\" is listed twice"
+                        ));
+                    }
+                }
                 if let Some(reads) = &options.reads {
                     // A summary comes from a step a member worked on: an agent step, anywhere
                     // before this one in run order (a path a run did not take hands on nothing).
@@ -549,6 +734,42 @@ impl Definition {
                     ));
                 }
             }
+            StepKind::Action { action, unattended } => {
+                self.validate_action(step, action)?;
+                // What goes out is the person's to see first, unless they said otherwise.
+                let sends = matches!(action, Action::Http { .. });
+                if sends && !unattended && !self.checked_before(&step.id) {
+                    return invalid(format!(
+                        "step \"{name}\": an action that sends something needs a check before it \
+                         on every path, or \"Runs without my check\" turned on"
+                    ));
+                }
+            }
+            StepKind::Wait { wait } => match wait {
+                Wait::Minutes { minutes } => {
+                    if *minutes == 0 || *minutes > MAX_WAIT_MINUTES {
+                        return invalid(format!(
+                            "step \"{name}\": it waits 1 to {MAX_WAIT_MINUTES} minutes"
+                        ));
+                    }
+                }
+                Wait::Time { at, .. } => {
+                    if time_of_day(at).is_none() {
+                        return invalid(format!(
+                            "step \"{name}\": the time must be written HH:MM, as in 09:00"
+                        ));
+                    }
+                }
+                Wait::Input { input } => {
+                    let found = self.inputs.iter().find(|f| f.name == *input);
+                    if !found.is_some_and(|f| f.kind == InputKind::DateTime) {
+                        return invalid(format!(
+                            "step \"{name}\": it waits until an input that holds a date and \
+                             time, and {input:?} is not one"
+                        ));
+                    }
+                }
+            },
             StepKind::Branch { on, paths, .. } => {
                 if paths.is_empty() {
                     return invalid(format!("step \"{name}\": a branch needs at least one path"));
@@ -594,6 +815,196 @@ impl Definition {
             }
         }
         Ok(())
+    }
+
+    /// The rules of the inputs a start is asked for.
+    fn validate_inputs(&self) -> Result<()> {
+        if self.inputs.len() > MAX_INPUTS {
+            return invalid(format!("a workflow asks for at most {MAX_INPUTS} inputs"));
+        }
+        let mut seen = HashSet::new();
+        for field in &self.inputs {
+            if !step_template::name_ok(&field.name) {
+                return invalid(format!(
+                    "an input's name must be 1 to 40 of a-z, 0-9, '-' and '_': {:?}",
+                    field.name
+                ));
+            }
+            if !seen.insert(field.name.as_str()) {
+                return invalid(format!("two inputs have the name \"{}\"", field.name));
+            }
+            let label = field.label.trim();
+            if label.is_empty() || label.chars().count() > MAX_NAME {
+                return invalid(format!(
+                    "the input \"{}\": a label must be 1 to {MAX_NAME} characters",
+                    field.name
+                ));
+            }
+            if let Some(default) = field.default.as_deref().filter(|d| !d.trim().is_empty()) {
+                if too_long(default, MAX_TASK) {
+                    return invalid(format!(
+                        "the input \"{}\": its default is longer than 8,000 characters",
+                        field.name
+                    ));
+                }
+                if field.kind == InputKind::DateTime && date_time_of(default).is_none() {
+                    return invalid(format!(
+                        "the input \"{}\": its default must be a date and time, as in \
+                         2026-12-01T09:00",
+                        field.name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The agent steps that come before the step `id` in run order, the ones inside an earlier
+    /// branch's paths included: the steps whose outputs and summaries it may use.
+    fn agents_earlier(&self, id: &str) -> Vec<&Step> {
+        let all = self.all();
+        let here = all.iter().position(|s| s.id == id).unwrap_or(0);
+        all[..here]
+            .iter()
+            .copied()
+            .filter(|s| matches!(s.kind, StepKind::Agent { .. }))
+            .collect()
+    }
+
+    /// The rules of one text of the action step `step`: its marks name what the workflow has.
+    /// `secrets`: whether the text may hold a secret (what is sent may; what is written to a
+    /// file may not).
+    fn validate_text(&self, step: &Step, what: &str, text: &str, secrets: bool) -> Result<()> {
+        let name = step.name.trim();
+        let refuse = |why: String| invalid(format!("step \"{name}\": {what}: {why}"));
+        let marks = match step_template::marks(text) {
+            Ok(marks) => marks,
+            Err(why) => return refuse(why),
+        };
+        let earlier = self.agents_earlier(&step.id);
+        for mark in marks {
+            let written = format!("{{{{{}}}}}", mark.written());
+            match &mark {
+                Mark::Task => {}
+                Mark::Input(input) => {
+                    if !self.inputs.iter().any(|f| f.name == *input) {
+                        return refuse(format!("{written} names no input of the workflow"));
+                    }
+                }
+                Mark::Secret(_) => {
+                    if !secrets {
+                        return refuse(format!("{written}: a secret cannot be written to a file"));
+                    }
+                }
+                Mark::Summary { step: from } => {
+                    if !earlier.iter().any(|s| s.id == *from) {
+                        return refuse(format!("{written} names no agent step before it"));
+                    }
+                }
+                Mark::Output {
+                    step: from,
+                    name: output,
+                } => {
+                    let gives = earlier.iter().any(|s| {
+                        s.id == *from
+                            && matches!(
+                                &s.kind,
+                                StepKind::Agent { produces, .. } if produces.contains(output)
+                            )
+                    });
+                    if !gives {
+                        return refuse(format!(
+                            "{written} names no output of an agent step before it"
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The rules of an action step's own fields.
+    fn validate_action(&self, step: &Step, action: &Action) -> Result<()> {
+        let name = step.name.trim();
+        match action {
+            Action::Http {
+                url, headers, body, ..
+            } => {
+                let url = url.trim();
+                let rest = url
+                    .strip_prefix("https://")
+                    .or_else(|| url.strip_prefix("http://"));
+                let Some(rest) = rest.filter(|r| !r.is_empty()) else {
+                    return invalid(format!(
+                        "step \"{name}\": the URL must start with https:// or http://"
+                    ));
+                };
+                if url.chars().count() > MAX_URL {
+                    return invalid(format!(
+                        "step \"{name}\": the URL is longer than {MAX_URL} characters"
+                    ));
+                }
+                // Where it goes is written in the workflow, never filled in by a step.
+                let host = rest.split(['/', '?', '#']).next().unwrap_or_default();
+                if host.is_empty() || host.contains("{{") || host.contains("}}") {
+                    return invalid(format!(
+                        "step \"{name}\": the URL's host must be written out, with no mark in it"
+                    ));
+                }
+                self.validate_text(step, "the URL", url, true)?;
+                if headers.len() > MAX_HEADERS {
+                    return invalid(format!(
+                        "step \"{name}\": an action sends at most {MAX_HEADERS} headers"
+                    ));
+                }
+                for header in headers {
+                    let h = header.name.trim();
+                    let token = !h.is_empty()
+                        && h.bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+                    if !token {
+                        return invalid(format!(
+                            "step \"{name}\": a header's name is letters, digits, '-' and '_': \
+                             {h:?}"
+                        ));
+                    }
+                    if too_long(&header.value, MAX_HEADER_VALUE) {
+                        return invalid(format!(
+                            "step \"{name}\": the header {h} is longer than {MAX_HEADER_VALUE} \
+                             characters"
+                        ));
+                    }
+                    self.validate_text(step, &format!("the header {h}"), &header.value, true)?;
+                }
+                if too_long(body, MAX_BODY) {
+                    return invalid(format!(
+                        "step \"{name}\": the body is longer than {MAX_BODY} characters"
+                    ));
+                }
+                self.validate_text(step, "the body", body, true)
+            }
+            Action::File { path, content } => {
+                let p = path.trim();
+                if p.is_empty() || p.chars().count() > MAX_FILE_PATH {
+                    return invalid(format!(
+                        "step \"{name}\": the file's path must be 1 to {MAX_FILE_PATH} characters"
+                    ));
+                }
+                if !relative_path_ok(p) {
+                    return invalid(format!(
+                        "step \"{name}\": the file's path must stay inside the project's folder"
+                    ));
+                }
+                self.validate_text(step, "the file's path", p, false)?;
+                if content.chars().count() > MAX_FILE_CONTENT {
+                    return invalid(format!(
+                        "step \"{name}\": the file's content is longer than \
+                         {MAX_FILE_CONTENT} characters"
+                    ));
+                }
+                self.validate_text(step, "the file's content", content, false)
+            }
+        }
     }
 
     /// Every step, depth first in run order: a branch, then its paths in order, then

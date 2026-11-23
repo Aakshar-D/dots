@@ -322,11 +322,13 @@ async fn the_report_hides_the_names_of_workflows_and_teams() {
         .await
         .unwrap();
     let definition = Definition {
+        inputs: vec![],
         trigger: Trigger::Manual,
         steps: vec![Step {
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                produces: vec![],
                 options: Default::default(),
                 member: dot.id.clone(),
                 job: "Work.".into(),

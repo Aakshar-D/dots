@@ -353,6 +353,7 @@ async fn a_deleted_team_s_step_runs_stay_out_of_runs_to_review() {
     let project_id = store.add_project(&team.id, &project).await.unwrap().id;
     // A check only: a pass of the loop meanwhile starts no dot run.
     let definition = Definition {
+        inputs: vec![],
         trigger: Trigger::Manual,
         steps: vec![Step {
             id: "check".into(),
@@ -377,7 +378,8 @@ async fn a_deleted_team_s_step_runs_stay_out_of_runs_to_review() {
             workflow_id: workflow.id,
             team_id: team.id.clone(),
             definition,
-            project_id,
+            project_id: Some(project_id),
+            inputs: Default::default(),
             project,
             task: "The tray icon is invisible.".into(),
             trigger: WorkflowTrigger::Manual,

@@ -36,6 +36,18 @@ pub struct CheckView {
     pub step_run_id: String,
     pub summary: String,
     pub branches: Vec<ShownBranch>,
+    /// The outputs of the step shown, in the order the step declares them (general workflows
+    /// spec section 8): what the steps after the check will use, for the person to read and
+    /// change.
+    #[serde(default)]
+    pub outputs: Vec<ShownOutput>,
+}
+
+/// One output a waiting check shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ShownOutput {
+    pub name: String,
+    pub text: String,
 }
 
 /// A branch as the check page showed it, with the commit it showed (`None` for a branch that
@@ -169,11 +181,35 @@ impl Workflows {
                 commit: tip(repo, &b.branch).await,
             });
         }
+        // In the order the step declares them; one it no longer declares, after those.
+        let declared: Vec<String> = match super::shown_step(&wr, &step_run.step_id).map(|s| &s.kind)
+        {
+            Some(crate::workflow::StepKind::Agent { produces, .. }) => produces.clone(),
+            _ => Vec::new(),
+        };
+        let mut outputs: Vec<ShownOutput> = declared
+            .iter()
+            .filter_map(|name| {
+                Some(ShownOutput {
+                    name: name.clone(),
+                    text: shown.outputs.get(name)?.clone(),
+                })
+            })
+            .collect();
+        for (name, text) in &shown.outputs {
+            if !declared.contains(name) {
+                outputs.push(ShownOutput {
+                    name: name.clone(),
+                    text: text.clone(),
+                });
+            }
+        }
         Ok(CheckView {
             step_id: step_run.step_id.clone(),
             step_run_id: step_run.id.clone(),
             summary: shown.summary,
             branches,
+            outputs,
         })
     }
 

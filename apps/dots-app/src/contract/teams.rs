@@ -11,7 +11,7 @@ use dots_core::workflow::{
     BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
     StepOptions, Trigger, WorkflowProblem,
 };
-use dots_core::workflows::{CheckView, ShownBranch};
+use dots_core::workflows::{CheckView, ShownBranch, ShownOutput};
 use serde_json::{json, Value};
 
 use super::{to, TS};
@@ -118,6 +118,7 @@ fn agent(id: &str, name: &str, member: &str, job: &str) -> Step {
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: member.into(),
             job: job.into(),
@@ -151,6 +152,7 @@ fn deploy(id: &str, mode: DeployMode) -> Step {
 /// the work back to the lead.
 fn chat_definition() -> Definition {
     Definition {
+        inputs: vec![],
         trigger: Trigger::Chat {
             starters: vec![DEV.into()],
         },
@@ -159,6 +161,7 @@ fn chat_definition() -> Definition {
                 id: "build".into(),
                 name: "Build".into(),
                 kind: StepKind::Agent {
+                    produces: vec![],
                     options: Default::default(),
                     member: DEV.into(),
                     job: "Fix the bug and say whether it is fixed.".into(),
@@ -192,6 +195,7 @@ fn chat_definition() -> Definition {
                         id: "design".into(),
                         name: "Design".into(),
                         kind: StepKind::Agent {
+                            produces: vec![],
                             options: StepOptions {
                                 model: Some(ModelTier::Small),
                                 lean: true,
@@ -259,6 +263,7 @@ fn workflows() -> Vec<Workflow> {
             spec: WorkflowSpec {
                 name: "Push it".into(),
                 definition: Definition {
+                    inputs: vec![],
                     trigger: Trigger::Manual,
                     steps: vec![
                         agent("work", "Work", "01J0GONE", "Do the task."),
@@ -280,7 +285,9 @@ fn workflows() -> Vec<Workflow> {
             "01J0WFL3",
             "Nightly",
             Definition {
+                inputs: vec![],
                 trigger: Trigger::Schedule {
+                    catch_up: false,
                     schedule,
                     task: "Update the dependencies.".into(),
                     project: "Sage".into(),
@@ -316,6 +323,7 @@ fn workflows() -> Vec<Workflow> {
                 "01J0WFL4",
                 "On issue",
                 Definition {
+                    inputs: vec![],
                     trigger: Trigger::Webhook {
                         task: Some("Look at the newest issue.".into()),
                         project: None,
@@ -370,6 +378,7 @@ fn step_run(id: &str, step_id: &str, status: StepRunStatus) -> StepRun {
 /// member it started handed back.
 fn lead_handoff() -> Handoff {
     Handoff {
+        outputs: Default::default(),
         summary: "Made the icon dark on a light taskbar.".into(),
         branches: vec![
             branch_ref("01J0RUN5", "dots/nightly-tests/01J0RUN5"),
@@ -397,6 +406,7 @@ fn lead_handoff() -> Handoff {
 
 fn workflow_run(id: &str) -> WorkflowRun {
     WorkflowRun {
+        inputs: Default::default(),
         id: id.into(),
         workflow_id: Some("01J0WFL".into()),
         team_id: TEAM.into(),
@@ -600,6 +610,10 @@ fn workflow_runs() -> Vec<WorkflowRun> {
 /// branch that is gone.
 fn check_view() -> CheckView {
     CheckView {
+        outputs: vec![ShownOutput {
+            name: "post".into(),
+            text: "The tray icon now shows on a light taskbar.".into(),
+        }],
         step_id: "review".into(),
         step_run_id: "01J0STP3".into(),
         summary: "Made the icon dark on a light taskbar.".into(),

@@ -696,6 +696,7 @@ impl Runtime {
             cfg.clock.clone(),
         );
         workflows.set_orgs(orgs.clone());
+        workflows.set_vault(vault.clone());
         workflows.spawn(shutdown.clone());
         // Scheduled workflows start from the scheduler's pass (teams spec section 5.1).
         scheduler.set_workflows(workflows.clone());

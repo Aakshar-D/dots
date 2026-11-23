@@ -150,6 +150,9 @@ struct StepContext {
     default_branch: Option<String>,
     remote: String,
     step_name: String,
+    /// Whether the project's folder is a git repo. In a plain folder a step works in the
+    /// folder itself, whatever its dot's workspace mode (general workflows spec section 2).
+    git: bool,
 }
 
 /// The dot as its run's workspace sees it: a run of a workflow step works in the project's
@@ -158,6 +161,9 @@ fn workspace_dot(dot: &Dot, step: Option<&StepContext>) -> Dot {
     let mut dot = dot.clone();
     if let Some(step) = step {
         dot.spec.workdir = step.repo.clone();
+        if !step.git {
+            dot.spec.workspace_mode = WorkspaceMode::Folder;
+        }
     }
     dot
 }
@@ -1378,7 +1384,11 @@ impl Runner {
             .step(&step.step_id)
             .map(|s| s.name.clone())
             .unwrap_or(step.step_id);
+        let git =
+            crate::runtime::is_git_repo(std::path::Path::new(&workflow_run.project.repo_path))
+                .await;
         Ok(Some(StepContext {
+            git,
             repo: workflow_run.project.repo_path,
             default_branch: workflow_run.project.default_branch,
             remote: workflow_run.project.remote,
@@ -1403,6 +1413,15 @@ impl Runner {
                 None
             }
         }
+    }
+
+    /// The folder Dots keeps for the team `team_id`'s workflow runs that name no project,
+    /// beside the worktrees in Dots' data folder (`<data>/team-files/<team>`).
+    pub fn team_files_dir(&self, team_id: &str) -> std::path::PathBuf {
+        self.cfg
+            .worktrees_dir
+            .with_file_name("team-files")
+            .join(team_id)
     }
 
     /// The checkpoints of folder runs, beside the worktrees in Dots' data folder

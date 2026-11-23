@@ -298,6 +298,7 @@ async fn team_with(t: &Rt, helper: &Dot, steps: Vec<Step>) -> (String, String) {
                 &WorkflowSpec {
                     name: "Fix".into(),
                     definition: Definition {
+                        inputs: vec![],
                         trigger: Trigger::Chat {
                             starters: vec![helper.id.clone()],
                         },
@@ -508,6 +509,7 @@ fn workflow_spec(name: &str, trigger: Trigger) -> WorkflowSpec {
     WorkflowSpec {
         name: name.into(),
         definition: Definition {
+            inputs: vec![],
             trigger,
             steps: vec![Step {
                 id: "check".into(),
@@ -540,6 +542,7 @@ async fn the_answer_to_a_workflow_steps_question_may_not_start_a_workflow() {
             id: "dev".into(),
             name: "Fix it".into(),
             kind: StepKind::Agent {
+                produces: vec![],
                 options: Default::default(),
                 member: helper.id.clone(),
                 job: "Fix.".into(),
@@ -558,7 +561,8 @@ async fn the_answer_to_a_workflow_steps_question_may_not_start_a_workflow() {
     t.rt.workflows()
         .start(dots_core::workflows::StartRequest {
             workflow_id: flow,
-            project_id: project,
+            project_id: Some(project),
+            inputs: Default::default(),
             task: "Fix the icon.".into(),
             trigger: WorkflowTrigger::Manual,
             origin_run_id: None,
@@ -716,6 +720,7 @@ async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
             id: "dev".into(),
             name: "Fix it".into(),
             kind: StepKind::Agent {
+                produces: vec![],
                 options: Default::default(),
                 member: helper.id.clone(),
                 job: "Fix.".into(),
@@ -735,7 +740,8 @@ async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
         t.rt.workflows()
             .start(dots_core::workflows::StartRequest {
                 workflow_id: flow,
-                project_id: project,
+                project_id: Some(project),
+                inputs: Default::default(),
                 task: "Fix the icon.".into(),
                 trigger: WorkflowTrigger::Manual,
                 origin_run_id: None,
@@ -906,6 +912,7 @@ fn agent_step(id: &str, name: &str, member: &Dot, outcomes: &[&str], back: &[&st
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: member.id.clone(),
             job: format!("{name}."),
@@ -957,6 +964,7 @@ async fn run_steps(t: &Rt, members: &[&Dot], steps: Vec<Step>) -> WorkflowRun {
                 &WorkflowSpec {
                     name: "Steps".into(),
                     definition: Definition {
+                        inputs: vec![],
                         trigger: Trigger::Manual,
                         steps,
                         budget: Budget::default(),
@@ -974,7 +982,8 @@ async fn run_steps(t: &Rt, members: &[&Dot], steps: Vec<Step>) -> WorkflowRun {
     t.rt.workflows()
         .start(dots_core::workflows::StartRequest {
             workflow_id: flow.id,
-            project_id: project,
+            project_id: Some(project),
+            inputs: Default::default(),
             task: "Fix the icon.".into(),
             trigger: WorkflowTrigger::Manual,
             origin_run_id: None,
@@ -1631,6 +1640,7 @@ fn delegate_step(lead: &Dot, member: &Dot) -> Step {
         id: "split".into(),
         name: "Split it".into(),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: lead.id.clone(),
             job: "Split it.".into(),

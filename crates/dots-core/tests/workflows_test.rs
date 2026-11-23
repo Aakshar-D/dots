@@ -429,6 +429,7 @@ fn agent(id: &str, name: &str, member: &Dot, job: &str) -> Step {
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: member.id.clone(),
             job: job.into(),
@@ -455,6 +456,7 @@ impl World {
                 &WorkflowSpec {
                     name: name.into(),
                     definition: Definition {
+                        inputs: vec![],
                         trigger: Trigger::Manual,
                         steps,
                         budget: self.budget,
@@ -471,7 +473,8 @@ impl World {
         self.workflows
             .start(StartRequest {
                 workflow_id: workflow.into(),
-                project_id: self.project.clone(),
+                project_id: Some(self.project.clone()),
+                inputs: Default::default(),
                 task: "The tray icon is invisible in dark mode.".into(),
                 trigger: WorkflowTrigger::Manual,
                 origin_run_id: None,
@@ -913,7 +916,8 @@ async fn what_a_start_refuses() {
     let flow = w.standard().await;
     let mut req = StartRequest {
         workflow_id: flow.clone(),
-        project_id: w.project.clone(),
+        project_id: Some(w.project.clone()),
+        inputs: Default::default(),
         task: "  ".into(),
         trigger: WorkflowTrigger::Manual,
         origin_run_id: None,
@@ -950,7 +954,7 @@ async fn what_a_start_refuses() {
         .await
         .unwrap();
     assert!(matches!(
-        w.workflows.start(StartRequest { project_id: theirs.id, ..req.clone() }).await,
+        w.workflows.start(StartRequest { project_id: Some(theirs.id), ..req.clone() }).await,
         Err(Error::Invalid(m)) if m == "Theirs is not a project of the workflow's team"
     ));
     // A workflow that is turned off.
@@ -986,7 +990,8 @@ async fn a_test_run_starts_while_its_workflow_is_off_and_run_now_does_not() {
     w.store.update_workflow(&flow, &spec).await.unwrap();
     let run_now = StartRequest {
         workflow_id: flow.clone(),
-        project_id: w.project.clone(),
+        project_id: Some(w.project.clone()),
+        inputs: Default::default(),
         task: "The tray icon is invisible in dark mode.".into(),
         trigger: WorkflowTrigger::Manual,
         origin_run_id: None,
@@ -2312,6 +2317,7 @@ fn delegating(
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: lead.id.clone(),
             job: "Split the work.".into(),
@@ -3838,7 +3844,8 @@ impl World {
             .workflows
             .start(StartRequest {
                 workflow_id: flow.into(),
-                project_id: self.project.clone(),
+                project_id: Some(self.project.clone()),
+                inputs: Default::default(),
                 task: "The tray icon is invisible in dark mode.".into(),
                 trigger: WorkflowTrigger::Manual,
                 origin_run_id: None,
@@ -5068,6 +5075,7 @@ async fn a_check_shows_its_branches_at_their_tips_and_the_approval_records_what_
     assert_eq!(
         view,
         CheckView {
+            outputs: vec![],
             step_id: "check".into(),
             step_run_id: newest(&wr, "check").id.clone(),
             summary: "Fixed the icon.".into(),
@@ -5086,6 +5094,7 @@ async fn a_check_shows_its_branches_at_their_tips_and_the_approval_records_what_
             "step_run_id": newest(&wr, "check").id,
             "summary": "Fixed the icon.",
             "branches": [{"branch": branch, "run_id": run_id, "commit": tip}],
+            "outputs": [],
         })
     );
     assert_eq!(
@@ -5417,7 +5426,8 @@ impl World {
         self.workflows
             .start(StartRequest {
                 workflow_id: workflow.into(),
-                project_id: self.project.clone(),
+                project_id: Some(self.project.clone()),
+                inputs: Default::default(),
                 task: "The tray icon is invisible in dark mode.".into(),
                 trigger: if origin.is_some() {
                     WorkflowTrigger::Chat

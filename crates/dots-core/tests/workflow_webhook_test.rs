@@ -196,6 +196,7 @@ fn flow(trigger: Trigger, step: Step) -> WorkflowSpec {
     WorkflowSpec {
         name: "Fix".into(),
         definition: Definition {
+            inputs: vec![],
             trigger,
             steps: vec![step],
             budget: Budget::default(),
@@ -278,7 +279,7 @@ async fn the_body_falls_back_to_the_trigger_s_task_and_project() {
 }
 
 #[tokio::test]
-async fn a_missing_task_or_project_or_an_unknown_project_is_400() {
+async fn a_missing_task_or_an_unknown_project_is_400_and_no_project_is_the_team_s_folder() {
     let t = Rt::start().await;
     let (workflow, token) = t.hooked(None, None).await;
     let answer = t.post(&workflow.id, Some(&token), None).await;
@@ -287,13 +288,12 @@ async fn a_missing_task_or_project_or_an_unknown_project_is_400() {
         error(&answer),
         "no task: give \"task\" in the body, or a task in the workflow's webhook trigger"
     );
+    // No project in the body or the trigger: the run works in the team's own folder.
     let body = json!({"task": "Fix it."}).to_string();
-    let answer = t.post(&workflow.id, Some(&token), Some(&body)).await;
-    assert_eq!(answer.0, 400);
-    assert_eq!(
-        error(&answer),
-        "no project: give \"project\" in the body, or a project in the workflow's webhook trigger"
-    );
+    let wr = t
+        .started_and_stopped(t.post(&workflow.id, Some(&token), Some(&body)).await)
+        .await;
+    assert_eq!((wr.project_id, wr.project.name.as_str()), (None, "Files"));
     let body = json!({"task": "Fix it.", "project": " Docs "}).to_string();
     let answer = t.post(&workflow.id, Some(&token), Some(&body)).await;
     assert_eq!(answer.0, 400);
@@ -314,7 +314,8 @@ async fn a_missing_task_or_project_or_an_unknown_project_is_400() {
     let answer = t.post(&workflow.id, Some(&token), None).await;
     assert_eq!(answer.0, 400);
     assert_eq!(error(&answer), "the team has no project named \"Gone\"");
-    assert_eq!(t.runs().await, 0);
+    // Only the start in the team's folder made a run.
+    assert_eq!(t.runs().await, 1);
     t.rt.shutdown();
 }
 
@@ -435,6 +436,7 @@ async fn a_workflow_without_a_webhook_trigger_turned_off_or_with_a_problem_is_40
         id: "work".into(),
         name: "Work".into(),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: t.other.id.clone(),
             job: "Fix it.".into(),

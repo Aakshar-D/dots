@@ -291,11 +291,13 @@ async fn a_waiting_workflow_run_is_in_the_inbox_and_needs_the_dot_whose_chat_sta
     };
     let project_id = t.store().add_project(&team.id, &project).await.unwrap().id;
     let definition = Definition {
+        inputs: vec![],
         trigger: Trigger::Manual,
         steps: vec![Step {
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                produces: vec![],
                 options: Default::default(),
                 member: member.id.clone(),
                 job: "Fix it.".into(),
@@ -327,7 +329,8 @@ async fn a_waiting_workflow_run_is_in_the_inbox_and_needs_the_dot_whose_chat_sta
             workflow_id: workflow.id.clone(),
             team_id: team.id.clone(),
             definition,
-            project_id,
+            project_id: Some(project_id),
+            inputs: Default::default(),
             project,
             task: "Fix the tray icon.".into(),
             trigger: WorkflowTrigger::Chat,

@@ -11,6 +11,7 @@ fn agent(id: &str, member: &str) -> Step {
         id: id.into(),
         name: format!("Step {id}"),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: member.into(),
             job: "Do it.".into(),
@@ -31,6 +32,7 @@ fn check(id: &str) -> Step {
 
 fn def(steps: Vec<Step>) -> Definition {
     Definition {
+        inputs: vec![],
         trigger: Trigger::Manual,
         steps,
         budget: Budget::default(),
@@ -114,6 +116,7 @@ fn the_rules_of_section_5_8() {
     );
     let mut no_job = agent("a", "dev");
     no_job.kind = StepKind::Agent {
+        produces: vec![],
         options: Default::default(),
         member: "dev".into(),
         job: " ".into(),
@@ -245,6 +248,7 @@ fn plan_a_definitions_still_read() {
     assert_eq!(
         d.steps[0].kind,
         StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: "dev".into(),
             job: "Fix the bug.".into(),
@@ -330,6 +334,7 @@ fn the_new_shapes_round_trip() {
 fn a_schedule_trigger_round_trips_and_is_checked() {
     let mut d = def(vec![check("c")]);
     d.trigger = Trigger::Schedule {
+        catch_up: false,
         schedule: daily(),
         task: "Look for new issues.".into(),
         project: "Dots".into(),
@@ -345,6 +350,7 @@ fn a_schedule_trigger_round_trips_and_is_checked() {
     let with = |schedule: Schedule, task: &str, project: &str| {
         let mut d = def(vec![check("c")]);
         d.trigger = Trigger::Schedule {
+            catch_up: false,
             schedule,
             task: task.into(),
             project: project.into(),
@@ -371,10 +377,8 @@ fn a_schedule_trigger_round_trips_and_is_checked() {
     with(daily(), &"x".repeat(8_000), "Dots")
         .validate(&members())
         .unwrap();
-    assert_eq!(
-        refusal(&with(daily(), "Look.", "  ")),
-        "the trigger needs a project"
-    );
+    // No project: the team's own folder (general workflows spec section 2).
+    with(daily(), "Look.", "  ").validate(&members()).unwrap();
 }
 
 #[test]
