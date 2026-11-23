@@ -159,7 +159,7 @@ fn inner_lists(step: &mut Value) -> Vec<&mut Vec<Value>> {
 /// id (a name the team does not have becomes the first member, with a note), and a step
 /// without an id gets one of its kind.
 fn settle(
-    steps: &mut Vec<Value>,
+    steps: &mut [Value],
     ctx: &DraftContext,
     taken: &mut Vec<String>,
     notes: &mut Vec<String>,
