@@ -481,4 +481,37 @@ describe("a step's settings sheet", () => {
       { name: "publish_at", label: "Publish at", kind: "date_time", required: true, default: null },
     ]);
   });
+
+  it("edits a Telegram action, and offers what an earlier action gave", async () => {
+    const { user } = open(sample.workflows[5]);
+    const sheet = await settings(user, "Tell them", "Action settings");
+    expect(sheet.getByRole("combobox", { name: "It does" })).toHaveValue("telegram");
+    expect(sheet.getByRole("textbox", { name: "Bot's token" })).toHaveValue("BOT_TOKEN");
+    expect(sheet.getByRole("textbox", { name: "Chat" })).toHaveValue("{{input.chat_id}}");
+    const message = sheet.getByRole("textbox", { name: "Message" });
+    expect(message).toHaveValue("{{answer.reply}}");
+    expect(sheet.getByRole("switch", { name: "Runs without my check" })).toBeChecked();
+    // No secret can be written into a message: the bot's token is named, not put in.
+    const marks = within(sheet.getByRole("list", { name: "What you can put in" }));
+    expect(marks.getAllByRole("listitem").map((m) => m.textContent)).toEqual([
+      "{{task}}",
+      "{{input.chat_id}}",
+      "{{answer.reply}}",
+      "{{answer.summary}}",
+    ]);
+    await user.type(message, " Thanks!");
+    expect(screen.getByRole("group", { name: "Step 2: Tell them", hidden: true })).toHaveTextContent(
+      "Sends a Telegram message to {{input.chat_id}}, without your check",
+    );
+    expect(await saved(user, "tell")).toEqual({
+      id: "tell",
+      name: "Tell them",
+      kind: "action",
+      action: "telegram",
+      token: "BOT_TOKEN",
+      chat: "{{input.chat_id}}",
+      text: "{{answer.reply}} Thanks!",
+      unattended: true,
+    });
+  });
 });

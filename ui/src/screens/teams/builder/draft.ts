@@ -257,9 +257,24 @@ export function agentsEarlier(steps: Step[], id: string): AgentStep[] {
 export function withAction(step: ActionStep, action: ActionStep["action"]): ActionStep {
   if (step.action === action) return step;
   const { id, name, kind, unattended } = step;
-  return action === "http"
-    ? { id, name, kind, unattended, action, method: "post", url: "https://", headers: [], body: "" }
-    : { id, name, kind, unattended, action, path: "", content: "" };
+  switch (action) {
+    case "http":
+      return {
+        id,
+        name,
+        kind,
+        unattended,
+        action,
+        method: "post",
+        url: "https://",
+        headers: [],
+        body: "",
+      };
+    case "file":
+      return { id, name, kind, unattended, action, path: "", content: "" };
+    case "telegram":
+      return { id, name, kind, unattended, action, token: "", chat: "", text: "" };
+  }
 }
 
 /// `step` as a wait of the kind `wait`, keeping its id and name; the same step when it is that
@@ -283,6 +298,13 @@ export function withWait(step: WaitStep, wait: WaitStep["wait"], inputs: InputFi
   }
 }
 
+/// What a later action may use of an action of each kind, as the core gives it.
+export const ACTION_GIVES: Record<ActionStep["action"], string[]> = {
+  http: ["status", "answer"],
+  file: ["path"],
+  telegram: ["answer"],
+};
+
 /// What a text of the action step `id` may hold, as it is written: the task, each input, each
 /// output and the summary of the agent steps before it, and with `secrets` how a Personal
 /// variable is named.
@@ -293,9 +315,16 @@ export function marksFor(
   secrets: boolean,
 ): string[] {
   const marks = ["{{task}}", ...inputs.map((f) => `{{input.${f.name}}}`)];
-  for (const step of agentsEarlier(steps, id)) {
-    for (const output of step.produces) marks.push(`{{${step.id}.${output}}}`);
-    marks.push(`{{${step.id}.summary}}`);
+  const all = allSteps(steps);
+  const here = all.findIndex((step) => step.id === id);
+  for (const step of all.slice(0, Math.max(here, 0))) {
+    if (step.kind === "agent") {
+      for (const output of step.produces) marks.push(`{{${step.id}.${output}}}`);
+      marks.push(`{{${step.id}.summary}}`);
+    } else if (step.kind === "action") {
+      // What an earlier action did: its answer and status, or the file it wrote.
+      for (const given of ACTION_GIVES[step.action]) marks.push(`{{${step.id}.${given}}}`);
+    }
   }
   if (secrets) marks.push("{{secret.NAME}}");
   return marks;
@@ -364,6 +393,8 @@ export function withTriggerKind(
       };
     case "webhook":
       return { kind, task: task?.trim() ? task : null, project: project || null };
+    case "telegram":
+      return { kind, token: "", chats: [], project: project ?? "" };
   }
 }
 

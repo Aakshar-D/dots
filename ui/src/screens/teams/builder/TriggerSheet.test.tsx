@@ -13,6 +13,7 @@ const [fix, pushIt, nightly, onIssue] = sample.workflows as [
   Workflow,
   Workflow,
 ];
+const answerClients = sample.workflows[5];
 
 /// The builder of `workflow`, with no problem in any draft, whose save answers with what it
 /// was sent.
@@ -62,6 +63,7 @@ describe("the trigger's settings sheet", () => {
       "Run by hand",
       "Started from a chat",
       "On a schedule",
+      "On a Telegram message",
       "On a webhook",
     ]);
     const by = within(sheet.getByRole("group", { name: "Started by" }));
@@ -183,5 +185,55 @@ describe("the trigger's settings sheet", () => {
       task: "Update the dependencies.",
       project: "Sage",
     });
+  });
+
+  it("listens to a Telegram bot's chats, found from the bot or typed by id", async () => {
+    backend.on("telegram_chats", () => sample.seenChats);
+    const { user } = open(fix);
+    const sheet = await settings(user);
+    await user.selectOptions(sheet.getByRole("combobox", { name: "What starts it" }), "telegram");
+    expect(trigger()).toHaveTextContent("It listens to no chat yet");
+    // Nothing to find until the bot's variable is named.
+    const find = sheet.getByRole("button", { name: "Find chats" });
+    expect(find).toBeDisabled();
+    await user.type(sheet.getByRole("textbox", { name: "Bot's token" }), "BOT_TOKEN");
+    await user.click(find);
+    const heard = within(await sheet.findByRole("list", { name: "Chats the bot heard from" }));
+    expect(backend.callsTo("telegram_chats")).toEqual([{ token: "BOT_TOKEN" }]);
+    await user.click(heard.getByRole("button", { name: "Listen to Asha" }));
+    expect(heard.getByRole("button", { name: "Listen to Asha" })).toBeDisabled();
+    // A chat's id is a number: anything else is not added.
+    const id = sheet.getByRole("textbox", { name: "Chat id" });
+    await user.type(id, "@clients");
+    expect(sheet.getByRole("button", { name: "Add chat" })).toBeDisabled();
+    await user.clear(id);
+    await user.type(id, "-100555");
+    await user.click(sheet.getByRole("button", { name: "Add chat" }));
+    await user.click(sheet.getByRole("button", { name: "Stop listening to the chat -100555" }));
+    expect(trigger()).toHaveTextContent("From 1 chat: the message is the task");
+    expect(await saved(user)).toEqual({
+      kind: "telegram",
+      token: "BOT_TOKEN",
+      chats: ["42"],
+      project: "",
+    });
+  });
+
+  it("says why the bot's chats could not be found", async () => {
+    backend.on("telegram_chats", () => {
+      throw { kind: "invalid", message: "there is no Personal variable named BOT_TOKEN" };
+    });
+    const { user } = open(answerClients);
+    const sheet = await settings(user);
+    expect(sheet.getByRole("textbox", { name: "Bot's token" })).toHaveValue("BOT_TOKEN");
+    expect(
+      within(sheet.getByRole("list", { name: "Chats it listens to" }))
+        .getAllByRole("listitem")
+        .map((c) => c.textContent),
+    ).toEqual(["42", "-1001234567890"]);
+    await user.click(sheet.getByRole("button", { name: "Find chats" }));
+    expect(await sheet.findByRole("alert")).toHaveTextContent(
+      "there is no Personal variable named BOT_TOKEN",
+    );
   });
 });

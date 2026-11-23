@@ -327,6 +327,7 @@ command_list![
     workflow_delete,
     workflow_check_spec,
     workflow_webhook_url,
+    telegram_chats,
     regenerate_workflow_token,
     workflow_runs_list,
     workflow_runs_for_origins,

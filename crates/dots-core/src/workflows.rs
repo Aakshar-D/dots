@@ -19,11 +19,13 @@ mod deploy_step;
 mod folder;
 mod jobs;
 mod send_back;
+mod telegram;
 mod tools;
 mod wait;
 
 pub use check::{branches_changed, CheckTip, CheckView, ShownBranch, ShownOutput, CHECK_CHANGED};
 pub use deploy_step::{INTERRUPTED, NO_APPROVAL, NO_DEFAULT_BRANCH};
+pub use telegram::{chat_id_ok, SeenChat};
 pub use tools::STEP_CLOSED;
 
 use std::collections::HashSet;
@@ -120,6 +122,8 @@ pub struct Workflows {
     deployer: OnceLock<Deployer>,
     /// Where an action's `{{secret.…}}` is read from (`set_vault`).
     vault: OnceLock<crate::vault::Vault>,
+    /// Where Telegram's bot API is, for tests (`set_telegram_base`).
+    telegram_base: OnceLock<String>,
     /// When the soonest wait step ends, noted by each pass (`wait`), so the loop passes then.
     due: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
 }
@@ -475,6 +479,7 @@ impl Workflows {
             gate: std::sync::Mutex::new(None),
             deployer: OnceLock::new(),
             vault: OnceLock::new(),
+            telegram_base: OnceLock::new(),
             due: std::sync::Mutex::new(None),
         })
     }

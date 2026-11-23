@@ -60,7 +60,7 @@ pub fn name_ok(name: &str) -> bool {
 
 /// Whether `name` can be a Personal variable's: 1 to 64 of `A-Z`, `a-z`, `0-9` and `_`, not
 /// starting with a digit.
-fn secret_ok(name: &str) -> bool {
+pub fn secret_ok(name: &str) -> bool {
     (1..=64).contains(&name.len())
         && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
         && !name.as_bytes()[0].is_ascii_digit()

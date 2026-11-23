@@ -6513,3 +6513,259 @@ async fn a_wait_whose_time_passed_while_sage_was_closed_ends_on_the_first_pass()
         .await;
     assert_eq!(newest(&wr, "hold").status, StepRunStatus::Succeeded);
 }
+
+// ---- Connected workflows (plan 3): Telegram, and what an action gives ----
+
+/// What a fake Telegram was asked: each call's path and JSON body.
+type Asked = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+
+/// A local server that answers as Telegram's bot API does: `getUpdates` gives the `updates`
+/// at or past the offset asked for, and `sendMessage` accepts a message unless its text is
+/// "refuse me".
+async fn telegram_server(updates: Vec<serde_json::Value>) -> (String, Asked) {
+    let asked: Asked = Arc::default();
+    let keep = asked.clone();
+    let app = axum::Router::new().fallback(move |uri: axum::http::Uri, body: String| {
+        let keep = keep.clone();
+        let updates = updates.clone();
+        async move {
+            let body: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+            keep.lock()
+                .unwrap()
+                .push((uri.path().to_string(), body.clone()));
+            if uri.path().ends_with("/getUpdates") {
+                let offset = body["offset"].as_i64().unwrap_or(0);
+                let fresh: Vec<_> = updates
+                    .iter()
+                    .filter(|u| u["update_id"].as_i64().unwrap_or(0) >= offset)
+                    .cloned()
+                    .collect();
+                axum::Json(json!({"ok": true, "result": fresh}))
+            } else if body["text"] == "refuse me" {
+                axum::Json(json!({"ok": false, "description": "Bad Request: chat not found"}))
+            } else {
+                axum::Json(json!({"ok": true, "result": {"message_id": 99}}))
+            }
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (base, asked)
+}
+
+/// A world whose bot's token is the Personal variable `BOT_TOKEN`, with Telegram at `base`.
+async fn with_bot(w: &World, base: &str) {
+    let vault = Vault::in_memory(w.store.clone());
+    vault
+        .add("BOT_TOKEN", EntryKind::Secret, "123:secret-token")
+        .await
+        .unwrap();
+    w.workflows.set_vault(vault);
+    w.workflows.set_telegram_base(base);
+}
+
+/// An action step that sends `text` to `chat` as the bot, with no check before it.
+fn telegram_step(id: &str, chat: &str, text: &str) -> Step {
+    Step {
+        id: id.into(),
+        name: "Tell them".into(),
+        kind: StepKind::Action {
+            action: Action::Telegram {
+                token: "BOT_TOKEN".into(),
+                chat: chat.into(),
+                text: text.into(),
+            },
+            unattended: true,
+        },
+    }
+}
+
+/// A message update as Telegram gives it.
+fn update(id: i64, chat: i64, name: &str, text: &str) -> serde_json::Value {
+    json!({"update_id": id, "message": {
+        "message_id": id * 10, "text": text,
+        "from": {"id": chat, "first_name": name},
+        "chat": {"id": chat, "type": "private", "first_name": name}
+    }})
+}
+
+#[tokio::test]
+async fn a_telegram_action_sends_as_its_bot_and_a_later_step_uses_its_answer() {
+    let w = world().await;
+    let (base, asked) = telegram_server(vec![]).await;
+    with_bot(&w, &base).await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Finish("Done.\n<reply>Thanks, we are on it.</reply>")],
+    );
+    let flow = w
+        .workflow_with(
+            "Reply",
+            vec![text_input("chat_id", "Chat", true)],
+            vec![
+                producing(agent("draft", "Draft it", &w.dev, "Draft."), &["reply"]),
+                telegram_step("send", "{{input.chat_id}}", "{{draft.reply}}"),
+                file_step("log", "sent.txt", "{{send.answer}}"),
+            ],
+        )
+        .await;
+    let wr = w
+        .workflows
+        .start(w.request(&flow, &[("chat_id", "42")]))
+        .await
+        .unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The bot's own call, with the chat as a number and the text as the step gave it.
+    let calls = asked.lock().unwrap().clone();
+    assert_eq!(
+        calls,
+        vec![(
+            "/bot123:secret-token/sendMessage".to_string(),
+            json!({"chat_id": 42, "text": "Thanks, we are on it."})
+        )]
+    );
+    let sent = newest(&wr, "send").handoff.clone().unwrap();
+    assert_eq!(
+        sent.summary,
+        "Sent a message of 21 characters to the chat 42."
+    );
+    // Its answer is a value the next step used.
+    let answer = std::fs::read_to_string(w.team_files().join("sent.txt")).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&answer).unwrap(),
+        json!({"ok": true, "result": {"message_id": 99}})
+    );
+    assert_eq!(sent.outputs["answer"], answer);
+    assert_eq!(
+        newest(&wr, "log").handoff.as_ref().unwrap().outputs["path"],
+        "sent.txt"
+    );
+
+    // A message Telegram refuses fails the step with Telegram's words.
+    let flow = w
+        .workflow_with(
+            "Refused",
+            vec![],
+            vec![telegram_step("send", "42", "refuse me")],
+        )
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Tell them: Telegram refused the message: Bad Request: chat not found")
+    );
+    // A test run sends nothing.
+    let before = asked.lock().unwrap().len();
+    let mut test = w.request(&flow, &[]);
+    test.test = true;
+    let wr = w.workflows.start(test).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(
+        wr.steps[0].handoff.as_ref().unwrap().summary,
+        "Test run: not sent. It would send a message of 9 characters to the chat 42."
+    );
+    assert_eq!(asked.lock().unwrap().len(), before);
+}
+
+#[tokio::test]
+async fn a_message_to_the_bot_starts_the_workflow_that_listens_to_its_chat_once() {
+    let w = world().await;
+    let (base, asked) = telegram_server(vec![
+        update(7, 42, "Asha", "Where is my order?"),
+        update(8, 99, "Stranger", "Buy my coins"),
+        json!({"update_id": 9, "edited_message": {"message_id": 70, "text": "edited"}}),
+    ])
+    .await;
+    with_bot(&w, &base).await;
+    let listens = |chats: &[&str]| Trigger::Telegram {
+        token: "BOT_TOKEN".into(),
+        chats: chats.iter().map(|c| c.to_string()).collect(),
+        project: String::new(),
+    };
+    let spec = WorkflowSpec {
+        name: "Answer clients".into(),
+        definition: Definition {
+            inputs: vec![
+                text_input("chat_id", "Chat", false),
+                text_input("sender", "Who wrote", false),
+            ],
+            trigger: listens(&["42"]),
+            steps: vec![agent("answer", "Answer", &w.dev, "Answer the client.")],
+            budget: w.budget,
+        },
+        enabled: true,
+    };
+    let flow = w.store.create_workflow(&w.team, &spec).await.unwrap().id;
+
+    // The chats the bot heard from, newest first, for the trigger's settings to offer.
+    let chats = w.workflows.telegram_chats("BOT_TOKEN").await.unwrap();
+    let seen: Vec<(&str, &str)> = chats
+        .iter()
+        .map(|c| (c.id.as_str(), c.name.as_str()))
+        .collect();
+    assert_eq!(seen, [("99", "Stranger"), ("42", "Asha")]);
+
+    w.workflows.telegram_pass().await.unwrap();
+    let runs = w.store.list_workflow_runs(Some(&w.team), 10).await.unwrap();
+    assert_eq!(runs.len(), 1, "only the chat it listens to starts it");
+    let wr = &runs[0];
+    assert_eq!(wr.workflow_id.as_deref(), Some(flow.as_str()));
+    assert_eq!(wr.trigger, WorkflowTrigger::Telegram);
+    assert_eq!(wr.task, "Where is my order?");
+    assert_eq!(wr.project.name, "Files");
+    let inputs: Vec<(&str, &str)> = wr
+        .inputs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    // The inputs it asks for by those names; `message_id`, which it does not, is left out.
+    assert_eq!(inputs, [("chat_id", "42"), ("sender", "Asha")]);
+
+    // Everything was read past, the stranger and the edit too: the next pass asks from 10 and
+    // starts nothing.
+    assert_eq!(w.store.telegram_offset("BOT_TOKEN").await.unwrap(), 10);
+    w.workflows.telegram_pass().await.unwrap();
+    assert_eq!(
+        w.store
+            .list_workflow_runs(Some(&w.team), 10)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    let offsets: Vec<i64> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(path, _)| path.ends_with("/getUpdates"))
+        .map(|(_, body)| body["offset"].as_i64().unwrap())
+        .collect();
+    assert_eq!(offsets, [0, 0, 10]);
+
+    // A workflow that is off, or whose bot has no token, starts nothing and breaks nothing.
+    let mut off = spec.clone();
+    off.name = "Off".into();
+    off.enabled = false;
+    w.store.create_workflow(&w.team, &off).await.unwrap();
+    let mut other = spec.clone();
+    other.name = "No token".into();
+    other.definition.trigger = Trigger::Telegram {
+        token: "MISSING_TOKEN".into(),
+        chats: vec!["42".into()],
+        project: String::new(),
+    };
+    w.store.create_workflow(&w.team, &other).await.unwrap();
+    w.workflows.telegram_pass().await.unwrap();
+    assert!(matches!(
+        w.workflows.telegram_chats("MISSING_TOKEN").await,
+        Err(Error::Invalid(m)) if m == "there is no Personal variable named MISSING_TOKEN"
+    ));
+}

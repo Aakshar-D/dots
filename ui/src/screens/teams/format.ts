@@ -16,6 +16,7 @@ export const TRIGGER_LABEL: Record<Trigger["kind"], string> = {
   chat: "Started from a chat",
   schedule: "On a schedule",
   webhook: "On a webhook",
+  telegram: "On a Telegram message",
 };
 
 /// What a waiting workflow run waits for, in the needs-you wording (section 10.5).

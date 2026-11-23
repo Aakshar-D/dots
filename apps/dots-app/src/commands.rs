@@ -59,7 +59,7 @@ use dots_core::vault::org::{
 };
 use dots_core::vault::{EntryKind, EnvEntry, GrantStatus};
 use dots_core::workflow::WorkflowProblem;
-use dots_core::workflows::{CheckTip, CheckView, StartRequest};
+use dots_core::workflows::{CheckTip, CheckView, SeenChat, StartRequest};
 use dots_core::Runtime;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_opener::OpenerExt;
@@ -2746,6 +2746,13 @@ pub async fn workflow_check_spec(
 #[tauri::command]
 pub async fn workflow_webhook_url(state: State<'_, AppState>, id: String) -> Res<String> {
     Ok(state.rt()?.workflow_webhook_url(&id).await?)
+}
+
+/// The chats the Telegram bot whose token the Personal variable `token` holds has heard from
+/// lately, newest first: what a Telegram trigger's settings offer to listen to.
+#[tauri::command]
+pub async fn telegram_chats(state: State<'_, AppState>, token: String) -> Res<Vec<SeenChat>> {
+    Ok(state.rt()?.workflows().telegram_chats(&token).await?)
 }
 
 /// A new webhook token for the workflow, shown this once; the old one stops working.

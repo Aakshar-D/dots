@@ -482,9 +482,26 @@ function Marks(props: { marks: string[] }) {
 }
 
 const ACTION_OPTIONS: [ActionStep["action"], string][] = [
+  ["telegram", "Send a Telegram message"],
   ["http", "Send a request to a web address"],
   ["file", "Save a text file"],
 ];
+
+/// The switch that lets an action that sends run with no check before it.
+function Unattended(props: { on: boolean; onChange: (on: boolean) => void }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <Switch id="step-unattended" checked={props.on} onCheckedChange={props.onChange} />
+        <Label htmlFor="step-unattended">Runs without my check</Label>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Off, the workflow needs a Check step before this one, so you see what goes out before
+        it is sent. On, it sends with no one looking.
+      </p>
+    </div>
+  );
+}
 
 const METHODS: HttpMethod[] = ["post", "get", "put", "patch", "delete"];
 
@@ -607,27 +624,17 @@ function ActionFields({ step, steps, inputs, onChange }: KindProps<ActionStep>) 
               onChange={(e) => onChange({ ...step, body: e.target.value })}
             />
           </Field>
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <Switch
-                id="step-unattended"
-                checked={step.unattended}
-                onCheckedChange={(unattended) => onChange({ ...step, unattended })}
-              />
-              <Label htmlFor="step-unattended">Runs without my check</Label>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Off, the workflow needs a Check step before this one, so you see what goes out
-              before it is sent. On, it sends with no one looking.
-            </p>
-          </div>
+          <Unattended
+            on={step.unattended}
+            onChange={(unattended) => onChange({ ...step, unattended })}
+          />
           <Marks marks={marksFor(steps, step.id, inputs, true)} />
           <p className="text-xs text-muted-foreground">
             {"{{secret.NAME}}"} is a variable of yours in Library, read when the step runs and
             never kept with the run. A Test run sends nothing.
           </p>
         </>
-      ) : (
+      ) : step.action === "file" ? (
         <>
           <Field
             label="File"
@@ -649,6 +656,46 @@ function ActionFields({ step, steps, inputs, onChange }: KindProps<ActionStep>) 
               onChange={(e) => onChange({ ...step, content: e.target.value })}
             />
           </Field>
+          <Marks marks={marksFor(steps, step.id, inputs, false)} />
+        </>
+      ) : (
+        <>
+          <Field
+            label="Bot's token"
+            htmlFor="step-token"
+            hint="The name of a variable in Library that holds your bot's token, such as BOT_TOKEN. The token itself is never written here."
+          >
+            <Input
+              id="step-token"
+              placeholder="BOT_TOKEN"
+              value={step.token}
+              onChange={(e) => onChange({ ...step, token: e.target.value })}
+            />
+          </Field>
+          <Field
+            label="Chat"
+            htmlFor="step-chat"
+            hint="The chat's id, a number. To answer the chat a message came from, give the workflow an input named chat_id and write {{input.chat_id}}."
+          >
+            <Input
+              id="step-chat"
+              placeholder="{{input.chat_id}}"
+              value={step.chat}
+              onChange={(e) => onChange({ ...step, chat: e.target.value })}
+            />
+          </Field>
+          <Field label="Message" htmlFor="step-text" hint="Up to 4,096 characters when it is sent.">
+            <Textarea
+              id="step-text"
+              rows={5}
+              value={step.text}
+              onChange={(e) => onChange({ ...step, text: e.target.value })}
+            />
+          </Field>
+          <Unattended
+            on={step.unattended}
+            onChange={(unattended) => onChange({ ...step, unattended })}
+          />
           <Marks marks={marksFor(steps, step.id, inputs, false)} />
         </>
       )}

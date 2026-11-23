@@ -352,4 +352,21 @@ describe("the builder's draft", () => {
       "{{secret.NAME}}",
     ]);
   });
+
+  it("offers a later action what the actions before it gave", () => {
+    const call = newStep("action", fixSteps, crew);
+    if (call.kind !== "action") throw new Error("not an action");
+    const tell = { ...withAction(call, "telegram"), id: "tell" };
+    expect(tell).toMatchObject({ action: "telegram", token: "", chat: "", text: "" });
+    const save = { ...withAction(call, "file"), id: "save" };
+    const last = { ...call, id: "last" };
+    const steps = [call, tell, save, last];
+    expect(marksFor(steps, "last", [], false)).toEqual([
+      "{{task}}",
+      "{{action-1.status}}",
+      "{{action-1.answer}}",
+      "{{tell.answer}}",
+      "{{save.path}}",
+    ]);
+  });
 });

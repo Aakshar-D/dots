@@ -1599,7 +1599,7 @@ export const Team = z.strictObject({
 });
 export type Team = z.infer<typeof Team>;
 
-export const WorkflowTrigger = z.enum(["chat", "manual", "schedule", "webhook"]);
+export const WorkflowTrigger = z.enum(["chat", "manual", "schedule", "webhook", "telegram"]);
 export type WorkflowTrigger = z.infer<typeof WorkflowTrigger>;
 export const WorkflowRunStatus = z.enum(["running", "waiting", "succeeded", "failed", "cancelled"]);
 export type WorkflowRunStatus = z.infer<typeof WorkflowRunStatus>;
@@ -1638,8 +1638,19 @@ export const Trigger = z.discriminatedUnion("kind", [
     task: nullable(z.string()),
     project: nullable(z.string()),
   }),
+  // A message to a Telegram bot starts it (connected workflows spec section 3): `token` names
+  // the variable that holds the bot's token, `chats` the ids of the chats it listens to.
+  z.strictObject({
+    kind: z.literal("telegram"),
+    token: z.string(),
+    chats: z.array(z.string()),
+    project: z.string(),
+  }),
 ]);
 export type Trigger = z.infer<typeof Trigger>;
+// A chat a Telegram bot heard from lately, for a trigger's settings to offer.
+export const SeenChat = z.strictObject({ id: z.string(), name: z.string() });
+export type SeenChat = z.infer<typeof SeenChat>;
 // What a delegate step's member may start (section 5.3).
 export const Delegate = z.strictObject({
   may_start: z.array(z.string()),
@@ -1719,6 +1730,14 @@ export const ActionStep = z.discriminatedUnion("action", [
     action: z.literal("file"),
     path: z.string(),
     content: z.string(),
+  }),
+  // A message to a Telegram chat, as the bot whose token the variable `token` holds.
+  z.strictObject({
+    ...actionShape,
+    action: z.literal("telegram"),
+    token: z.string(),
+    chat: z.string(),
+    text: z.string(),
   }),
 ]);
 export type ActionStep = z.infer<typeof ActionStep>;
