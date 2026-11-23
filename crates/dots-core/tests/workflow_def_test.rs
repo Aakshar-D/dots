@@ -934,23 +934,31 @@ fn a_step_reads_only_agent_steps_before_it() {
 }
 
 #[test]
-fn step_options_stay_out_of_the_json_until_one_is_set() {
-    // A step as it was saved before the options existed reads as one with none, and is
-    // written back the same.
-    let plain = agent("a", "helper");
-    let value = serde_json::to_value(&plain).unwrap();
-    assert!(value.get("options").is_none(), "{value}");
-    assert_eq!(serde_json::from_value::<Step>(value).unwrap(), plain);
-    // One that sets some carries only those.
+fn a_step_saved_before_the_options_reads_as_one_with_every_default() {
+    let old =
+        json!({"id": "a", "name": "Step a", "kind": "agent", "member": "helper", "job": "Do it."});
+    assert_eq!(
+        serde_json::from_value::<Step>(old).unwrap(),
+        agent("a", "helper")
+    );
+    // Written, a step always carries the three, so the builder reads one shape.
+    let value = serde_json::to_value(agent("a", "helper")).unwrap();
+    assert_eq!(
+        value["options"],
+        json!({"model": null, "lean": false, "reads": null})
+    );
     let mut set = agent("a", "helper");
     if let StepKind::Agent { options, .. } = &mut set.kind {
         *options = StepOptions {
             model: Some(dots_core::model::ModelTier::Small),
             lean: true,
-            reads: None,
+            reads: Some(vec![]),
         };
     }
     let value = serde_json::to_value(&set).unwrap();
-    assert_eq!(value["options"], json!({"model": "small", "lean": true}));
+    assert_eq!(
+        value["options"],
+        json!({"model": "small", "lean": true, "reads": []})
+    );
     assert_eq!(serde_json::from_value::<Step>(value).unwrap(), set);
 }

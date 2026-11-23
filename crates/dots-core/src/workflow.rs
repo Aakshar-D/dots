@@ -74,9 +74,9 @@ pub enum StepKind {
         outcomes: Vec<String>,
         #[serde(default)]
         delegate: Option<Delegate>,
-        /// What makes its run cheaper (lean workflows spec section 2). Left out of the JSON
-        /// while every one is at its default, so a workflow saved before them reads the same.
-        #[serde(default, skip_serializing_if = "StepOptions::is_default")]
+        /// What makes its run cheaper (lean workflows spec section 2). A workflow saved
+        /// before these existed has none, and reads as one with every default.
+        #[serde(default)]
         options: StepOptions,
     },
     /// The workflow waits for the person to approve or send back.
@@ -108,24 +108,17 @@ pub struct StepOptions {
     /// The size of model its run starts with, mapped by the settings' Auto models; `None`:
     /// the member's own model. Only a member on the Claude engine has sizes: another engine's
     /// keeps its own model.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub model: Option<ModelTier>,
     /// Its prompt carries the member's instructions and the workflow only: no memories and no
     /// project map, and its run saves no memory.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub lean: bool,
     /// The ids of the earlier steps whose summaries its prompt carries, each in full. `None`:
     /// every earlier step's, the newest in full and the older ones cut short
     /// (`workflows::MAX_OLDER_SUMMARY`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub reads: Option<Vec<String>>,
-}
-
-impl StepOptions {
-    /// Whether every option is at its default.
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
 }
 
 /// What a delegate step's member may start (section 5.3).

@@ -9,7 +9,7 @@ use dots_core::model::*;
 use dots_core::schedule::Schedule;
 use dots_core::workflow::{
     BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
-    Trigger, WorkflowProblem,
+    StepOptions, Trigger, WorkflowProblem,
 };
 use dots_core::workflows::{CheckView, ShownBranch};
 use serde_json::{json, Value};
@@ -192,7 +192,11 @@ fn chat_definition() -> Definition {
                         id: "design".into(),
                         name: "Design".into(),
                         kind: StepKind::Agent {
-                            options: Default::default(),
+                            options: StepOptions {
+                                model: Some(ModelTier::Small),
+                                lean: true,
+                                reads: Some(vec!["build".into()]),
+                            },
                             member: REVIEWER.into(),
                             job: "Propose a design.".into(),
                             can_send_back_to: vec!["build".into()],

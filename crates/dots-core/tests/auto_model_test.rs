@@ -5,8 +5,8 @@ mod common;
 
 use common::{fake_dot, fake_run};
 use dots_core::auto_model::{
-    choose, choose_for_step, fallback_tier, is_auto, model_unavailable, route, signals, AutoModels, Signals,
-    AUTO_MODEL,
+    choose, choose_for_step, fallback_tier, is_auto, model_unavailable, route, signals, AutoModels,
+    Signals, AUTO_MODEL,
 };
 use dots_core::model::{EngineKind, ModelTier, TriggerKind, WorkspaceMode};
 use dots_core::models::list_models;
@@ -437,7 +437,10 @@ fn a_workflow_step_sets_the_size_of_its_model_and_its_thread_keeps_it() {
         let c = choose_for_step(&dot, &step, None, &settings, Some(Small));
         assert_eq!(c.model, "haiku");
         let auto = c.auto.unwrap();
-        assert_eq!((auto.tier, auto.reason.as_str()), (Small, "set on the workflow step"));
+        assert_eq!(
+            (auto.tier, auto.reason.as_str()),
+            (Small, "set on the workflow step")
+        );
     }
     // No size on the step: the dot's own model, as before.
     dot.spec.model = "opus".into();
@@ -467,28 +470,18 @@ fn a_workflow_step_is_sized_by_its_task_and_job_not_by_earlier_summaries() {
     let run = fake_run(
         TriggerKind::Workflow,
         Some(json!({"workflow": {
-            "section": "## Workflow
-
-### Earlier steps
-
-I had to refactor and debug the code.",
-            "route": "Post the update.
-
-Send it to the channel.",
+            "section": "## Workflow\n\n### Earlier steps\n\nI had to refactor and debug the code.",
+            "route": "Post the update.\n\nSend it to the channel.",
         }})),
         None,
     );
     let s = signals(&dot, &run, None);
-    assert_eq!(s.text, "Post the update.
-
-Send it to the channel.");
+    assert_eq!(s.text, "Post the update.\n\nSend it to the channel.");
     assert!(s.is_message);
     // A run queued before the route was written is sized by its section, as it was.
     let old = fake_run(
         TriggerKind::Workflow,
-        Some(json!({"workflow": {"section": "## Workflow
-
-Design the API"}})),
+        Some(json!({"workflow": {"section": "## Workflow\n\nDesign the API"}})),
         None,
     );
     assert!(signals(&dot, &old, None).text.contains("Design the API"));
