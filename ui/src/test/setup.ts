@@ -42,7 +42,10 @@ vi.mock("@tauri-apps/api/event", async () => {
 });
 vi.mock("@tauri-apps/plugin-dialog", async () => {
   const { backend } = await import("./backend");
-  return { open: (options?: Record<string, unknown>) => backend.invoke("dialog_open", options) };
+  return {
+    open: (options?: Record<string, unknown>) => backend.invoke("dialog_open", options),
+    save: (options?: Record<string, unknown>) => backend.invoke("dialog_save", options),
+  };
 });
 
 // jsdom lacks these; Radix and the toaster call them.

@@ -848,6 +848,16 @@ pub(super) fn teams_samples(samples: &mut Value) {
     let runs = workflow_runs();
     samples["WorkflowRun"] = to(&runs);
     samples["CheckView"] = to(check_view());
+    samples["WorkflowDraft"] = to(dots_core::workflow_draft::WorkflowDraft {
+        name: "Answer clients".into(),
+        definition: workflows
+            .last()
+            .expect("a workflow")
+            .spec
+            .definition
+            .clone(),
+        notes: vec!["Keep your bot's token as a secret variable named BOT_TOKEN.".into()],
+    });
     samples["SeenChat"] = to(vec![
         SeenChat {
             id: "42".into(),

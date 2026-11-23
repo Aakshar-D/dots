@@ -264,6 +264,8 @@ pub struct Runtime {
     skill_drafts: SkillDrafts,
     /// The setup agent's requests (setup agent spec §9).
     setup_drafts: SetupDrafts,
+    /// The workflows being drafted from a description (plain workflows spec section 2).
+    workflow_drafts: crate::workflow_draft::WorkflowDrafts,
     /// Open Dot's mind: one spoken turn in, words and one checked action out.
     open_dot: crate::open_dot::Mind,
     /// Makes `setup_apply` check a name and create its dot in one step, so a second press of
@@ -765,6 +767,13 @@ impl Runtime {
             server_error,
             // Drafts need the CLI, not the local server: they work while its port is taken.
             skill_drafts: SkillDrafts::new(
+                claude_program.clone(),
+                cfg.claude_env.clone(),
+                cfg.data_dir.join(DRAFTS_DIR),
+                cfg.draft_limit,
+                shutdown.clone(),
+            ),
+            workflow_drafts: crate::workflow_draft::WorkflowDrafts::new(
                 claude_program.clone(),
                 cfg.claude_env.clone(),
                 cfg.data_dir.join(DRAFTS_DIR),
@@ -1979,6 +1988,38 @@ impl Runtime {
             Ok(ctx) => self.setup_drafts.ask_with_usage(id, &ctx, &req).await,
             Err(e) => (Err(e), None),
         }
+    }
+
+    /// Drafts the workflow `description` asks for, for the team `team_id` (plain workflows
+    /// spec section 2): the team's members and projects are named to the model, and its answer
+    /// is read into a definition. Nothing is saved. A newer request of the same dialog cancels
+    /// the one before.
+    pub async fn workflow_draft(
+        &self,
+        dialog: &str,
+        team_id: &str,
+        description: &str,
+    ) -> Result<crate::workflow_draft::WorkflowDraft> {
+        use crate::workflow_draft::{DraftContext, DraftMember};
+        let team = self.teams.get(team_id).await?;
+        let ctx = DraftContext {
+            members: team
+                .members
+                .iter()
+                .map(|m| DraftMember {
+                    id: m.dot_id.clone(),
+                    name: m.dot_name.clone(),
+                    role: m.role.clone(),
+                })
+                .collect(),
+            projects: team.projects.iter().map(|p| p.spec.name.clone()).collect(),
+        };
+        self.workflow_drafts.draft(dialog, &ctx, description).await
+    }
+
+    /// Cancels the dialog's workflow draft, if one is being written.
+    pub fn workflow_draft_cancel(&self, dialog: &str) {
+        self.workflow_drafts.cancel(dialog);
     }
 
     /// Cancels the setup's request, if one is being answered (`setup_cancel`).

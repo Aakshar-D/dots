@@ -1287,6 +1287,11 @@
     "workflows_list",
     "workflow_get",
     "workflow_create",
+    "workflow_create_draft",
+    "workflow_draft",
+    "workflow_draft_cancel",
+    "workflow_export",
+    "workflow_import",
     "workflow_update",
     "workflow_delete",
     "workflow_check_spec",
@@ -16553,6 +16558,68 @@
       "updated_at": "2026-10-09T12:00:00.000Z"
     }
   ],
+  "WorkflowDraft": {
+    "definition": {
+      "budget": {
+        "max_minutes": 120,
+        "max_runs": 10,
+        "max_send_backs": 3,
+        "max_tokens": 1500000
+      },
+      "inputs": [
+        {
+          "default": null,
+          "kind": "text",
+          "label": "Chat",
+          "name": "chat_id",
+          "required": false
+        }
+      ],
+      "steps": [
+        {
+          "can_send_back_to": [],
+          "delegate": null,
+          "id": "answer",
+          "job": "Answer the client.",
+          "kind": "agent",
+          "member": "01J0DOT",
+          "name": "Write the answer",
+          "options": {
+            "lean": false,
+            "model": null,
+            "reads": null
+          },
+          "outcomes": [],
+          "produces": [
+            "reply"
+          ]
+        },
+        {
+          "action": "telegram",
+          "chat": "{{input.chat_id}}",
+          "id": "tell",
+          "kind": "action",
+          "name": "Tell them",
+          "text": "{{answer.reply}}",
+          "token": "BOT_TOKEN",
+          "unattended": true
+        }
+      ],
+      "trigger": {
+        "chats": [
+          "42",
+          "-1001234567890"
+        ],
+        "kind": "telegram",
+        "project": "",
+        "token": "BOT_TOKEN"
+      }
+    },
+    "name": "Answer clients",
+    "notes": [
+      "Keep your bot's token as a secret variable named BOT_TOKEN."
+    ]
+  },
   "WorkflowProblem": [
     {
       "message": "step \"Work\": 01J0GONE is not a member of the team",

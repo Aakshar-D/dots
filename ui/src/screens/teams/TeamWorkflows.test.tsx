@@ -1,7 +1,7 @@
 import { act, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { Team, Workflow, WorkflowRun } from "@/api/types";
+import type { Team, Workflow, WorkflowRun, WorkflowSpec } from "@/api/types";
 import { backend } from "@/test/backend";
 import { sample } from "@/test/fixtures";
 import { renderApp } from "@/test/render";
@@ -78,12 +78,18 @@ describe("the team page's workflows", () => {
 
   it("makes a workflow done by the first member, off, and opens it in the builder", async () => {
     const made: Workflow = { ...pushIt, id: "01J0WFL9", name: "New workflow", problem: null };
-    backend.on("workflow_create", () => made);
+    backend.on("workflow_create_draft", () => made);
     const { user, visited } = crewPage();
     await screen.findByRole("region", { name: "Workflows" });
     await user.click(screen.getByRole("button", { name: "New workflow" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "New workflow" }));
+    await user.click(dialog.getByRole("button", { name: "Start with an empty one" }));
+    // What will be made is shown first.
+    expect(within(dialog.getByRole("list", { name: "Its steps" })).getAllByRole("listitem"))
+      .toHaveLength(1);
+    await user.click(dialog.getByRole("button", { name: "Make it" }));
     await waitFor(() => expect(visited).toContain("/teams/01J0TEAM/workflows/01J0WFL9"));
-    expect(backend.callsTo("workflow_create")).toEqual([
+    expect(backend.callsTo("workflow_create_draft")).toEqual([
       {
         teamId: "01J0TEAM",
         spec: {
@@ -166,6 +172,125 @@ describe("the team page's workflows", () => {
         test: false,
         inputs: { product: "Sage", notes: "Keep it short." },
       },
+    ]);
+  });
+
+  it("writes a workflow from a description, shows it with what is left to do, and makes it", async () => {
+    const made: Workflow = { ...pushIt, id: "01J0WFL9", problem: null };
+    backend.on("workflow_draft", () => sample.workflowDraft);
+    backend.on("workflow_create_draft", () => made);
+    const { user, visited } = crewPage();
+    await screen.findByRole("region", { name: "Workflows" });
+    await user.click(screen.getByRole("button", { name: "New workflow" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "New workflow" }));
+    const write = dialog.getByRole("button", { name: "Write it for me" });
+    expect(write).toBeDisabled();
+    await user.type(dialog.getByLabelText("Describe it"), "Answer my clients on Telegram.");
+    await user.click(write);
+    const shown = within(await dialog.findByRole("region", { name: "The workflow to make" }));
+    // The team has a workflow of that name: the new one's is made free.
+    expect(shown.getByText("Answer clients 2")).toBeVisible();
+    expect(
+      within(shown.getByRole("list", { name: "Its steps" }))
+        .getAllByRole("listitem")
+        .map((step) => step.textContent),
+    ).toEqual(["1.Write the answerAgent step", "2.Tell themAction"]);
+    expect(shown.getByRole("list", { name: "Before it can run" })).toHaveTextContent(
+      "Keep your bot's token as a secret variable named BOT_TOKEN.",
+    );
+    expect(backend.callsTo("workflow_draft")).toEqual([
+      expect.objectContaining({ teamId: "01J0TEAM", description: "Answer my clients on Telegram." }),
+    ]);
+    await user.click(dialog.getByRole("button", { name: "Make it" }));
+    await waitFor(() => expect(visited).toContain("/teams/01J0TEAM/workflows/01J0WFL9"));
+    expect(backend.callsTo("workflow_create_draft")).toEqual([
+      {
+        teamId: "01J0TEAM",
+        spec: {
+          name: "Answer clients 2",
+          definition: sample.workflowDraft.definition,
+          enabled: false,
+        },
+      },
+    ]);
+  });
+
+  it("says why a workflow could not be written, and keeps the description", async () => {
+    backend.on("workflow_draft", () => {
+      throw { kind: "other", message: "Claude took too long to write the workflow." };
+    });
+    const { user } = crewPage();
+    await screen.findByRole("region", { name: "Workflows" });
+    await user.click(screen.getByRole("button", { name: "New workflow" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "New workflow" }));
+    await user.type(dialog.getByLabelText("Describe it"), "Post every week.");
+    await user.click(dialog.getByRole("button", { name: "Write it for me" }));
+    expect(await dialog.findByRole("alert")).toHaveTextContent(
+      "Claude took too long to write the workflow.",
+    );
+    expect(dialog.getByLabelText("Describe it")).toHaveValue("Post every week.");
+  });
+
+  it("starts from a ready workflow, with the team's first member and what is left to do", async () => {
+    const made: Workflow = { ...pushIt, id: "01J0WFL9", problem: null };
+    backend.on("workflow_create_draft", () => made);
+    const { user } = crewPage();
+    await screen.findByRole("region", { name: "Workflows" });
+    await user.click(screen.getByRole("button", { name: "New workflow" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "New workflow" }));
+    const ready = within(dialog.getByRole("list", { name: "Ready workflows" }));
+    expect(ready.getAllByRole("listitem")).toHaveLength(5);
+    await user.click(ready.getByRole("button", { name: /Answer messages on Telegram/ }));
+    expect(dialog.getByRole("list", { name: "Before it can run" })).toHaveTextContent(
+      "Make a bot with @BotFather in Telegram",
+    );
+    // Back, and another one.
+    await user.click(dialog.getByRole("button", { name: "Back" }));
+    await user.click(
+      within(dialog.getByRole("list", { name: "Ready workflows" })).getByRole("button", {
+        name: /Write a post, approve it, publish it at a time/,
+      }),
+    );
+    await user.click(dialog.getByRole("button", { name: "Make it" }));
+    const [call] = backend.callsTo("workflow_create_draft") as { spec: WorkflowSpec }[];
+    expect(call.spec.name).toBe("Post at a time");
+    expect(call.spec.enabled).toBe(false);
+    expect(call.spec.definition.steps.map((s) => s.kind)).toEqual([
+      "agent",
+      "check",
+      "wait",
+      "action",
+    ]);
+    expect(call.spec.definition.steps[0]).toMatchObject({ member: "01J0DOT", produces: ["post"] });
+  });
+
+  it("makes a copy, saves a workflow as a file, and brings one in", async () => {
+    backend.on("workflow_create_draft", () => ({ ...nightly, id: "01J0WFL9" }));
+    backend.on("dialog_save", () => "C:/out/Nightly.sage-workflow.json");
+    backend.on("workflow_export", () => null);
+    backend.on("dialog_open", () => "C:/in/theirs.json");
+    backend.on("workflow_import", () => ({ ...nightly, id: "01J0WFL8", name: "Theirs" }));
+    const { user, visited } = crewPage();
+    await screen.findByRole("region", { name: "Workflows" });
+    await user.click(within(row("Nightly")).getByRole("button", { name: "Make a copy of Nightly" }));
+    await waitFor(() =>
+      expect(backend.callsTo("workflow_create_draft")).toEqual([
+        {
+          teamId: "01J0TEAM",
+          spec: { name: "Nightly copy", definition: nightly.definition, enabled: false },
+        },
+      ]),
+    );
+    await user.click(within(row("Nightly")).getByRole("button", { name: "Save Nightly as a file" }));
+    await waitFor(() =>
+      expect(backend.callsTo("workflow_export")).toEqual([
+        { id: "01J0WFL3", path: "C:/out/Nightly.sage-workflow.json" },
+      ]),
+    );
+    await user.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(visited).toContain("/teams/01J0TEAM/workflows/01J0WFL8"));
+    expect(backend.callsTo("workflow_import")).toEqual([
+      { teamId: "01J0TEAM", path: "C:/in/theirs.json" },
     ]);
   });
 
