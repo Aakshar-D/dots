@@ -1353,7 +1353,7 @@ impl Workflows {
         let earlier: Vec<_> = match reads {
             Some(reads) => earlier
                 .into_iter()
-                .filter(|(s, _)| reads.iter().any(|id| *id == s.id))
+                .filter(|(s, _)| reads.contains(&s.id))
                 .collect(),
             None => earlier,
         };
