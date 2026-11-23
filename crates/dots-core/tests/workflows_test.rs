@@ -21,9 +21,10 @@ use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::scheduler::{Clock, SystemClock};
 use dots_core::store::Store;
 use dots_core::team_tools::{DelegateTools, SendBackTarget, StartableMember, StepTools, Tool};
+use dots_core::vault::{EntryKind, Vault};
 use dots_core::workflow::{
-    BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
-    StepOptions, Trigger,
+    Action, BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, Header, HttpMethod,
+    InputField, InputKind, MergeMethod, Step, StepKind, StepOptions, Trigger, Wait,
 };
 use dots_core::workflows::{
     CheckTip, CheckView, ShownBranch, StartRequest, Workflows, ENDED_STEP_THREAD,
@@ -5828,4 +5829,684 @@ async fn a_pass_writes_nothing_for_a_run_that_waits_on_the_person() {
     let done = w.approve(&wr.id, None).await.unwrap();
     assert_eq!(done.status, WorkflowRunStatus::Succeeded);
     assert_eq!(done.active_ms, waiting.active_ms);
+}
+
+// ---- General workflows (plan 2): plain folders, inputs, outputs, actions and waits ----
+
+/// `step`, an agent step, giving the outputs `names`.
+fn producing(mut step: Step, names: &[&str]) -> Step {
+    if let StepKind::Agent { produces, .. } = &mut step.kind {
+        *produces = names.iter().map(|n| n.to_string()).collect();
+    }
+    step
+}
+
+/// An action step that writes `content` to the file `path`.
+fn file_step(id: &str, path: &str, content: &str) -> Step {
+    Step {
+        id: id.into(),
+        name: "Save it".into(),
+        kind: StepKind::Action {
+            action: Action::File {
+                path: path.into(),
+                content: content.into(),
+            },
+            unattended: false,
+        },
+    }
+}
+
+/// An action step that sends `body` to `url` with `headers`, with no check before it.
+fn http_step(id: &str, url: &str, headers: &[(&str, &str)], body: &str) -> Step {
+    Step {
+        id: id.into(),
+        name: "Send it".into(),
+        kind: StepKind::Action {
+            action: Action::Http {
+                method: HttpMethod::Post,
+                url: url.into(),
+                headers: headers
+                    .iter()
+                    .map(|(name, value)| Header {
+                        name: name.to_string(),
+                        value: value.to_string(),
+                    })
+                    .collect(),
+                body: body.into(),
+            },
+            unattended: true,
+        },
+    }
+}
+
+fn text_input(name: &str, label: &str, required: bool) -> InputField {
+    InputField {
+        name: name.into(),
+        label: label.into(),
+        kind: InputKind::Text,
+        required,
+        default: None,
+    }
+}
+
+impl World {
+    /// A workflow of `steps` that asks for `inputs`.
+    async fn workflow_with(&self, name: &str, inputs: Vec<InputField>, steps: Vec<Step>) -> String {
+        self.store
+            .create_workflow(
+                &self.team,
+                &WorkflowSpec {
+                    name: name.into(),
+                    definition: Definition {
+                        inputs,
+                        trigger: Trigger::Manual,
+                        steps,
+                        budget: self.budget,
+                    },
+                    enabled: true,
+                },
+            )
+            .await
+            .unwrap()
+            .id
+    }
+
+    /// A start of `workflow` in the team's own folder, with `inputs`.
+    fn request(&self, workflow: &str, inputs: &[(&str, &str)]) -> StartRequest {
+        StartRequest {
+            workflow_id: workflow.into(),
+            project_id: None,
+            inputs: inputs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            task: "Announce the launch.".into(),
+            trigger: WorkflowTrigger::Manual,
+            origin_run_id: None,
+            test: false,
+        }
+    }
+
+    /// The team's own folder, where a run that names no project works.
+    fn team_files(&self) -> PathBuf {
+        self.dir.path().join("team-files").join(&self.team)
+    }
+}
+
+/// Why a start of `flow` with `inputs` is refused.
+async fn refused_start(w: &World, flow: &str, inputs: Vec<(&str, &str)>) -> String {
+    match w.workflows.start(w.request(flow, &inputs)).await {
+        Err(Error::Invalid(m)) => m,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+/// A local HTTP server that keeps what it is sent (method, path and query, the `x-key`
+/// header, the body) and answers 200 `ok`, or 500 `nope` on a path that starts with `/fail`.
+async fn hook_server() -> (String, Arc<Mutex<Vec<(String, String, String, String)>>>) {
+    let got: Arc<Mutex<Vec<(String, String, String, String)>>> = Arc::default();
+    let keep = got.clone();
+    let app = axum::Router::new().fallback(
+        move |method: axum::http::Method,
+              uri: axum::http::Uri,
+              headers: axum::http::HeaderMap,
+              body: String| {
+            let keep = keep.clone();
+            async move {
+                let key = headers
+                    .get("x-key")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or_default()
+                    .to_string();
+                keep.lock()
+                    .unwrap()
+                    .push((method.to_string(), uri.to_string(), key, body));
+                if uri.path().starts_with("/fail") {
+                    (axum::http::StatusCode::INTERNAL_SERVER_ERROR, "nope")
+                } else {
+                    (axum::http::StatusCode::OK, "ok")
+                }
+            }
+        },
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    (base, got)
+}
+
+#[tokio::test]
+async fn a_run_with_no_project_works_in_the_team_s_own_folder_and_hands_on_no_branch() {
+    let w = world().await;
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Write("post.txt", "Wrote it.")]);
+    let flow = w
+        .workflow_with(
+            "Write",
+            vec![],
+            vec![agent("draft", "Draft it", &w.dev, "Draft.")],
+        )
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    assert_eq!(
+        (wr.project_id.clone(), wr.project.name.as_str()),
+        (None, "Files")
+    );
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The dev works in worktrees, but a plain folder has none: it worked in the folder itself.
+    let folder = w.team_files();
+    assert_eq!(wr.project.repo_path, folder.to_string_lossy());
+    assert_eq!(
+        std::fs::read_to_string(folder.join("post.txt")).unwrap(),
+        "Wrote it."
+    );
+    let run = &w.store.runs_of_step_run(&wr.steps[0].id).await.unwrap()[0];
+    assert_eq!(run.branch, None);
+    let handoff = wr.steps[0].handoff.as_ref().unwrap();
+    assert_eq!(handoff.summary, "Wrote it.");
+    assert!(handoff.branches.is_empty());
+    // The project it was shown is the folder.
+    let prompt = &w.engine.prompts_of("dev")[0];
+    assert!(prompt.contains("- Project: Files ("), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_plain_folder_is_a_project_a_run_works_in() {
+    let w = world().await;
+    let plain = w.dir.path().join("campaign");
+    std::fs::create_dir_all(&plain).unwrap();
+    let project = w
+        .store
+        .add_project(
+            &w.team,
+            &ProjectSpec {
+                name: "Campaign".into(),
+                repo_path: plain.to_string_lossy().to_string(),
+                default_branch: None,
+                remote: "origin".into(),
+            },
+        )
+        .await
+        .unwrap();
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Write("plan.md", "Planned.")]);
+    let flow = w
+        .workflow_with(
+            "Plan",
+            vec![],
+            vec![agent("plan", "Plan it", &w.dev, "Plan.")],
+        )
+        .await;
+    let mut req = w.request(&flow, &[]);
+    req.project_id = Some(project.id.clone());
+    let wr = w.workflows.start(req.clone()).await.unwrap();
+    w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(
+        std::fs::read_to_string(plain.join("plan.md")).unwrap(),
+        "Planned."
+    );
+    // A project whose folder is gone starts nothing.
+    std::fs::remove_dir_all(&plain).unwrap();
+    assert!(matches!(
+        w.workflows.start(req).await,
+        Err(Error::Invalid(m)) if m.ends_with("is not a folder")
+    ));
+}
+
+#[tokio::test]
+async fn a_start_is_given_the_workflow_s_inputs_and_a_step_s_prompt_lists_them() {
+    let w = world().await;
+    let when = InputField {
+        name: "publish_at".into(),
+        label: "Publish at".into(),
+        kind: InputKind::DateTime,
+        required: false,
+        default: Some("2026-12-01T09:00".into()),
+    };
+    let flow = w
+        .workflow_with(
+            "Post",
+            vec![
+                text_input("product", "Product name", true),
+                when,
+                text_input("tone", "Tone", false),
+            ],
+            vec![agent("draft", "Draft it", &w.dev, "Draft.")],
+        )
+        .await;
+    assert_eq!(
+        refused_start(&w, &flow, vec![]).await,
+        "\"Product name\" is needed to start"
+    );
+    assert_eq!(
+        refused_start(&w, &flow, vec![("product", "  ")]).await,
+        "\"Product name\" is needed to start"
+    );
+    assert_eq!(
+        refused_start(&w, &flow, vec![("product", "Sage"), ("colour", "teal")]).await,
+        "the workflow asks for no input named \"colour\""
+    );
+    assert_eq!(
+        refused_start(&w, &flow, vec![("product", "Sage"), ("publish_at", "soon")]).await,
+        "\"Publish at\" must be a date and time, as in 2026-12-01T09:00"
+    );
+    let long = "x".repeat(8_001);
+    assert_eq!(
+        refused_start(&w, &flow, vec![("product", &long)]).await,
+        "\"Product name\" is longer than 8,000 characters"
+    );
+
+    // A default fills what the start leaves out; a blank optional one is left out.
+    let wr = w
+        .workflows
+        .start(w.request(&flow, &[("product", " Sage ")]))
+        .await
+        .unwrap();
+    let inputs: Vec<(&str, &str)> = wr
+        .inputs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    assert_eq!(
+        inputs,
+        [("product", "Sage"), ("publish_at", "2026-12-01T09:00")]
+    );
+    w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let prompt = &w.engine.prompts_of("dev")[0];
+    assert!(
+        prompt.contains(
+            "### Inputs\n\n- Product name (`product`): Sage\n- Publish at (`publish_at`): \
+             2026-12-01T09:00\n\n### Your job in this step"
+        ),
+        "{prompt}"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_step_s_outputs_are_read_from_its_reply_and_a_missing_one_fails_it() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Finish("A draft: <post>first try</post>\n\nDone.\n<post>\nHello, world!\n</post>\n<caption>Short one</caption>"),
+            Act::Finish("Only this: <post>Hello again</post>"),
+        ],
+    );
+    let flow = w
+        .workflow_with(
+            "Post",
+            vec![],
+            vec![producing(
+                agent("draft", "Draft it", &w.dev, "Draft."),
+                &["post", "caption"],
+            )],
+        )
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let outputs = &wr.steps[0].handoff.as_ref().unwrap().outputs;
+    let got: Vec<(&str, &str)> = outputs
+        .iter()
+        .map(|(k, v)| (k.as_str(), v.as_str()))
+        .collect();
+    // The last block of each name counts, trimmed.
+    assert_eq!(got, [("caption", "Short one"), ("post", "Hello, world!")]);
+    let prompt = &w.engine.prompts_of("dev")[0];
+    assert!(
+        prompt.contains(
+            "### Outputs\n\nEnd your reply with each of these in a block of its own, written \
+             exactly so, with only the text itself inside:\n\n<post>…</post>\n<caption>…</caption>\n"
+        ),
+        "{prompt}"
+    );
+
+    // A reply without one of them fails the step, which waits for a retry.
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Draft it: its reply did not end with a block for: \"caption\"")
+    );
+    assert_eq!(wr.steps[0].status, StepRunStatus::Failed);
+}
+
+#[tokio::test]
+async fn a_check_shows_the_outputs_and_what_the_person_changes_is_what_the_next_step_uses() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Finish(
+            "Drafted.\n<post>Helo wrld</post>\n<caption>A caption</caption>",
+        )],
+    );
+    let flow = w
+        .workflow_with(
+            "Post",
+            vec![text_input("product", "Product name", true)],
+            vec![
+                producing(
+                    agent("draft", "Draft it", &w.dev, "Draft."),
+                    &["post", "caption"],
+                ),
+                check("check"),
+                file_step(
+                    "save",
+                    "out/{{input.product}}.txt",
+                    "{{draft.post}}\n--\n{{draft.caption}}\n--\n{{task}}",
+                ),
+            ],
+        )
+        .await;
+    let wr = w
+        .workflows
+        .start(w.request(&flow, &[("product", "sage")]))
+        .await
+        .unwrap();
+    w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    let view = w.workflows.check(&wr.id).await.unwrap();
+    // In the order the step declares them.
+    let shown: Vec<(&str, &str)> = view
+        .outputs
+        .iter()
+        .map(|o| (o.name.as_str(), o.text.as_str()))
+        .collect();
+    assert_eq!(shown, [("post", "Helo wrld"), ("caption", "A caption")]);
+
+    // An output the step did not give is refused, and nothing is recorded.
+    let unknown = [("title".to_string(), "T".to_string())].into();
+    assert!(matches!(
+        w.workflows
+            .approve_check_edited(&wr.id, None, &view.step_run_id, &view.tips(), &unknown)
+            .await,
+        Err(Error::Invalid(m)) if m == "the step shown gave no output named \"title\""
+    ));
+    assert_eq!(
+        w.store.get_workflow_run(&wr.id).await.unwrap().status,
+        WorkflowRunStatus::Waiting
+    );
+
+    let edits = [("post".to_string(), "Hello, world".to_string())].into();
+    w.workflows
+        .approve_check_edited(&wr.id, None, &view.step_run_id, &view.tips(), &edits)
+        .await
+        .unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The file holds the changed post, the caption as it was, and the task.
+    assert_eq!(
+        std::fs::read_to_string(w.team_files().join("out").join("sage.txt")).unwrap(),
+        "Hello, world\n--\nA caption\n--\nAnnounce the launch."
+    );
+    assert_eq!(
+        newest(&wr, "save").handoff.as_ref().unwrap().summary,
+        "Wrote out/sage.txt (49 characters)."
+    );
+    // The check says what was changed, and the step that gave it keeps the changed text.
+    assert_eq!(
+        newest(&wr, "check").decision.as_ref().unwrap()["edited"],
+        json!(["post"])
+    );
+    assert_eq!(
+        newest(&wr, "draft").handoff.as_ref().unwrap().outputs["post"],
+        "Hello, world"
+    );
+}
+
+#[tokio::test]
+async fn an_http_action_sends_what_the_workflow_wrote_and_keeps_no_secret() {
+    let w = world().await;
+    let (base, got) = hook_server().await;
+    let vault = Vault::in_memory(w.store.clone());
+    vault
+        .add("CHAT_TOKEN", EntryKind::Secret, "s3cret/token")
+        .await
+        .unwrap();
+    w.workflows.set_vault(vault);
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![Act::Finish(
+            "Done.\n<post>She said \"hi\"\nand left & more</post>",
+        )],
+    );
+    let flow = w
+        .workflow_with(
+            "Post",
+            vec![text_input("chat", "Chat", true)],
+            vec![
+                producing(agent("draft", "Draft it", &w.dev, "Draft."), &["post"]),
+                http_step(
+                    "send",
+                    &format!("{base}/bot{{{{secret.CHAT_TOKEN}}}}/send?chat={{{{input.chat}}}}"),
+                    &[("X-Key", "Bearer {{secret.CHAT_TOKEN}}")],
+                    "{\"text\": \"{{draft.post}}\"}",
+                ),
+            ],
+        )
+        .await;
+    let wr = w
+        .workflows
+        .start(w.request(&flow, &[("chat", "team room")]))
+        .await
+        .unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let sent = got.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    let (method, uri, key, body) = &sent[0];
+    assert_eq!(method, "POST");
+    // A value in the URL is percent-encoded; one in a JSON body sits in its string.
+    assert_eq!(uri, "/bots3cret%2Ftoken/send?chat=team%20room");
+    assert_eq!(key, "Bearer s3cret/token");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(body).unwrap(),
+        json!({"text": "She said \"hi\"\nand left & more"})
+    );
+    // What is kept names the request without its query, and no secret in any spelling.
+    let summary = &newest(&wr, "send").handoff.as_ref().unwrap().summary;
+    assert_eq!(
+        summary,
+        &format!("POST {base}/bot•••/send answered 200.\n\nok")
+    );
+    // An action spends no run and no tokens.
+    assert_eq!(wr.spent_runs, 1);
+}
+
+#[tokio::test]
+async fn an_http_action_that_is_refused_fails_its_step_and_a_test_run_sends_nothing() {
+    let w = world().await;
+    let (base, got) = hook_server().await;
+    let flow = w
+        .workflow_with(
+            "Ping",
+            vec![],
+            vec![http_step("send", &format!("{base}/fail/now"), &[], "hello")],
+        )
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some(format!("Send it: POST {base}/fail/now answered 500: nope").as_str())
+    );
+    assert_eq!(got.lock().unwrap().len(), 1);
+    // A retry sends it again.
+    w.workflows.retry_step(&wr.id).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| {
+            wr.status == WorkflowRunStatus::Waiting && wr.steps.len() == 2
+        })
+        .await;
+    assert_eq!(wr.steps[1].attempt, 2);
+    assert_eq!(got.lock().unwrap().len(), 2);
+    w.workflows.stop(&wr.id).await.unwrap();
+
+    // A test run fills the request and sends nothing.
+    let mut test = w.request(&flow, &[]);
+    test.test = true;
+    let wr = w.workflows.start(test).await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(
+        wr.steps[0].handoff.as_ref().unwrap().summary,
+        format!(
+            "Test run: not sent. It would send POST {base}/fail/now with a body of 5 characters."
+        )
+    );
+    assert_eq!(got.lock().unwrap().len(), 2);
+
+    // A secret with no vault to read it from, and a step on a path the run did not take.
+    let flow = w
+        .workflow_with(
+            "Key",
+            vec![],
+            vec![http_step(
+                "send",
+                &format!("{base}/x"),
+                &[("X-Key", "{{secret.NOPE}}")],
+                "",
+            )],
+        )
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Send it: {{secret.NOPE}}: the variables cannot be read here")
+    );
+}
+
+#[tokio::test]
+async fn a_wait_step_holds_the_run_until_its_time_and_counts_no_minutes() {
+    let start = chrono::Utc::now() - chrono::TimeDelta::hours(6);
+    let clock = common::clock::FakeClock::new(start);
+    let w = world_with(clock.clone(), Budget::default()).await;
+    w.engine
+        .set(&w.helper.spec.name, vec![Act::Finish("Drafted.")]);
+    w.engine.set(&w.dev.spec.name, vec![Act::Finish("Posted.")]);
+    let wait = Step {
+        id: "hold".into(),
+        name: "Until later".into(),
+        kind: StepKind::Wait {
+            wait: Wait::Minutes { minutes: 60 },
+        },
+    };
+    let flow = w
+        .workflow_with(
+            "Post later",
+            vec![],
+            vec![
+                agent("draft", "Draft it", &w.helper, "Draft."),
+                wait,
+                agent("post", "Post it", &w.dev, "Post."),
+            ],
+        )
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let at_wait = |wr: &WorkflowRun| {
+        wr.current_step.as_deref() == Some("hold") && newest(wr, "hold").decision.is_some()
+    };
+    let wr = w.until(&wr.id, at_wait).await;
+    // It runs, waiting on no one, until an hour after the step began.
+    assert_eq!(wr.status, WorkflowRunStatus::Running);
+    let until = newest(&wr, "hold").decision.as_ref().unwrap()["until"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        until,
+        dots_core::util::timestamp(start + chrono::TimeDelta::minutes(60))
+    );
+    let before = wr.active_ms;
+
+    // 59 minutes of passes: still waiting, no minute counted, the next step not begun.
+    w.run_clock(&clock, start + chrono::TimeDelta::minutes(59))
+        .await;
+    let wr = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(wr.current_step.as_deref(), Some("hold"));
+    assert_eq!(newest(&wr, "hold").status, StepRunStatus::Running);
+    assert_eq!(wr.active_ms, before);
+    assert!(w.engine.prompts_of("dev").is_empty());
+
+    // Its time comes: the wait ends and the workflow goes on.
+    w.run_clock(&clock, start + chrono::TimeDelta::minutes(61))
+        .await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert_eq!(newest(&wr, "hold").status, StepRunStatus::Succeeded);
+    assert_eq!(ran(&wr), ["draft", "hold", "post"]);
+}
+
+#[tokio::test]
+async fn a_wait_whose_time_passed_while_sage_was_closed_ends_on_the_first_pass() {
+    let start = chrono::Utc::now() - chrono::TimeDelta::hours(6);
+    let clock = common::clock::FakeClock::new(start);
+    let w = world_with(clock.clone(), Budget::default()).await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Finish("Posted.")]);
+    let wait = Step {
+        id: "hold".into(),
+        name: "Until then".into(),
+        kind: StepKind::Wait {
+            wait: Wait::Input {
+                input: "publish_at".into(),
+            },
+        },
+    };
+    let when = InputField {
+        name: "publish_at".into(),
+        label: "Publish at".into(),
+        kind: InputKind::DateTime,
+        required: false,
+        default: None,
+    };
+    let flow = w
+        .workflow_with(
+            "Post then",
+            vec![when],
+            vec![wait, agent("post", "Post it", &w.dev, "Post.")],
+        )
+        .await;
+    // An input left empty leaves the wait with no time: the step fails.
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Until then: the input \"publish_at\" holds no date and time")
+    );
+    w.workflows.stop(&wr.id).await.unwrap();
+
+    // A time two hours on: the loop stops (Sage is closed), three hours pass, and the first
+    // pass after ends the wait.
+    let local = (start + chrono::TimeDelta::hours(2))
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%dT%H:%M")
+        .to_string();
+    let wr = w
+        .workflows
+        .start(w.request(&flow, &[("publish_at", &local)]))
+        .await
+        .unwrap();
+    let wr = w
+        .until(&wr.id, |wr| {
+            wr.current_step.as_deref() == Some("hold") && newest(wr, "hold").decision.is_some()
+        })
+        .await;
+    w.stop_loop.cancel();
+    clock.set(start + chrono::TimeDelta::hours(5));
+    w.workflows.pass().await.unwrap();
+    let wr = w
+        .until(&wr.id, |wr| wr.current_step.as_deref() == Some("post"))
+        .await;
+    assert_eq!(newest(&wr, "hold").status, StepRunStatus::Succeeded);
 }

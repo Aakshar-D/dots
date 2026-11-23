@@ -1,7 +1,7 @@
 use dots_core::schedule::{Rule, Schedule};
 use dots_core::workflow::{
-    BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
-    StepOptions, Trigger,
+    Action, BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, Header, HttpMethod,
+    InputField, InputKind, MergeMethod, Step, StepKind, StepOptions, Trigger, Wait,
 };
 use dots_core::Error;
 use serde_json::json;
@@ -965,4 +965,430 @@ fn a_step_saved_before_the_options_reads_as_one_with_every_default() {
         json!({"model": "small", "lean": true, "reads": []})
     );
     assert_eq!(serde_json::from_value::<Step>(value).unwrap(), set);
+}
+
+// ---- General workflows (plan 2): inputs, outputs, actions and waits ----
+
+fn http(id: &str, url: &str, unattended: bool) -> Step {
+    Step {
+        id: id.into(),
+        name: format!("Step {id}"),
+        kind: StepKind::Action {
+            action: Action::Http {
+                method: HttpMethod::Post,
+                url: url.into(),
+                headers: vec![],
+                body: String::new(),
+            },
+            unattended,
+        },
+    }
+}
+
+fn file(id: &str, path: &str, content: &str) -> Step {
+    Step {
+        id: id.into(),
+        name: format!("Step {id}"),
+        kind: StepKind::Action {
+            action: Action::File {
+                path: path.into(),
+                content: content.into(),
+            },
+            unattended: false,
+        },
+    }
+}
+
+fn wait(id: &str, wait: Wait) -> Step {
+    Step {
+        id: id.into(),
+        name: format!("Step {id}"),
+        kind: StepKind::Wait { wait },
+    }
+}
+
+fn input(name: &str, kind: InputKind) -> InputField {
+    InputField {
+        name: name.into(),
+        label: format!("The {name}"),
+        kind,
+        required: false,
+        default: None,
+    }
+}
+
+/// `step`, an agent step, giving the outputs `names`.
+fn giving(mut step: Step, names: &[&str]) -> Step {
+    if let StepKind::Agent { produces, .. } = &mut step.kind {
+        *produces = names.iter().map(|n| n.to_string()).collect();
+    }
+    step
+}
+
+#[test]
+fn the_new_steps_inputs_and_outputs_round_trip_as_json() {
+    let value = json!({
+        "trigger": {"kind": "manual"},
+        "inputs": [
+            {"name": "chat", "label": "Chat"},
+            {"name": "publish_at", "label": "Publish at", "kind": "date_time", "required": true,
+             "default": "2026-12-01T09:00"}
+        ],
+        "steps": [
+            {"id": "draft", "name": "Draft", "kind": "agent", "member": "dev", "job": "Draft.",
+             "produces": ["post"]},
+            {"id": "hold", "name": "Hold", "kind": "wait", "wait": "input", "input": "publish_at"},
+            {"id": "nap", "name": "Nap", "kind": "wait", "wait": "minutes", "minutes": 5},
+            {"id": "nine", "name": "Nine", "kind": "wait", "wait": "time", "at": "09:00",
+             "weekday": "Tue"},
+            {"id": "send", "name": "Send", "kind": "action", "action": "http", "method": "post",
+             "url": "https://example.com/send", "headers": [{"name": "X-Key", "value": "k"}],
+             "body": "{{draft.post}}", "unattended": true},
+            {"id": "save", "name": "Save", "kind": "action", "action": "file",
+             "path": "out/post.txt", "content": "{{draft.post}}"}
+        ]
+    });
+    let d: Definition = serde_json::from_value(value).unwrap();
+    d.validate(&members()).unwrap();
+    assert_eq!(d.inputs[0].kind, InputKind::Text);
+    assert!(!d.inputs[0].required);
+    assert_eq!(
+        d.steps[1].kind,
+        StepKind::Wait {
+            wait: Wait::Input {
+                input: "publish_at".into()
+            }
+        }
+    );
+    assert_eq!(
+        d.steps[3].kind,
+        StepKind::Wait {
+            wait: Wait::Time {
+                at: "09:00".into(),
+                weekday: Some(chrono::Weekday::Tue)
+            }
+        }
+    );
+    let StepKind::Action { action, unattended } = &d.steps[4].kind else {
+        panic!("not an action: {:?}", d.steps[4]);
+    };
+    assert!(*unattended);
+    assert!(
+        matches!(action, Action::Http { method: HttpMethod::Post, headers, .. } if headers.len() == 1)
+    );
+    // Written and read again, the same.
+    let again: Definition = serde_json::from_value(serde_json::to_value(&d).unwrap()).unwrap();
+    assert_eq!(again, d);
+    // A workflow saved before these has no inputs, and its steps give no outputs.
+    let old: Definition = serde_json::from_value(json!({
+        "trigger": {"kind": "manual"},
+        "steps": [{"id": "a", "name": "A", "kind": "agent", "member": "dev", "job": "Do."}]
+    }))
+    .unwrap();
+    assert!(old.inputs.is_empty());
+    assert_eq!(old.steps[0], {
+        let mut step = agent("a", "dev");
+        step.name = "A".into();
+        if let StepKind::Agent { job, .. } = &mut step.kind {
+            *job = "Do.".into();
+        }
+        step
+    });
+}
+
+#[test]
+fn inputs_and_outputs_have_names_steps_can_use() {
+    let with = |inputs: Vec<InputField>| {
+        let mut d = def(vec![agent("a", "dev")]);
+        d.inputs = inputs;
+        d
+    };
+    with(vec![
+        input("chat", InputKind::Text),
+        input("when", InputKind::DateTime),
+    ])
+    .validate(&members())
+    .unwrap();
+    assert_eq!(
+        refusal(&with(vec![input("Chat Room", InputKind::Text)])),
+        "an input's name must be 1 to 40 of a-z, 0-9, '-' and '_': \"Chat Room\""
+    );
+    assert_eq!(
+        refusal(&with(vec![
+            input("chat", InputKind::Text),
+            input("chat", InputKind::Text)
+        ])),
+        "two inputs have the name \"chat\""
+    );
+    let mut blank = input("chat", InputKind::Text);
+    blank.label = "  ".into();
+    assert_eq!(
+        refusal(&with(vec![blank])),
+        "the input \"chat\": a label must be 1 to 80 characters"
+    );
+    let mut when = input("when", InputKind::DateTime);
+    when.default = Some("tomorrow".into());
+    assert_eq!(
+        refusal(&with(vec![when])),
+        "the input \"when\": its default must be a date and time, as in 2026-12-01T09:00"
+    );
+    assert_eq!(
+        refusal(&with(
+            (0..21)
+                .map(|i| input(&format!("i{i}"), InputKind::Text))
+                .collect()
+        )),
+        "a workflow asks for at most 20 inputs"
+    );
+    // An input's problem is the workflow's, not a step's.
+    assert_eq!(
+        with(vec![input("Chat Room", InputKind::Text)])
+            .problem(&members())
+            .unwrap()
+            .step_id,
+        None
+    );
+
+    for (names, why) in [
+        (
+            vec!["post", "post"],
+            "step \"Step a\": the output \"post\" is listed twice",
+        ),
+        (
+            vec!["summary"],
+            "step \"Step a\": an output's name must be 1 to 40 of a-z, 0-9, '-' and '_', and \
+             not \"summary\": \"summary\"",
+        ),
+        (
+            vec!["The Post"],
+            "step \"Step a\": an output's name must be 1 to 40 of a-z, 0-9, '-' and '_', and \
+             not \"summary\": \"The Post\"",
+        ),
+    ] {
+        assert_eq!(refusal(&def(vec![giving(agent("a", "dev"), &names)])), why);
+    }
+    let many: Vec<String> = (0..11).map(|i| format!("o{i}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    assert_eq!(
+        refusal(&def(vec![giving(agent("a", "dev"), &many)])),
+        "step \"Step a\": a step gives at most 10 outputs"
+    );
+}
+
+#[test]
+fn an_action_that_sends_needs_a_check_before_it_unless_it_is_unattended() {
+    let url = "https://example.com/send";
+    assert_eq!(
+        refusal(&def(vec![agent("a", "dev"), http("s", url, false)])),
+        "step \"Step s\": an action that sends something needs a check before it on every path, \
+         or \"Runs without my check\" turned on"
+    );
+    def(vec![agent("a", "dev"), check("c"), http("s", url, false)])
+        .validate(&members())
+        .unwrap();
+    def(vec![agent("a", "dev"), http("s", url, true)])
+        .validate(&members())
+        .unwrap();
+    // A file written into the project's folder goes nowhere: it needs none.
+    def(vec![agent("a", "dev"), file("f", "out.txt", "x")])
+        .validate(&members())
+        .unwrap();
+}
+
+#[test]
+fn an_action_s_texts_name_only_what_the_workflow_has() {
+    let base = |step: Step| {
+        let mut d = def(vec![
+            giving(agent("draft", "dev"), &["post"]),
+            check("c"),
+            step,
+        ]);
+        d.inputs = vec![input("chat", InputKind::Text)];
+        d
+    };
+    let ok = "https://example.com/bot{{secret.TOKEN}}/send?chat={{input.chat}}&t={{task}}";
+    base(http("s", ok, false)).validate(&members()).unwrap();
+    base(file(
+        "f",
+        "out/{{input.chat}}.txt",
+        "{{draft.post}} {{draft.summary}} {{task}}",
+    ))
+    .validate(&members())
+    .unwrap();
+
+    for (url, why) in [
+        (
+            "ftp://example.com/x",
+            "step \"Step s\": the URL must start with https:// or http://",
+        ),
+        (
+            "https://",
+            "step \"Step s\": the URL must start with https:// or http://",
+        ),
+        (
+            "https://{{input.chat}}.example.com/x",
+            "step \"Step s\": the URL's host must be written out, with no mark in it",
+        ),
+        (
+            "https://example.com/{{input.room}}",
+            "step \"Step s\": the URL: {{input.room}} names no input of the workflow",
+        ),
+        (
+            "https://example.com/{{draft.title}}",
+            "step \"Step s\": the URL: {{draft.title}} names no output of an agent step before it",
+        ),
+        (
+            "https://example.com/{{later.summary}}",
+            "step \"Step s\": the URL: {{later.summary}} names no agent step before it",
+        ),
+        (
+            "https://example.com/{{nonsense}}",
+            "step \"Step s\": the URL: {{nonsense}} is not something a step can use",
+        ),
+        (
+            "https://example.com/{{task",
+            "step \"Step s\": the URL: a {{ has no }} after it",
+        ),
+    ] {
+        let d = base(http("s", url, false));
+        assert_eq!(refusal(&d), why, "{url}");
+        assert_eq!(d.problem(&members()).unwrap().step_id.as_deref(), Some("s"));
+    }
+    let long = format!("https://example.com/{}", "x".repeat(2_000));
+    assert_eq!(
+        refusal(&base(http("s", &long, false))),
+        "step \"Step s\": the URL is longer than 2000 characters"
+    );
+
+    // Headers and the body.
+    let with_header = |name: &str, value: &str| {
+        let mut step = http("s", "https://example.com/x", false);
+        if let StepKind::Action {
+            action: Action::Http { headers, .. },
+            ..
+        } = &mut step.kind
+        {
+            headers.push(Header {
+                name: name.into(),
+                value: value.into(),
+            });
+        }
+        base(step)
+    };
+    with_header("Authorization", "Bearer {{secret.TOKEN}}")
+        .validate(&members())
+        .unwrap();
+    assert_eq!(
+        refusal(&with_header("Bad Name", "x")),
+        "step \"Step s\": a header's name is letters, digits, '-' and '_': \"Bad Name\""
+    );
+    assert_eq!(
+        refusal(&with_header("X-Chat", "{{input.room}}")),
+        "step \"Step s\": the header X-Chat: {{input.room}} names no input of the workflow"
+    );
+    let mut step = http("s", "https://example.com/x", false);
+    if let StepKind::Action {
+        action: Action::Http { body, .. },
+        ..
+    } = &mut step.kind
+    {
+        *body = "x".repeat(20_001);
+    }
+    assert_eq!(
+        refusal(&base(step)),
+        "step \"Step s\": the body is longer than 20000 characters"
+    );
+
+    // A file stays inside the project's folder, and holds no secret.
+    for path in [
+        "../up.txt",
+        "/abs.txt",
+        "C:/abs.txt",
+        "a//b.txt",
+        "a/./b.txt",
+        "a\\..\\b.txt",
+    ] {
+        assert_eq!(
+            refusal(&base(file("f", path, "x"))),
+            "step \"Step f\": the file's path must stay inside the project's folder",
+            "{path}"
+        );
+    }
+    assert_eq!(
+        refusal(&base(file("f", "  ", "x"))),
+        "step \"Step f\": the file's path must be 1 to 200 characters"
+    );
+    assert_eq!(
+        refusal(&base(file("f", "k.txt", "{{secret.TOKEN}}"))),
+        "step \"Step f\": the file's content: {{secret.TOKEN}}: a secret cannot be written to a file"
+    );
+}
+
+#[test]
+fn a_wait_names_a_time_it_can_wait_for() {
+    let with = |w: Wait| {
+        let mut d = def(vec![wait("w", w), agent("a", "dev")]);
+        d.inputs = vec![
+            input("when", InputKind::DateTime),
+            input("chat", InputKind::Text),
+        ];
+        d
+    };
+    for ok in [
+        Wait::Minutes { minutes: 1 },
+        Wait::Minutes { minutes: 527_040 },
+        Wait::Time {
+            at: "09:00".into(),
+            weekday: None,
+        },
+        Wait::Time {
+            at: " 23:59 ".into(),
+            weekday: Some(chrono::Weekday::Sun),
+        },
+        Wait::Input {
+            input: "when".into(),
+        },
+    ] {
+        with(ok).validate(&members()).unwrap();
+    }
+    for (bad, why) in [
+        (
+            Wait::Minutes { minutes: 0 },
+            "step \"Step w\": it waits 1 to 527040 minutes",
+        ),
+        (
+            Wait::Minutes { minutes: 527_041 },
+            "step \"Step w\": it waits 1 to 527040 minutes",
+        ),
+        (
+            Wait::Time {
+                at: "9am".into(),
+                weekday: None,
+            },
+            "step \"Step w\": the time must be written HH:MM, as in 09:00",
+        ),
+        (
+            Wait::Time {
+                at: "24:00".into(),
+                weekday: None,
+            },
+            "step \"Step w\": the time must be written HH:MM, as in 09:00",
+        ),
+        (
+            Wait::Input {
+                input: "chat".into(),
+            },
+            "step \"Step w\": it waits until an input that holds a date and time, and \"chat\" is \
+             not one",
+        ),
+        (
+            Wait::Input {
+                input: "never".into(),
+            },
+            "step \"Step w\": it waits until an input that holds a date and time, and \"never\" \
+             is not one",
+        ),
+    ] {
+        assert_eq!(refusal(&with(bad)), why);
+    }
 }

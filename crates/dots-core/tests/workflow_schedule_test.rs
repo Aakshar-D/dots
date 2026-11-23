@@ -662,3 +662,26 @@ async fn deleting_a_workflow_deletes_its_schedule_row() {
         .unwrap()
         .is_empty());
 }
+
+#[tokio::test]
+async fn a_schedule_that_catches_up_starts_the_newest_missed_slot_once() {
+    let mut h = Harness::new().await;
+    let mut spec = h.spec("Every 10", every(10, 0, None), "Dots", &h.dev);
+    if let Trigger::Schedule { catch_up, .. } = &mut spec.definition.trigger {
+        *catch_up = true;
+    }
+    let id = h.store.create_workflow(&h.team, &spec).await.unwrap().id;
+    h.start();
+    h.settle().await;
+
+    // Closed over the slots at 600, 1200 and 1800; back at 2000: the slot at 1800 starts one
+    // run, late, and the two before it start none.
+    h.stop();
+    h.clock.set(after(2000));
+    h.restart();
+    h.settle().await;
+    let runs = h.runs(&id).await;
+    assert_eq!(runs.len(), 1, "the newest missed slot runs once");
+    assert_eq!(h.row(&id).await.unwrap().last_slot_at, ts(1800));
+    h.workflows.stop(&runs[0].id).await.unwrap();
+}
