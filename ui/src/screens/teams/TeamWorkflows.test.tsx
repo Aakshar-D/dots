@@ -101,6 +101,7 @@ describe("the team page's workflows", () => {
                 can_send_back_to: [],
                 outcomes: [],
                 delegate: null,
+                options: { model: null, lean: false, reads: null },
               },
             ],
             budget: { max_runs: 10, max_tokens: 1_500_000, max_minutes: 120, max_send_backs: 3 },

@@ -443,14 +443,13 @@ describe("runtime events and the query cache", () => {
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
   });
 
-  it("marks the run, every run list, its workflow and what needs you stale on a run update", () => {
+  it("gives a run that moved to its page, and asks again for what else shows it", () => {
     const qc = createQueryClient();
     const [run] = sample.workflowRuns;
     const [tip] = sample.check.branches;
+    const diff = keys.workflowBranchDiff(run.id, tip.branch, tip.commit ?? "");
     const lists = [
-      keys.workflowRun(run.id),
       keys.workflowCheck(run.id),
-      keys.workflowBranchDiff(run.id, tip.branch, tip.commit ?? ""),
       keys.workflowDotRuns(run.id),
       keys.workflowRuns({ team_id: run.team_id }),
       keys.workflowRuns({ workflow_id: "another-workflow" }),
@@ -464,6 +463,8 @@ describe("runtime events and the query cache", () => {
       keys.unreadTotal,
     ];
     const untouched = [
+      // A diff is of one commit: it never changes.
+      diff,
       keys.workflowRun("another-run"),
       keys.workflowDotRuns("another-run"),
       keys.workflows("another-team"),
@@ -472,10 +473,56 @@ describe("runtime events and the query cache", () => {
       keys.runs(sample.dot.id),
     ];
     for (const key of [...lists, ...untouched]) qc.setQueryData(key, []);
+    // The page holds the run as it was a step ago.
+    const earlier = { ...run, current_step: "an-earlier-step" };
+    qc.setQueryData(keys.workflowRun(run.id), earlier);
 
     applyRuntimeEvent(qc, { type: "workflow_run_updated", run });
+    // The page has the run the event carried, with no question asked.
+    expect(qc.getQueryData(keys.workflowRun(run.id))).toEqual(run);
+    expect(stale(qc, keys.workflowRun(run.id))).toBe(false);
     for (const key of lists) expect(stale(qc, key), key.join("/")).toBe(true);
     for (const key of untouched) expect(stale(qc, key), key.join("/")).toBe(false);
+  });
+
+  it("puts a run that only spent more where it is shown, and asks for nothing", () => {
+    const qc = createQueryClient();
+    const [run, other] = sample.workflowRuns;
+    const list = keys.workflowRuns({ team_id: run.team_id });
+    const cards = keys.workflowRunsForOrigins([run.origin_run_id ?? ""]);
+    const quiet = [
+      keys.workflowCheck(run.id),
+      keys.workflowDotRuns(run.id),
+      keys.workflows(run.team_id),
+      keys.workflow(run.workflow_id ?? ""),
+      keys.inbox,
+      keys.overview,
+    ];
+    for (const key of quiet) qc.setQueryData(key, []);
+    qc.setQueryData(keys.workflowRun(run.id), run);
+    qc.setQueryData(list, [other, run]);
+    qc.setQueryData(cards, [run]);
+
+    const spent = { ...run, spent_tokens: run.spent_tokens + 1_000 };
+    applyRuntimeEvent(qc, { type: "workflow_run_updated", run: spent });
+    expect(qc.getQueryData(keys.workflowRun(run.id))).toEqual(spent);
+    expect(qc.getQueryData(list)).toEqual([other, spent]);
+    expect(qc.getQueryData(cards)).toEqual([spent]);
+    for (const key of [...quiet, list, cards, keys.workflowRun(run.id)]) {
+      expect(stale(qc, key), key.join("/")).toBe(false);
+    }
+  });
+
+  it("asks for a run it has not seen, and loads no page nobody opened", () => {
+    const qc = createQueryClient();
+    const [run] = sample.workflowRuns;
+    const list = keys.workflowRuns({ team_id: run.team_id });
+    qc.setQueryData(list, []);
+
+    applyRuntimeEvent(qc, { type: "workflow_run_updated", run });
+    // A new run may belong in a list: the lists are asked again.
+    expect(stale(qc, list)).toBe(true);
+    expect(qc.getQueryState(keys.workflowRun(run.id))).toBeUndefined();
   });
 
   it("marks the run pages' sol runs stale when a step's run changes, not for another run", () => {
@@ -502,10 +549,9 @@ describe("runtime events and the query cache", () => {
 
     applyRuntimeEvent(qc, { type: "workflow_run_updated", run });
     expect([
-      stale(qc, keys.workflowRun(run.id)),
       stale(qc, keys.workflows(run.team_id)),
       stale(qc, workflow),
-    ]).toEqual([true, true, false]);
+    ]).toEqual([true, false]);
   });
 });
 

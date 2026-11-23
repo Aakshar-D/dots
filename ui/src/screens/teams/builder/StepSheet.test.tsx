@@ -98,6 +98,7 @@ describe("a step's settings sheet", () => {
       job: "Draw it.",
       can_send_back_to: [],
       outcomes: ["done"],
+      options: { model: "small", lean: true, reads: ["build"] },
       delegate: null,
     });
   });
@@ -134,6 +135,51 @@ describe("a step's settings sheet", () => {
     expect(sheet.getByRole("spinbutton", { name: "Total" })).toHaveValue(6);
     expect(await saved(user, "build")).toMatchObject({
       delegate: { may_start: [], at_once: 3, total: 6 },
+    });
+  });
+
+  it("sets an agent step's model size, lean prompt and the steps it reads", async () => {
+    const { user } = open(fix);
+    let sheet = await settings(user, "Design", "Agent step settings");
+    const size = sheet.getByRole("combobox", { name: "Model size" });
+    expect(size).toHaveValue("small");
+    expect(within(size).getAllByRole("option").map((o) => o.getAttribute("value"))).toEqual([
+      "",
+      "small",
+      "standard",
+      "large",
+    ]);
+    expect(sheet.getByRole("switch", { name: "Lean prompt" })).toBeChecked();
+    expect(sheet.getByRole("switch", { name: "Pick the earlier steps it reads" })).toBeChecked();
+    const reads = within(sheet.getByRole("group", { name: "Reads" }));
+    expect(reads.getByRole("checkbox", { name: "Build" })).toBeChecked();
+
+    // Back to the step as it ran before the options: the member's model, the whole prompt,
+    // every earlier summary.
+    await user.selectOptions(size, "");
+    await user.click(sheet.getByRole("switch", { name: "Lean prompt" }));
+    await user.click(sheet.getByRole("switch", { name: "Pick the earlier steps it reads" }));
+    expect(sheet.queryByRole("group", { name: "Reads" })).not.toBeInTheDocument();
+    expect(sheet.getByText(/older ones shortened/)).toBeVisible();
+    expect(await saved(user, "design")).toMatchObject({
+      options: { model: null, lean: false, reads: null },
+    });
+
+    // Picking starts from none, and each tick names a step by its id.
+    sheet = await settings(user, "Design", "Agent step settings");
+    await user.selectOptions(sheet.getByRole("combobox", { name: "Model size" }), "large");
+    await user.click(sheet.getByRole("switch", { name: "Pick the earlier steps it reads" }));
+    const picked = within(sheet.getByRole("group", { name: "Reads" }));
+    expect(picked.getByRole("checkbox", { name: "Build" })).not.toBeChecked();
+    expect(await saved(user, "design")).toMatchObject({
+      options: { model: "large", lean: false, reads: [] },
+    });
+    sheet = await settings(user, "Design", "Agent step settings");
+    await user.click(
+      within(sheet.getByRole("group", { name: "Reads" })).getByRole("checkbox", { name: "Build" }),
+    );
+    expect(await saved(user, "design")).toMatchObject({
+      options: { model: "large", lean: false, reads: ["build"] },
     });
   });
 
