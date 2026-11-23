@@ -1628,7 +1628,10 @@ export const Trigger = z.discriminatedUnion("kind", [
     kind: z.literal("schedule"),
     schedule: Schedule,
     task: z.string(),
+    // Blank: the team's own folder.
     project: z.string(),
+    // The newest slot missed while Sage was closed starts once, when under a day old.
+    catch_up: z.boolean(),
   }),
   z.strictObject({
     kind: z.literal("webhook"),
@@ -1668,6 +1671,8 @@ export const AgentStep = z.strictObject({
   outcomes: z.array(z.string()),
   delegate: nullable(Delegate),
   options: StepOptions,
+  // The names of the outputs it gives: its reply ends with each in a block of its name.
+  produces: z.array(z.string()),
 });
 export type AgentStep = z.infer<typeof AgentStep>;
 // `send_back_to` null: the nearest agent step before it on its path.
@@ -1692,6 +1697,45 @@ export const DeployStep = z.discriminatedUnion("mode", [
 ]);
 export type DeployStep = z.infer<typeof DeployStep>;
 export type DeployMode = DeployStep["mode"];
+// A step Sage itself does, with no model (general workflows spec section 6): one HTTP request,
+// or one file written into the project's folder. Its texts may hold `{{…}}` marks. An action
+// that sends needs a check before it unless it is `unattended`.
+export const HttpMethod = z.enum(["get", "post", "put", "patch", "delete"]);
+export type HttpMethod = z.infer<typeof HttpMethod>;
+export const ActionHeader = z.strictObject({ name: z.string(), value: z.string() });
+export type ActionHeader = z.infer<typeof ActionHeader>;
+const actionShape = { ...stepShape, kind: z.literal("action"), unattended: z.boolean() };
+export const ActionStep = z.discriminatedUnion("action", [
+  z.strictObject({
+    ...actionShape,
+    action: z.literal("http"),
+    method: HttpMethod,
+    url: z.string(),
+    headers: z.array(ActionHeader),
+    body: z.string(),
+  }),
+  z.strictObject({
+    ...actionShape,
+    action: z.literal("file"),
+    path: z.string(),
+    content: z.string(),
+  }),
+]);
+export type ActionStep = z.infer<typeof ActionStep>;
+// A step that waits for a time (general workflows spec section 7): some minutes, the next
+// `at` (HH:MM, on `weekday` when set), or the date and time one of the run's inputs holds.
+const waitShape = { ...stepShape, kind: z.literal("wait") };
+export const WaitStep = z.discriminatedUnion("wait", [
+  z.strictObject({ ...waitShape, wait: z.literal("minutes"), minutes: z.number().int() }),
+  z.strictObject({
+    ...waitShape,
+    wait: z.literal("time"),
+    at: z.string(),
+    weekday: nullable(Weekday),
+  }),
+  z.strictObject({ ...waitShape, wait: z.literal("input"), input: z.string() }),
+]);
+export type WaitStep = z.infer<typeof WaitStep>;
 // A branch holds steps of its own, so its schemas are typed by hand and read `Step` lazily.
 export type BranchPath = { label: string; steps: Step[] };
 export type BranchStep = {
@@ -1702,7 +1746,7 @@ export type BranchStep = {
   paths: BranchPath[];
   otherwise: Step[];
 };
-export type Step = AgentStep | CheckStep | DeployStep | BranchStep;
+export type Step = AgentStep | CheckStep | DeployStep | ActionStep | WaitStep | BranchStep;
 export const BranchPath: z.ZodType<BranchPath> = z.strictObject({
   label: z.string(),
   steps: z.array(z.lazy(() => Step)),
@@ -1714,7 +1758,14 @@ export const BranchStep: z.ZodType<BranchStep> = z.strictObject({
   paths: z.array(BranchPath),
   otherwise: z.array(z.lazy(() => Step)),
 });
-export const Step: z.ZodType<Step> = z.union([AgentStep, CheckStep, DeployStep, BranchStep]);
+export const Step: z.ZodType<Step> = z.union([
+  AgentStep,
+  CheckStep,
+  DeployStep,
+  ActionStep,
+  WaitStep,
+  BranchStep,
+]);
 // The limits of one workflow run (section 5.7).
 export const Budget = z.strictObject({
   max_runs: z.number().int(),
@@ -1723,10 +1774,23 @@ export const Budget = z.strictObject({
   max_send_backs: z.number().int(),
 });
 export type Budget = z.infer<typeof Budget>;
+// Something a run is started with besides its task (general workflows spec section 3). A
+// `date_time` is written `YYYY-MM-DDTHH:MM`, in this PC's time.
+export const InputKind = z.enum(["text", "long_text", "date_time"]);
+export type InputKind = z.infer<typeof InputKind>;
+export const InputField = z.strictObject({
+  name: z.string(),
+  label: z.string(),
+  kind: InputKind,
+  required: z.boolean(),
+  default: nullable(z.string()),
+});
+export type InputField = z.infer<typeof InputField>;
 export const Definition = z.strictObject({
   trigger: Trigger,
   steps: z.array(Step),
   budget: Budget,
+  inputs: z.array(InputField),
 });
 export type Definition = z.infer<typeof Definition>;
 // A workflow as the builder saves it.
@@ -1798,6 +1862,8 @@ export const Handoff = z.strictObject({
   branches: z.array(BranchRef),
   outcome: nullable(z.string()),
   members: z.array(MemberHandoff),
+  // The outputs an agent step gave, by name, with what the person changed at a check.
+  outputs: z.record(z.string(), z.string()),
 });
 export type Handoff = z.infer<typeof Handoff>;
 // A branch and the commit the check page showed (null: the branch is gone), sent with Approve.
@@ -1866,6 +1932,8 @@ export type SendBack = z.infer<typeof SendBack>;
 // The workflow and the project are null once they are deleted. `spent_tokens` counts new input
 // and output; cache reads are shown beside it, not counted.
 export const WorkflowRun = z.strictObject({
+  // What it was started with besides the task, by input name.
+  inputs: z.record(z.string(), z.string()),
   id: z.string(),
   workflow_id: nullable(z.string()),
   team_id: z.string(),
@@ -1902,6 +1970,8 @@ export type ShownBranch = z.infer<typeof ShownBranch>;
 // What the check a workflow run waits on shows; Approve sends its branches back as `CheckTip`s,
 // and Approve and Send back name its step run (`step_run_id`, the one the check waits on).
 export const CheckView = z.strictObject({
+  // The outputs of the step shown, for the person to read and change.
+  outputs: z.array(z.strictObject({ name: z.string(), text: z.string() })),
   step_id: z.string(),
   step_run_id: z.string(),
   summary: z.string(),

@@ -22,7 +22,7 @@ import { useDebounced } from "@/lib/use-debounced";
 import { plural } from "@/screens/library/parts";
 
 import { RunNowDialog } from "../RunNowDialog";
-import { BudgetCard, TriggerCard } from "./cards";
+import { BudgetCard, InputsCard, TriggerCard } from "./cards";
 import {
   deleteStep,
   findStep,
@@ -289,6 +289,12 @@ function WorkflowBuilder({ team, workflow }: { team: Team; workflow: Workflow })
           <StepList steps={draft.definition.steps} list={TOP} prefix="" name="the workflow" top />
         </BuilderProvider>
         <div className="pt-4">
+          <InputsCard
+            inputs={draft.definition.inputs}
+            onChange={(inputs) => edit((d) => ({ ...d, definition: { ...d.definition, inputs } }))}
+          />
+        </div>
+        <div className="pt-4">
           <BudgetCard
             budget={draft.definition.budget}
             onChange={(budget) => edit((d) => ({ ...d, definition: { ...d.definition, budget } }))}
@@ -298,6 +304,7 @@ function WorkflowBuilder({ team, workflow }: { team: Team; workflow: Workflow })
       <StepSheet
         step={open}
         steps={draft.definition.steps}
+        inputs={draft.definition.inputs}
         team={team}
         nameOf={nameOf}
         onChange={(step) => editSteps((steps) => updateStep(steps, step.id, () => step))}

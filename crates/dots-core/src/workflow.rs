@@ -198,11 +198,46 @@ pub enum Wait {
     /// one is set.
     Time {
         at: String,
-        #[serde(default)]
+        #[serde(default, with = "weekday")]
         weekday: Option<chrono::Weekday>,
     },
     /// Until the date and time the run's input `input` holds.
     Input { input: String },
+}
+
+/// A weekday as a schedule writes it, `"mon"` to `"sun"`, or null for any day.
+mod weekday {
+    use chrono::Weekday;
+    use serde::de::Error as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    const NAMES: [(&str, Weekday); 7] = [
+        ("mon", Weekday::Mon),
+        ("tue", Weekday::Tue),
+        ("wed", Weekday::Wed),
+        ("thu", Weekday::Thu),
+        ("fri", Weekday::Fri),
+        ("sat", Weekday::Sat),
+        ("sun", Weekday::Sun),
+    ];
+
+    pub fn serialize<S: Serializer>(day: &Option<Weekday>, s: S) -> Result<S::Ok, S::Error> {
+        match day {
+            Some(day) => s.serialize_some(NAMES[day.num_days_from_monday() as usize].0),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<Weekday>, D::Error> {
+        let Some(name) = Option::<String>::deserialize(d)? else {
+            return Ok(None);
+        };
+        NAMES
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, day)| Some(*day))
+            .ok_or_else(|| D::Error::custom(format!("unknown weekday {name:?}")))
+    }
 }
 
 /// The time of day `at` names, written `HH:MM`.

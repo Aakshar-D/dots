@@ -2839,11 +2839,19 @@ pub async fn workflow_approve(
     note: Option<String>,
     step_run_id: String,
     tips: Vec<CheckTip>,
+    edits: Option<std::collections::BTreeMap<String, String>>,
 ) -> Res<WorkflowRun> {
+    // `edits`: what the person changed in the outputs the check showed.
     Ok(state
         .rt()?
         .workflows()
-        .approve_check(&id, note.as_deref(), &step_run_id, &tips)
+        .approve_check_edited(
+            &id,
+            note.as_deref(),
+            &step_run_id,
+            &tips,
+            &edits.unwrap_or_default(),
+        )
         .await?)
 }
 

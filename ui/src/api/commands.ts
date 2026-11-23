@@ -814,8 +814,23 @@ export const commands = {
   /// The dot runs of the run's step runs, oldest first: the run page's links.
   workflowRunDotRuns: (id: string) => call(T.StepDotRun.array(), "workflow_run_dot_runs", { id }),
   /// "Run now", or "Test run" with `test`: its deploys push nothing.
-  workflowRunStart: (workflowId: string, projectId: string, task: string, test: boolean) =>
-    call(T.WorkflowRun, "workflow_run_start", { workflowId, projectId, task, test }),
+  /// `projectId` null: the run works in the team's own folder. `inputs`: what the workflow
+  /// asks for besides the task, by name.
+  workflowRunStart: (
+    workflowId: string,
+    projectId: string | null,
+    task: string,
+    test: boolean,
+    inputs: Record<string, string> = {},
+  ) =>
+    call(T.WorkflowRun, "workflow_run_start", {
+      workflowId,
+      projectId,
+      task,
+      test,
+      // Left out when there are none, as a workflow without inputs has always been started.
+      ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+    }),
   /// What the check the run waits on shows. Rejects with kind `conflict` when it waits on none.
   workflowCheck: (id: string) => call(T.CheckView, "workflow_check", { id }),
   /// A branch's committed work from the project's default branch, at `commit`.
@@ -824,8 +839,22 @@ export const commands = {
   /// Approves the check's step run `stepRunId` with the tips it showed. Rejects with kind
   /// `conflict` when a branch moved since or the run waits on another check: the check is read
   /// again.
-  workflowApprove: (id: string, note: string | null, stepRunId: string, tips: T.CheckTip[]) =>
-    call(T.WorkflowRun, "workflow_approve", { id, note, stepRunId, tips }),
+  /// `edits`: what the person changed in the outputs the check showed, by name.
+  workflowApprove: (
+    id: string,
+    note: string | null,
+    stepRunId: string,
+    tips: T.CheckTip[],
+    edits: Record<string, string> = {},
+  ) =>
+    call(T.WorkflowRun, "workflow_approve", {
+      id,
+      note,
+      stepRunId,
+      tips,
+      // Left out when nothing was changed.
+      ...(Object.keys(edits).length > 0 ? { edits } : {}),
+    }),
   /// Sends the work of the check's step run `stepRunId` back. Rejects with kind `conflict` when
   /// the run waits on another check.
   workflowSendBack: (id: string, note: string, stepRunId: string) =>

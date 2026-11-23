@@ -1,4 +1,15 @@
-import type { AgentStep, BranchOn, DeployMode, DeployStep, MergeMethod, Step, Trigger, ModelTier } from "@/api/types";
+import type {
+  AgentStep,
+  BranchOn,
+  DeployMode,
+  DeployStep,
+  MergeMethod,
+  ModelTier,
+  Step,
+  Trigger,
+  WaitStep,
+  Weekday,
+} from "@/api/types";
 
 import { taskLine, TRIGGER_LABEL } from "../format";
 import { findStep, type StepKindName } from "./draft";
@@ -7,9 +18,44 @@ import { findStep, type StepKindName } from "./draft";
 export const KIND_LABEL: Record<StepKindName, string> = {
   agent: "Agent step",
   check: "Check",
+  action: "Action",
+  wait: "Wait",
   deploy: "Deploy",
   branch: "Branch",
 };
+
+/// The days a wait may wait for, as its settings name them.
+export const WEEKDAY_OPTIONS: [Weekday, string][] = [
+  ["mon", "Monday"],
+  ["tue", "Tuesday"],
+  ["wed", "Wednesday"],
+  ["thu", "Thursday"],
+  ["fri", "Friday"],
+  ["sat", "Saturday"],
+  ["sun", "Sunday"],
+];
+
+/// Where an action's request goes: the host of its URL, or the URL while it has none.
+export function hostOf(url: string): string {
+  const host = url.trim().replace(/^https?:\/\//, "").split(/[/?#]/)[0];
+  return host || "nowhere yet";
+}
+
+/// What a wait step waits for, in a line.
+export function waitLine(step: WaitStep): string {
+  switch (step.wait) {
+    case "minutes":
+      return step.minutes === 1 ? "Waits 1 minute" : `Waits ${step.minutes} minutes`;
+    case "time": {
+      const day = WEEKDAY_OPTIONS.find(([value]) => value === step.weekday)?.[1];
+      return day ? `Waits until ${step.at} on ${day}` : `Waits until ${step.at}`;
+    }
+    case "input":
+      return step.input
+        ? `Waits until the date and time given as "${step.input}"`
+        : "Waits until a date and time given at the start";
+  }
+}
 
 /// What a deploy of each mode does with the approved branches (section 5.5).
 export const DEPLOY_LABEL: Record<DeployMode, string> = {
@@ -115,6 +161,14 @@ export function stepLine(step: Step, steps: Step[], nameOf: NameOf): string {
     }
     case "deploy":
       return deployLine(step, nameOf);
+    case "action":
+      return step.action === "http"
+        ? `Sends ${step.method.toUpperCase()} to ${hostOf(step.url)}${
+            step.unattended ? ", without your check" : ""
+          }`
+        : `Saves ${step.path.trim() || "a file"}`;
+    case "wait":
+      return waitLine(step);
     case "branch":
       return step.on === "outcome"
         ? "Goes on by the outcome reported before it"

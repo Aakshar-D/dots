@@ -6,6 +6,7 @@ import { commands } from "@/api/commands";
 import type { Project, Workflow } from "@/api/types";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -30,7 +31,12 @@ export function RunNowDialog(props: {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [task, setTask] = useState("");
+  // "": the team's own folder.
   const [projectId, setProjectId] = useState(props.projects[0]?.id ?? "");
+  const fields = props.workflow.definition.inputs;
+  const [inputs, setInputs] = useState<Record<string, string>>(() =>
+    Object.fromEntries(fields.map((f) => [f.name, f.default ?? ""])),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const test = props.test ?? false;
@@ -39,7 +45,16 @@ export function RunNowDialog(props: {
     setBusy(true);
     setError(undefined);
     try {
-      const run = await commands.workflowRunStart(props.workflow.id, projectId, task.trim(), test);
+      const given = Object.fromEntries(
+        Object.entries(inputs).filter(([, text]) => text.trim() !== ""),
+      );
+      const run = await commands.workflowRunStart(
+        props.workflow.id,
+        projectId === "" ? null : projectId,
+        task.trim(),
+        test,
+        given,
+      );
       invalidate(qc, ["workflow-runs"]);
       navigate(`/workflow-runs/${run.id}`);
     } catch (e) {
@@ -48,11 +63,12 @@ export function RunNowDialog(props: {
     }
   }
 
+  const needed = fields.find((f) => f.required && (inputs[f.name] ?? "").trim() === "");
   const missing =
     task.trim() === ""
       ? "Say what the task is first."
-      : projectId === ""
-        ? "Add a project to the team first."
+      : needed
+        ? `Give "${needed.label.trim() || needed.name}" first.`
         : undefined;
   return (
     <Dialog open onOpenChange={(next) => !next && props.onClose()}>
@@ -63,8 +79,8 @@ export function RunNowDialog(props: {
           </DialogTitle>
           <DialogDescription>
             {test
-              ? "A real run of the saved workflow, except that its deploys push nothing: the branches are kept for you to look at."
-              : "The saved workflow runs on the project, step by step, from the task."}
+              ? "A real run of the saved workflow, except that nothing leaves this PC: its deploys push nothing and its actions send nothing."
+              : "The saved workflow runs step by step, from the task."}
           </DialogDescription>
         </DialogHeader>
         <Field label="Task" htmlFor="run-task">
@@ -76,12 +92,17 @@ export function RunNowDialog(props: {
             onChange={(e) => setTask(e.target.value)}
           />
         </Field>
-        <Field label="Project" htmlFor="run-project">
+        <Field
+          label="Project"
+          htmlFor="run-project"
+          hint="A project of the team, or the folder Sage keeps for the team."
+        >
           <NativeSelect
             id="run-project"
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
           >
+            <NativeSelectOption value="">The team's own folder</NativeSelectOption>
             {props.projects.map((project) => (
               <NativeSelectOption key={project.id} value={project.id}>
                 {project.name}
@@ -89,6 +110,29 @@ export function RunNowDialog(props: {
             ))}
           </NativeSelect>
         </Field>
+        {fields.map((field) => {
+          const id = `run-input-${field.name}`;
+          const value = inputs[field.name] ?? "";
+          const change = (text: string) => setInputs((all) => ({ ...all, [field.name]: text }));
+          return (
+            <Field
+              key={field.name}
+              label={`${field.label.trim() || field.name}${field.required ? "" : " (optional)"}`}
+              htmlFor={id}
+            >
+              {field.kind === "long_text" ? (
+                <Textarea id={id} rows={3} value={value} onChange={(e) => change(e.target.value)} />
+              ) : (
+                <Input
+                  id={id}
+                  type={field.kind === "date_time" ? "datetime-local" : "text"}
+                  value={value}
+                  onChange={(e) => change(e.target.value)}
+                />
+              )}
+            </Field>
+          );
+        })}
         {error && (
           <p role="alert" className="text-sm text-destructive">
             {error}

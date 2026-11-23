@@ -895,6 +895,12 @@
         "run_id": "01J0RUN6"
       }
     ],
+    "outputs": [
+      {
+        "name": "post",
+        "text": "The tray icon now shows on a light taskbar."
+      }
+    ],
     "step_id": "review",
     "step_run_id": "01J0STP3",
     "summary": "Made the icon dark on a light taskbar."
@@ -13907,6 +13913,7 @@
             "max_send_backs": 3,
             "max_tokens": 1500000
           },
+          "inputs": [],
           "steps": [
             {
               "can_send_back_to": [],
@@ -13930,7 +13937,8 @@
               "outcomes": [
                 "fixed",
                 "needs_design"
-              ]
+              ],
+              "produces": []
             },
             {
               "id": "route",
@@ -13955,7 +13963,8 @@
                       "build"
                     ]
                   },
-                  "outcomes": []
+                  "outcomes": [],
+                  "produces": []
                 }
               ],
               "paths": [
@@ -13990,6 +13999,7 @@
         "ended_at": null,
         "error": null,
         "id": "01J0WFR",
+        "inputs": {},
         "origin_run_id": "01J0RUN",
         "project": {
           "default_branch": "main",
@@ -14044,6 +14054,7 @@
                 }
               ],
               "outcome": "fixed",
+              "outputs": {},
               "summary": "Made the icon dark on a light taskbar."
             },
             "id": "01J0STP1",
@@ -16037,6 +16048,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -16060,7 +16072,8 @@
             "outcomes": [
               "fixed",
               "needs_design"
-            ]
+            ],
+            "produces": []
           },
           {
             "id": "route",
@@ -16085,7 +16098,8 @@
                     "build"
                   ]
                 },
-                "outcomes": []
+                "outcomes": [],
+                "produces": []
               }
             ],
             "paths": [
@@ -16141,6 +16155,7 @@
           "max_send_backs": 1,
           "max_tokens": 200000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -16155,7 +16170,8 @@
               "model": null,
               "reads": null
             },
-            "outcomes": []
+            "outcomes": [],
+            "produces": []
           },
           {
             "id": "check",
@@ -16198,6 +16214,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -16212,7 +16229,8 @@
               "model": null,
               "reads": null
             },
-            "outcomes": []
+            "outcomes": [],
+            "produces": []
           },
           {
             "id": "check",
@@ -16253,6 +16271,7 @@
           }
         ],
         "trigger": {
+          "catch_up": false,
           "kind": "schedule",
           "project": "Sage",
           "schedule": {
@@ -16285,6 +16304,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -16299,7 +16319,8 @@
               "model": null,
               "reads": null
             },
-            "outcomes": []
+            "outcomes": [],
+            "produces": []
           },
           {
             "id": "check",
@@ -16327,6 +16348,125 @@
       "id": "01J0WFL4",
       "last_run": null,
       "name": "On issue",
+      "problem": null,
+      "runs_in_flight": 0,
+      "team_id": "01J0TEAM",
+      "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "inputs": [
+          {
+            "default": null,
+            "kind": "text",
+            "label": "Product name",
+            "name": "product",
+            "required": true
+          },
+          {
+            "default": "Keep it short.",
+            "kind": "long_text",
+            "label": "Notes",
+            "name": "notes",
+            "required": false
+          },
+          {
+            "default": null,
+            "kind": "date_time",
+            "label": "Publish at",
+            "name": "publish_at",
+            "required": false
+          }
+        ],
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "draft",
+            "job": "Write the announcement.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Draft the post",
+            "options": {
+              "lean": true,
+              "model": "standard",
+              "reads": []
+            },
+            "outcomes": [],
+            "produces": [
+              "post"
+            ]
+          },
+          {
+            "id": "approve",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "hold",
+            "input": "publish_at",
+            "kind": "wait",
+            "name": "Until it is time",
+            "wait": "input"
+          },
+          {
+            "at": "09:00",
+            "id": "nine",
+            "kind": "wait",
+            "name": "Tuesday at nine",
+            "wait": "time",
+            "weekday": "tue"
+          },
+          {
+            "id": "pause",
+            "kind": "wait",
+            "minutes": 5,
+            "name": "A short pause",
+            "wait": "minutes"
+          },
+          {
+            "action": "http",
+            "body": "{{draft.post}}",
+            "headers": [
+              {
+                "name": "X-Product",
+                "value": "{{input.product}}"
+              }
+            ],
+            "id": "send",
+            "kind": "action",
+            "method": "post",
+            "name": "Send it",
+            "unattended": false,
+            "url": "https://example.com/hooks/{{secret.HOOK_KEY}}"
+          },
+          {
+            "action": "file",
+            "content": "{{draft.post}}",
+            "id": "save",
+            "kind": "action",
+            "name": "Keep a copy",
+            "path": "posts/{{input.product}}.md",
+            "unattended": false
+          }
+        ],
+        "trigger": {
+          "kind": "manual"
+        }
+      },
+      "enabled": true,
+      "has_webhook_token": false,
+      "id": "01J0WFL5",
+      "last_run": null,
+      "name": "Announce",
       "problem": null,
       "runs_in_flight": 0,
       "team_id": "01J0TEAM",
@@ -16360,6 +16500,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -16383,7 +16524,8 @@
             "outcomes": [
               "fixed",
               "needs_design"
-            ]
+            ],
+            "produces": []
           },
           {
             "id": "route",
@@ -16408,7 +16550,8 @@
                     "build"
                   ]
                 },
-                "outcomes": []
+                "outcomes": [],
+                "produces": []
               }
             ],
             "paths": [
@@ -16443,6 +16586,7 @@
       "ended_at": null,
       "error": null,
       "id": "01J0WFR",
+      "inputs": {},
       "origin_run_id": "01J0RUN",
       "project": {
         "default_branch": "main",
@@ -16497,6 +16641,7 @@
               }
             ],
             "outcome": "fixed",
+            "outputs": {},
             "summary": "Made the icon dark on a light taskbar."
           },
           "id": "01J0STP1",
@@ -16566,6 +16711,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -16589,7 +16735,8 @@
             "outcomes": [
               "fixed",
               "needs_design"
-            ]
+            ],
+            "produces": []
           },
           {
             "id": "route",
@@ -16614,7 +16761,8 @@
                     "build"
                   ]
                 },
-                "outcomes": []
+                "outcomes": [],
+                "produces": []
               }
             ],
             "paths": [
@@ -16649,6 +16797,7 @@
       "ended_at": "2026-10-09T12:00:00.000Z",
       "error": null,
       "id": "01J0WFR2",
+      "inputs": {},
       "origin_run_id": "01J0RUN",
       "project": {
         "default_branch": "main",
@@ -16709,6 +16858,7 @@
               }
             ],
             "outcome": "fixed",
+            "outputs": {},
             "summary": "Made the icon dark on a light taskbar."
           },
           "id": "01J0STP1",
@@ -16795,6 +16945,7 @@
               }
             ],
             "outcome": "fixed",
+            "outputs": {},
             "summary": "Made the icon dark on a light taskbar."
           },
           "id": "01J0STP9",
@@ -16875,6 +17026,7 @@
               }
             ],
             "outcome": "fixed",
+            "outputs": {},
             "summary": "Made the icon dark on a light taskbar."
           },
           "id": "01J0STP4",
@@ -16937,6 +17089,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -16960,7 +17113,8 @@
             "outcomes": [
               "fixed",
               "needs_design"
-            ]
+            ],
+            "produces": []
           },
           {
             "id": "route",
@@ -16985,7 +17139,8 @@
                     "build"
                   ]
                 },
-                "outcomes": []
+                "outcomes": [],
+                "produces": []
               }
             ],
             "paths": [
@@ -17020,6 +17175,7 @@
       "ended_at": null,
       "error": null,
       "id": "01J0WFR3",
+      "inputs": {},
       "origin_run_id": "01J0RUN",
       "project": {
         "default_branch": "main",
@@ -17085,6 +17241,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -17108,7 +17265,8 @@
             "outcomes": [
               "fixed",
               "needs_design"
-            ]
+            ],
+            "produces": []
           },
           {
             "id": "route",
@@ -17133,7 +17291,8 @@
                     "build"
                   ]
                 },
-                "outcomes": []
+                "outcomes": [],
+                "produces": []
               }
             ],
             "paths": [
@@ -17168,6 +17327,7 @@
       "ended_at": null,
       "error": "Ship: gh: could not create the pull request",
       "id": "01J0WFR4",
+      "inputs": {},
       "origin_run_id": null,
       "project": {
         "default_branch": "main",
@@ -17243,6 +17403,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -17257,7 +17418,8 @@
               "model": null,
               "reads": null
             },
-            "outcomes": []
+            "outcomes": [],
+            "produces": []
           },
           {
             "id": "check",
@@ -17298,6 +17460,7 @@
           }
         ],
         "trigger": {
+          "catch_up": false,
           "kind": "schedule",
           "project": "Sage",
           "schedule": {
@@ -17314,6 +17477,7 @@
       "ended_at": null,
       "error": null,
       "id": "01J0WFR5",
+      "inputs": {},
       "origin_run_id": null,
       "project": {
         "default_branch": null,
@@ -17392,6 +17556,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -17415,7 +17580,8 @@
             "outcomes": [
               "fixed",
               "needs_design"
-            ]
+            ],
+            "produces": []
           },
           {
             "id": "route",
@@ -17440,7 +17606,8 @@
                     "build"
                   ]
                 },
-                "outcomes": []
+                "outcomes": [],
+                "produces": []
               }
             ],
             "paths": [
@@ -17483,6 +17650,7 @@
           "max_send_backs": 1,
           "max_tokens": 200000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -17497,7 +17665,8 @@
               "model": null,
               "reads": null
             },
-            "outcomes": []
+            "outcomes": [],
+            "produces": []
           },
           {
             "id": "check",
@@ -17527,6 +17696,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -17541,7 +17711,8 @@
               "model": null,
               "reads": null
             },
-            "outcomes": []
+            "outcomes": [],
+            "produces": []
           },
           {
             "id": "check",
@@ -17582,6 +17753,7 @@
           }
         ],
         "trigger": {
+          "catch_up": false,
           "kind": "schedule",
           "project": "Sage",
           "schedule": {
@@ -17606,6 +17778,7 @@
           "max_send_backs": 3,
           "max_tokens": 1500000
         },
+        "inputs": [],
         "steps": [
           {
             "can_send_back_to": [],
@@ -17620,7 +17793,8 @@
               "model": null,
               "reads": null
             },
-            "outcomes": []
+            "outcomes": [],
+            "produces": []
           },
           {
             "id": "check",
@@ -17645,6 +17819,117 @@
       },
       "enabled": true,
       "name": "On issue"
+    },
+    {
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "inputs": [
+          {
+            "default": null,
+            "kind": "text",
+            "label": "Product name",
+            "name": "product",
+            "required": true
+          },
+          {
+            "default": "Keep it short.",
+            "kind": "long_text",
+            "label": "Notes",
+            "name": "notes",
+            "required": false
+          },
+          {
+            "default": null,
+            "kind": "date_time",
+            "label": "Publish at",
+            "name": "publish_at",
+            "required": false
+          }
+        ],
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "draft",
+            "job": "Write the announcement.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Draft the post",
+            "options": {
+              "lean": true,
+              "model": "standard",
+              "reads": []
+            },
+            "outcomes": [],
+            "produces": [
+              "post"
+            ]
+          },
+          {
+            "id": "approve",
+            "kind": "check",
+            "name": "Review",
+            "send_back_to": null
+          },
+          {
+            "id": "hold",
+            "input": "publish_at",
+            "kind": "wait",
+            "name": "Until it is time",
+            "wait": "input"
+          },
+          {
+            "at": "09:00",
+            "id": "nine",
+            "kind": "wait",
+            "name": "Tuesday at nine",
+            "wait": "time",
+            "weekday": "tue"
+          },
+          {
+            "id": "pause",
+            "kind": "wait",
+            "minutes": 5,
+            "name": "A short pause",
+            "wait": "minutes"
+          },
+          {
+            "action": "http",
+            "body": "{{draft.post}}",
+            "headers": [
+              {
+                "name": "X-Product",
+                "value": "{{input.product}}"
+              }
+            ],
+            "id": "send",
+            "kind": "action",
+            "method": "post",
+            "name": "Send it",
+            "unattended": false,
+            "url": "https://example.com/hooks/{{secret.HOOK_KEY}}"
+          },
+          {
+            "action": "file",
+            "content": "{{draft.post}}",
+            "id": "save",
+            "kind": "action",
+            "name": "Keep a copy",
+            "path": "posts/{{input.product}}.md",
+            "unattended": false
+          }
+        ],
+        "trigger": {
+          "kind": "manual"
+        }
+      },
+      "enabled": true,
+      "name": "Announce"
     }
   ],
   "WorkspaceView": [

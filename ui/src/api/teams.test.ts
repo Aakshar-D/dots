@@ -24,6 +24,7 @@ const agent = (id: string): T.Step => ({
   outcomes: [],
   delegate: null,
   options: { model: null, lean: false, reads: null },
+  produces: [],
 });
 
 /// A branch on outcome whose "fixed" path holds a branch on project: two levels of paths.
@@ -56,7 +57,23 @@ describe("the teams and workflows schemas", () => {
   it("has a workflow sample of every step kind, deploy mode and trigger kind", () => {
     const workflows = T.Workflow.array().parse(fixture.Workflow);
     const steps = workflows.flatMap((w) => all(w.definition.steps));
-    expect(sorted(steps.map((s) => s.kind))).toEqual(["agent", "branch", "check", "deploy"]);
+    expect(sorted(steps.map((s) => s.kind))).toEqual([
+      "action",
+      "agent",
+      "branch",
+      "check",
+      "deploy",
+      "wait",
+    ]);
+    // Every kind of action and of wait, too.
+    const actions = T.ActionStep.options.map((o) => o.shape.action.value);
+    expect(sorted(steps.flatMap((s) => (s.kind === "action" ? [s.action] : [])))).toEqual(
+      sorted(actions),
+    );
+    const waits = T.WaitStep.options.map((o) => o.shape.wait.value);
+    expect(sorted(steps.flatMap((s) => (s.kind === "wait" ? [s.wait] : [])))).toEqual(
+      sorted(waits),
+    );
     const modes = T.DeployStep.options.map((o) => o.shape.mode.value);
     expect(sorted(steps.flatMap((s) => (s.kind === "deploy" ? [s.mode] : [])))).toEqual(
       sorted(modes),

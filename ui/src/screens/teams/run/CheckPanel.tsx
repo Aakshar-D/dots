@@ -31,6 +31,8 @@ export function CheckPanel({ run, stop = true }: { run: WorkflowRun; stop?: bool
     enabled: waiting,
   });
   const [note, setNote] = useState("");
+  // What the person changed in the outputs the check shows, by name.
+  const [edits, setEdits] = useState<Record<string, string>>({});
   const [refusal, setRefusal] = useState<string>();
   // The check this answer was about is gone or changed: the next wait reads its own.
   const forget = () => qc.removeQueries({ queryKey: keys.workflowCheck(run.id), exact: true });
@@ -44,6 +46,7 @@ export function CheckPanel({ run, stop = true }: { run: WorkflowRun; stop?: bool
   };
   const done = (next: WorkflowRun) => {
     setNote("");
+    setEdits({});
     setRefusal(undefined);
     forget();
     settle(qc, next);
@@ -51,7 +54,19 @@ export function CheckPanel({ run, stop = true }: { run: WorkflowRun; stop?: bool
   const approve = useMutation({
     mutationFn: (shown: CheckView) => {
       const tips = shown.branches.map(({ branch, commit }) => ({ branch, commit }));
-      return commands.workflowApprove(run.id, note.trim() || null, shown.step_run_id, tips);
+      // Only what differs from what the step gave.
+      const changed = Object.fromEntries(
+        shown.outputs
+          .filter((o) => edits[o.name] !== undefined && edits[o.name] !== o.text)
+          .map((o) => [o.name, edits[o.name]]),
+      );
+      return commands.workflowApprove(
+        run.id,
+        note.trim() || null,
+        shown.step_run_id,
+        tips,
+        changed,
+      );
     },
     onSuccess: done,
     onError,
@@ -88,8 +103,28 @@ export function CheckPanel({ run, stop = true }: { run: WorkflowRun; stop?: bool
           ) : (
             <p className="text-sm text-muted-foreground">The step before it said nothing.</p>
           )}
+          {check.data.outputs.length > 0 && (
+            <div aria-label="What the next steps use" role="group" className="flex flex-col gap-2">
+              <p className="text-xs text-muted-foreground">
+                The steps after this check use these as they stand. Change one here before you
+                approve.
+              </p>
+              {check.data.outputs.map((o) => (
+                <Field key={o.name} label={o.name} htmlFor={`check-output-${run.id}-${o.name}`}>
+                  <Textarea
+                    id={`check-output-${run.id}-${o.name}`}
+                    rows={Math.min(12, Math.max(3, o.text.split("\n").length + 1))}
+                    value={edits[o.name] ?? o.text}
+                    onChange={(e) => setEdits((all) => ({ ...all, [o.name]: e.target.value }))}
+                  />
+                </Field>
+              ))}
+            </div>
+          )}
           {check.data.branches.length === 0 ? (
-            <p className="text-sm text-muted-foreground">It shows no branch: nothing changed.</p>
+            check.data.outputs.length === 0 && (
+              <p className="text-sm text-muted-foreground">It shows no branch: nothing changed.</p>
+            )
           ) : (
             <ul aria-label="Branches to check" className="flex flex-col gap-1">
               {check.data.branches.map((b) => (

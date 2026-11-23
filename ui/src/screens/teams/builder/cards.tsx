@@ -1,11 +1,13 @@
-import { Settings2 } from "lucide-react";
+import { Plus, Settings2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import type { Budget, Trigger } from "@/api/types";
+import type { Budget, InputField, InputKind, Trigger } from "@/api/types";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 
+import { MAX_INPUTS, nameOk, newInput } from "./draft";
 import { type NameOf, triggerSummary } from "./labels";
 
 /// The trigger card, first and in the accent (section 10.2): what starts the workflow. A click
@@ -74,6 +76,124 @@ export function BudgetCard(props: { budget: Budget; onChange: (budget: Budget) =
             onChange={(value) => props.onChange({ ...props.budget, [key]: value })}
           />
         ))}
+      </div>
+    </section>
+  );
+}
+
+const INPUT_KINDS: [InputKind, string][] = [
+  ["text", "A line of text"],
+  ["long_text", "Several lines"],
+  ["date_time", "A date and time"],
+];
+
+/// The Inputs card (general workflows spec section 3): what a start is asked for besides the
+/// task. Steps name an input by its name, as `{{input.<name>}}`.
+export function InputsCard(props: {
+  inputs: InputField[];
+  onChange: (inputs: InputField[]) => void;
+}) {
+  const { inputs } = props;
+  const set = (i: number, change: Partial<InputField>) =>
+    props.onChange(inputs.map((f, j) => (j === i ? { ...f, ...change } : f)));
+  return (
+    <section
+      aria-labelledby="workflow-inputs"
+      className="flex w-full flex-col gap-2 rounded-xl border bg-card p-3"
+    >
+      <h2 id="workflow-inputs" className="font-semibold">
+        Inputs
+      </h2>
+      <p className="text-xs text-muted-foreground">
+        What a run is asked for when it starts, besides the task. Every step is told them, and a
+        Send or Save step uses one as {"{{input.name}}"}.
+      </p>
+      {inputs.length > 0 && (
+        <ul aria-label="Inputs" className="flex flex-col gap-3">
+          {inputs.map((field, i) => (
+            <li
+              key={i}
+              aria-label={field.label.trim() || field.name}
+              className="flex flex-col gap-2 rounded-md border p-2"
+            >
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Asks for" htmlFor={`input-label-${i}`}>
+                  <Input
+                    id={`input-label-${i}`}
+                    placeholder="Product name"
+                    maxLength={80}
+                    value={field.label}
+                    onChange={(e) => set(i, { label: e.target.value })}
+                  />
+                </Field>
+                <Field
+                  label="Name"
+                  htmlFor={`input-name-${i}`}
+                  error={nameOk(field.name) ? undefined : "Use a-z, 0-9, - and _."}
+                >
+                  <Input
+                    id={`input-name-${i}`}
+                    maxLength={40}
+                    value={field.name}
+                    onChange={(e) => set(i, { name: e.target.value })}
+                  />
+                </Field>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Kind" htmlFor={`input-kind-${i}`}>
+                  <NativeSelect
+                    id={`input-kind-${i}`}
+                    className="w-full"
+                    value={field.kind}
+                    onChange={(e) => set(i, { kind: e.target.value as InputKind, default: null })}
+                  >
+                    {INPUT_KINDS.map(([value, label]) => (
+                      <NativeSelectOption key={value} value={value}>
+                        {label}
+                      </NativeSelectOption>
+                    ))}
+                  </NativeSelect>
+                </Field>
+                <Field label="Default" htmlFor={`input-default-${i}`}>
+                  <Input
+                    id={`input-default-${i}`}
+                    type={field.kind === "date_time" ? "datetime-local" : "text"}
+                    value={field.default ?? ""}
+                    onChange={(e) => set(i, { default: e.target.value === "" ? null : e.target.value })}
+                  />
+                </Field>
+              </div>
+              <div className="flex items-center justify-between gap-2">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={field.required}
+                    onChange={(e) => set(i, { required: e.target.checked })}
+                  />
+                  A run cannot start without it
+                </label>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={`Remove the input ${field.label.trim() || field.name}`}
+                  onClick={() => props.onChange(inputs.filter((_, j) => j !== i))}
+                >
+                  Remove
+                </Button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={inputs.length >= MAX_INPUTS}
+          onClick={() => props.onChange([...inputs, newInput(inputs)])}
+        >
+          <Plus aria-hidden /> Add input
+        </Button>
       </div>
     </section>
   );

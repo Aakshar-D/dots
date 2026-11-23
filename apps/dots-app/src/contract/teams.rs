@@ -8,8 +8,9 @@ use dots_core::events::RuntimeEvent;
 use dots_core::model::*;
 use dots_core::schedule::Schedule;
 use dots_core::workflow::{
-    BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
-    StepOptions, Trigger, WorkflowProblem,
+    Action, BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, Header, HttpMethod,
+    InputField, InputKind, MergeMethod, Step, StepKind, StepOptions, Trigger, Wait,
+    WorkflowProblem,
 };
 use dots_core::workflows::{CheckView, ShownBranch, ShownOutput};
 use serde_json::{json, Value};
@@ -343,6 +344,112 @@ fn workflows() -> Vec<Workflow> {
                 },
             )
         },
+        // A workflow with nothing of git in it (general workflows spec): inputs, an output, a
+        // wait of each kind and an action of each kind.
+        workflow(
+            "01J0WFL5",
+            "Announce",
+            Definition {
+                inputs: vec![
+                    InputField {
+                        name: "product".into(),
+                        label: "Product name".into(),
+                        kind: InputKind::Text,
+                        required: true,
+                        default: None,
+                    },
+                    InputField {
+                        name: "notes".into(),
+                        label: "Notes".into(),
+                        kind: InputKind::LongText,
+                        required: false,
+                        default: Some("Keep it short.".into()),
+                    },
+                    InputField {
+                        name: "publish_at".into(),
+                        label: "Publish at".into(),
+                        kind: InputKind::DateTime,
+                        required: false,
+                        default: None,
+                    },
+                ],
+                trigger: Trigger::Manual,
+                steps: vec![
+                    Step {
+                        id: "draft".into(),
+                        name: "Draft the post".into(),
+                        kind: StepKind::Agent {
+                            produces: vec!["post".into()],
+                            options: StepOptions {
+                                model: Some(ModelTier::Standard),
+                                lean: true,
+                                reads: Some(vec![]),
+                            },
+                            member: DEV.into(),
+                            job: "Write the announcement.".into(),
+                            can_send_back_to: vec![],
+                            outcomes: vec![],
+                            delegate: None,
+                        },
+                    },
+                    check("approve", None),
+                    Step {
+                        id: "hold".into(),
+                        name: "Until it is time".into(),
+                        kind: StepKind::Wait {
+                            wait: Wait::Input {
+                                input: "publish_at".into(),
+                            },
+                        },
+                    },
+                    Step {
+                        id: "nine".into(),
+                        name: "Tuesday at nine".into(),
+                        kind: StepKind::Wait {
+                            wait: Wait::Time {
+                                at: "09:00".into(),
+                                weekday: Some(chrono::Weekday::Tue),
+                            },
+                        },
+                    },
+                    Step {
+                        id: "pause".into(),
+                        name: "A short pause".into(),
+                        kind: StepKind::Wait {
+                            wait: Wait::Minutes { minutes: 5 },
+                        },
+                    },
+                    Step {
+                        id: "send".into(),
+                        name: "Send it".into(),
+                        kind: StepKind::Action {
+                            action: Action::Http {
+                                method: HttpMethod::Post,
+                                url: "https://example.com/hooks/{{secret.HOOK_KEY}}".into(),
+                                headers: vec![Header {
+                                    name: "X-Product".into(),
+                                    value: "{{input.product}}".into(),
+                                }],
+                                body: "{{draft.post}}".into(),
+                            },
+                            unattended: false,
+                        },
+                    },
+                    Step {
+                        id: "save".into(),
+                        name: "Keep a copy".into(),
+                        kind: StepKind::Action {
+                            action: Action::File {
+                                path: "posts/{{input.product}}.md".into(),
+                                content: "{{draft.post}}".into(),
+                            },
+                            unattended: false,
+                        },
+                    },
+                ],
+                budget: Budget::default(),
+            },
+        ),
     ]
 }
 

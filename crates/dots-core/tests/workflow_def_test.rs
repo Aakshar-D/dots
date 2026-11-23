@@ -1040,7 +1040,7 @@ fn the_new_steps_inputs_and_outputs_round_trip_as_json() {
             {"id": "hold", "name": "Hold", "kind": "wait", "wait": "input", "input": "publish_at"},
             {"id": "nap", "name": "Nap", "kind": "wait", "wait": "minutes", "minutes": 5},
             {"id": "nine", "name": "Nine", "kind": "wait", "wait": "time", "at": "09:00",
-             "weekday": "Tue"},
+             "weekday": "tue"},
             {"id": "send", "name": "Send", "kind": "action", "action": "http", "method": "post",
              "url": "https://example.com/send", "headers": [{"name": "X-Key", "value": "k"}],
              "body": "{{draft.post}}", "unattended": true},

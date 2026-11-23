@@ -39,7 +39,8 @@ export function TeamProjects({ team }: { team: Team }) {
     >
       {team.projects.length === 0 ? (
         <p className="text-muted-foreground">
-          No projects yet. A project is a git repo on this PC that the team works in.
+          No projects yet. A project is a folder on this PC that the team works in. A workflow
+          can also run with none, in a folder Sage keeps for the team.
         </p>
       ) : (
         <ul className="flex flex-col gap-2">
@@ -129,7 +130,7 @@ function ProjectDialog(props: { teamId: string; project: Project | null; onClose
   const [error, setError] = useState<string>();
 
   function pick() {
-    open({ directory: true, title: "Choose the project's git repo" }).then((picked) => {
+    open({ directory: true, title: "Choose the project's folder" }).then((picked) => {
       if (typeof picked !== "string") return;
       setFolder(picked);
       if (name.trim() === "") setName(folderName(picked));
@@ -168,8 +169,9 @@ function ProjectDialog(props: { teamId: string; project: Project | null; onClose
         <DialogHeader>
           <DialogTitle>{project ? `Edit ${project.name}` : "Add project"}</DialogTitle>
           <DialogDescription>
-            A git repo on this PC. Each workflow run works in worktrees of it, on its own
-            branches.
+            A folder on this PC. In a git repo, each workflow run works in worktrees of it, on its
+            own branches, which a check shows and a deploy ships. In a plain folder, a run works
+            in the folder itself.
           </DialogDescription>
         </DialogHeader>
         <Field label="Name" htmlFor="project-name">
