@@ -699,6 +699,7 @@ impl Runtime {
         );
         workflows.set_orgs(orgs.clone());
         workflows.set_vault(vault.clone());
+        workflows.set_awake(crate::awake::Awake::new());
         workflows.spawn(shutdown.clone());
         workflows.spawn_telegram(shutdown.clone());
         // Scheduled workflows start from the scheduler's pass (teams spec section 5.1).

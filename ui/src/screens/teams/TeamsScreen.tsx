@@ -37,6 +37,7 @@ export function TeamsScreen() {
   return (
     <Page title="Teams" actions={actions}>
       {teams.isError && <ErrorNote error={teams.error} />}
+      <StandingNote />
       {teams.data?.length === 0 && (
         <EmptyState icon={UsersRound}>
           No teams yet. A team is sols that work on a project together, step by step, as a
@@ -62,6 +63,56 @@ export function TeamsScreen() {
       )}
       {creating && <NewTeamDialog onClose={() => setCreating(false)} />}
     </Page>
+  );
+}
+
+/// What needs Sage open (always-on workflows spec section 2): shown while a workflow starts on
+/// a schedule or on a message, or a run waits for a time, with whether Sage starts by itself
+/// when the person signs in. Nothing while nothing needs it.
+function StandingNote() {
+  const standing = useQuery({
+    queryKey: keys.workflowsStanding,
+    queryFn: commands.workflowsStanding,
+  }).data;
+  const settings = useQuery({ queryKey: keys.settings, queryFn: commands.getSettings }).data;
+  if (!standing || standing.schedules + standing.listeners + standing.waits === 0) return null;
+  const parts = [
+    standing.schedules > 0 && `${plural(standing.schedules, "workflow")} on a schedule`,
+    standing.listeners > 0 &&
+      `${plural(standing.listeners, "workflow")} listening for messages`,
+    standing.waits > 0 && `${plural(standing.waits, "run")} waiting for a time`,
+  ].filter((part): part is string => typeof part === "string");
+  const next = standing.next_wait ? new Date(standing.next_wait) : null;
+  return (
+    <section
+      aria-label="What needs Sage open"
+      className="mb-3 flex flex-col gap-1 rounded-lg border bg-card p-3 text-sm"
+    >
+      <p>
+        <span className="font-medium">Sage has to be open for these to happen:</span>{" "}
+        {parts.join(", ")}.
+        {next && !Number.isNaN(next.getTime()) && (
+          <>
+            {" "}
+            The next wait ends{" "}
+            {next.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}.
+          </>
+        )}
+      </p>
+      {settings && (
+        <p className="text-xs text-muted-foreground">
+          {settings.autostart
+            ? "Sage starts in the background when you sign in."
+            : "Sage does not start when you sign in, so they wait until you open it."}{" "}
+          {settings.keep_awake
+            ? "This PC is kept awake for them."
+            : "This PC may go to sleep, and they then wait until it wakes."}{" "}
+          <Link to="/settings" className="underline">
+            Change in Settings
+          </Link>
+        </p>
+      )}
+    </section>
   );
 }
 

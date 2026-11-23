@@ -113,6 +113,8 @@ export const sample = {
   workflowRuns: T.WorkflowRun.array().parse(contract.WorkflowRun),
   /// What the first run's check shows: the lead's branch at its tip, and a member's that is gone.
   check: T.CheckView.parse(contract.CheckView),
+  /// What needs Sage open: a schedule, a listener and two waits.
+  standing: T.Standing.parse(contract.Standing),
   /// A workflow Sage drafted from a description, with what is left to do.
   workflowDraft: T.WorkflowDraft.parse(contract.WorkflowDraft),
   /// The chats a Telegram bot heard from lately.
@@ -348,6 +350,13 @@ export function installDefaults(): void {
   // No team is made, no workflow has run and no chat started one.
   backend.on("teams_list", () => []);
   backend.on("workflow_runs_list", () => []);
+  // Nothing needs Sage open.
+  backend.on("workflows_standing", () => ({
+    schedules: 0,
+    listeners: 0,
+    waits: 0,
+    next_wait: null,
+  }));
   backend.on("workflow_runs_for_origins", () => []);
   backend.on("workflow_run_dot_runs", () => []);
   backend.on(

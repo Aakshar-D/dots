@@ -194,6 +194,8 @@ export const keys = {
   workflowProblem: (teamId: string, spec: WorkflowSpec) =>
     ["workflow-problem", teamId, spec] as const,
   workflowWebhookUrl: (id: string) => ["workflow-webhook-url", id] as const,
+  /// What needs Sage open: it changes with the workflows and with their runs.
+  workflowsStanding: ["workflows-standing"] as const,
   /// Lists of workflow runs: by filter (the team page), and the runs chat runs started (a
   /// conversation's cards). Any workflow run event marks them all stale.
   workflowRuns: (filter: Partial<WorkflowRunFilter>) =>

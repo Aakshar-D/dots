@@ -124,8 +124,31 @@ pub struct Workflows {
     vault: OnceLock<crate::vault::Vault>,
     /// Where Telegram's bot API is, for tests (`set_telegram_base`).
     telegram_base: OnceLock<String>,
+    /// What keeps the PC awake while a workflow needs Sage (`set_awake`); unset, nothing does.
+    awake: OnceLock<crate::awake::Awake>,
     /// When the soonest wait step ends, noted by each pass (`wait`), so the loop passes then.
     due: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
+}
+
+/// What needs Sage open to happen (always-on workflows spec section 2): the workflows that
+/// start on a schedule or on a Telegram message, and the runs that wait for a time.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Standing {
+    /// Workflows that are on, break no rule and start on a schedule.
+    pub schedules: u32,
+    /// Workflows that are on, break no rule and start on a Telegram message.
+    pub listeners: u32,
+    /// Runs at a wait step.
+    pub waits: u32,
+    /// When the soonest of those waits ends.
+    pub next_wait: Option<String>,
+}
+
+impl Standing {
+    /// Whether anything needs Sage open.
+    pub fn any(&self) -> bool {
+        self.schedules + self.listeners + self.waits > 0
+    }
 }
 
 /// The newest step run of `step_id`.
@@ -480,6 +503,7 @@ impl Workflows {
             deployer: OnceLock::new(),
             vault: OnceLock::new(),
             telegram_base: OnceLock::new(),
+            awake: OnceLock::new(),
             due: std::sync::Mutex::new(None),
         })
     }
@@ -1087,6 +1111,65 @@ impl Workflows {
         Ok(())
     }
 
+    /// Sets what keeps the PC awake, once (the runtime's; a test sets none).
+    pub fn set_awake(&self, awake: crate::awake::Awake) {
+        let _ = self.awake.set(awake);
+    }
+
+    /// What needs Sage open now (`Standing`).
+    pub async fn standing(&self) -> Result<Standing> {
+        let mut standing = Standing::default();
+        for team in self.store.list_teams().await? {
+            for workflow in self.store.list_workflows(&team.id).await? {
+                if !workflow.spec.enabled || workflow.problem.is_some() {
+                    continue;
+                }
+                match &workflow.spec.definition.trigger {
+                    crate::workflow::Trigger::Schedule { .. } => standing.schedules += 1,
+                    crate::workflow::Trigger::Telegram { .. } => standing.listeners += 1,
+                    _ => {}
+                }
+            }
+        }
+        for id in self.store.workflow_runs_in_flight().await? {
+            let wr = self.store.get_workflow_run(&id).await?;
+            if !wait::waits(&wr) {
+                continue;
+            }
+            standing.waits += 1;
+            let until = wr
+                .current_step
+                .as_deref()
+                .and_then(|step| latest(&wr, step))
+                .and_then(|run| run.decision.as_ref())
+                .and_then(|d| d.get("until"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            // The times are written alike (`util::timestamp`), so the earliest sorts first.
+            if let Some(until) = until {
+                if standing.next_wait.as_ref().is_none_or(|next| until < *next) {
+                    standing.next_wait = Some(until);
+                }
+            }
+        }
+        Ok(standing)
+    }
+
+    /// Keeps the PC awake while the person asked for it (the `keep_awake` setting) and a
+    /// workflow needs Sage open, and lets it sleep otherwise. A read that fails lets it sleep.
+    async fn keep_awake(&self) {
+        let Some(awake) = self.awake.get() else {
+            return;
+        };
+        let asked = self
+            .store
+            .get_settings()
+            .await
+            .is_ok_and(|settings| settings.keep_awake);
+        let needed = asked && self.standing().await.is_ok_and(|s| s.any());
+        awake.set(needed);
+    }
+
     /// Runs the loop until `shutdown`.
     pub fn spawn(self: &Arc<Self>, shutdown: CancellationToken) -> JoinHandle<()> {
         let this = self.clone();
@@ -1098,6 +1181,7 @@ impl Workflows {
                 if let Err(e) = this.pass().await {
                     tracing::error!("workflow pass failed: {e}");
                 }
+                this.keep_awake().await;
                 // Until the next tick, or sooner when a wait step ends before it.
                 let sleep = this.until_due().map_or(TICK, |due| due.min(TICK));
                 tokio::select! {

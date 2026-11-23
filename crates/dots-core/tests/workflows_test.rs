@@ -27,7 +27,7 @@ use dots_core::workflow::{
     InputField, InputKind, MergeMethod, Step, StepKind, StepOptions, Trigger, Wait,
 };
 use dots_core::workflows::{
-    CheckTip, CheckView, ShownBranch, StartRequest, Workflows, ENDED_STEP_THREAD,
+    CheckTip, CheckView, ShownBranch, Standing, StartRequest, Workflows, ENDED_STEP_THREAD,
     MAX_OLDER_SUMMARY, NO_DEFAULT_BRANCH, STEP_CLOSED,
 };
 use dots_core::Error;
@@ -6768,4 +6768,85 @@ async fn a_message_to_the_bot_starts_the_workflow_that_listens_to_its_chat_once(
         w.workflows.telegram_chats("MISSING_TOKEN").await,
         Err(Error::Invalid(m)) if m == "there is no Personal variable named MISSING_TOKEN"
     ));
+}
+
+// ---- Always-on workflows (plan 5): what needs Sage open ----
+
+#[tokio::test]
+async fn standing_counts_the_schedules_the_listeners_and_the_waits() {
+    let start = chrono::Utc::now() - chrono::TimeDelta::hours(6);
+    let clock = common::clock::FakeClock::new(start);
+    let w = world_with(clock.clone(), Budget::default()).await;
+    // Nothing needs Sage open yet.
+    let none = w.workflows.standing().await.unwrap();
+    assert_eq!(none, Standing::default());
+    assert!(!none.any());
+
+    let with_trigger = |name: &str, trigger: Trigger, enabled: bool| WorkflowSpec {
+        name: name.into(),
+        definition: Definition {
+            inputs: vec![],
+            trigger,
+            steps: vec![agent("work", "Work", &w.dev, "Work.")],
+            budget: w.budget,
+        },
+        enabled,
+    };
+    let daily = || Trigger::Schedule {
+        schedule: serde_json::from_value(json!({
+            "rule": {"kind": "daily", "time": "09:00"}, "catch_up": false, "until": null
+        }))
+        .unwrap(),
+        task: "Report.".into(),
+        project: String::new(),
+        catch_up: true,
+    };
+    let bot = Trigger::Telegram {
+        token: "BOT_TOKEN".into(),
+        chats: vec!["42".into()],
+        project: String::new(),
+    };
+    for spec in [
+        with_trigger("Daily", daily(), true),
+        // One that is off does not count, nor one started by hand.
+        with_trigger("Daily, off", daily(), false),
+        with_trigger("Listens", bot, true),
+        with_trigger("By hand", Trigger::Manual, true),
+    ] {
+        w.store.create_workflow(&w.team, &spec).await.unwrap();
+    }
+
+    // A run at a wait step, an hour long.
+    let wait = Step {
+        id: "hold".into(),
+        name: "Hold".into(),
+        kind: StepKind::Wait {
+            wait: Wait::Minutes { minutes: 60 },
+        },
+    };
+    let flow = w
+        .workflow_with(
+            "Later",
+            vec![],
+            vec![wait, agent("post", "Post it", &w.dev, "Post.")],
+        )
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    w.until(&wr.id, |wr| {
+        wr.current_step.as_deref() == Some("hold") && newest(wr, "hold").decision.is_some()
+    })
+    .await;
+    let standing = w.workflows.standing().await.unwrap();
+    assert_eq!(
+        standing,
+        Standing {
+            schedules: 1,
+            listeners: 1,
+            waits: 1,
+            next_wait: Some(dots_core::util::timestamp(
+                start + chrono::TimeDelta::minutes(60)
+            )),
+        }
+    );
+    assert!(standing.any());
 }

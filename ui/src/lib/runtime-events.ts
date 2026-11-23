@@ -230,6 +230,7 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       }
       break;
     case "workflow_updated":
+      invalidate(qc, keys.workflowsStanding);
       invalidate(qc, keys.workflows(event.team_id));
       invalidate(qc, keys.workflow(event.workflow_id));
       break;
@@ -276,6 +277,7 @@ function applyWorkflowRun(qc: QueryClient, run: WorkflowRun): void {
   if (!moved) return;
 
   for (const queryKey of [
+    keys.workflowsStanding,
     keys.workflowCheck(run.id),
     keys.workflowDotRuns(run.id),
     ["workflow-runs"],
