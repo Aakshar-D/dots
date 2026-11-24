@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "The main window: the app's own commands and events, the workdir picker, and the title bar's theme.",
   "windows": ["main"],
-  "permissions": ["core:default", "dialog:allow-open", "core:window:allow-set-theme"]
+  "permissions": ["core:default", "dialog:allow-open", "dialog:allow-save", "core:window:allow-set-theme"]
 }

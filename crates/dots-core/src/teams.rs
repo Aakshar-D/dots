@@ -83,6 +83,29 @@ fn rename_members(value: &mut serde_json::Value, to: &dyn Fn(&str) -> String) {
     }
 }
 
+/// Takes out of an imported definition's JSON what would let it act unseen: every
+/// `unattended` is turned off, and a Telegram trigger's chats are emptied.
+fn disarm(value: &mut serde_json::Value) {
+    use serde_json::Value;
+    match value {
+        Value::Object(object) => {
+            if object.get("kind").and_then(Value::as_str) == Some("telegram") {
+                if let Some(chats) = object.get_mut("chats") {
+                    *chats = Value::Array(Vec::new());
+                }
+            }
+            for (key, inner) in object.iter_mut() {
+                match (key.as_str(), inner) {
+                    ("unattended", flag) => *flag = Value::Bool(false),
+                    (_, inner) => disarm(inner),
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(disarm),
+        _ => {}
+    }
+}
+
 /// Refuses a default branch given with a remote in front, such as `origin/main`: worktrees and
 /// deploys look the name up as a branch and add the remote themselves, so it would name a ref
 /// that does not exist. The remotes are the repo's (`git remote`) and the project's own, which
@@ -357,6 +380,9 @@ impl Teams {
                 .find(|m| m.dot_name.trim().eq_ignore_ascii_case(name.trim()))
                 .map_or_else(|| name.to_string(), |m| m.dot_id.clone())
         });
+        // What a file brings in acts only once the person has looked: nothing in it sends
+        // with no check, and it listens to no chat until one is picked here.
+        disarm(&mut definition);
         let definition = serde_json::from_value(definition).map_err(|_| not_one())?;
         let wanted = file
             .get("name")
@@ -364,7 +390,9 @@ impl Teams {
             .map(str::trim)
             .filter(|n| !n.is_empty())
             .unwrap_or("Imported workflow")
-            .to_string();
+            .chars()
+            .take(crate::model::MAX_TEAM_NAME - 4)
+            .collect::<String>();
         // A name the team has already gets the first number that is free.
         let taken: Vec<String> = self
             .store

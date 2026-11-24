@@ -22,9 +22,19 @@ import { invalidate, keys } from "@/lib/query";
 /// needs the person are read again. The run's own event follows and changes nothing more.
 export function settle(qc: QueryClient, next: WorkflowRun): void {
   qc.setQueryData(keys.workflowRun(next.id), next);
-  for (const queryKey of [["workflow-runs"], keys.workflows(next.team_id), keys.inbox]) {
+  // The run's event may come after this answer and then finds nothing changed, so everything
+  // that event would have marked is marked here.
+  for (const queryKey of [
+    ["workflow-runs"],
+    keys.workflows(next.team_id),
+    keys.workflowDotRuns(next.id),
+    keys.workflowsStanding,
+    keys.inbox,
+    keys.overview,
+  ]) {
     invalidate(qc, queryKey);
   }
+  if (next.workflow_id !== null) invalidate(qc, keys.workflow(next.workflow_id));
 }
 
 /// Whether a workflow run can still be acted on: it is running or waiting.

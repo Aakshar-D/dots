@@ -32,7 +32,12 @@ export function CheckPanel({ run, stop = true }: { run: WorkflowRun; stop?: bool
   });
   const [note, setNote] = useState("");
   // What the person changed in the outputs the check shows, by name.
-  const [edits, setEdits] = useState<Record<string, string>>({});
+  // Kept with the check they were typed at: another check's outputs start as the step gave
+  // them, whatever their names.
+  const [typed, setTyped] = useState<{ check: string; edits: Record<string, string> }>({
+    check: "",
+    edits: {},
+  });
   const [refusal, setRefusal] = useState<string>();
   // The check this answer was about is gone or changed: the next wait reads its own.
   const forget = () => qc.removeQueries({ queryKey: keys.workflowCheck(run.id), exact: true });
@@ -46,7 +51,7 @@ export function CheckPanel({ run, stop = true }: { run: WorkflowRun; stop?: bool
   };
   const done = (next: WorkflowRun) => {
     setNote("");
-    setEdits({});
+    setTyped({ check: "", edits: {} });
     setRefusal(undefined);
     forget();
     settle(qc, next);
@@ -79,6 +84,10 @@ export function CheckPanel({ run, stop = true }: { run: WorkflowRun; stop?: bool
   });
   if (!waiting) return null;
 
+  const shownCheck = check.data?.step_run_id ?? "";
+  const edits = typed.check === shownCheck ? typed.edits : {};
+  const setEdits = (change: (all: Record<string, string>) => Record<string, string>) =>
+    setTyped({ check: shownCheck, edits: change(edits) });
   const stepId = check.data?.step_id ?? run.current_step ?? "";
   const target = sendBackTarget(run.definition.steps, stepId);
   // Approve and Send back name the check on screen: none while it is read (again).

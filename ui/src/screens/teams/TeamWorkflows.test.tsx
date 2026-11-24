@@ -160,7 +160,9 @@ describe("the team page's workflows", () => {
     await user.type(dialog.getByLabelText("Product name"), "Sage");
     // A default is filled in, and an optional one may stay empty.
     expect(dialog.getByLabelText("Notes (optional)")).toHaveValue("Keep it short.");
-    expect(dialog.getByLabelText("Publish at (optional)")).toHaveValue("");
+    // The wait's date and time is needed too.
+    expect(start).toHaveAttribute("title", `Give "Publish at" first.`);
+    await user.type(dialog.getByLabelText("Publish at"), "2026-12-01T09:00");
     await user.selectOptions(dialog.getByLabelText("Project"), "The team's own folder");
     await user.click(start);
     await waitFor(() => expect(visited).toContain("/workflow-runs/01J0WFR"));
@@ -170,7 +172,7 @@ describe("the team page's workflows", () => {
         projectId: null,
         task: "Announce the launch.",
         test: false,
-        inputs: { product: "Sage", notes: "Keep it short." },
+        inputs: { product: "Sage", notes: "Keep it short.", publish_at: "2026-12-01T09:00" },
       },
     ]);
   });

@@ -369,7 +369,7 @@ fn workflows() -> Vec<Workflow> {
                         name: "publish_at".into(),
                         label: "Publish at".into(),
                         kind: InputKind::DateTime,
-                        required: false,
+                        required: true,
                         default: None,
                     },
                 ],

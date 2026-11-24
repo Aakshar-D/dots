@@ -147,8 +147,9 @@ pub fn fill(
 pub fn output_of(reply: &str, name: &str) -> Option<String> {
     let open = format!("<{name}>");
     let close = format!("</{name}>");
-    let start = reply.rfind(&open)? + open.len();
-    let end = reply[start..].find(&close)? + start;
+    // The last block that is whole: a name mentioned again after it opens no new one.
+    let end = reply.rfind(&close)?;
+    let start = reply[..end].rfind(&open)? + open.len();
     Some(reply[start..end].trim().to_string())
 }
 
@@ -224,8 +225,13 @@ mod tests {
         assert_eq!(output_of(reply, "post").as_deref(), Some("second, final"));
         assert_eq!(output_of(reply, "caption").as_deref(), Some("c"));
         assert_eq!(output_of(reply, "title"), None);
-        // An open block with no end gives nothing.
+        // An open block with no end gives nothing, and a name said again after the block
+        // does not hide it.
         assert_eq!(output_of("<post>never closed", "post"), None);
+        assert_eq!(
+            output_of("<post>done</post> I put it in <post> as asked.", "post").as_deref(),
+            Some("done")
+        );
         assert_eq!(output_of("<post></post>", "post").as_deref(), Some(""));
     }
 }

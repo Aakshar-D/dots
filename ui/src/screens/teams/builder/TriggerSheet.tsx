@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
@@ -209,6 +209,8 @@ function TelegramFields(props: {
   const [seen, setSeen] = useState<SeenChat[]>();
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const latestToken = useRef(trigger.token);
+  latestToken.current = trigger.token;
   const id = chat.trim();
   const numeric = /^-?[0-9]{1,20}$/.test(id);
   const add = (chatId: string) => {
@@ -217,8 +219,11 @@ function TelegramFields(props: {
   async function find() {
     setBusy(true);
     setError(undefined);
+    const asked = trigger.token.trim();
     try {
-      setSeen(await commands.telegramChats(trigger.token.trim()));
+      const found = await commands.telegramChats(asked);
+      // The bot's name was changed while it was asked: these are not its chats.
+      if (asked === latestToken.current.trim()) setSeen(found);
     } catch (e) {
       setSeen(undefined);
       setError(errorMessage(e));
@@ -237,7 +242,12 @@ function TelegramFields(props: {
           id="trigger-token"
           placeholder="BOT_TOKEN"
           value={trigger.token}
-          onChange={(e) => onChange({ ...trigger, token: e.target.value })}
+          onChange={(e) => {
+            // The chats found were another bot's.
+            setSeen(undefined);
+            setError(undefined);
+            onChange({ ...trigger, token: e.target.value });
+          }}
         />
       </Field>
       <fieldset className="flex flex-col gap-1.5">
