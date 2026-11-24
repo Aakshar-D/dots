@@ -611,7 +611,7 @@ impl Definition {
             let stuck = self.inputs.iter().find(|f| {
                 f.required
                     && !given.contains(&f.name.as_str())
-                    && !f.default.as_deref().is_some_and(|d| !d.trim().is_empty())
+                    && f.default.as_deref().is_none_or(|d| d.trim().is_empty())
             });
             if let Some(field) = stuck {
                 return whole(Error::Invalid(format!(
@@ -877,7 +877,7 @@ impl Definition {
                     let may_be_empty = found.is_some_and(|f| {
                         f.kind == InputKind::DateTime
                             && !f.required
-                            && !f.default.as_deref().is_some_and(|d| !d.trim().is_empty())
+                            && f.default.as_deref().is_none_or(|d| d.trim().is_empty())
                     });
                     if may_be_empty {
                         return invalid(format!(
