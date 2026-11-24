@@ -57,6 +57,7 @@ pub mod settings;
 pub mod setup;
 pub mod skill_creator;
 pub mod spend;
+pub mod step_template;
 pub mod store;
 pub mod team_tools;
 pub mod teams;

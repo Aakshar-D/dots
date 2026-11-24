@@ -95,9 +95,11 @@ export function newWorkflowSpec(name: string, member: string): WorkflowSpec {
           outcomes: [],
           delegate: null,
           options: { model: null, lean: false, reads: null },
+          produces: [],
         },
       ],
       budget: DEFAULT_BUDGET,
+      inputs: [],
     },
   };
 }

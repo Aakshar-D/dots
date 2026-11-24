@@ -36,11 +36,13 @@ fn flow(name: &str, member: &str) -> WorkflowSpec {
     WorkflowSpec {
         name: name.into(),
         definition: Definition {
+            inputs: vec![],
             trigger: Trigger::Manual,
             steps: vec![Step {
                 id: "a".into(),
                 name: "Work".into(),
                 kind: StepKind::Agent {
+                    produces: vec![],
                     options: Default::default(),
                     member: member.into(),
                     job: "Fix it.".into(),
@@ -177,7 +179,7 @@ async fn workflows_are_validated_against_the_team() {
 }
 
 #[tokio::test]
-async fn a_project_is_a_git_repo_with_safe_git_names() {
+async fn a_project_is_a_folder_git_or_not_with_safe_git_names() {
     let (dir, store) = temp_store().await;
     let teams = Teams::new(store.clone(), new_bus());
     let t = teams.create(&team("T", &[])).await.unwrap();
@@ -190,12 +192,23 @@ async fn a_project_is_a_git_repo_with_safe_git_names() {
     assert_eq!(p.spec.remote, "origin");
     assert_eq!(teams.get(&t.id).await.unwrap().projects, vec![p.clone()]);
 
+    // A plain folder is a project too (general workflows spec section 2); one that is not
+    // there, or is a file, is not.
     let plain = dir.path().join("plain");
     std::fs::create_dir_all(&plain).unwrap();
-    assert!(matches!(
-        teams.add_project(&t.id, &project("Plain", &plain)).await,
-        Err(Error::Invalid(m)) if m.ends_with("is not a git repository")
-    ));
+    let files = teams
+        .add_project(&t.id, &project("Plain", &plain))
+        .await
+        .unwrap();
+    teams.delete_project(&files.id).await.unwrap();
+    let file = dir.path().join("notes.txt");
+    std::fs::write(&file, "x").unwrap();
+    for gone in [dir.path().join("nowhere"), file] {
+        assert!(matches!(
+            teams.add_project(&t.id, &project("Gone", &gone)).await,
+            Err(Error::Invalid(m)) if m.ends_with("is not a folder")
+        ));
+    }
     assert!(matches!(
         teams.add_project(&t.id, &project("Dots", &repo)).await,
         Err(Error::Conflict(m)) if m == "the team has a project named \"Dots\""

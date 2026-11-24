@@ -10,6 +10,7 @@ import { findStep } from "./draft";
 
 const [crew] = sample.teams as [Team, Team];
 const [fix, , nightly] = sample.workflows as [Workflow, Workflow, Workflow, Workflow];
+const announce = sample.workflows[4];
 
 /// The builder of `workflow`, with no problem in any draft, whose save answers with what it
 /// was sent.
@@ -99,6 +100,7 @@ describe("a step's settings sheet", () => {
       can_send_back_to: [],
       outcomes: ["done"],
       options: { model: "small", lean: true, reads: ["build"] },
+      produces: [],
       delegate: null,
     });
   });
@@ -163,6 +165,7 @@ describe("a step's settings sheet", () => {
     expect(sheet.getByText(/older ones shortened/)).toBeVisible();
     expect(await saved(user, "design")).toMatchObject({
       options: { model: null, lean: false, reads: null },
+      produces: [],
     });
 
     // Picking starts from none, and each tick names a step by its id.
@@ -173,6 +176,7 @@ describe("a step's settings sheet", () => {
     expect(picked.getByRole("checkbox", { name: "Build" })).not.toBeChecked();
     expect(await saved(user, "design")).toMatchObject({
       options: { model: "large", lean: false, reads: [] },
+      produces: [],
     });
     sheet = await settings(user, "Design", "Agent step settings");
     await user.click(
@@ -180,6 +184,7 @@ describe("a step's settings sheet", () => {
     );
     expect(await saved(user, "design")).toMatchObject({
       options: { model: "large", lean: false, reads: ["build"] },
+      produces: [],
     });
   });
 
@@ -335,5 +340,145 @@ describe("a step's settings sheet", () => {
     );
     // Work, the agent step before it, declares no outcome.
     expect(sheet.getByText("A path's label is an outcome of Work: it has none yet.")).toBeVisible();
+  });
+
+  it("names the outputs an agent step gives, as a later step writes them", async () => {
+    const { user } = open(announce);
+    const sheet = await settings(user, "Draft the post", "Agent step settings");
+    const outputs = within(sheet.getByRole("group", { name: "Outputs" }));
+    expect(outputs.getByRole("list", { name: "Outputs" })).toHaveTextContent("{{draft.post}}");
+    const next = outputs.getByRole("textbox", { name: "New output" });
+    // A name steps cannot write, and one listed already, are not taken.
+    await user.type(next, "The Caption");
+    expect(outputs.getByRole("button", { name: "Add output" })).toBeDisabled();
+    await user.clear(next);
+    await user.type(next, "post");
+    expect(outputs.getByText("It is listed already.")).toBeVisible();
+    await user.clear(next);
+    await user.type(next, "caption{Enter}");
+    expect(outputs.getByRole("list", { name: "Outputs" })).toHaveTextContent("{{draft.caption}}");
+    await user.click(outputs.getByRole("button", { name: "Remove the output post" }));
+    expect(await saved(user, "draft")).toMatchObject({ produces: ["caption"] });
+  });
+
+  it("edits an action's request, and turns it into a saved file", async () => {
+    const { user } = open(announce);
+    let sheet = await settings(user, "Send it", "Action settings");
+    expect(sheet.getByRole("combobox", { name: "It does" })).toHaveValue("http");
+    expect(sheet.getByRole("combobox", { name: "Method" })).toHaveValue("post");
+    const address = sheet.getByRole("textbox", { name: "Address" });
+    expect(address).toHaveValue("https://example.com/hooks/{{secret.HOOK_KEY}}");
+    expect(sheet.getByRole("textbox", { name: "Header 1 name" })).toHaveValue("X-Product");
+    expect(sheet.getByRole("textbox", { name: "Body" })).toHaveValue("{{draft.post}}");
+    // What its texts may hold: the task, each input, the outputs and summary of the agent
+    // step before it, and how a secret is named.
+    const marks = within(sheet.getByRole("list", { name: "What you can put in" }));
+    expect(marks.getAllByRole("listitem").map((m) => m.textContent)).toEqual([
+      "{{task}}",
+      "{{input.product}}",
+      "{{input.notes}}",
+      "{{input.publish_at}}",
+      "{{draft.post}}",
+      "{{draft.summary}}",
+      "{{secret.NAME}}",
+    ]);
+    await user.selectOptions(sheet.getByRole("combobox", { name: "Method" }), "put");
+    await user.click(sheet.getByRole("button", { name: "Remove header 1" }));
+    await user.click(sheet.getByRole("switch", { name: "Runs without my check" }));
+    expect(screen.getByRole("group", { name: "Step 6: Send it", hidden: true })).toHaveTextContent(
+      "Sends PUT to example.com, without your check",
+    );
+    expect(await saved(user, "send")).toEqual({
+      id: "send",
+      name: "Send it",
+      kind: "action",
+      action: "http",
+      method: "put",
+      url: "https://example.com/hooks/{{secret.HOOK_KEY}}",
+      headers: [],
+      body: "{{draft.post}}",
+      unattended: true,
+    });
+
+    // As a file it keeps its name and whether it runs with no check, and holds no secret.
+    sheet = await settings(user, "Send it", "Action settings");
+    await user.selectOptions(sheet.getByRole("combobox", { name: "It does" }), "file");
+    await user.type(sheet.getByRole("textbox", { name: "File" }), "out/post.md");
+    await user.type(sheet.getByRole("textbox", { name: "Content" }), "Posted.");
+    expect(
+      within(sheet.getByRole("list", { name: "What you can put in" }))
+        .getAllByRole("listitem")
+        .map((m) => m.textContent),
+    ).not.toContain("{{secret.NAME}}");
+    expect(await saved(user, "send")).toEqual({
+      id: "send",
+      name: "Send it",
+      kind: "action",
+      action: "file",
+      path: "out/post.md",
+      content: "Posted.",
+      unattended: true,
+    });
+  });
+
+  it("sets what a wait waits for: minutes, a time of day, or a date and time input", async () => {
+    const { user } = open(announce);
+    let sheet = await settings(user, "Until it is time", "Wait settings");
+    const kind = sheet.getByRole("combobox", { name: "It waits" });
+    expect(kind).toHaveValue("input");
+    // Only an input that holds a date and time can be waited for.
+    const input = sheet.getByRole("combobox", { name: "Input" });
+    expect(within(input).getAllByRole("option").map((o) => o.textContent)).toEqual(["Publish at"]);
+    expect(
+      screen.getByRole("group", { name: "Step 3: Until it is time", hidden: true }),
+    ).toHaveTextContent(`Waits until the date and time given as "publish_at"`);
+
+    await user.selectOptions(kind, "time");
+    expect(sheet.getByLabelText("Time")).toHaveValue("09:00");
+    await user.selectOptions(sheet.getByRole("combobox", { name: "Day" }), "fri");
+    expect(await saved(user, "hold")).toEqual({
+      id: "hold",
+      name: "Until it is time",
+      kind: "wait",
+      wait: "time",
+      at: "09:00",
+      weekday: "fri",
+    });
+
+    sheet = await settings(user, "Until it is time", "Wait settings");
+    await user.selectOptions(sheet.getByRole("combobox", { name: "It waits" }), "minutes");
+    const minutes = sheet.getByRole("spinbutton", { name: "Minutes" });
+    expect(minutes).toHaveValue(60);
+    await user.clear(minutes);
+    await user.type(minutes, "15");
+    expect(await saved(user, "hold")).toEqual({
+      id: "hold",
+      name: "Until it is time",
+      kind: "wait",
+      wait: "minutes",
+      minutes: 15,
+    });
+  });
+
+  it("adds and removes the inputs a run is asked for", async () => {
+    const { user } = open(fix);
+    const card = within(await screen.findByRole("region", { name: "Inputs" }));
+    expect(card.queryByRole("list", { name: "Inputs" })).not.toBeInTheDocument();
+    await user.click(card.getByRole("button", { name: "Add input" }));
+    await user.type(card.getByRole("textbox", { name: "Asks for" }), "Publish at");
+    const name = card.getByRole("textbox", { name: "Name" });
+    await user.clear(name);
+    await user.type(name, "publish_at");
+    await user.selectOptions(card.getByRole("combobox", { name: "Kind" }), "date_time");
+    await user.click(card.getByRole("checkbox", { name: "A run cannot start without it" }));
+    await user.click(card.getByRole("button", { name: "Add input" }));
+    await user.click(card.getByRole("button", { name: "Remove the input input_2" }));
+    const save = screen.getByRole("button", { name: "Save" });
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.click(save);
+    const spec = backend.callsTo("workflow_update").at(-1)!.spec as WorkflowSpec;
+    expect(spec.definition.inputs).toEqual([
+      { name: "publish_at", label: "Publish at", kind: "date_time", required: true, default: null },
+    ]);
   });
 });

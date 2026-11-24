@@ -166,6 +166,16 @@ function StepRunCard({ step, number, view }: { step: Step; number: string; view:
         </ul>
       )}
       {stepRun?.deploy_result && <DeployResult run={run} result={stepRun.deploy_result} />}
+      {step.kind === "action" && stepRun?.handoff?.summary && (
+        <p className="text-xs break-words whitespace-pre-wrap text-muted-foreground">
+          {stepRun.handoff.summary}
+        </p>
+      )}
+      {step.kind === "wait" && stepRun?.status === "running" && waitsUntil(stepRun.decision) && (
+        <p className="text-xs text-muted-foreground">
+          Waits until {waitsUntil(stepRun.decision)}. No minutes are counted meanwhile.
+        </p>
+      )}
       {links && links.step.length > 0 && (
         <ul aria-label={`Sol runs of ${name}`} className="flex flex-wrap gap-2 text-xs">
           {links.step.map((link) => (
@@ -232,4 +242,15 @@ function StepRunCard({ step, number, view }: { step: Step; number: string; view:
       )}
     </div>
   );
+}
+
+/// The time a wait step's run waits until, as this PC writes it; undefined when its step run
+/// holds none.
+function waitsUntil(decision: unknown): string | undefined {
+  const until = (decision as { until?: unknown } | null)?.until;
+  if (typeof until !== "string") return undefined;
+  const at = new Date(until);
+  return Number.isNaN(at.getTime())
+    ? undefined
+    : at.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }

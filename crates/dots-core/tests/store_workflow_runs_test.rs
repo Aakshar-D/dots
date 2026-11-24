@@ -48,11 +48,13 @@ async fn fixture() -> Fixture {
     };
     let project_id = store.add_project(&team.id, &project).await.unwrap().id;
     let definition = Definition {
+        inputs: vec![],
         trigger: Trigger::Manual,
         steps: vec![Step {
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                produces: vec![],
                 options: Default::default(),
                 member: dot.clone(),
                 job: "Fix it.".into(),
@@ -81,7 +83,8 @@ async fn fixture() -> Fixture {
         workflow_id: workflow.id,
         team_id: team.id,
         definition,
-        project_id,
+        project_id: Some(project_id),
+        inputs: Default::default(),
         project,
         task: "The tray icon is invisible.".into(),
         trigger: WorkflowTrigger::Manual,
@@ -194,6 +197,7 @@ async fn step_runs_record_their_hand_off_and_decision() {
         .unwrap();
     assert_eq!((step.attempt, step.status), (1, StepRunStatus::Running));
     let handoff = Handoff {
+        outputs: Default::default(),
         summary: "Fixed.".into(),
         branches: vec![],
         outcome: None,

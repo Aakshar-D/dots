@@ -127,7 +127,7 @@ describe("the workflow builder", () => {
       within(screen.getByRole("menu"))
         .getAllByRole("menuitem")
         .map((item) => item.textContent),
-    ).toEqual(["Agent step", "Check", "Deploy", "Branch"]);
+    ).toEqual(["Agent step", "Check", "Action", "Wait", "Deploy", "Branch"]);
     await user.click(screen.getByRole("menuitem", { name: "Agent step" }));
     expect(card("Step 2: Work")).toHaveTextContent("nightly-tests · Work on the task.");
     expect(card("Step 3: Review")).toBeInTheDocument();

@@ -15,7 +15,8 @@ use crate::util::{new_id, now};
 use crate::workflow::Definition;
 use crate::{Error, Result};
 
-const WR_COLUMNS: &str = "id, workflow_id, team_id, definition, project_id, project, task, \
+const WR_COLUMNS: &str =
+    "id, workflow_id, team_id, definition, project_id, project, task, inputs, \
     trigger_kind, origin_run_id, test, status, waiting_on, current_step, budget, send_backs, \
     send_back, active_ms, error, started_at, ended_at";
 const STEP_COLUMNS: &str = "id, workflow_run_id, step_id, attempt, status, handoff, decision, \
@@ -50,8 +51,8 @@ impl Store {
         let ts = now();
         sqlx::query(
             "INSERT INTO workflow_runs (id, workflow_id, team_id, definition, project_id, \
-             project, task, trigger_kind, origin_run_id, test, status, budget, clock_at, \
-             started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             project, task, inputs, trigger_kind, origin_run_id, test, status, budget, clock_at, \
+             started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&new.workflow_id)
@@ -60,6 +61,7 @@ impl Store {
         .bind(&new.project_id)
         .bind(serde_json::to_string(&new.project)?)
         .bind(&new.task)
+        .bind(serde_json::to_string(&new.inputs)?)
         .bind(new.trigger.as_str())
         .bind(&new.origin_run_id)
         .bind(new.test as i64)
@@ -107,6 +109,7 @@ impl Store {
             definition: serde_json::from_str(&row.try_get::<String, _>("definition")?)?,
             project_id: row.try_get("project_id")?,
             project: serde_json::from_str(&row.try_get::<String, _>("project")?)?,
+            inputs: serde_json::from_str(&row.try_get::<String, _>("inputs")?)?,
             task: row.try_get("task")?,
             trigger: WorkflowTrigger::parse(&row.try_get::<String, _>("trigger_kind")?)?,
             origin_run_id: row.try_get("origin_run_id")?,
@@ -272,12 +275,14 @@ impl Store {
     pub async fn workflow_in_flight_from_thread(
         &self,
         workflow_id: &str,
-        project_id: &str,
+        project_id: Option<&str>,
         root_run_id: &str,
     ) -> Result<bool> {
+        // `IS`: a run in the team's own folder has no project, and two such runs are the same
+        // work.
         let n: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM workflow_runs w JOIN runs r ON r.id = w.origin_run_id \
-             WHERE w.workflow_id = ? AND w.project_id = ? AND r.root_run_id = ? \
+             WHERE w.workflow_id = ? AND w.project_id IS ? AND r.root_run_id = ? \
              AND w.status IN ('running', 'waiting')",
         )
         .bind(workflow_id)

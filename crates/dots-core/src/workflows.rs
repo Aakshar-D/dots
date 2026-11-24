@@ -12,6 +12,7 @@
 //! approved (`deploy_step`), at the tips the person was shown (`check`). "Open folder" finds a
 //! project's folder and a ready branch's worktree by id (`folder`).
 
+mod action;
 mod check;
 mod delegate;
 mod deploy_step;
@@ -19,8 +20,9 @@ mod folder;
 mod jobs;
 mod send_back;
 mod tools;
+mod wait;
 
-pub use check::{branches_changed, CheckTip, CheckView, ShownBranch, CHECK_CHANGED};
+pub use check::{branches_changed, CheckTip, CheckView, ShownBranch, ShownOutput, CHECK_CHANGED};
 pub use deploy_step::{INTERRUPTED, NO_APPROVAL, NO_DEFAULT_BRANCH};
 pub use tools::STEP_CLOSED;
 
@@ -62,6 +64,8 @@ pub const MAX_HANDOFF_SUMMARY: usize = 4_000;
 /// characters, unless the step names what it reads (lean workflows spec section 4): the whole
 /// text is on the run page, and the work itself is on the branch.
 pub const MAX_OLDER_SUMMARY: usize = 1_000;
+/// The longest output of an agent step, in characters.
+pub const MAX_OUTPUT: usize = 20_000;
 /// Why a run may not continue the thread of a workflow step that has ended (section 8): it
 /// would work in the project's worktree outside the workflow.
 pub const ENDED_STEP_THREAD: &str =
@@ -77,8 +81,13 @@ const MAX_TICK_GAIN: Duration = Duration::from_secs(2 * TICK.as_secs());
 #[derive(Debug, Clone, PartialEq)]
 pub struct StartRequest {
     pub workflow_id: String,
-    pub project_id: String,
+    /// The project of the workflow's team it works on; `None`: the team's own folder
+    /// (general workflows spec section 2).
+    pub project_id: Option<String>,
     pub task: String,
+    /// What it is given for the workflow's inputs, by name (general workflows spec section
+    /// 3). One it does not name takes its default.
+    pub inputs: std::collections::BTreeMap<String, String>,
     pub trigger: WorkflowTrigger,
     /// The chat run that started it (`start_workflow`).
     pub origin_run_id: Option<String>,
@@ -109,6 +118,10 @@ pub struct Workflows {
     /// What deploy steps push and open pull requests with (`set_deployer`); unset, `gh` from
     /// the PATH.
     deployer: OnceLock<Deployer>,
+    /// Where an action's `{{secret.…}}` is read from (`set_vault`).
+    vault: OnceLock<crate::vault::Vault>,
+    /// When the soonest wait step ends, noted by each pass (`wait`), so the loop passes then.
+    due: std::sync::Mutex<Option<chrono::DateTime<chrono::Utc>>>,
 }
 
 /// The newest step run of `step_id`.
@@ -243,6 +256,58 @@ fn handoffs_before<'a>(wr: &'a WorkflowRun, id: &str) -> Vec<(&'a Step, &'a Hand
         .filter(|s| deploy_step::worker(wr, s).is_some())
         .filter_map(|s| Some((s, succeeded(wr, &s.id)?.handoff.as_ref()?)))
         .collect()
+}
+
+/// The step whose hand-off the check `id` shows: the newest earlier step a member worked on.
+fn shown_step<'a>(wr: &'a WorkflowRun, id: &str) -> Option<&'a Step> {
+    handoffs_before(wr, id).last().map(|(step, _)| *step)
+}
+
+/// The inputs a run starts with: what `given` names of the workflow's `fields`, else each
+/// field's default; a blank one is left out. Refuses a name the workflow does not ask for, a
+/// needed input left blank, a text longer than `MAX_TASK`, and a date and time that is none.
+fn given_inputs(
+    fields: &[crate::workflow::InputField],
+    given: &std::collections::BTreeMap<String, String>,
+) -> Result<std::collections::BTreeMap<String, String>> {
+    if let Some(name) = given.keys().find(|k| !fields.iter().any(|f| f.name == **k)) {
+        return Err(Error::Invalid(format!(
+            "the workflow asks for no input named \"{name}\""
+        )));
+    }
+    let mut out = std::collections::BTreeMap::new();
+    for field in fields {
+        let label = field.label.trim();
+        let text = given
+            .get(&field.name)
+            .map(|v| v.trim())
+            .filter(|v| !v.is_empty())
+            .or(field
+                .default
+                .as_deref()
+                .map(str::trim)
+                .filter(|v| !v.is_empty()));
+        let Some(text) = text else {
+            if field.required {
+                return Err(Error::Invalid(format!("\"{label}\" is needed to start")));
+            }
+            continue;
+        };
+        if text.chars().count() > MAX_TASK {
+            return Err(Error::Invalid(format!(
+                "\"{label}\" is longer than 8,000 characters"
+            )));
+        }
+        if field.kind == crate::workflow::InputKind::DateTime
+            && crate::workflow::date_time_of(text).is_none()
+        {
+            return Err(Error::Invalid(format!(
+                "\"{label}\" must be a date and time, as in 2026-12-01T09:00"
+            )));
+        }
+        out.insert(field.name.clone(), text.to_string());
+    }
+    Ok(out)
 }
 
 /// The newest of `handoffs` that has branches. A step that changed nothing hands on none (its
@@ -409,6 +474,8 @@ impl Workflows {
             jobs: std::sync::Mutex::new(HashSet::new()),
             gate: std::sync::Mutex::new(None),
             deployer: OnceLock::new(),
+            vault: OnceLock::new(),
+            due: std::sync::Mutex::new(None),
         })
     }
 
@@ -495,23 +562,42 @@ impl Workflows {
                 "workflow {name} cannot start: {problem}"
             )));
         }
-        let project = self.store.get_project(&req.project_id).await?;
-        if project.team_id != workflow.team_id {
-            return Err(Error::Invalid(format!(
-                "{} is not a project of the workflow's team",
-                project.spec.name
-            )));
-        }
-        crate::teams::check_repo(&project.spec.repo_path).await?;
+        let inputs = given_inputs(&workflow.spec.definition.inputs, &req.inputs)?;
+        let (project_id, project) = match &req.project_id {
+            Some(id) => {
+                let project = self.store.get_project(id).await?;
+                if project.team_id != workflow.team_id {
+                    return Err(Error::Invalid(format!(
+                        "{} is not a project of the workflow's team",
+                        project.spec.name
+                    )));
+                }
+                crate::teams::check_folder(&project.spec.repo_path).await?;
+                (Some(project.id), project.spec)
+            }
+            // No project: the team's own folder, made when it is first worked in.
+            None => {
+                let folder = self.runner.team_files_dir(&workflow.team_id);
+                tokio::fs::create_dir_all(&folder).await?;
+                let spec = crate::model::ProjectSpec {
+                    name: crate::teams::TEAM_FILES.to_string(),
+                    repo_path: folder.to_string_lossy().to_string(),
+                    default_branch: None,
+                    remote: "origin".to_string(),
+                };
+                (None, spec)
+            }
+        };
         let wr = self
             .store
             .create_workflow_run(&NewWorkflowRun {
                 workflow_id: workflow.id.clone(),
                 team_id: workflow.team_id.clone(),
                 definition: workflow.spec.definition.clone(),
-                project_id: project.id.clone(),
-                project: project.spec.clone(),
+                project_id,
+                project,
                 task: task.to_string(),
+                inputs,
                 trigger: req.trigger,
                 origin_run_id: req.origin_run_id,
                 test: req.test,
@@ -588,7 +674,9 @@ impl Workflows {
             .await?
             .and_then(|t| chrono::DateTime::parse_from_rfc3339(&t).ok())
             .map(|t| t.with_timezone(&chrono::Utc));
+        // A wait step counts no time either (general workflows spec section 7).
         let active = wr.status == WorkflowRunStatus::Running
+            && !wait::waits(wr)
             && !self.store.workflow_waits_on_person(&wr.id).await?;
         let gained = match (active, last) {
             (true, Some(last)) if now > last => {
@@ -627,9 +715,22 @@ impl Workflows {
                 .to_string()
         };
         let (name, project, task) = (arg("workflow"), arg("project"), arg("task"));
-        if name.is_empty() || project.is_empty() {
-            return Err("Give `workflow` and `project` by their names as listed.".into());
+        if name.is_empty() {
+            return Err("Give `workflow` by its name as listed.".into());
         }
+        let inputs: std::collections::BTreeMap<String, String> = input
+            .get("inputs")
+            .and_then(serde_json::Value::as_object)
+            .map(|given| {
+                given
+                    .iter()
+                    .map(|(k, v)| {
+                        let text = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                        (k.clone(), text)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let found: Vec<&StartableWorkflow> = startable
             .iter()
             .filter(|w| {
@@ -663,36 +764,50 @@ impl Workflows {
                 "There is no workflow named \"{name}\" that you may start."
             ));
         };
-        let Some(project) = workflow
-            .projects
-            .iter()
-            .find(|p| p.eq_ignore_ascii_case(&project))
-        else {
-            return Err(format!(
-                "The team \"{}\" has no project named \"{project}\".",
-                workflow.team
-            ));
+        // No project named: the team's own folder (general workflows spec section 2).
+        let project_id = if project.is_empty() {
+            None
+        } else {
+            let Some(project) = workflow
+                .projects
+                .iter()
+                .find(|p| p.eq_ignore_ascii_case(&project))
+            else {
+                return Err(format!(
+                    "The team \"{}\" has no project named \"{project}\".",
+                    workflow.team
+                ));
+            };
+            match self
+                .store
+                .get_team_project_id(&workflow.workflow_id, project)
+                .await
+            {
+                Ok(id) => Some(id),
+                Err(e) => return Err(format!("Not started: {e}.")),
+            }
         };
-        let project_id = match self
-            .store
-            .get_team_project_id(&workflow.workflow_id, project)
-            .await
-        {
-            Ok(id) => id,
-            Err(e) => return Err(format!("Not started: {e}.")),
+        let on = if project.is_empty() {
+            "the team's folder".to_string()
+        } else {
+            format!("\"{project}\"")
         };
         // One run of a workflow on a project per chat at a time: a model that calls again, in a
         // loop or in parallel, does not start the same work twice and spend its budget twice.
         let _one_start = self.start_lock.lock().await;
         match self
             .store
-            .workflow_in_flight_from_thread(&workflow.workflow_id, &project_id, &caller.root_run_id)
+            .workflow_in_flight_from_thread(
+                &workflow.workflow_id,
+                project_id.as_deref(),
+                &caller.root_run_id,
+            )
             .await
         {
             Ok(false) => {}
             Ok(true) => {
                 return Err(format!(
-                    "Not started: \"{}\" is already running on \"{project}\" from this chat.",
+                    "Not started: \"{}\" is already running on {on} from this chat.",
                     workflow.workflow
                 ))
             }
@@ -703,6 +818,7 @@ impl Workflows {
                 workflow_id: workflow.workflow_id.clone(),
                 project_id,
                 task,
+                inputs,
                 trigger: WorkflowTrigger::Chat,
                 origin_run_id: Some(run_id.to_string()),
                 test: false,
@@ -710,7 +826,7 @@ impl Workflows {
             .await;
         match started {
             Ok(_) => Ok(format!(
-                "Workflow \"{}\" started on \"{project}\".",
+                "Workflow \"{}\" started on {on}.",
                 workflow.workflow
             )),
             Err(Error::Invalid(m)) | Err(Error::Conflict(m)) => Err(format!("Not started: {m}.")),
@@ -734,6 +850,22 @@ impl Workflows {
         note: Option<&str>,
         step_run_id: &str,
         tips: &[CheckTip],
+    ) -> Result<WorkflowRun> {
+        self.approve_check_edited(id, note, step_run_id, tips, &Default::default())
+            .await
+    }
+
+    /// `approve_check`, with what the person changed in the outputs the check showed
+    /// (general workflows spec section 8): `edits` names outputs of the step shown, each with
+    /// its new text. The steps after the check use the changed text. An output the step did
+    /// not give is refused (`Invalid`), and nothing is recorded.
+    pub async fn approve_check_edited(
+        &self,
+        id: &str,
+        note: Option<&str>,
+        step_run_id: &str,
+        tips: &[CheckTip],
+        edits: &std::collections::BTreeMap<String, String>,
     ) -> Result<WorkflowRun> {
         let _one = self.lock.lock().await;
         let wr = self.store.get_workflow_run(id).await?;
@@ -760,7 +892,44 @@ impl Workflows {
             return Err(Error::Conflict(branches_changed(&differ)));
         }
         let note = note.map(str::trim).filter(|n| !n.is_empty());
-        let decision = json!({"decision": "approved", "note": note, "branches": branches});
+        let mut shown = shown;
+        let mut decision = json!({"decision": "approved", "note": note, "branches": branches});
+        if !edits.is_empty() {
+            let unknown = edits.keys().find(|name| !shown.outputs.contains_key(*name));
+            if let Some(name) = unknown {
+                return Err(Error::Invalid(format!(
+                    "the step shown gave no output named \"{name}\""
+                )));
+            }
+            if let Some((name, _)) = edits
+                .iter()
+                .find(|(_, text)| text.chars().count() > MAX_OUTPUT)
+            {
+                return Err(Error::Invalid(format!(
+                    "the output \"{name}\" is longer than 20,000 characters"
+                )));
+            }
+            // The step that gave them keeps the changed text: a later step reads it there.
+            let from = shown_step(&wr, &step_run.step_id)
+                .and_then(|step| succeeded(&wr, &step.id))
+                .cloned();
+            if let Some(mut source) = from {
+                if let Some(handoff) = &mut source.handoff {
+                    handoff.outputs.extend(edits.clone());
+                    self.store
+                        .set_step_run(
+                            &source.id,
+                            &StepRunChange {
+                                handoff: Some(source.handoff.clone()),
+                                ..Default::default()
+                            },
+                        )
+                        .await?;
+                }
+            }
+            shown.outputs.extend(edits.clone());
+            decision["edited"] = json!(edits.keys().collect::<Vec<_>>());
+        }
         self.store
             .set_step_run(
                 &step_run.id,
@@ -924,12 +1093,14 @@ impl Workflows {
                 if let Err(e) = this.pass().await {
                     tracing::error!("workflow pass failed: {e}");
                 }
+                // Until the next tick, or sooner when a wait step ends before it.
+                let sleep = this.until_due().map_or(TICK, |due| due.min(TICK));
                 tokio::select! {
                     biased;
                     _ = shutdown.cancelled() => break,
                     _ = this.wake.notified() => {}
                     _ = relevant(&mut events, &store) => {}
-                    _ = tokio::time::sleep(TICK) => {}
+                    _ = tokio::time::sleep(sleep) => {}
                 }
             }
         })
@@ -973,6 +1144,16 @@ impl Workflows {
             {
                 let next = self.take_branch(&wr, step, Some(&step_run)).await?;
                 self.begin_or_finish(&wr, next).await
+            }
+            Some((StepRunStatus::Running, step_run))
+                if matches!(step.kind, StepKind::Action { .. }) =>
+            {
+                self.watch_action(&wr, step, &step_run).await
+            }
+            Some((StepRunStatus::Running, step_run))
+                if matches!(step.kind, StepKind::Wait { .. }) =>
+            {
+                self.watch_wait(&wr, step, &step_run).await
             }
             // A deploy with no member to watch: its job runs, or Dots stopped during it.
             Some((StepRunStatus::Running, step_run))
@@ -1119,6 +1300,8 @@ impl Workflows {
                 }
             }
             StepKind::Deploy { .. } => self.begin_deploy(wr, step).await?,
+            StepKind::Action { .. } => self.begin_action(wr, step).await?,
+            StepKind::Wait { .. } => self.begin_wait(wr, step).await?,
             StepKind::Branch { .. } => {}
         }
         Ok(())
@@ -1316,9 +1499,41 @@ impl Workflows {
         out.push_str(&place(wr, step));
         out.push_str("### Task\n\n");
         out.push_str(wr.task.trim());
+        // What the run was started with besides the task (general workflows spec section 3).
+        let given: Vec<_> = wr
+            .definition
+            .inputs
+            .iter()
+            .filter_map(|f| Some((f, wr.inputs.get(&f.name).filter(|v| !v.trim().is_empty())?)))
+            .collect();
+        if !given.is_empty() {
+            out.push_str("\n\n### Inputs\n\n");
+            for (field, value) in given {
+                out.push_str(&format!(
+                    "- {} (`{}`): {}\n",
+                    field.label.trim(),
+                    field.name,
+                    value.trim()
+                ));
+            }
+            out.truncate(out.trim_end().len());
+        }
         out.push_str("\n\n### Your job in this step\n\n");
         out.push_str(job.trim());
         out.push_str("\n\n");
+        // The outputs a later step uses as they are (general workflows spec section 5).
+        if let StepKind::Agent { produces, .. } = &step.kind {
+            if !produces.is_empty() {
+                out.push_str(
+                    "### Outputs\n\nEnd your reply with each of these in a block of its own, \
+                     written exactly so, with only the text itself inside:\n\n",
+                );
+                for name in produces {
+                    out.push_str(&format!("<{name}>…</{name}>\n"));
+                }
+                out.push_str("\nA later step uses each block's text as it is.\n\n");
+            }
+        }
         // A member deploy is shown only what the check approved, each branch at its commit.
         if matches!(step.kind, StepKind::Deploy { .. }) {
             if let Ok((branches, summary)) = deploy_step::approved(wr, &step.id) {
@@ -1533,12 +1748,27 @@ impl Workflows {
     /// member's branch that exists. A check after the step shows these, and a deploy after it
     /// ships them. The outcome is the caller's: the step run's. Slow, and run by a job without
     /// the lock.
-    async fn handoff_of(&self, wr: &WorkflowRun, members: &[StepMember], runs: &[Run]) -> Handoff {
+    async fn handoff_of(
+        &self,
+        wr: &WorkflowRun,
+        produces: &[String],
+        members: &[StepMember],
+        runs: &[Run],
+    ) -> Handoff {
         let own = delegate::own_runs(runs, members);
         let summary = own
             .last()
             .and_then(|r| r.summary.clone())
             .unwrap_or_default();
+        // The outputs, read from the whole reply before it is cut (general workflows spec
+        // section 5). One the reply lacks is left out: the step then fails (`jobs`).
+        let outputs = produces
+            .iter()
+            .filter_map(|name| {
+                let text = crate::step_template::output_of(&summary, name)?;
+                Some((name.clone(), cut(&text, MAX_OUTPUT)))
+            })
+            .collect();
         let repo = Path::new(&wr.project.repo_path);
         let mut lead = None;
         if let Some(run) = own.iter().rev().find(|r| r.branch.is_some()) {
@@ -1566,6 +1796,7 @@ impl Workflows {
             branches,
             outcome: None,
             members: handed,
+            outputs,
         }
     }
 }

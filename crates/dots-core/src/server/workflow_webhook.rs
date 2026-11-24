@@ -153,30 +153,46 @@ pub async fn trigger(
             "no task: give \"task\" in the body, or a task in the workflow's webhook trigger",
         );
     };
-    let Some(project) = given(asked.project, trigger_project) else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "no project: give \"project\" in the body, or a project in the workflow's webhook \
-             trigger",
-        );
+    // No project in the body or the trigger: the team's own folder (general workflows spec
+    // section 2).
+    let project_id = match given(asked.project, trigger_project) {
+        None => None,
+        Some(project) => {
+            let team = match s.store.get_team(&workflow.team_id).await {
+                Ok(t) => t,
+                Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            };
+            let Some(project) = crate::teams::project_named(&team, &project) else {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    &format!("the team has no project named \"{project}\""),
+                );
+            };
+            Some(project.id.clone())
+        }
     };
-    let team = match s.store.get_team(&workflow.team_id).await {
-        Ok(t) => t,
-        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-    };
-    let Some(project) = crate::teams::project_named(&team, &project) else {
-        return error(
-            StatusCode::BAD_REQUEST,
-            &format!("the team has no project named \"{project}\""),
-        );
-    };
+    // The body's `inputs`, an object: each value's text, a string as it is.
+    let inputs = serde_json::from_slice::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("inputs").and_then(|i| i.as_object().cloned()))
+        .map(|given| {
+            given
+                .into_iter()
+                .map(|(k, v)| {
+                    let text = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                    (k, text)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let Some(workflows) = s.runner.checkins().and_then(|c| c.workflows()) else {
         return error(StatusCode::SERVICE_UNAVAILABLE, "workflows are not running");
     };
     match workflows
         .start(StartRequest {
             workflow_id: workflow.id.clone(),
-            project_id: project.id.clone(),
+            project_id,
+            inputs,
             task,
             trigger: WorkflowTrigger::Webhook,
             origin_run_id: None,

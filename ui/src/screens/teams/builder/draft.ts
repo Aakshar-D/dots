@@ -1,14 +1,17 @@
 import type {
+  ActionStep,
   AgentStep,
   BranchStep,
   DeployMode,
   DeployStep,
   Delegate,
+  InputField,
   Schedule,
   Step,
   StepOptions,
   Team,
   Trigger,
+  WaitStep,
 } from "@/api/types";
 
 /// The core's limits on what a step holds (`workflow.rs`), in characters: a step's name, an
@@ -26,7 +29,22 @@ export const NO_OPTIONS: StepOptions = { model: null, lean: false, reads: null }
 /// The kinds of step the builder adds (teams spec section 5): a delegate is an agent step whose
 /// settings say what it may start.
 export type StepKindName = Step["kind"];
-export const STEP_KINDS: StepKindName[] = ["agent", "check", "deploy", "branch"];
+export const STEP_KINDS: StepKindName[] = ["agent", "check", "action", "wait", "deploy", "branch"];
+
+/// The most inputs a workflow asks for, and the most outputs a step gives, as the core has
+/// them.
+export const MAX_INPUTS = 20;
+export const MAX_OUTPUTS = 10;
+
+/// Whether `name` can name an input or an output: 1 to 40 of a-z, 0-9, '-' and '_'.
+export const nameOk = (name: string) => /^[a-z0-9_-]{1,40}$/.test(name);
+
+/// A new input for a workflow whose inputs are `inputs`: a line of text nobody has to give.
+export function newInput(inputs: InputField[]): InputField {
+  let n = inputs.length + 1;
+  while (inputs.some((f) => f.name === `input_${n}`)) n += 1;
+  return { name: `input_${n}`, label: "", kind: "text", required: false, default: null };
+}
 
 /// One list of steps in a definition: the top list, or one of a branch step's lists (a path by
 /// its place, or `otherwise`).
@@ -84,7 +102,22 @@ export function newStep(
         outcomes: [],
         delegate: null,
         options: NO_OPTIONS,
+        produces: [],
       };
+    case "action":
+      return {
+        id,
+        name: "Send it",
+        kind,
+        action: "http",
+        method: "post",
+        url: "https://",
+        headers: [],
+        body: "",
+        unattended: false,
+      };
+    case "wait":
+      return { id, name: "Wait", kind, wait: "minutes", minutes: 60 };
     case "check":
       return { id, name: "Your check", kind, send_back_to: null };
     case "deploy":
@@ -219,6 +252,55 @@ export function agentsEarlier(steps: Step[], id: string): AgentStep[] {
     .filter((step): step is AgentStep => step.kind === "agent");
 }
 
+/// `step` as an action of the kind `action`, keeping its id, name and whether it runs with no
+/// check; the same step when it is that kind already.
+export function withAction(step: ActionStep, action: ActionStep["action"]): ActionStep {
+  if (step.action === action) return step;
+  const { id, name, kind, unattended } = step;
+  return action === "http"
+    ? { id, name, kind, unattended, action, method: "post", url: "https://", headers: [], body: "" }
+    : { id, name, kind, unattended, action, path: "", content: "" };
+}
+
+/// `step` as a wait of the kind `wait`, keeping its id and name; the same step when it is that
+/// kind already. A wait on an input takes the first input that holds a date and time.
+export function withWait(step: WaitStep, wait: WaitStep["wait"], inputs: InputField[]): WaitStep {
+  if (step.wait === wait) return step;
+  const { id, name, kind } = step;
+  switch (wait) {
+    case "minutes":
+      return { id, name, kind, wait, minutes: 60 };
+    case "time":
+      return { id, name, kind, wait, at: "09:00", weekday: null };
+    case "input":
+      return {
+        id,
+        name,
+        kind,
+        wait,
+        input: inputs.find((f) => f.kind === "date_time")?.name ?? "",
+      };
+  }
+}
+
+/// What a text of the action step `id` may hold, as it is written: the task, each input, each
+/// output and the summary of the agent steps before it, and with `secrets` how a Personal
+/// variable is named.
+export function marksFor(
+  steps: Step[],
+  id: string,
+  inputs: InputField[],
+  secrets: boolean,
+): string[] {
+  const marks = ["{{task}}", ...inputs.map((f) => `{{input.${f.name}}}`)];
+  for (const step of agentsEarlier(steps, id)) {
+    for (const output of step.produces) marks.push(`{{${step.id}.${output}}}`);
+    marks.push(`{{${step.id}.summary}}`);
+  }
+  if (secrets) marks.push("{{secret.NAME}}");
+  return marks;
+}
+
 /// The agent step whose outcome a branch on outcome `id` goes by: the nearest one before it.
 export function outcomeSource(steps: Step[], id: string): AgentStep | undefined {
   return agentsBefore(steps, id).at(-1);
@@ -278,6 +360,7 @@ export function withTriggerKind(
         schedule,
         task: task ?? "",
         project: project || (team.projects[0]?.name ?? ""),
+        catch_up: false,
       };
     case "webhook":
       return { kind, task: task?.trim() ? task : null, project: project || null };

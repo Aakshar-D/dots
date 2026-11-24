@@ -106,6 +106,7 @@ describe("the trigger's settings sheet", () => {
       schedule: { rule: { kind: "daily", time: "07:30" }, catch_up: false, until: null },
       task: "Update the dependencies.",
       project: "Site",
+      catch_up: false,
     });
     expect(backend.callsTo("preview_schedule").at(-1)).toMatchObject({ count: 3 });
   });

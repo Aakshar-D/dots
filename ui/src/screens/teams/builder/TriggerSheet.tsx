@@ -8,6 +8,7 @@ import { ConfirmButton } from "@/components/ConfirmButton";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select";
 import {
   Sheet,
@@ -16,6 +17,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { scheduleError, scheduleOf, withKind } from "@/lib/dot-rules";
 import { errorMessage, notifyError } from "@/lib/notify";
@@ -235,8 +237,23 @@ function ScheduleFields(props: {
         label="Project"
         team={props.team}
         value={trigger.project}
+        none="The team's own folder"
         onChange={(project) => onChange({ ...trigger, project })}
       />
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <Switch
+            id="trigger-catch-up"
+            checked={trigger.catch_up}
+            onCheckedChange={(catch_up) => onChange({ ...trigger, catch_up })}
+          />
+          <Label htmlFor="trigger-catch-up">Catch up after Sage was closed</Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          A run missed while Sage was closed or this PC asleep starts once Sage is open again,
+          when it is under a day late. Off, a missed run is skipped.
+        </p>
+      </div>
     </>
   );
 }

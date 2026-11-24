@@ -31,6 +31,11 @@ use crate::workflow::Trigger;
 use crate::workflows::{StartRequest, Workflows};
 use crate::{Error, Result};
 
+/// How late a missed slot of a schedule that catches up still starts its workflow: Dots was
+/// closed or the PC asleep at its time (general workflows spec section 9). Only the newest
+/// missed slot runs, once.
+const CATCH_UP: chrono::TimeDelta = chrono::TimeDelta::hours(24);
+
 /// What a workflow's schedule trigger asks for: its schedule, its task and the name of its
 /// project.
 struct Scheduled<'a> {
@@ -39,6 +44,8 @@ struct Scheduled<'a> {
     schedule: &'a Schedule,
     task: &'a str,
     project: &'a str,
+    /// Whether the newest missed slot starts late (`CATCH_UP`).
+    catch_up: bool,
 }
 
 impl Scheduler {
@@ -63,6 +70,7 @@ impl Scheduler {
                     schedule,
                     task,
                     project,
+                    catch_up,
                 } = &workflow.spec.definition.trigger
                 else {
                     continue;
@@ -77,6 +85,7 @@ impl Scheduler {
                     schedule,
                     task,
                     project,
+                    catch_up: *catch_up,
                 };
                 match self.handle_workflow(workflows, &scheduled, row, now).await {
                     Ok(next) => wake = wake.into_iter().chain(next).min(),
@@ -139,10 +148,11 @@ impl Scheduler {
             row_slot = timestamp(due);
             if limit.is_some_and(|n| fired >= n) {
                 // The count was reached: the status below completes the row.
-            } else if now - due >= ON_TIME {
+            } else if now - due >= ON_TIME && !(s.catch_up && now - due < CATCH_UP) {
                 tracing::info!(
                     workflow = %name, slot = %due,
-                    "missed slot skipped: a workflow schedule never catches up"
+                    "missed slot skipped: the schedule does not catch up, or the slot is over a \
+                     day old"
                 );
             } else if self.store.workflow_has_runs_in_flight(id).await? {
                 tracing::info!(
@@ -212,16 +222,23 @@ impl Scheduler {
 /// among its team's projects, with the trigger's task. `Workflows::start` refuses what it
 /// refuses for any start.
 async fn start(workflows: &Workflows, s: &Scheduled<'_>) -> Result<WorkflowRun> {
-    let Some(project) = crate::teams::project_named(s.team, s.project) else {
-        return Err(Error::NotFound(format!(
-            "the team has no project named \"{}\"",
-            s.project.trim()
-        )));
+    // A blank project: the team's own folder (general workflows spec section 2).
+    let project_id = if s.project.trim().is_empty() {
+        None
+    } else {
+        let Some(project) = crate::teams::project_named(s.team, s.project) else {
+            return Err(Error::NotFound(format!(
+                "the team has no project named \"{}\"",
+                s.project.trim()
+            )));
+        };
+        Some(project.id.clone())
     };
     workflows
         .start(StartRequest {
             workflow_id: s.workflow.id.clone(),
-            project_id: project.id.clone(),
+            inputs: Default::default(),
+            project_id,
             task: s.task.to_string(),
             trigger: WorkflowTrigger::Schedule,
             origin_run_id: None,

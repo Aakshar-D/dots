@@ -493,6 +493,7 @@ async fn run_step(t: &T, member: &Dot) -> WorkflowRun {
         id: "research".into(),
         name: "Research it".into(),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: member.id.clone(),
             job: "Research it.".into(),
@@ -508,6 +509,7 @@ async fn run_step(t: &T, member: &Dot) -> WorkflowRun {
                 &WorkflowSpec {
                     name: "Steps".into(),
                     definition: Definition {
+                        inputs: vec![],
                         trigger: Trigger::Manual,
                         steps: vec![step],
                         budget: Budget::default(),
@@ -525,7 +527,8 @@ async fn run_step(t: &T, member: &Dot) -> WorkflowRun {
     t.rt.workflows()
         .start(dots_core::workflows::StartRequest {
             workflow_id: flow.id,
-            project_id: project,
+            project_id: Some(project),
+            inputs: Default::default(),
             task: "Watch three blogs.".into(),
             trigger: WorkflowTrigger::Manual,
             origin_run_id: None,

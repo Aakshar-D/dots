@@ -2789,8 +2789,9 @@ pub async fn workflow_run_dot_runs(state: State<'_, AppState>, id: String) -> Re
 pub async fn workflow_run_start(
     state: State<'_, AppState>,
     workflow_id: String,
-    project_id: String,
+    project_id: Option<String>,
     task: String,
+    inputs: Option<std::collections::BTreeMap<String, String>>,
     test: bool,
 ) -> Res<WorkflowRun> {
     Ok(state
@@ -2799,6 +2800,7 @@ pub async fn workflow_run_start(
         .start(StartRequest {
             workflow_id,
             project_id,
+            inputs: inputs.unwrap_or_default(),
             task,
             trigger: WorkflowTrigger::Manual,
             origin_run_id: None,
@@ -2837,11 +2839,19 @@ pub async fn workflow_approve(
     note: Option<String>,
     step_run_id: String,
     tips: Vec<CheckTip>,
+    edits: Option<std::collections::BTreeMap<String, String>>,
 ) -> Res<WorkflowRun> {
+    // `edits`: what the person changed in the outputs the check showed.
     Ok(state
         .rt()?
         .workflows()
-        .approve_check(&id, note.as_deref(), &step_run_id, &tips)
+        .approve_check_edited(
+            &id,
+            note.as_deref(),
+            &step_run_id,
+            &tips,
+            &edits.unwrap_or_default(),
+        )
         .await?)
 }
 

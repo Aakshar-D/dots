@@ -2,14 +2,19 @@ import { Plus, X } from "lucide-react";
 import { useState } from "react";
 
 import type {
+  ActionStep,
   AgentStep,
   BranchStep,
   CheckStep,
   DeployStep,
+  HttpMethod,
+  InputField,
   ModelTier,
   Step,
   StepOptions,
   Team,
+  WaitStep,
+  Weekday,
 } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Field } from "@/components/Field";
@@ -33,14 +38,19 @@ import {
   agentsBefore,
   agentsEarlier,
   findStep,
+  marksFor,
   MAX_JOB,
   MAX_NAME,
   MAX_OUTCOME,
+  MAX_OUTPUTS,
+  nameOk,
   NEW_DELEGATE,
   newPathLabel,
   outcomeSource,
   toggled,
+  withAction,
   withMode,
+  withWait,
 } from "./draft";
 import { ChoiceList, FolderWarning, Group, MemberSelect } from "./fields";
 import {
@@ -49,6 +59,7 @@ import {
   MERGE_OPTIONS,
   MODE_OPTIONS,
   MODEL_SIZE_OPTIONS,
+  WEEKDAY_OPTIONS,
   type NameOf,
   ON_OPTIONS,
 } from "./labels";
@@ -58,6 +69,8 @@ import {
 type KindProps<S extends Step> = {
   step: S;
   steps: Step[];
+  /// What a run of the workflow is started with: an action's texts and a wait may name them.
+  inputs: InputField[];
   team: Team;
   nameOf: NameOf;
   onChange: (step: Step) => void;
@@ -72,6 +85,7 @@ const nameIn = (steps: Step[], id: string) => findStep(steps, id)?.name.trim() |
 export function StepSheet(props: {
   step: Step | undefined;
   steps: Step[];
+  inputs: InputField[];
   team: Team;
   nameOf: NameOf;
   onChange: (step: Step) => void;
@@ -112,6 +126,10 @@ function KindFields(props: KindProps<Step>) {
       return <CheckFields {...props} step={step} />;
     case "deploy":
       return <DeployFields {...props} step={step} />;
+    case "action":
+      return <ActionFields {...props} step={step} />;
+    case "wait":
+      return <WaitFields {...props} step={step} />;
     case "branch":
       return <BranchFields {...props} step={step} />;
   }
@@ -167,6 +185,11 @@ function AgentFields({ step, steps, team, nameOf, onChange }: KindProps<AgentSte
       <OutcomeList
         outcomes={step.outcomes}
         onChange={(outcomes) => onChange({ ...step, outcomes })}
+      />
+      <OutputList
+        stepId={step.id}
+        outputs={step.produces}
+        onChange={(produces) => onChange({ ...step, produces })}
       />
       <div className="flex flex-col gap-1.5">
         <div className="flex items-center gap-2">
@@ -362,6 +385,375 @@ function OutcomeList(props: { outcomes: string[]; onChange: (outcomes: string[])
       </div>
       {label !== "" && twice && <p className="text-xs text-destructive">It is listed already.</p>}
     </Group>
+  );
+}
+
+/// The outputs an agent step gives (general workflows spec section 5): each a name, shown as a
+/// later Send or Save step writes it.
+function OutputList(props: {
+  stepId: string;
+  outputs: string[];
+  onChange: (outputs: string[]) => void;
+}) {
+  const [text, setText] = useState("");
+  const name = text.trim();
+  const twice = props.outputs.includes(name);
+  const bad = name !== "" && (!nameOk(name) || name === "summary");
+  const full = props.outputs.length >= MAX_OUTPUTS;
+  function add() {
+    if (name === "" || twice || bad || full) return;
+    props.onChange([...props.outputs, name]);
+    setText("");
+  }
+  return (
+    <Group
+      legend="Outputs"
+      hint="Texts this step gives by name, such as a post or a subject line. Its reply ends with each one in a block, you can change them at a check, and a later Send or Save step uses them as written here."
+    >
+      {props.outputs.length > 0 && (
+        <ul aria-label="Outputs" className="flex flex-wrap gap-1.5">
+          {props.outputs.map((o, i) => (
+            <li
+              key={i}
+              className="flex items-center gap-1 rounded-md border bg-card py-0.5 pr-0.5 pl-2 font-mono text-xs"
+            >
+              {`{{${props.stepId}.${o}}}`}
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label={`Remove the output ${o}`}
+                title="Remove"
+                onClick={() => props.onChange(props.outputs.filter((_, j) => j !== i))}
+              >
+                <X aria-hidden />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex gap-2">
+        <Input
+          aria-label="New output"
+          placeholder="post"
+          maxLength={40}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter") return;
+            e.preventDefault();
+            add();
+          }}
+        />
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={name === "" || twice || bad || full}
+          onClick={add}
+        >
+          <Plus aria-hidden /> Add output
+        </Button>
+      </div>
+      {twice && <p className="text-xs text-destructive">It is listed already.</p>}
+      {bad && (
+        <p className="text-xs text-destructive">
+          Use a-z, 0-9, - and _ (not "summary", which every step has).
+        </p>
+      )}
+    </Group>
+  );
+}
+
+/// What a text of an action may hold, each as it is written.
+function Marks(props: { marks: string[] }) {
+  return (
+    <Group
+      legend="What you can put in"
+      hint="Write any of these where its text should go. Each is filled in when the step runs."
+    >
+      <ul aria-label="What you can put in" className="flex flex-wrap gap-1.5">
+        {props.marks.map((mark) => (
+          <li key={mark} className="rounded-md border bg-card px-2 py-0.5 font-mono text-xs">
+            {mark}
+          </li>
+        ))}
+      </ul>
+    </Group>
+  );
+}
+
+const ACTION_OPTIONS: [ActionStep["action"], string][] = [
+  ["http", "Send a request to a web address"],
+  ["file", "Save a text file"],
+];
+
+const METHODS: HttpMethod[] = ["post", "get", "put", "patch", "delete"];
+
+/// An action (general workflows spec section 6): what Sage itself does, with no model. A
+/// request has its method, address, headers and body; a file its path and content.
+function ActionFields({ step, steps, inputs, onChange }: KindProps<ActionStep>) {
+  return (
+    <>
+      <Field
+        label="It does"
+        htmlFor="step-action"
+        hint="Sage does this itself: no sol runs, so it uses no tokens."
+      >
+        <NativeSelect
+          id="step-action"
+          className="w-full"
+          value={step.action}
+          onChange={(e) => onChange(withAction(step, e.target.value as ActionStep["action"]))}
+        >
+          {ACTION_OPTIONS.map(([value, label]) => (
+            <NativeSelectOption key={value} value={value}>
+              {label}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </Field>
+      {step.action === "http" ? (
+        <>
+          <div className="grid grid-cols-[7rem_1fr] gap-2">
+            <Field label="Method" htmlFor="step-method">
+              <NativeSelect
+                id="step-method"
+                className="w-full"
+                value={step.method}
+                onChange={(e) => onChange({ ...step, method: e.target.value as HttpMethod })}
+              >
+                {METHODS.map((m) => (
+                  <NativeSelectOption key={m} value={m}>
+                    {m.toUpperCase()}
+                  </NativeSelectOption>
+                ))}
+              </NativeSelect>
+            </Field>
+            <Field label="Address" htmlFor="step-url">
+              <Input
+                id="step-url"
+                placeholder="https://example.com/send"
+                value={step.url}
+                onChange={(e) => onChange({ ...step, url: e.target.value })}
+              />
+            </Field>
+          </div>
+          <Group
+            legend="Headers"
+            hint="Sent with the request, such as Authorization. A JSON body needs none: Sage says it is JSON."
+          >
+            {step.headers.map((header, i) => (
+              <div key={i} className="flex gap-2">
+                <Input
+                  aria-label={`Header ${i + 1} name`}
+                  placeholder="Authorization"
+                  value={header.name}
+                  onChange={(e) =>
+                    onChange({
+                      ...step,
+                      headers: step.headers.map((h, j) =>
+                        j === i ? { ...h, name: e.target.value } : h,
+                      ),
+                    })
+                  }
+                />
+                <Input
+                  aria-label={`Header ${i + 1} value`}
+                  placeholder="Bearer {{secret.NAME}}"
+                  value={header.value}
+                  onChange={(e) =>
+                    onChange({
+                      ...step,
+                      headers: step.headers.map((h, j) =>
+                        j === i ? { ...h, value: e.target.value } : h,
+                      ),
+                    })
+                  }
+                />
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Remove header ${i + 1}`}
+                  title="Remove"
+                  onClick={() =>
+                    onChange({ ...step, headers: step.headers.filter((_, j) => j !== i) })
+                  }
+                >
+                  <X aria-hidden />
+                </Button>
+              </div>
+            ))}
+            <div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  onChange({ ...step, headers: [...step.headers, { name: "", value: "" }] })
+                }
+              >
+                <Plus aria-hidden /> Add header
+              </Button>
+            </div>
+          </Group>
+          <Field
+            label="Body"
+            htmlFor="step-body"
+            hint="What is sent. In a JSON body, what you put in is written so the JSON stays whole."
+          >
+            <Textarea
+              id="step-body"
+              rows={6}
+              className="font-mono text-xs"
+              value={step.body}
+              onChange={(e) => onChange({ ...step, body: e.target.value })}
+            />
+          </Field>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="step-unattended"
+                checked={step.unattended}
+                onCheckedChange={(unattended) => onChange({ ...step, unattended })}
+              />
+              <Label htmlFor="step-unattended">Runs without my check</Label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Off, the workflow needs a Check step before this one, so you see what goes out
+              before it is sent. On, it sends with no one looking.
+            </p>
+          </div>
+          <Marks marks={marksFor(steps, step.id, inputs, true)} />
+          <p className="text-xs text-muted-foreground">
+            {"{{secret.NAME}}"} is a variable of yours in Library, read when the step runs and
+            never kept with the run. A Test run sends nothing.
+          </p>
+        </>
+      ) : (
+        <>
+          <Field
+            label="File"
+            htmlFor="step-path"
+            hint="Where it is saved, inside the folder the run works in. A file of that name is replaced."
+          >
+            <Input
+              id="step-path"
+              placeholder="posts/announcement.md"
+              value={step.path}
+              onChange={(e) => onChange({ ...step, path: e.target.value })}
+            />
+          </Field>
+          <Field label="Content" htmlFor="step-content">
+            <Textarea
+              id="step-content"
+              rows={6}
+              value={step.content}
+              onChange={(e) => onChange({ ...step, content: e.target.value })}
+            />
+          </Field>
+          <Marks marks={marksFor(steps, step.id, inputs, false)} />
+        </>
+      )}
+    </>
+  );
+}
+
+const WAIT_OPTIONS: [WaitStep["wait"], string][] = [
+  ["minutes", "For some minutes"],
+  ["time", "Until a time of day"],
+  ["input", "Until a date and time given at the start"],
+];
+
+/// A wait (general workflows spec section 7): how long the workflow waits before its next
+/// step. No sol runs and no minutes are counted meanwhile.
+function WaitFields({ step, inputs, onChange }: KindProps<WaitStep>) {
+  const dated = inputs.filter((f) => f.kind === "date_time");
+  return (
+    <>
+      <Field
+        label="It waits"
+        htmlFor="step-wait"
+        hint="Nothing runs while it waits, and the wait counts no minutes of the budget. Sage must be open for the wait to end; one that ended while it was closed ends when it opens."
+      >
+        <NativeSelect
+          id="step-wait"
+          className="w-full"
+          value={step.wait}
+          onChange={(e) => onChange(withWait(step, e.target.value as WaitStep["wait"], inputs))}
+        >
+          {WAIT_OPTIONS.map(([value, label]) => (
+            <NativeSelectOption key={value} value={value}>
+              {label}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </Field>
+      {step.wait === "minutes" && (
+        <LimitField
+          id="step-minutes"
+          label="Minutes"
+          value={step.minutes}
+          onChange={(minutes) => onChange({ ...step, minutes })}
+        />
+      )}
+      {step.wait === "time" && (
+        <div className="grid grid-cols-2 gap-2">
+          <Field label="Time" htmlFor="step-at" hint="This PC's time.">
+            <Input
+              id="step-at"
+              type="time"
+              value={step.at}
+              onChange={(e) => onChange({ ...step, at: e.target.value })}
+            />
+          </Field>
+          <Field label="Day" htmlFor="step-weekday">
+            <NativeSelect
+              id="step-weekday"
+              className="w-full"
+              value={step.weekday ?? ""}
+              onChange={(e) =>
+                onChange({
+                  ...step,
+                  weekday: e.target.value === "" ? null : (e.target.value as Weekday),
+                })
+              }
+            >
+              <NativeSelectOption value="">The next time it comes</NativeSelectOption>
+              {WEEKDAY_OPTIONS.map(([value, label]) => (
+                <NativeSelectOption key={value} value={value}>
+                  {label}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+        </div>
+      )}
+      {step.wait === "input" &&
+        (dated.length === 0 && step.input === "" ? (
+          <p role="note" className="text-sm text-muted-foreground">
+            Add an input of the kind "A date and time" to the workflow first: the run waits
+            until what it is given there.
+          </p>
+        ) : (
+          <Field label="Input" htmlFor="step-input">
+            <NativeSelect
+              id="step-input"
+              className="w-full"
+              value={step.input}
+              onChange={(e) => onChange({ ...step, input: e.target.value })}
+            >
+              {!dated.some((f) => f.name === step.input) && (
+                <NativeSelectOption value={step.input}>
+                  {step.input === "" ? "Pick an input" : `${step.input} (not a date and time)`}
+                </NativeSelectOption>
+              )}
+              {dated.map((f) => (
+                <NativeSelectOption key={f.name} value={f.name}>
+                  {f.label.trim() || f.name}
+                </NativeSelectOption>
+              ))}
+            </NativeSelect>
+          </Field>
+        ))}
+    </>
   );
 }
 

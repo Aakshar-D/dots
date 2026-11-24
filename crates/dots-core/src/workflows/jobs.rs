@@ -151,7 +151,17 @@ impl Workflows {
         // The members cannot change unread: a member started meanwhile adds a run, and the
         // runs are compared below.
         let members = self.store.step_members(&step_run_id).await?;
-        let built = self.handoff_of(&wr, &members, &runs).await;
+        let step_id = wr
+            .steps
+            .iter()
+            .find(|s| s.id == step_run_id)
+            .map(|s| s.step_id.clone())
+            .unwrap_or_default();
+        let produces = match wr.definition.step(&step_id).map(|s| &s.kind) {
+            Some(crate::workflow::StepKind::Agent { produces, .. }) => produces.clone(),
+            _ => Vec::new(),
+        };
+        let built = self.handoff_of(&wr, &produces, &members, &runs).await;
         let _one = self.lock.lock().await;
         let Some((wr, step_run)) = self.still_open(&wr.id, &step_run_id).await? else {
             return Ok(());
@@ -173,6 +183,20 @@ impl Workflows {
                 step_run.step_id
             )));
         };
+        // A reply without one of the step's outputs leaves the steps after it nothing to use:
+        // the step fails, and the person retries it (general workflows spec section 5).
+        let missing: Vec<&str> = produces
+            .iter()
+            .filter(|name| !built.outputs.contains_key(*name))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            let error = format!(
+                "its reply did not end with a block for: {}",
+                crate::team_tools::quoted(missing.into_iter())
+            );
+            return self.fail_step(&wr, step, &step_run, &error).await;
+        }
         // The step run read under the lock carries the outcome its runs reported.
         let handoff = Handoff {
             outcome: step_run.outcome.clone(),

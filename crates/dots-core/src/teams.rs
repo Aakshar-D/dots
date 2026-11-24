@@ -32,12 +32,17 @@ pub fn project_named<'a>(team: &'a Team, name: &str) -> Option<&'a Project> {
         .find(|p| p.spec.name.trim().eq_ignore_ascii_case(wanted))
 }
 
-/// Refuses a project folder that is not a git repo.
-pub(crate) async fn check_repo(repo_path: &str) -> Result<()> {
+/// The name of the folder Dots keeps for a team's runs that name no project (general
+/// workflows spec section 2), as a run's project is named.
+pub const TEAM_FILES: &str = "Files";
+
+/// Refuses a project folder that is not a folder. It need not be a git repo (general workflows
+/// spec section 2): a run in a plain folder works in the folder itself and hands on no branch.
+pub(crate) async fn check_folder(repo_path: &str) -> Result<()> {
     let path = Path::new(repo_path.trim());
-    if !crate::runtime::is_git_repo(path).await {
+    if !tokio::fs::metadata(path).await.is_ok_and(|m| m.is_dir()) {
         return Err(Error::Invalid(format!(
-            "{} is not a git repository",
+            "{} is not a folder",
             path.display()
         )));
     }
@@ -47,7 +52,7 @@ pub(crate) async fn check_repo(repo_path: &str) -> Result<()> {
 /// Refuses a default branch given with a remote in front, such as `origin/main`: worktrees and
 /// deploys look the name up as a branch and add the remote themselves, so it would name a ref
 /// that does not exist. The remotes are the repo's (`git remote`) and the project's own, which
-/// counts even before the repo has it. Called after `check_repo`.
+/// counts even before the repo has it. Called after `check_folder`.
 async fn check_default_branch(spec: &ProjectSpec) -> Result<()> {
     let Some(branch) = spec.default_branch.as_deref().filter(|b| b.contains('/')) else {
         return Ok(());
@@ -211,7 +216,7 @@ impl Teams {
     pub async fn add_project(&self, team_id: &str, spec: &ProjectSpec) -> Result<Project> {
         self.require_edit_team(team_id).await?;
         spec.validate()?;
-        check_repo(&spec.repo_path).await?;
+        check_folder(&spec.repo_path).await?;
         check_default_branch(spec).await?;
         let project = self.store.add_project(team_id, spec).await?;
         self.team_updated(team_id);
@@ -222,7 +227,7 @@ impl Teams {
         self.require_edit_team(&self.store.get_project(id).await?.team_id)
             .await?;
         spec.validate()?;
-        check_repo(&spec.repo_path).await?;
+        check_folder(&spec.repo_path).await?;
         check_default_branch(spec).await?;
         let project = self.store.update_project(id, spec).await?;
         self.team_updated(&project.team_id);

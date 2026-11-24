@@ -88,10 +88,9 @@ export function TeamWorkflows({ team, workflows }: { team: Team; workflows?: Wor
 }
 
 /// Why "Run now" is off for `workflow` of `team`, or undefined when it may start.
-function cannotRun(workflow: Workflow, team: Team): string | undefined {
+function cannotRun(workflow: Workflow): string | undefined {
   if (workflow.problem !== null) return `It cannot start: ${workflow.problem}`;
   if (!workflow.enabled) return "Turn it on first.";
-  if (team.projects.length === 0) return "Add a project to the team first.";
   return undefined;
 }
 
@@ -112,7 +111,7 @@ function WorkflowRow(props: { workflow: Workflow; team: Team; onRun: () => void 
     },
     onError: notifyError,
   });
-  const blocked = cannotRun(workflow, team);
+  const blocked = cannotRun(workflow);
   const last = workflow.last_run;
   return (
     <ItemRow

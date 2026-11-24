@@ -1865,6 +1865,7 @@ mod tests {
     ) -> WorkflowRun {
         use dots_core::model::{ProjectSpec, WorkflowTrigger};
         WorkflowRun {
+            inputs: Default::default(),
             id: id.into(),
             workflow_id: Some("wf".into()),
             team_id: "t".into(),

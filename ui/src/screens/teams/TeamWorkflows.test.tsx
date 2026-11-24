@@ -102,21 +102,24 @@ describe("the team page's workflows", () => {
                 outcomes: [],
                 delegate: null,
                 options: { model: null, lean: false, reads: null },
+                produces: [],
               },
             ],
             budget: { max_runs: 10, max_tokens: 1_500_000, max_minutes: 120, max_send_backs: 3 },
+            inputs: [],
           },
         },
       },
     ]);
   });
 
-  it("asks for a member before a new workflow, and for a project before a run", async () => {
+  it("asks for a member before a new workflow, and runs one without a project", async () => {
     crewPage({ team: { ...crew, members: [], projects: [] } });
     const section = within(await screen.findByRole("region", { name: "Workflows" }));
     expect(section.getByRole("button", { name: "New workflow" })).toBeDisabled();
+    // A run needs no project: it works in the team's own folder.
     expect(within(row("Fix and ship")).getByRole("button", { name: "Run Fix and ship now" }))
-      .toBeDisabled();
+      .toBeEnabled();
   });
 
   it("runs a workflow with a task on a project, then opens the run's page", async () => {
@@ -134,6 +137,35 @@ describe("the team page's workflows", () => {
     await waitFor(() => expect(visited).toContain("/workflow-runs/01J0WFR"));
     expect(backend.callsTo("workflow_run_start")).toEqual([
       { workflowId: "01J0WFL", projectId: "01J0PRJ2", task: "Fix the tray icon.", test: false },
+    ]);
+  });
+
+  it("asks for the workflow's inputs, and runs in the team's own folder", async () => {
+    backend.on("workflow_run_start", () => waiting);
+    const { user, visited } = crewPage();
+    await screen.findByRole("region", { name: "Workflows" });
+    await user.click(screen.getByRole("button", { name: "Run Announce now" }));
+    const dialog = within(await screen.findByRole("dialog", { name: "Run Announce" }));
+    const start = dialog.getByRole("button", { name: "Start run" });
+    await user.type(dialog.getByLabelText("Task"), "Announce the launch.");
+    // A needed input holds the start back, and says which.
+    expect(start).toBeDisabled();
+    expect(start).toHaveAttribute("title", `Give "Product name" first.`);
+    await user.type(dialog.getByLabelText("Product name"), "Sage");
+    // A default is filled in, and an optional one may stay empty.
+    expect(dialog.getByLabelText("Notes (optional)")).toHaveValue("Keep it short.");
+    expect(dialog.getByLabelText("Publish at (optional)")).toHaveValue("");
+    await user.selectOptions(dialog.getByLabelText("Project"), "The team's own folder");
+    await user.click(start);
+    await waitFor(() => expect(visited).toContain("/workflow-runs/01J0WFR"));
+    expect(backend.callsTo("workflow_run_start")).toEqual([
+      {
+        workflowId: "01J0WFL5",
+        projectId: null,
+        task: "Announce the launch.",
+        test: false,
+        inputs: { product: "Sage", notes: "Keep it short." },
+      },
     ]);
   });
 

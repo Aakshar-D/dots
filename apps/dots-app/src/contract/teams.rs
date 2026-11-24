@@ -8,10 +8,11 @@ use dots_core::events::RuntimeEvent;
 use dots_core::model::*;
 use dots_core::schedule::Schedule;
 use dots_core::workflow::{
-    BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
-    StepOptions, Trigger, WorkflowProblem,
+    Action, BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, Header, HttpMethod,
+    InputField, InputKind, MergeMethod, Step, StepKind, StepOptions, Trigger, Wait,
+    WorkflowProblem,
 };
-use dots_core::workflows::{CheckView, ShownBranch};
+use dots_core::workflows::{CheckView, ShownBranch, ShownOutput};
 use serde_json::{json, Value};
 
 use super::{to, TS};
@@ -118,6 +119,7 @@ fn agent(id: &str, name: &str, member: &str, job: &str) -> Step {
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            produces: vec![],
             options: Default::default(),
             member: member.into(),
             job: job.into(),
@@ -151,6 +153,7 @@ fn deploy(id: &str, mode: DeployMode) -> Step {
 /// the work back to the lead.
 fn chat_definition() -> Definition {
     Definition {
+        inputs: vec![],
         trigger: Trigger::Chat {
             starters: vec![DEV.into()],
         },
@@ -159,6 +162,7 @@ fn chat_definition() -> Definition {
                 id: "build".into(),
                 name: "Build".into(),
                 kind: StepKind::Agent {
+                    produces: vec![],
                     options: Default::default(),
                     member: DEV.into(),
                     job: "Fix the bug and say whether it is fixed.".into(),
@@ -192,6 +196,7 @@ fn chat_definition() -> Definition {
                         id: "design".into(),
                         name: "Design".into(),
                         kind: StepKind::Agent {
+                            produces: vec![],
                             options: StepOptions {
                                 model: Some(ModelTier::Small),
                                 lean: true,
@@ -259,6 +264,7 @@ fn workflows() -> Vec<Workflow> {
             spec: WorkflowSpec {
                 name: "Push it".into(),
                 definition: Definition {
+                    inputs: vec![],
                     trigger: Trigger::Manual,
                     steps: vec![
                         agent("work", "Work", "01J0GONE", "Do the task."),
@@ -280,7 +286,9 @@ fn workflows() -> Vec<Workflow> {
             "01J0WFL3",
             "Nightly",
             Definition {
+                inputs: vec![],
                 trigger: Trigger::Schedule {
+                    catch_up: false,
                     schedule,
                     task: "Update the dependencies.".into(),
                     project: "Sage".into(),
@@ -316,6 +324,7 @@ fn workflows() -> Vec<Workflow> {
                 "01J0WFL4",
                 "On issue",
                 Definition {
+                    inputs: vec![],
                     trigger: Trigger::Webhook {
                         task: Some("Look at the newest issue.".into()),
                         project: None,
@@ -335,6 +344,112 @@ fn workflows() -> Vec<Workflow> {
                 },
             )
         },
+        // A workflow with nothing of git in it (general workflows spec): inputs, an output, a
+        // wait of each kind and an action of each kind.
+        workflow(
+            "01J0WFL5",
+            "Announce",
+            Definition {
+                inputs: vec![
+                    InputField {
+                        name: "product".into(),
+                        label: "Product name".into(),
+                        kind: InputKind::Text,
+                        required: true,
+                        default: None,
+                    },
+                    InputField {
+                        name: "notes".into(),
+                        label: "Notes".into(),
+                        kind: InputKind::LongText,
+                        required: false,
+                        default: Some("Keep it short.".into()),
+                    },
+                    InputField {
+                        name: "publish_at".into(),
+                        label: "Publish at".into(),
+                        kind: InputKind::DateTime,
+                        required: false,
+                        default: None,
+                    },
+                ],
+                trigger: Trigger::Manual,
+                steps: vec![
+                    Step {
+                        id: "draft".into(),
+                        name: "Draft the post".into(),
+                        kind: StepKind::Agent {
+                            produces: vec!["post".into()],
+                            options: StepOptions {
+                                model: Some(ModelTier::Standard),
+                                lean: true,
+                                reads: Some(vec![]),
+                            },
+                            member: DEV.into(),
+                            job: "Write the announcement.".into(),
+                            can_send_back_to: vec![],
+                            outcomes: vec![],
+                            delegate: None,
+                        },
+                    },
+                    check("approve", None),
+                    Step {
+                        id: "hold".into(),
+                        name: "Until it is time".into(),
+                        kind: StepKind::Wait {
+                            wait: Wait::Input {
+                                input: "publish_at".into(),
+                            },
+                        },
+                    },
+                    Step {
+                        id: "nine".into(),
+                        name: "Tuesday at nine".into(),
+                        kind: StepKind::Wait {
+                            wait: Wait::Time {
+                                at: "09:00".into(),
+                                weekday: Some(chrono::Weekday::Tue),
+                            },
+                        },
+                    },
+                    Step {
+                        id: "pause".into(),
+                        name: "A short pause".into(),
+                        kind: StepKind::Wait {
+                            wait: Wait::Minutes { minutes: 5 },
+                        },
+                    },
+                    Step {
+                        id: "send".into(),
+                        name: "Send it".into(),
+                        kind: StepKind::Action {
+                            action: Action::Http {
+                                method: HttpMethod::Post,
+                                url: "https://example.com/hooks/{{secret.HOOK_KEY}}".into(),
+                                headers: vec![Header {
+                                    name: "X-Product".into(),
+                                    value: "{{input.product}}".into(),
+                                }],
+                                body: "{{draft.post}}".into(),
+                            },
+                            unattended: false,
+                        },
+                    },
+                    Step {
+                        id: "save".into(),
+                        name: "Keep a copy".into(),
+                        kind: StepKind::Action {
+                            action: Action::File {
+                                path: "posts/{{input.product}}.md".into(),
+                                content: "{{draft.post}}".into(),
+                            },
+                            unattended: false,
+                        },
+                    },
+                ],
+                budget: Budget::default(),
+            },
+        ),
     ]
 }
 
@@ -370,6 +485,7 @@ fn step_run(id: &str, step_id: &str, status: StepRunStatus) -> StepRun {
 /// member it started handed back.
 fn lead_handoff() -> Handoff {
     Handoff {
+        outputs: Default::default(),
         summary: "Made the icon dark on a light taskbar.".into(),
         branches: vec![
             branch_ref("01J0RUN5", "dots/nightly-tests/01J0RUN5"),
@@ -397,6 +513,7 @@ fn lead_handoff() -> Handoff {
 
 fn workflow_run(id: &str) -> WorkflowRun {
     WorkflowRun {
+        inputs: Default::default(),
         id: id.into(),
         workflow_id: Some("01J0WFL".into()),
         team_id: TEAM.into(),
@@ -600,6 +717,10 @@ fn workflow_runs() -> Vec<WorkflowRun> {
 /// branch that is gone.
 fn check_view() -> CheckView {
     CheckView {
+        outputs: vec![ShownOutput {
+            name: "post".into(),
+            text: "The tray icon now shows on a light taskbar.".into(),
+        }],
         step_id: "review".into(),
         step_run_id: "01J0STP3".into(),
         summary: "Made the icon dark on a light taskbar.".into(),

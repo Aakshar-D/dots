@@ -19,7 +19,10 @@ import {
   findStep,
   insertStep,
   locateStep,
+  marksFor,
   moveStep,
+  nameOk,
+  newInput,
   newPathLabel,
   newStep,
   nextStepId,
@@ -28,8 +31,10 @@ import {
   toggled,
   TOP,
   updateStep,
+  withAction,
   withMode,
   withTriggerKind,
+  withWait,
 } from "./draft";
 
 const [crew] = sample.teams as [Team, Team];
@@ -81,6 +86,7 @@ describe("the builder's draft", () => {
       outcomes: [],
       delegate: null,
       options: { model: null, lean: false, reads: null },
+      produces: [],
     });
     expect(newStep("check", nightlySteps, crew)).toEqual({
       id: "check-1",
@@ -251,6 +257,7 @@ describe("the builder's draft", () => {
       schedule: daily,
       task: "",
       project: "Sage",
+      catch_up: false,
     });
     expect(withTriggerKind(manual, "webhook", crew, daily)).toEqual({
       kind: "webhook",
@@ -276,5 +283,73 @@ describe("the builder's draft", () => {
     expect(toggled(["a"], "b", true)).toEqual(["a", "b"]);
     expect(toggled(["a", "b"], "a", true)).toEqual(["a", "b"]);
     expect(toggled(["a", "b"], "a", false)).toEqual(["b"]);
+  });
+
+  it("gives a new action and a new wait defaults, and changes their kind in place", () => {
+    const action = newStep("action", fixSteps, crew);
+    expect(action).toEqual({
+      id: "action-1",
+      name: "Send it",
+      kind: "action",
+      action: "http",
+      method: "post",
+      url: "https://",
+      headers: [],
+      body: "",
+      unattended: false,
+    });
+    const wait = newStep("wait", fixSteps, crew);
+    expect(wait).toEqual({ id: "wait-1", name: "Wait", kind: "wait", wait: "minutes", minutes: 60 });
+    if (action.kind !== "action" || wait.kind !== "wait") throw new Error("not the kinds made");
+
+    const file = withAction({ ...action, unattended: true }, "file");
+    expect(file).toEqual({
+      id: "action-1",
+      name: "Send it",
+      kind: "action",
+      action: "file",
+      path: "",
+      content: "",
+      unattended: true,
+    });
+    expect(withAction(file, "file")).toBe(file);
+    const inputs = [newInput([]), { ...newInput([]), name: "when", kind: "date_time" as const }];
+    expect(inputs[0]).toEqual({
+      name: "input_1",
+      label: "",
+      kind: "text",
+      required: false,
+      default: null,
+    });
+    expect(newInput(inputs).name).toBe("input_3");
+    // A wait on an input takes the first one that holds a date and time.
+    expect(withWait(wait, "input", inputs)).toMatchObject({ wait: "input", input: "when" });
+    expect(withWait(wait, "input", [])).toMatchObject({ wait: "input", input: "" });
+    expect(withWait(wait, "time", inputs)).toMatchObject({
+      wait: "time",
+      at: "09:00",
+      weekday: null,
+    });
+    expect(withWait(wait, "minutes", inputs)).toBe(wait);
+    expect(Step.safeParse(file).success).toBe(true);
+    expect(Step.safeParse(withWait(wait, "time", inputs)).success).toBe(true);
+
+    expect([nameOk("post"), nameOk("post_2-a"), nameOk("The Post"), nameOk("")]).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    // What an action at the end may hold: the agent steps before it give no outputs, so only
+    // their summaries.
+    const after = insertStep(fixSteps, TOP, fixSteps.length, action);
+    expect(marksFor(after, "action-1", inputs, true)).toEqual([
+      "{{task}}",
+      "{{input.input_1}}",
+      "{{input.when}}",
+      "{{build.summary}}",
+      "{{design.summary}}",
+      "{{secret.NAME}}",
+    ]);
   });
 });

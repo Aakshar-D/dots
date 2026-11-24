@@ -93,6 +93,29 @@ describe("the check's actions", () => {
     ]);
   });
 
+  it("show the outputs the next steps use, and approve with what was changed", async () => {
+    backend.on("workflow_approve", () => ({ ...done, id: waiting.id }));
+    const { user } = show(waiting);
+    const outputs = within(await screen.findByRole("group", { name: "What the next steps use" }));
+    const post = outputs.getByRole("textbox", { name: "post" });
+    expect(post).toHaveValue("The tray icon now shows on a light taskbar.");
+    await user.clear(post);
+    await user.type(post, "The tray icon shows everywhere.");
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+    expect(backend.callsTo("workflow_approve")).toEqual([
+      {
+        id: "01J0WFR",
+        note: null,
+        stepRunId: STEP_RUN,
+        tips: [
+          { branch: LEAD, commit: TIP },
+          { branch: MEMBER, commit: null },
+        ],
+        edits: { post: "The tray icon shows everywhere." },
+      },
+    ]);
+  });
+
   it("name the check on screen by its step run, and wait while the check is read again", async () => {
     backend.on("workflow_approve", () => ({ ...done, id: waiting.id }));
     const { user, queryClient } = show(waiting);
