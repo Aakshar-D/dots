@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 
@@ -12,7 +13,8 @@ import { notifyError } from "@/lib/notify";
 import { invalidate, keys } from "@/lib/query";
 import { ItemRow, plural } from "@/screens/library/parts";
 
-import { newWorkflowSpec, TRIGGER_LABEL, uniqueName } from "./format";
+import { TRIGGER_LABEL, uniqueName } from "./format";
+import { NewWorkflowDialog } from "./NewWorkflowDialog";
 import { TeamSection } from "./parts";
 import { RunNowDialog } from "./RunNowDialog";
 import { TestBadge, WorkflowRunBadge } from "./WorkflowRunBadge";
@@ -29,12 +31,18 @@ export function TeamWorkflows({ team, workflows }: { team: Team; workflows?: Wor
   const navigate = useNavigate();
   const [running, setRunning] = useState<Workflow | null>(null);
   const first = team.members[0];
-  const create = useMutation({
-    mutationFn: (member: string) => {
-      const name = uniqueName("New workflow", (workflows ?? []).map((w) => w.name));
-      return commands.workflowCreate(team.id, newWorkflowSpec(name, member));
+  const [creating, setCreating] = useState(false);
+  // A workflow from a file someone handed over: it comes in turned off, for the builder.
+  const bringIn = useMutation({
+    mutationFn: async () => {
+      const picked = await open({
+        title: "Choose a workflow's file",
+        filters: [{ name: "Sage workflow", extensions: ["json"] }],
+      });
+      return typeof picked === "string" ? commands.workflowImport(team.id, picked) : null;
     },
     onSuccess: (workflow) => {
+      if (!workflow) return;
       invalidate(qc, keys.workflows(team.id));
       navigate(builderPath(team.id, workflow.id));
     },
@@ -45,17 +53,28 @@ export function TeamWorkflows({ team, workflows }: { team: Team; workflows?: Wor
       id="team-workflows"
       title="Workflows"
       actions={
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={first === undefined || workflows === undefined || create.isPending}
-          title={
-            first === undefined ? "Add a member first: a workflow's steps need one." : undefined
-          }
-          onClick={() => first && create.mutate(first.dot_id)}
-        >
-          <Plus aria-hidden /> New workflow
-        </Button>
+        <>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={workflows === undefined || bringIn.isPending}
+            title="Bring in a workflow from a file someone gave you"
+            onClick={() => bringIn.mutate()}
+          >
+            Import
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={first === undefined || workflows === undefined}
+            title={
+              first === undefined ? "Add a member first: a workflow's steps need one." : undefined
+            }
+            onClick={() => setCreating(true)}
+          >
+            <Plus aria-hidden /> New workflow
+          </Button>
+        </>
       }
     >
       {workflows?.length === 0 && (
@@ -71,10 +90,18 @@ export function TeamWorkflows({ team, workflows }: { team: Team; workflows?: Wor
               key={workflow.id}
               workflow={workflow}
               team={team}
+              names={workflows!.map((w) => w.name)}
               onRun={() => setRunning(workflow)}
             />
           ))}
         </ul>
+      )}
+      {creating && (
+        <NewWorkflowDialog
+          team={team}
+          workflows={workflows ?? []}
+          onClose={() => setCreating(false)}
+        />
       )}
       {running && (
         <RunNowDialog
@@ -94,7 +121,13 @@ function cannotRun(workflow: Workflow): string | undefined {
   return undefined;
 }
 
-function WorkflowRow(props: { workflow: Workflow; team: Team; onRun: () => void }) {
+function WorkflowRow(props: {
+  workflow: Workflow;
+  team: Team;
+  /// The names of the team's workflows: a copy takes one that is free.
+  names: string[];
+  onRun: () => void;
+}) {
   const { workflow, team } = props;
   const qc = useQueryClient();
   const name = workflow.name;
@@ -113,6 +146,29 @@ function WorkflowRow(props: { workflow: Workflow; team: Team; onRun: () => void 
   });
   const blocked = cannotRun(workflow);
   const last = workflow.last_run;
+  // A copy to change without touching this one: turned off, with a name of its own.
+  const copy = useMutation({
+    mutationFn: () =>
+      commands.workflowCreateDraft(team.id, {
+        name: uniqueName(`${workflow.name} copy`, props.names),
+        definition: workflow.definition,
+        enabled: false,
+      }),
+    onSuccess: () => invalidate(qc, keys.workflows(team.id)),
+    onError: notifyError,
+  });
+  // A file to hand to someone else: its members go by name, since ids mean nothing elsewhere.
+  const sendOut = useMutation({
+    mutationFn: async () => {
+      const picked = await save({
+        title: `Save ${name} as a file`,
+        defaultPath: `${name}.sage-workflow.json`,
+        filters: [{ name: "Sage workflow", extensions: ["json"] }],
+      });
+      if (typeof picked === "string") await commands.workflowExport(workflow.id, picked);
+    },
+    onError: notifyError,
+  });
   return (
     <ItemRow
       label={name}
@@ -127,6 +183,24 @@ function WorkflowRow(props: { workflow: Workflow; team: Team; onRun: () => void 
             />
             On
           </label>
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={`Make a copy of ${name}`}
+            disabled={copy.isPending}
+            onClick={() => copy.mutate()}
+          >
+            Copy
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            aria-label={`Save ${name} as a file`}
+            disabled={sendOut.isPending}
+            onClick={() => sendOut.mutate()}
+          >
+            Export
+          </Button>
           <Button
             size="sm"
             variant="outline"

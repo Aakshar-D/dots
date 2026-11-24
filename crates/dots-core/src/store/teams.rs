@@ -410,9 +410,49 @@ impl Store {
     /// Creates a workflow of the team, validated against its members, its schedule prepared
     /// (`prepared`).
     pub async fn create_workflow(&self, team_id: &str, spec: &WorkflowSpec) -> Result<Workflow> {
+        self.store_workflow(team_id, spec, true).await
+    }
+
+    /// Stores a workflow that may still break a rule of its definition (plain workflows spec
+    /// section 4): one drafted, started from a template or brought in from a file, for the
+    /// person to finish in the builder. It is stored turned off, whatever `spec` says, shows
+    /// its `problem`, and cannot start or be turned on until a save takes it. Its name is
+    /// checked as any workflow's.
+    pub async fn create_workflow_draft(
+        &self,
+        team_id: &str,
+        spec: &WorkflowSpec,
+    ) -> Result<Workflow> {
+        let mut off = spec.clone();
+        off.enabled = false;
+        self.store_workflow(team_id, &off, false).await
+    }
+
+    /// Stores a new workflow of the team: `checked`, only one that breaks no rule.
+    async fn store_workflow(
+        &self,
+        team_id: &str,
+        spec: &WorkflowSpec,
+        checked: bool,
+    ) -> Result<Workflow> {
         self.get_team(team_id).await?;
-        spec.validate(&self.team_member_ids(team_id).await?)?;
-        let spec = &prepared(spec, None)?;
+        let problem = spec.problem(&self.team_member_ids(team_id).await?);
+        if let Some(problem) = problem {
+            // A draft's steps may still be wrong; its name may not.
+            let named = spec
+                .definition
+                .problem(&self.team_member_ids(team_id).await?);
+            if checked || named.as_ref() != Some(&problem) {
+                return Err(Error::Invalid(problem.message));
+            }
+        }
+        // A draft's schedule may be one that never runs: it is kept as written.
+        let prepared = match prepared(spec, None) {
+            Ok(prepared) => prepared,
+            Err(_) if !checked => spec.clone(),
+            Err(e) => return Err(e),
+        };
+        let spec = &prepared;
         let id = new_id();
         let ts = now();
         sqlx::query(

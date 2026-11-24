@@ -2716,6 +2716,66 @@ pub async fn workflow_create(
     Ok(state.rt()?.teams().create_workflow(&team_id, &spec).await?)
 }
 
+/// Makes a workflow for the person to finish in the builder: turned off, and kept even while
+/// its steps break a rule (one drafted, or started from a template).
+#[tauri::command]
+pub async fn workflow_create_draft(
+    state: State<'_, AppState>,
+    team_id: String,
+    spec: WorkflowSpec,
+) -> Res<Workflow> {
+    Ok(state
+        .rt()?
+        .teams()
+        .create_workflow_draft(&team_id, &spec)
+        .await?)
+}
+
+/// Drafts the workflow `description` asks for, for the team. Nothing is saved.
+#[tauri::command]
+pub async fn workflow_draft(
+    state: State<'_, AppState>,
+    dialog: String,
+    team_id: String,
+    description: String,
+) -> Res<dots_core::workflow_draft::WorkflowDraft> {
+    Ok(state
+        .rt()?
+        .workflow_draft(&dialog, &team_id, &description)
+        .await?)
+}
+
+/// Ends the dialog's workflow draft, if one is being written; its `workflow_draft` then fails.
+#[tauri::command]
+pub fn workflow_draft_cancel(state: State<'_, AppState>, dialog: String) -> Res<()> {
+    state.rt()?.workflow_draft_cancel(&dialog);
+    Ok(())
+}
+
+/// Writes the workflow to the file `path`, which the person picked.
+#[tauri::command]
+pub async fn workflow_export(state: State<'_, AppState>, id: String, path: String) -> Res<()> {
+    Ok(state
+        .rt()?
+        .teams()
+        .export_workflow(&id, std::path::Path::new(&path))
+        .await?)
+}
+
+/// Brings the workflow in the file `path`, which the person picked, into the team as a draft.
+#[tauri::command]
+pub async fn workflow_import(
+    state: State<'_, AppState>,
+    team_id: String,
+    path: String,
+) -> Res<Workflow> {
+    Ok(state
+        .rt()?
+        .teams()
+        .import_workflow(&team_id, std::path::Path::new(&path))
+        .await?)
+}
+
 /// Saves the builder's draft; runs in flight keep the definition they started with.
 #[tauri::command]
 pub async fn workflow_update(

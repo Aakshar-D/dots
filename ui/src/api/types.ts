@@ -1819,6 +1819,14 @@ export const WorkflowSpec = z.strictObject({
   enabled: z.boolean(),
 });
 export type WorkflowSpec = z.infer<typeof WorkflowSpec>;
+// A workflow Sage drafted from a description (plain workflows spec section 2): its name, its
+// definition, and what the person still has to do before it can run.
+export const WorkflowDraft = z.strictObject({
+  name: z.string(),
+  definition: Definition,
+  notes: z.array(z.string()),
+});
+export type WorkflowDraft = z.infer<typeof WorkflowDraft>;
 // A workflow's newest run, for the team page.
 export const LastRun = z.strictObject({
   id: z.string(),

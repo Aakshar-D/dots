@@ -800,6 +800,18 @@ export const commands = {
     call(T.WorkflowProblem.nullable(), "workflow_check_spec", { teamId, spec }),
   /// Rejects with kind `conflict` while the local server is not running.
   workflowWebhookUrl: (id: string) => call(text, "workflow_webhook_url", { id }),
+  /// Makes a workflow for the person to finish in the builder: turned off, and kept even
+  /// while its steps break a rule.
+  workflowCreateDraft: (teamId: string, spec: T.WorkflowSpec) =>
+    call(T.Workflow, "workflow_create_draft", { teamId, spec }),
+  /// Drafts the workflow `description` asks for. Nothing is saved.
+  workflowDraft: (dialog: string, teamId: string, description: string) =>
+    call(T.WorkflowDraft, "workflow_draft", { dialog, teamId, description }),
+  workflowDraftCancel: (dialog: string) => call(nothing, "workflow_draft_cancel", { dialog }),
+  /// Writes the workflow to the file `path`; brings the one in `path` into the team as a draft.
+  workflowExport: (id: string, path: string) => call(nothing, "workflow_export", { id, path }),
+  workflowImport: (teamId: string, path: string) =>
+    call(T.Workflow, "workflow_import", { teamId, path }),
   /// The chats the Telegram bot whose token the variable `token` holds heard from lately.
   telegramChats: (token: string) => call(T.SeenChat.array(), "telegram_chats", { token }),
   /// A new token, shown this once; the old one stops working.

@@ -113,6 +113,8 @@ export const sample = {
   workflowRuns: T.WorkflowRun.array().parse(contract.WorkflowRun),
   /// What the first run's check shows: the lead's branch at its tip, and a member's that is gone.
   check: T.CheckView.parse(contract.CheckView),
+  /// A workflow Sage drafted from a description, with what is left to do.
+  workflowDraft: T.WorkflowDraft.parse(contract.WorkflowDraft),
   /// The chats a Telegram bot heard from lately.
   seenChats: T.SeenChat.array().parse(contract.SeenChat),
   /// The first run's dot runs, oldest first: the lead's, its two members' (one handed back a

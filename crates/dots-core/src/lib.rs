@@ -66,6 +66,7 @@ pub mod util;
 pub mod vault;
 pub mod watchers;
 pub mod workflow;
+pub mod workflow_draft;
 pub mod workflows;
 pub mod workspace;
 

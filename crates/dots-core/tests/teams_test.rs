@@ -5,7 +5,9 @@ use dots_core::events::{new_bus, RuntimeEvent};
 use dots_core::model::{MemberSpec, ProjectSpec, TeamSpec, WorkflowSpec};
 use dots_core::store::Store;
 use dots_core::teams::Teams;
-use dots_core::workflow::{Budget, Definition, Step, StepKind, Trigger, WorkflowProblem};
+use dots_core::workflow::{
+    Budget, Definition, DeployMode, Step, StepKind, Trigger, WorkflowProblem,
+};
 use dots_core::Error;
 
 async fn dot(store: &Store, name: &str) -> String {
@@ -684,4 +686,109 @@ async fn a_change_of_members_announces_each_workflow_of_the_team() {
         announced(&mut events, &names),
         ["workflow Fix", "workflow Ship", "team"]
     );
+}
+
+/// `flow`, with a deploy no check comes before: a definition a save refuses.
+fn unfinished(name: &str, member: &str) -> WorkflowSpec {
+    let mut spec = flow(name, member);
+    spec.definition.steps.push(Step {
+        id: "ship".into(),
+        name: "Ship".into(),
+        kind: StepKind::Deploy {
+            mode: DeployMode::Push,
+        },
+    });
+    spec
+}
+
+#[tokio::test]
+async fn a_draft_is_kept_turned_off_with_its_problem_until_a_save_takes_it() {
+    let (_dir, store) = temp_store().await;
+    let dev = dot(&store, "dev").await;
+    let teams = Teams::new(store.clone(), new_bus());
+    let t = teams.create(&team("T", &[&dev])).await.unwrap();
+    let spec = unfinished("Ship it", &dev);
+    // A workflow made the usual way must break no rule.
+    assert!(matches!(
+        teams.create_workflow(&t.id, &spec).await,
+        Err(Error::Invalid(m)) if m.contains("a deploy needs a check before it")
+    ));
+    // A draft is kept, off whatever it asked for, and says what is wrong with it.
+    let draft = teams.create_workflow_draft(&t.id, &spec).await.unwrap();
+    assert!(!draft.spec.enabled);
+    assert!(draft
+        .problem
+        .as_deref()
+        .is_some_and(|p| p.contains("a deploy needs a check before it")));
+    // It cannot be turned on as it is: a save still refuses it.
+    let mut on = draft.spec.clone();
+    on.enabled = true;
+    assert!(teams.update_workflow(&draft.id, &on).await.is_err());
+    // A draft's name is checked as any workflow's, and stays unique.
+    assert!(teams
+        .create_workflow_draft(&t.id, &unfinished("  ", &dev))
+        .await
+        .is_err());
+    assert!(matches!(
+        teams.create_workflow_draft(&t.id, &spec).await,
+        Err(Error::Conflict(_))
+    ));
+    // A draft that breaks no rule is an ordinary workflow, turned off.
+    let fine = teams
+        .create_workflow_draft(&t.id, &flow("Fine", &dev))
+        .await
+        .unwrap();
+    assert_eq!((fine.spec.enabled, fine.problem), (false, None));
+}
+
+#[tokio::test]
+async fn a_workflow_goes_to_a_file_and_comes_into_another_team_by_its_members_names() {
+    let (dir, store) = temp_store().await;
+    let dev = dot(&store, "dev").await;
+    let writer = dot(&store, "writer").await;
+    let teams = Teams::new(store.clone(), new_bus());
+    let home = teams.create(&team("Home", &[&dev])).await.unwrap();
+    let made = teams
+        .create_workflow(&home.id, &flow("Fix", &dev))
+        .await
+        .unwrap();
+    let file = dir.path().join("fix.sage-workflow.json");
+    teams.export_workflow(&made.id, &file).await.unwrap();
+    // The file names the member by its sol's name, not by an id of this PC.
+    let written: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(written["sage_workflow"], 1);
+    assert_eq!(written["name"], "Fix");
+    assert_eq!(written["definition"]["steps"][0]["member"], "dev");
+
+    // Into the team it came from: the member is found, it is off, and its name is made free.
+    let back = teams.import_workflow(&home.id, &file).await.unwrap();
+    assert_eq!(back.spec.name, "Fix 2");
+    assert!(!back.spec.enabled);
+    assert_eq!(back.problem, None);
+    assert_eq!(back.spec.definition, made.spec.definition);
+
+    // Into a team without that member: kept as a draft whose problem names who is missing.
+    let other = teams.create(&team("Other", &[&writer])).await.unwrap();
+    let foreign = teams.import_workflow(&other.id, &file).await.unwrap();
+    assert_eq!(foreign.spec.name, "Fix");
+    assert!(foreign
+        .problem
+        .as_deref()
+        .is_some_and(|p| p.contains("dev is not a member of the team")));
+
+    // A file that is no workflow, and one of another version, are refused.
+    let junk = dir.path().join("junk.json");
+    for text in [
+        "not json",
+        "[1]",
+        "{}",
+        r#"{"sage_workflow": 2, "definition": {}}"#,
+    ] {
+        std::fs::write(&junk, text).unwrap();
+        assert!(matches!(
+            teams.import_workflow(&other.id, &junk).await,
+            Err(Error::Invalid(m)) if m == "That file is not a Sage workflow."
+        ));
+    }
 }

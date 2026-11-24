@@ -49,6 +49,40 @@ pub(crate) async fn check_folder(repo_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// The version a workflow's file says it is (`Teams::export_workflow`).
+pub const EXPORT_VERSION: u64 = 1;
+/// The largest file `Teams::import_workflow` reads.
+const MAX_EXPORT_BYTES: u64 = 1024 * 1024;
+
+/// Renames the members a definition's JSON names, wherever it names one: a step's `member`,
+/// a chat trigger's `starters`, and a delegate's `may_start`. `to` gives the new name of each.
+fn rename_members(value: &mut serde_json::Value, to: &dyn Fn(&str) -> String) {
+    use serde_json::Value;
+    match value {
+        Value::Object(object) => {
+            for (key, inner) in object.iter_mut() {
+                match (key.as_str(), inner) {
+                    ("member", Value::String(name)) => *name = to(name),
+                    ("starters" | "may_start", Value::Array(names)) => {
+                        for name in names.iter_mut() {
+                            if let Value::String(name) = name {
+                                *name = to(name);
+                            }
+                        }
+                    }
+                    (_, inner) => rename_members(inner, to),
+                }
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                rename_members(item, to);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Refuses a default branch given with a remote in front, such as `origin/main`: worktrees and
 /// deploys look the name up as a branch and add the remote themselves, so it would name a ref
 /// that does not exist. The remotes are the repo's (`git remote`) and the project's own, which
@@ -256,6 +290,101 @@ impl Teams {
         let workflow = self.store.create_workflow(team_id, spec).await?;
         self.workflow_updated(team_id, &workflow.id);
         Ok(workflow)
+    }
+
+    /// Makes a workflow for the person to finish in the builder (`Store::create_workflow_draft`):
+    /// turned off, and kept even while its steps break a rule.
+    pub async fn create_workflow_draft(
+        &self,
+        team_id: &str,
+        spec: &WorkflowSpec,
+    ) -> Result<Workflow> {
+        self.require_edit_team(team_id).await?;
+        let workflow = self.store.create_workflow_draft(team_id, spec).await?;
+        self.workflow_updated(team_id, &workflow.id);
+        Ok(workflow)
+    }
+
+    /// Writes the workflow `id` to the file `path` (plain workflows spec section 5), to hand to
+    /// someone else or keep: its name and definition as JSON, with each member named by its
+    /// sol's name, since ids mean nothing on another PC. A file of that path is replaced.
+    pub async fn export_workflow(&self, id: &str, path: &Path) -> Result<()> {
+        let workflow = self.store.get_workflow(id).await?;
+        let team = self.store.get_team(&workflow.team_id).await?;
+        let mut definition = serde_json::to_value(&workflow.spec.definition)?;
+        rename_members(&mut definition, &|id| {
+            team.members
+                .iter()
+                .find(|m| m.dot_id == id)
+                .map_or_else(|| id.to_string(), |m| m.dot_name.clone())
+        });
+        let file = serde_json::json!({
+            "sage_workflow": EXPORT_VERSION,
+            "name": workflow.spec.name,
+            "definition": definition,
+        });
+        tokio::fs::write(path, serde_json::to_string_pretty(&file)? + "\n").await?;
+        Ok(())
+    }
+
+    /// Brings the workflow in the file `path` into the team `team_id`, as a draft: turned off,
+    /// with each member found by its sol's name among the team's, without case. A member the
+    /// team does not have stays as the file names it, which the builder shows as the workflow's
+    /// problem. A name the team already has gets a number.
+    pub async fn import_workflow(&self, team_id: &str, path: &Path) -> Result<Workflow> {
+        self.require_edit_team(team_id).await?;
+        let not_one = || Error::Invalid("That file is not a Sage workflow.".to_string());
+        let size = tokio::fs::metadata(path).await?.len();
+        if size > MAX_EXPORT_BYTES {
+            return Err(not_one());
+        }
+        let text = tokio::fs::read_to_string(path).await?;
+        let Ok(serde_json::Value::Object(mut file)) = serde_json::from_str(&text) else {
+            return Err(not_one());
+        };
+        if file
+            .get("sage_workflow")
+            .and_then(serde_json::Value::as_u64)
+            != Some(EXPORT_VERSION)
+        {
+            return Err(not_one());
+        }
+        let team = self.store.get_team(team_id).await?;
+        let mut definition = file.remove("definition").ok_or_else(not_one)?;
+        rename_members(&mut definition, &|name| {
+            team.members
+                .iter()
+                .find(|m| m.dot_name.trim().eq_ignore_ascii_case(name.trim()))
+                .map_or_else(|| name.to_string(), |m| m.dot_id.clone())
+        });
+        let definition = serde_json::from_value(definition).map_err(|_| not_one())?;
+        let wanted = file
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .unwrap_or("Imported workflow")
+            .to_string();
+        // A name the team has already gets the first number that is free.
+        let taken: Vec<String> = self
+            .store
+            .list_workflows(team_id)
+            .await?
+            .into_iter()
+            .map(|w| w.spec.name.trim().to_lowercase())
+            .collect();
+        let mut name = wanted.clone();
+        let mut n = 2;
+        while taken.contains(&name.to_lowercase()) {
+            name = format!("{wanted} {n}");
+            n += 1;
+        }
+        let spec = WorkflowSpec {
+            name,
+            definition,
+            enabled: false,
+        };
+        self.create_workflow_draft(team_id, &spec).await
     }
 
     /// What saving `spec` as a workflow of the team `team_id` would be refused with, and the
