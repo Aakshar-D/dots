@@ -1297,6 +1297,7 @@
     "workflow_check_spec",
     "workflow_webhook_url",
     "telegram_chats",
+    "workflows_standing",
     "regenerate_workflow_token",
     "workflow_runs_list",
     "workflow_runs_for_origins",
@@ -14481,6 +14482,7 @@
     "hold_enabled": true,
     "hold_share_five_hour": 60,
     "hold_share_weekly": 70,
+    "keep_awake": false,
     "local_endpoints": [
       "http://127.0.0.1:1234"
     ],
@@ -14536,6 +14538,7 @@
       "hold_enabled": true,
       "hold_share_five_hour": 60,
       "hold_share_weekly": 70,
+      "keep_awake": false,
       "local_endpoints": [
         "http://127.0.0.1:1234"
       ],
@@ -15118,6 +15121,12 @@
     "id": "01J0ATT",
     "name": "report.pdf",
     "size": 2458
+  },
+  "Standing": {
+    "listeners": 1,
+    "next_wait": "2026-10-09T12:00:00.000Z",
+    "schedules": 1,
+    "waits": 2
   },
   "StartupError": {
     "backup": "C:/Users/u/AppData/Local/dots/backups/dots-0.1.0-2026-10-20-091700.db",

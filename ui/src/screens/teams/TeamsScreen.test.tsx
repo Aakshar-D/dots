@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { Team } from "@/api/types";
@@ -114,5 +114,34 @@ describe("the Teams screen", () => {
       'a team named "crew" exists',
     );
     expect(within(dialog).getByRole("button", { name: "Create team" })).toBeEnabled();
+  });
+
+  it("says what needs Sage open, and whether it will be", async () => {
+    backend.on("teams_list", () => [crew]);
+    renderApp("/teams");
+    // Nothing needs it: no note.
+    await screen.findByRole("link", { name: crew.name });
+    expect(screen.queryByRole("region", { name: "What needs Sage open" })).toBeNull();
+  });
+
+  it("lists the schedules, listeners and waits that need Sage open", async () => {
+    backend.on("teams_list", () => [crew]);
+    backend.on("workflows_standing", () => sample.standing);
+    backend.on("get_settings", () => ({ ...sample.settings, autostart: false, keep_awake: true }));
+    renderApp("/teams");
+    const note = await screen.findByRole("region", { name: "What needs Sage open" });
+    expect(note).toHaveTextContent(
+      "1 workflow on a schedule, 1 workflow listening for messages, 2 runs waiting for a time.",
+    );
+    expect(note).toHaveTextContent("The next wait ends");
+    await waitFor(() =>
+      expect(note).toHaveTextContent(
+        "Sage does not start when you sign in, so they wait until you open it. This PC is kept awake for them.",
+      ),
+    );
+    expect(within(note).getByRole("link", { name: "Change in Settings" })).toHaveAttribute(
+      "href",
+      "/settings",
+    );
   });
 });

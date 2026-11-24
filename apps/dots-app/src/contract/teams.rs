@@ -848,6 +848,12 @@ pub(super) fn teams_samples(samples: &mut Value) {
     let runs = workflow_runs();
     samples["WorkflowRun"] = to(&runs);
     samples["CheckView"] = to(check_view());
+    samples["Standing"] = to(dots_core::workflows::Standing {
+        schedules: 1,
+        listeners: 1,
+        waits: 2,
+        next_wait: Some(TS.into()),
+    });
     samples["WorkflowDraft"] = to(dots_core::workflow_draft::WorkflowDraft {
         name: "Answer clients".into(),
         definition: workflows

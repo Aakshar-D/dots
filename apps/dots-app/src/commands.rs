@@ -2808,6 +2808,13 @@ pub async fn workflow_webhook_url(state: State<'_, AppState>, id: String) -> Res
     Ok(state.rt()?.workflow_webhook_url(&id).await?)
 }
 
+/// What needs Sage open now: the workflows that start on a schedule or a Telegram message,
+/// and the runs that wait for a time.
+#[tauri::command]
+pub async fn workflows_standing(state: State<'_, AppState>) -> Res<dots_core::workflows::Standing> {
+    Ok(state.rt()?.workflows().standing().await?)
+}
+
 /// The chats the Telegram bot whose token the Personal variable `token` holds has heard from
 /// lately, newest first: what a Telegram trigger's settings offer to listen to.
 #[tauri::command]

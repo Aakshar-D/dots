@@ -48,6 +48,7 @@ async fn an_empty_table_gives_the_defaults() {
 async fn settings_round_trip() {
     let (_dir, store) = temp_store().await;
     let s = Settings {
+        keep_awake: true,
         port: 50000,
         max_concurrent_runs: 4,
         claude_path: Some("C:/tools/claude.exe".into()),

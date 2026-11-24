@@ -70,6 +70,9 @@ pub struct Settings {
     pub tested_claude_version: String,
     pub local_endpoints: Vec<String>,
     pub autostart: bool,
+    /// Keep this PC from sleeping on its own while a workflow needs Sage (always-on workflows
+    /// spec section 3). Off by default: it costs power.
+    pub keep_awake: bool,
     pub schedules_paused: bool,
     /// The text every dot's first prompt starts with, unless the dot switches it off.
     pub global_instructions: String,
@@ -164,6 +167,7 @@ impl Default for Settings {
             tested_claude_version: TESTED_CLAUDE_VERSION.to_string(),
             local_endpoints: Vec::new(),
             autostart: true,
+            keep_awake: false,
             schedules_paused: false,
             global_instructions: String::new(),
             notify_on_notes: true,

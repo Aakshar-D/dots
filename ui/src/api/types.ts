@@ -1163,6 +1163,8 @@ export const Settings = z.strictObject({
   tested_claude_version: z.string(),
   local_endpoints: z.array(z.string()),
   autostart: z.boolean(),
+  // Keep this PC from sleeping on its own while a workflow needs Sage.
+  keep_awake: z.boolean(),
   schedules_paused: z.boolean(),
   global_instructions: z.string(),
   // A dot's note notifies; a question always does.
@@ -1648,6 +1650,15 @@ export const Trigger = z.discriminatedUnion("kind", [
   }),
 ]);
 export type Trigger = z.infer<typeof Trigger>;
+// What needs Sage open (always-on workflows spec section 2): workflows that start on a
+// schedule or a Telegram message, and runs that wait for a time.
+export const Standing = z.strictObject({
+  schedules: z.number().int(),
+  listeners: z.number().int(),
+  waits: z.number().int(),
+  next_wait: nullable(z.string()),
+});
+export type Standing = z.infer<typeof Standing>;
 // A chat a Telegram bot heard from lately, for a trigger's settings to offer.
 export const SeenChat = z.strictObject({ id: z.string(), name: z.string() });
 export type SeenChat = z.infer<typeof SeenChat>;

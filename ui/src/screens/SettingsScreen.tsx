@@ -388,6 +388,23 @@ function Form({
             />
             <Label htmlFor="settings-autostart">Start Sage when I sign in</Label>
           </div>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <Switch
+                id="settings-keep-awake"
+                checked={draft.keep_awake}
+                onCheckedChange={(keep_awake) => set({ keep_awake })}
+              />
+              <Label htmlFor="settings-keep-awake">
+                Keep this PC awake while a workflow needs Sage
+              </Label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              While a workflow is on a schedule, listens for messages or waits for a time, this
+              PC does not go to sleep on its own. It still sleeps when you tell it to or close
+              the lid. It uses more power.
+            </p>
+          </div>
           <div className="flex items-center gap-2">
             <Switch
               id="settings-notify-notes"

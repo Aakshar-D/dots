@@ -812,6 +812,8 @@ export const commands = {
   workflowExport: (id: string, path: string) => call(nothing, "workflow_export", { id, path }),
   workflowImport: (teamId: string, path: string) =>
     call(T.Workflow, "workflow_import", { teamId, path }),
+  /// What needs Sage open now.
+  workflowsStanding: () => call(T.Standing, "workflows_standing"),
   /// The chats the Telegram bot whose token the variable `token` holds heard from lately.
   telegramChats: (token: string) => call(T.SeenChat.array(), "telegram_chats", { token }),
   /// A new token, shown this once; the old one stops working.

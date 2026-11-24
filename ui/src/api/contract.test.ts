@@ -159,6 +159,7 @@ const schemas: Record<SampleName, { parse: (v: unknown) => unknown }> = {
   WorkflowRunFilter: T.WorkflowRunFilter.array(),
   WorkflowRun: T.WorkflowRun.array(),
   CheckView: T.CheckView,
+  Standing: T.Standing,
   WorkflowDraft: T.WorkflowDraft,
   SeenChat: T.SeenChat.array(),
   CheckTip: T.CheckTip.array(),
