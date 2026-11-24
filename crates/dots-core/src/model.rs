@@ -1613,6 +1613,7 @@ str_enum!(WorkflowTrigger {
     Manual => "manual",
     Schedule => "schedule",
     Webhook => "webhook",
+    Telegram => "telegram",
 });
 str_enum!(WorkflowRunStatus {
     Running => "running",

@@ -11,6 +11,7 @@
 //! A secret never reaches the store: where a text that is kept (the summary, an error) holds
 //! one, it is replaced.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
@@ -27,6 +28,8 @@ use crate::{Error, Result};
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// The most of an answer's body kept in the step's summary or error, in characters.
 const KEPT_BODY: usize = 1_000;
+/// The most of an answer a later step may use, in characters.
+const KEPT_ANSWER: usize = 20_000;
 /// What stands for a secret in a text that is kept.
 const HIDDEN: &str = "•••";
 /// Why a secret is refused in a team of an account: its variables are the account's to grant.
@@ -282,9 +285,10 @@ impl Workflows {
             )));
         };
         match done {
-            Ok(summary) => {
+            Ok((summary, outputs)) => {
                 let handoff = Handoff {
                     summary,
+                    outputs,
                     ..Default::default()
                 };
                 self.store
@@ -306,11 +310,7 @@ impl Workflows {
 
     /// Performs the action step `step_id` of `wr`. `Ok` says what it did, `Err` why it could
     /// not, both without any secret. Slow: run without the lock.
-    async fn act_now(
-        &self,
-        wr: &WorkflowRun,
-        step_id: &str,
-    ) -> std::result::Result<String, String> {
+    async fn act_now(&self, wr: &WorkflowRun, step_id: &str) -> std::result::Result<Done, String> {
         let Some(StepKind::Action { action, .. }) = wr.definition.step(step_id).map(|s| &s.kind)
         else {
             return Err(format!("step {step_id} is not an action"));
@@ -335,12 +335,70 @@ impl Workflows {
             Action::File { path, content } => {
                 write(&mut values, Path::new(&wr.project.repo_path), path, content).await
             }
+            Action::Telegram { token, chat, text } => {
+                let base = self.telegram_base().to_string();
+                message(&mut values, wr.test, &base, token, chat, text).await
+            }
         };
+        // What a later step may use of it, with no secret in it either.
         match done {
-            Ok(summary) => Ok(values.hidden(&summary)),
+            Ok((summary, outputs)) => Ok((
+                values.hidden(&summary),
+                outputs
+                    .into_iter()
+                    .map(|(name, text)| (name, values.hidden(&text)))
+                    .collect(),
+            )),
             Err(error) => Err(values.hidden(&error)),
         }
     }
+}
+
+/// What an action did: its summary, and what a later step may use of it by name
+/// (`Action::gives`).
+type Done = (String, BTreeMap<String, String>);
+
+/// `pairs` as the outputs of an action.
+fn given<const N: usize>(pairs: [(&str, String); N]) -> BTreeMap<String, String> {
+    pairs
+        .into_iter()
+        .map(|(name, text)| (name.to_string(), text))
+        .collect()
+}
+
+/// Sends the message of a Telegram action as its bot. In a test run nothing is sent.
+async fn message(
+    values: &mut Values<'_>,
+    test: bool,
+    base: &str,
+    token: &str,
+    chat: &str,
+    text: &str,
+) -> std::result::Result<Done, String> {
+    let chat = values.fill(chat.trim(), Escape::None).await?;
+    let text = values.fill(text, Escape::None).await?;
+    let secret = values
+        .value(&Mark::Secret(token.trim().to_string()))
+        .await?;
+    if test {
+        return Ok((
+            format!(
+                "Test run: not sent. It would send a message of {} characters to the chat {}.",
+                text.trim().chars().count(),
+                chat.trim()
+            ),
+            given([("answer", String::new())]),
+        ));
+    }
+    let answer = super::telegram::send_message(base, &secret, &chat, &text).await?;
+    Ok((
+        format!(
+            "Sent a message of {} characters to the chat {}.",
+            text.trim().chars().count(),
+            chat.trim()
+        ),
+        given([("answer", clipped(&answer, KEPT_ANSWER))]),
+    ))
 }
 
 /// Sends the request of an HTTP action. In a test run nothing is sent: the summary says what
@@ -352,7 +410,7 @@ async fn send(
     url: &str,
     headers: &[Header],
     body: &str,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<Done, String> {
     let url = values.fill(url.trim(), Escape::Url).await?;
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("the URL cannot be read: {e}"))?;
     let host = parsed.host_str().unwrap_or_default().to_string();
@@ -370,9 +428,12 @@ async fn send(
     }
     let line = format!("{} {}", method.as_str(), shown_url(&url));
     if test {
-        return Ok(format!(
-            "Test run: not sent. It would send {line} with a body of {} characters.",
-            body.chars().count()
+        return Ok((
+            format!(
+                "Test run: not sent. It would send {line} with a body of {} characters.",
+                body.chars().count()
+            ),
+            given([("status", String::new()), ("answer", String::new())]),
         ));
     }
     // No redirect is followed: the headers are for the host the workflow names, and no other.
@@ -416,10 +477,15 @@ async fn send(
     let text = answer.text().await.unwrap_or_default();
     let said = clipped(&text, KEPT_BODY);
     if status.is_success() {
-        Ok(match said.is_empty() {
+        let summary = match said.is_empty() {
             true => format!("{line} answered {}.", status.as_u16()),
             false => format!("{line} answered {}.\n\n{said}", status.as_u16()),
-        })
+        };
+        let outputs = given([
+            ("status", status.as_u16().to_string()),
+            ("answer", clipped(&text, KEPT_ANSWER)),
+        ]);
+        Ok((summary, outputs))
     } else {
         Err(match said.is_empty() {
             true => format!("{line} answered {}", status.as_u16()),
@@ -435,7 +501,7 @@ async fn write(
     folder: &Path,
     path: &str,
     content: &str,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<Done, String> {
     let path = values.fill(path.trim(), Escape::None).await?;
     let path = path.trim();
     if !relative_path_ok(path) {
@@ -453,9 +519,9 @@ async fn write(
     tokio::fs::write(&file, content.as_bytes())
         .await
         .map_err(|e| format!("{path} could not be written: {e}"))?;
-    Ok(format!(
-        "Wrote {path} ({} characters).",
-        content.chars().count()
+    Ok((
+        format!("Wrote {path} ({} characters).", content.chars().count()),
+        given([("path", path.to_string())]),
     ))
 }
 

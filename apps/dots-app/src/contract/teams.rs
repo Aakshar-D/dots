@@ -12,7 +12,7 @@ use dots_core::workflow::{
     InputField, InputKind, MergeMethod, Step, StepKind, StepOptions, Trigger, Wait,
     WorkflowProblem,
 };
-use dots_core::workflows::{CheckView, ShownBranch, ShownOutput};
+use dots_core::workflows::{CheckView, SeenChat, ShownBranch, ShownOutput};
 use serde_json::{json, Value};
 
 use super::{to, TS};
@@ -450,6 +450,54 @@ fn workflows() -> Vec<Workflow> {
                 budget: Budget::default(),
             },
         ),
+        // A workflow a Telegram message starts, which answers in the same chat (connected
+        // workflows spec).
+        workflow(
+            "01J0WFL6",
+            "Answer clients",
+            Definition {
+                inputs: vec![InputField {
+                    name: "chat_id".into(),
+                    label: "Chat".into(),
+                    kind: InputKind::Text,
+                    required: false,
+                    default: None,
+                }],
+                trigger: Trigger::Telegram {
+                    token: "BOT_TOKEN".into(),
+                    chats: vec!["42".into(), "-1001234567890".into()],
+                    project: String::new(),
+                },
+                steps: vec![
+                    Step {
+                        id: "answer".into(),
+                        name: "Write the answer".into(),
+                        kind: StepKind::Agent {
+                            produces: vec!["reply".into()],
+                            options: Default::default(),
+                            member: DEV.into(),
+                            job: "Answer the client.".into(),
+                            can_send_back_to: vec![],
+                            outcomes: vec![],
+                            delegate: None,
+                        },
+                    },
+                    Step {
+                        id: "tell".into(),
+                        name: "Tell them".into(),
+                        kind: StepKind::Action {
+                            action: Action::Telegram {
+                                token: "BOT_TOKEN".into(),
+                                chat: "{{input.chat_id}}".into(),
+                                text: "{{answer.reply}}".into(),
+                            },
+                            unattended: true,
+                        },
+                    },
+                ],
+                budget: Budget::default(),
+            },
+        ),
     ]
 }
 
@@ -800,6 +848,16 @@ pub(super) fn teams_samples(samples: &mut Value) {
     let runs = workflow_runs();
     samples["WorkflowRun"] = to(&runs);
     samples["CheckView"] = to(check_view());
+    samples["SeenChat"] = to(vec![
+        SeenChat {
+            id: "42".into(),
+            name: "Asha".into(),
+        },
+        SeenChat {
+            id: "-1001234567890".into(),
+            name: "Client room".into(),
+        },
+    ]);
     samples["CheckTip"] = to(check_view().tips());
     samples["StepDotRun"] = to(step_dot_runs());
     samples["Enums"]["WorkflowTrigger"] = to(WorkflowTrigger::ALL);

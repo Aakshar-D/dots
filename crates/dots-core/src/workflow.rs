@@ -56,6 +56,16 @@ pub enum Trigger {
         #[serde(default)]
         catch_up: bool,
     },
+    /// A message to a Telegram bot starts it (connected workflows spec section 3): `token`
+    /// names the Personal variable that holds the bot's token, `chats` the ids of the chats it
+    /// listens to. The message's text is the run's task, on the project named `project`
+    /// (blank: the team's own folder).
+    Telegram {
+        token: String,
+        chats: Vec<String>,
+        #[serde(default)]
+        project: String,
+    },
     /// A `POST` to the workflow's URL with its token starts it. The body's `task` and `project`
     /// (by name) are used; these are the fallbacks for a body without them.
     Webhook {
@@ -155,6 +165,31 @@ pub enum Action {
     },
     /// Writes a text file into the project's folder, replacing one of that path.
     File { path: String, content: String },
+    /// Sends `text` to the Telegram chat `chat` as the bot whose token the Personal variable
+    /// `token` holds (connected workflows spec section 2).
+    Telegram {
+        token: String,
+        chat: String,
+        text: String,
+    },
+}
+
+impl Action {
+    /// Whether the action sends something out of this PC, so needs a check before it unless
+    /// it is `unattended`.
+    pub fn sends(&self) -> bool {
+        !matches!(self, Action::File { .. })
+    }
+
+    /// The values a later action may use of this one, as `{{<step>.<name>}}` (connected
+    /// workflows spec section 4).
+    pub fn gives(&self) -> &'static [&'static str] {
+        match self {
+            Action::Http { .. } => &["status", "answer"],
+            Action::File { .. } => &["path"],
+            Action::Telegram { .. } => &["answer"],
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -629,6 +664,27 @@ impl Definition {
                 // A blank project: the team's own folder (general workflows spec section 2).
                 let _ = project;
             }
+            Trigger::Telegram { token, chats, .. } => {
+                if !step_template::secret_ok(token.trim()) {
+                    return invalid(
+                        "the trigger needs the name of the variable that holds the bot's token"
+                            .into(),
+                    );
+                }
+                if chats.is_empty() {
+                    return invalid(
+                        "a Telegram trigger needs at least one chat it listens to".into(),
+                    );
+                }
+                if let Some(chat) = chats
+                    .iter()
+                    .find(|c| !crate::workflows::chat_id_ok(c.trim()))
+                {
+                    return invalid(format!(
+                        "the trigger: {chat:?} is not a chat's id, which is a number"
+                    ));
+                }
+            }
             Trigger::Webhook { task, .. } => {
                 // A blank fallback is no fallback: the body must then carry the task.
                 if task.as_deref().is_some_and(|t| too_long(t, MAX_TASK)) {
@@ -772,8 +828,7 @@ impl Definition {
             StepKind::Action { action, unattended } => {
                 self.validate_action(step, action)?;
                 // What goes out is the person's to see first, unless they said otherwise.
-                let sends = matches!(action, Action::Http { .. });
-                if sends && !unattended && !self.checked_before(&step.id) {
+                if action.sends() && !unattended && !self.checked_before(&step.id) {
                     return invalid(format!(
                         "step \"{name}\": an action that sends something needs a check before it \
                          on every path, or \"Runs without my check\" turned on"
@@ -906,6 +961,19 @@ impl Definition {
             .collect()
     }
 
+    /// The action steps that come before the step `id` in run order, each with its id.
+    fn actions_earlier(&self, id: &str) -> Vec<(&str, &Action)> {
+        let all = self.all();
+        let here = all.iter().position(|s| s.id == id).unwrap_or(0);
+        all[..here]
+            .iter()
+            .filter_map(|s| match &s.kind {
+                StepKind::Action { action, .. } => Some((s.id.as_str(), action)),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The rules of one text of the action step `step`: its marks name what the workflow has.
     /// `secrets`: whether the text may hold a secret (what is sent may; what is written to a
     /// file may not).
@@ -928,7 +996,7 @@ impl Definition {
                 }
                 Mark::Secret(_) => {
                     if !secrets {
-                        return refuse(format!("{written}: a secret cannot be written to a file"));
+                        return refuse(format!("{written}: a secret cannot be put here"));
                     }
                 }
                 Mark::Summary { step: from } => {
@@ -947,7 +1015,11 @@ impl Definition {
                                 StepKind::Agent { produces, .. } if produces.contains(output)
                             )
                     });
-                    if !gives {
+                    // An earlier action gives what it did: its answer, its status, its path.
+                    let did = self.actions_earlier(&step.id).iter().any(|(id, action)| {
+                        *id == from.as_str() && action.gives().contains(&output.as_str())
+                    });
+                    if !gives && !did {
                         return refuse(format!(
                             "{written} names no output of an agent step before it"
                         ));
@@ -1017,6 +1089,24 @@ impl Definition {
                     ));
                 }
                 self.validate_text(step, "the body", body, true)
+            }
+            Action::Telegram { token, chat, text } => {
+                if !step_template::secret_ok(token.trim()) {
+                    return invalid(format!(
+                        "step \"{name}\": it needs the name of the variable that holds the bot's \
+                         token"
+                    ));
+                }
+                if chat.trim().is_empty() {
+                    return invalid(format!("step \"{name}\": it needs a chat to send to"));
+                }
+                self.validate_text(step, "the chat", chat, false)?;
+                if text.trim().is_empty() || too_long(text, MAX_BODY) {
+                    return invalid(format!(
+                        "step \"{name}\": the message must be 1 to {MAX_BODY} characters"
+                    ));
+                }
+                self.validate_text(step, "the message", text, false)
             }
             Action::File { path, content } => {
                 let p = path.trim();

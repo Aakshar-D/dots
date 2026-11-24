@@ -116,6 +116,15 @@ export function triggerSummary(trigger: Trigger, nameOf: NameOf): [string, strin
           ? `${taskLine(trigger.task)}, unless the call says the task`
           : "The call says the task",
       ];
+    case "telegram":
+      return [
+        title,
+        trigger.chats.length === 0
+          ? "It listens to no chat yet"
+          : trigger.chats.length === 1
+            ? "From 1 chat: the message is the task"
+            : `From ${trigger.chats.length} chats: the message is the task`,
+      ];
   }
 }
 
@@ -161,12 +170,17 @@ export function stepLine(step: Step, steps: Step[], nameOf: NameOf): string {
     }
     case "deploy":
       return deployLine(step, nameOf);
-    case "action":
-      return step.action === "http"
-        ? `Sends ${step.method.toUpperCase()} to ${hostOf(step.url)}${
-            step.unattended ? ", without your check" : ""
-          }`
-        : `Saves ${step.path.trim() || "a file"}`;
+    case "action": {
+      const unchecked = step.unattended ? ", without your check" : "";
+      switch (step.action) {
+        case "http":
+          return `Sends ${step.method.toUpperCase()} to ${hostOf(step.url)}${unchecked}`;
+        case "file":
+          return `Saves ${step.path.trim() || "a file"}`;
+        case "telegram":
+          return `Sends a Telegram message to ${step.chat.trim() || "a chat"}${unchecked}`;
+      }
+    }
     case "wait":
       return waitLine(step);
     case "branch":

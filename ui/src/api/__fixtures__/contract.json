@@ -1291,6 +1291,7 @@
     "workflow_delete",
     "workflow_check_spec",
     "workflow_webhook_url",
+    "telegram_chats",
     "regenerate_workflow_token",
     "workflow_runs_list",
     "workflow_runs_for_origins",
@@ -3335,7 +3336,8 @@
       "chat",
       "manual",
       "schedule",
-      "webhook"
+      "webhook",
+      "telegram"
     ],
     "WorkspaceMode": [
       "worktree",
@@ -14441,6 +14443,16 @@
     "limit": 30,
     "text": "lisbon ho"
   },
+  "SeenChat": [
+    {
+      "id": "42",
+      "name": "Asha"
+    },
+    {
+      "id": "-1001234567890",
+      "name": "Client room"
+    }
+  ],
   "Settings": {
     "auto_archive_days": 30,
     "auto_install_updates": false,
@@ -16471,6 +16483,74 @@
       "runs_in_flight": 0,
       "team_id": "01J0TEAM",
       "updated_at": "2026-10-09T12:00:00.000Z"
+    },
+    {
+      "created_at": "2026-10-09T12:00:00.000Z",
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "inputs": [
+          {
+            "default": null,
+            "kind": "text",
+            "label": "Chat",
+            "name": "chat_id",
+            "required": false
+          }
+        ],
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "answer",
+            "job": "Answer the client.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Write the answer",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
+            "outcomes": [],
+            "produces": [
+              "reply"
+            ]
+          },
+          {
+            "action": "telegram",
+            "chat": "{{input.chat_id}}",
+            "id": "tell",
+            "kind": "action",
+            "name": "Tell them",
+            "text": "{{answer.reply}}",
+            "token": "BOT_TOKEN",
+            "unattended": true
+          }
+        ],
+        "trigger": {
+          "chats": [
+            "42",
+            "-1001234567890"
+          ],
+          "kind": "telegram",
+          "project": "",
+          "token": "BOT_TOKEN"
+        }
+      },
+      "enabled": true,
+      "has_webhook_token": false,
+      "id": "01J0WFL6",
+      "last_run": null,
+      "name": "Answer clients",
+      "problem": null,
+      "runs_in_flight": 0,
+      "team_id": "01J0TEAM",
+      "updated_at": "2026-10-09T12:00:00.000Z"
     }
   ],
   "WorkflowProblem": [
@@ -17930,6 +18010,66 @@
       },
       "enabled": true,
       "name": "Announce"
+    },
+    {
+      "definition": {
+        "budget": {
+          "max_minutes": 120,
+          "max_runs": 10,
+          "max_send_backs": 3,
+          "max_tokens": 1500000
+        },
+        "inputs": [
+          {
+            "default": null,
+            "kind": "text",
+            "label": "Chat",
+            "name": "chat_id",
+            "required": false
+          }
+        ],
+        "steps": [
+          {
+            "can_send_back_to": [],
+            "delegate": null,
+            "id": "answer",
+            "job": "Answer the client.",
+            "kind": "agent",
+            "member": "01J0DOT",
+            "name": "Write the answer",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
+            "outcomes": [],
+            "produces": [
+              "reply"
+            ]
+          },
+          {
+            "action": "telegram",
+            "chat": "{{input.chat_id}}",
+            "id": "tell",
+            "kind": "action",
+            "name": "Tell them",
+            "text": "{{answer.reply}}",
+            "token": "BOT_TOKEN",
+            "unattended": true
+          }
+        ],
+        "trigger": {
+          "chats": [
+            "42",
+            "-1001234567890"
+          ],
+          "kind": "telegram",
+          "project": "",
+          "token": "BOT_TOKEN"
+        }
+      },
+      "enabled": true,
+      "name": "Answer clients"
     }
   ],
   "WorkspaceView": [

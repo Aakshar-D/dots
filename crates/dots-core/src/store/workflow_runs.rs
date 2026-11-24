@@ -336,6 +336,31 @@ impl Store {
         Ok(n > 0)
     }
 
+    /// Where the messages of the Telegram bot whose token the variable `token_name` holds have
+    /// been read up to: the offset the next `getUpdates` asks from, 0 before any was read.
+    pub async fn telegram_offset(&self, token_name: &str) -> Result<i64> {
+        Ok(
+            sqlx::query_scalar("SELECT next_offset FROM telegram_offsets WHERE token_name = ?")
+                .bind(token_name)
+                .fetch_optional(&self.pool)
+                .await?
+                .unwrap_or(0),
+        )
+    }
+
+    /// Moves that offset on to `next`; never back.
+    pub async fn set_telegram_offset(&self, token_name: &str, next: i64) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO telegram_offsets (token_name, next_offset) VALUES (?, ?) \
+             ON CONFLICT(token_name) DO UPDATE SET next_offset = MAX(next_offset, excluded.next_offset)",
+        )
+        .bind(token_name)
+        .bind(next)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// When the workflow run's clock last counted (`WorkflowRunChange::clock_at`).
     pub async fn workflow_run_clock(&self, id: &str) -> Result<Option<String>> {
         Ok(

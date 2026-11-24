@@ -800,6 +800,8 @@ export const commands = {
     call(T.WorkflowProblem.nullable(), "workflow_check_spec", { teamId, spec }),
   /// Rejects with kind `conflict` while the local server is not running.
   workflowWebhookUrl: (id: string) => call(text, "workflow_webhook_url", { id }),
+  /// The chats the Telegram bot whose token the variable `token` holds heard from lately.
+  telegramChats: (token: string) => call(T.SeenChat.array(), "telegram_chats", { token }),
   /// A new token, shown this once; the old one stops working.
   regenerateWorkflowToken: (id: string) => call(text, "regenerate_workflow_token", { id }),
 

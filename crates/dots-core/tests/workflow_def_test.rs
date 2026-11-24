@@ -1320,7 +1320,7 @@ fn an_action_s_texts_name_only_what_the_workflow_has() {
     );
     assert_eq!(
         refusal(&base(file("f", "k.txt", "{{secret.TOKEN}}"))),
-        "step \"Step f\": the file's content: {{secret.TOKEN}}: a secret cannot be written to a file"
+        "step \"Step f\": the file's content: {{secret.TOKEN}}: a secret cannot be put here"
     );
 }
 
@@ -1390,5 +1390,142 @@ fn a_wait_names_a_time_it_can_wait_for() {
         ),
     ] {
         assert_eq!(refusal(&with(bad)), why);
+    }
+}
+
+// ---- Connected workflows (plan 3): Telegram, and what an action gives ----
+
+fn telegram(id: &str, token: &str, chat: &str, text: &str, unattended: bool) -> Step {
+    Step {
+        id: id.into(),
+        name: format!("Step {id}"),
+        kind: StepKind::Action {
+            action: Action::Telegram {
+                token: token.into(),
+                chat: chat.into(),
+                text: text.into(),
+            },
+            unattended,
+        },
+    }
+}
+
+#[test]
+fn a_telegram_trigger_names_its_bot_s_variable_and_the_chats_it_listens_to() {
+    let with = |token: &str, chats: &[&str]| {
+        let mut d = def(vec![agent("a", "dev")]);
+        d.trigger = Trigger::Telegram {
+            token: token.into(),
+            chats: chats.iter().map(|c| c.to_string()).collect(),
+            project: String::new(),
+        };
+        d
+    };
+    with("BOT_TOKEN", &["42", " -1001234567890 "])
+        .validate(&members())
+        .unwrap();
+    assert_eq!(
+        refusal(&with("bot token", &["42"])),
+        "the trigger needs the name of the variable that holds the bot's token"
+    );
+    assert_eq!(
+        refusal(&with("BOT_TOKEN", &[])),
+        "a Telegram trigger needs at least one chat it listens to"
+    );
+    assert_eq!(
+        refusal(&with("BOT_TOKEN", &["42", "@clients"])),
+        "the trigger: \"@clients\" is not a chat's id, which is a number"
+    );
+    // Its JSON.
+    let value = json!({"kind": "telegram", "token": "BOT_TOKEN", "chats": ["42"]});
+    let trigger: Trigger = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        serde_json::to_value(&trigger).unwrap(),
+        json!({"kind": "telegram", "token": "BOT_TOKEN", "chats": ["42"], "project": ""})
+    );
+}
+
+#[test]
+fn a_telegram_action_names_its_bot_a_chat_and_a_message_and_needs_a_check() {
+    let base = |step: Step| {
+        let mut d = def(vec![giving(agent("draft", "dev"), &["post"]), step]);
+        d.inputs = vec![input("chat_id", InputKind::Text)];
+        d
+    };
+    base(telegram(
+        "t",
+        "BOT_TOKEN",
+        "{{input.chat_id}}",
+        "{{draft.post}}",
+        true,
+    ))
+    .validate(&members())
+    .unwrap();
+    assert_eq!(
+        refusal(&base(telegram("t", "BOT_TOKEN", "42", "Hello", false))),
+        "step \"Step t\": an action that sends something needs a check before it on every path, or \"Runs without my check\" turned on"
+    );
+    assert_eq!(
+        refusal(&base(telegram("t", "the token", "42", "Hello", true))),
+        "step \"Step t\": it needs the name of the variable that holds the bot's token"
+    );
+    assert_eq!(
+        refusal(&base(telegram("t", "BOT_TOKEN", "  ", "Hello", true))),
+        "step \"Step t\": it needs a chat to send to"
+    );
+    assert_eq!(
+        refusal(&base(telegram("t", "BOT_TOKEN", "42", "  ", true))),
+        "step \"Step t\": the message must be 1 to 20000 characters"
+    );
+    // The token is named, never written into the message.
+    assert_eq!(
+        refusal(&base(telegram(
+            "t",
+            "BOT_TOKEN",
+            "42",
+            "{{secret.BOT_TOKEN}}",
+            true
+        ))),
+        "step \"Step t\": the message: {{secret.BOT_TOKEN}}: a secret cannot be put here"
+    );
+    let value = json!({"id": "t", "name": "T", "kind": "action", "action": "telegram",
+        "token": "BOT_TOKEN", "chat": "42", "text": "Hello"});
+    let step: Step = serde_json::from_value(value).unwrap();
+    assert!(matches!(
+        &step.kind,
+        StepKind::Action { action: Action::Telegram { chat, .. }, unattended: false } if chat == "42"
+    ));
+}
+
+#[test]
+fn a_later_action_uses_what_an_earlier_action_gave() {
+    let after = |mark: &str| {
+        def(vec![
+            http("call", "https://example.com/x", true),
+            file("save", "a.txt", "x"),
+            telegram("tell", "BOT_TOKEN", "42", "Hello", true),
+            file("log", "log.txt", mark),
+        ])
+    };
+    for ok in [
+        "{{call.status}} {{call.answer}}",
+        "{{save.path}}",
+        "{{tell.answer}}",
+    ] {
+        after(ok).validate(&members()).unwrap();
+    }
+    // Only what that kind of action gives, and only of an action before it.
+    for bad in [
+        "{{call.path}}",
+        "{{save.answer}}",
+        "{{tell.status}}",
+        "{{log.path}}",
+    ] {
+        assert_eq!(
+            refusal(&after(bad)),
+            format!(
+                "step \"Step log\": the file's content: {bad} names no output of an agent step before it"
+            )
+        );
     }
 }

@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
 import { commands } from "@/api/commands";
-import type { Schedule, Team, Trigger, Workflow } from "@/api/types";
+import type { Schedule, SeenChat, Team, Trigger, Workflow } from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,7 @@ import { MAX_TASK, toggled, withTriggerKind } from "./draft";
 import { ChoiceList } from "./fields";
 import type { NameOf } from "./labels";
 
-const KINDS: Trigger["kind"][] = ["manual", "chat", "schedule", "webhook"];
+const KINDS: Trigger["kind"][] = ["manual", "chat", "schedule", "telegram", "webhook"];
 
 /// What each kind of trigger does (section 5.1), under the kind's field.
 const KIND_HINT: Record<Trigger["kind"], string> = {
@@ -40,6 +41,8 @@ const KIND_HINT: Record<Trigger["kind"], string> = {
   schedule:
     "It runs at each time of the schedule. A time that comes while a run is still in flight is skipped.",
   webhook: "Another program starts it with a POST request to its URL.",
+  telegram:
+    "A message to your Telegram bot starts it, with the message as the task. Sage asks Telegram for new messages every few seconds while it is open.",
 };
 
 /// The side sheet of the trigger's settings (section 10.2), open while `open`: its kind and the
@@ -113,6 +116,9 @@ export function TriggerSheet(props: {
               onChange={onChange}
             />
           )}
+          {trigger.kind === "telegram" && (
+            <TelegramFields trigger={trigger} team={props.team} onChange={props.onChange} />
+          )}
           {trigger.kind === "webhook" && (
             <>
               <WebhookFields
@@ -185,6 +191,157 @@ function ProjectSelect(props: {
         ))}
       </NativeSelect>
     </Field>
+  );
+}
+
+type TelegramTrigger = Extract<Trigger, { kind: "telegram" }>;
+
+/// A Telegram trigger (connected workflows spec section 3): the variable that holds the bot's
+/// token, the chats it listens to, and where its runs work. The chats the bot heard from
+/// lately are offered, so nobody has to find a chat's id.
+function TelegramFields(props: {
+  trigger: TelegramTrigger;
+  team: Team;
+  onChange: (trigger: Trigger) => void;
+}) {
+  const { trigger, onChange } = props;
+  const [chat, setChat] = useState("");
+  const [seen, setSeen] = useState<SeenChat[]>();
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const id = chat.trim();
+  const numeric = /^-?[0-9]{1,20}$/.test(id);
+  const add = (chatId: string) => {
+    if (!trigger.chats.includes(chatId)) onChange({ ...trigger, chats: [...trigger.chats, chatId] });
+  };
+  async function find() {
+    setBusy(true);
+    setError(undefined);
+    try {
+      setSeen(await commands.telegramChats(trigger.token.trim()));
+    } catch (e) {
+      setSeen(undefined);
+      setError(errorMessage(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <>
+      <Field
+        label="Bot's token"
+        htmlFor="trigger-token"
+        hint="The name of a variable in Library that holds your bot's token, such as BOT_TOKEN. Make a bot with @BotFather in Telegram, and keep its token as a secret variable."
+      >
+        <Input
+          id="trigger-token"
+          placeholder="BOT_TOKEN"
+          value={trigger.token}
+          onChange={(e) => onChange({ ...trigger, token: e.target.value })}
+        />
+      </Field>
+      <fieldset className="flex flex-col gap-1.5">
+        <legend className="mb-1.5 text-sm leading-none font-medium">Chats it listens to</legend>
+        {trigger.chats.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            None yet. Only a message from a chat listed here starts the workflow.
+          </p>
+        ) : (
+          <ul aria-label="Chats it listens to" className="flex flex-wrap gap-1.5">
+            {trigger.chats.map((c) => (
+              <li
+                key={c}
+                className="flex items-center gap-1 rounded-md border bg-card py-0.5 pr-0.5 pl-2 font-mono text-xs"
+              >
+                {c}
+                <Button
+                  variant="ghost"
+                  size="icon-xs"
+                  aria-label={`Stop listening to the chat ${c}`}
+                  title="Remove"
+                  onClick={() => onChange({ ...trigger, chats: trigger.chats.filter((x) => x !== c) })}
+                >
+                  <X aria-hidden />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex gap-2">
+          <Input
+            aria-label="Chat id"
+            placeholder="A chat's id, a number"
+            value={chat}
+            onChange={(e) => setChat(e.target.value)}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!numeric}
+            onClick={() => {
+              add(id);
+              setChat("");
+            }}
+          >
+            Add chat
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || trigger.token.trim() === ""}
+            onClick={() => void find()}
+          >
+            Find chats
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            Write to your bot from the chat first, then find it here.
+          </span>
+        </div>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        {seen &&
+          (seen.length === 0 ? (
+            <p role="status" className="text-sm text-muted-foreground">
+              The bot has no new message. Write to it, then look again.
+            </p>
+          ) : (
+            <ul aria-label="Chats the bot heard from" className="flex flex-col gap-1">
+              {seen.map((c) => (
+                <li key={c.id} className="flex items-center gap-2 text-sm">
+                  <span className="min-w-0 flex-1">
+                    {c.name} <span className="font-mono text-xs text-muted-foreground">{c.id}</span>
+                  </span>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={trigger.chats.includes(c.id)}
+                    aria-label={`Listen to ${c.name}`}
+                    onClick={() => add(c.id)}
+                  >
+                    {trigger.chats.includes(c.id) ? "Listening" : "Listen"}
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ))}
+      </fieldset>
+      <ProjectSelect
+        label="Project"
+        team={props.team}
+        value={trigger.project}
+        none="The team's own folder"
+        onChange={(project) => onChange({ ...trigger, project })}
+      />
+      <p className="text-xs text-muted-foreground">
+        Give the workflow inputs named chat_id, sender or message_id and each run gets them: a
+        Telegram action can then answer with {"{{input.chat_id}}"} as its chat.
+      </p>
+    </>
   );
 }
 
