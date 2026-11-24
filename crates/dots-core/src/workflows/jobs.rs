@@ -190,7 +190,8 @@ impl Workflows {
             .filter(|name| !built.outputs.contains_key(*name))
             .map(String::as_str)
             .collect();
-        if !missing.is_empty() {
+        // A step that sends its work back hands nothing on: its outputs are not asked for.
+        if !missing.is_empty() && step_run.send_back.is_none() {
             let error = format!(
                 "its reply did not end with a block for: {}",
                 crate::team_tools::quoted(missing.into_iter())

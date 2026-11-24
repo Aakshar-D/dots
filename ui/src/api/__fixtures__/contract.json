@@ -16408,7 +16408,7 @@
             "kind": "date_time",
             "label": "Publish at",
             "name": "publish_at",
-            "required": false
+            "required": true
           }
         ],
         "steps": [
@@ -18004,7 +18004,7 @@
             "kind": "date_time",
             "label": "Publish at",
             "name": "publish_at",
-            "required": false
+            "required": true
           }
         ],
         "steps": [

@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { useState } from "react";
+import { toast } from "sonner";
 import { Link, useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -162,10 +163,16 @@ function WorkflowRow(props: {
     mutationFn: async () => {
       const picked = await save({
         title: `Save ${name} as a file`,
-        defaultPath: `${name}.sage-workflow.json`,
+        // A name may hold what a file's name may not.
+        defaultPath: `${name.replace(/[^A-Za-z0-9 _.-]+/g, "-")}.sage-workflow.json`,
         filters: [{ name: "Sage workflow", extensions: ["json"] }],
       });
-      if (typeof picked === "string") await commands.workflowExport(workflow.id, picked);
+      if (typeof picked !== "string") return null;
+      await commands.workflowExport(workflow.id, picked);
+      return picked;
+    },
+    onSuccess: (path) => {
+      if (path) toast.success(`Saved ${name} to ${path}`);
     },
     onError: notifyError,
   });

@@ -1119,20 +1119,31 @@ impl Workflows {
     /// What needs Sage open now (`Standing`).
     pub async fn standing(&self) -> Result<Standing> {
         let mut standing = Standing::default();
+        let paused = self
+            .store
+            .get_settings()
+            .await
+            .is_ok_and(|settings| settings.schedules_paused);
         for team in self.store.list_teams().await? {
             for workflow in self.store.list_workflows(&team.id).await? {
                 if !workflow.spec.enabled || workflow.problem.is_some() {
                     continue;
                 }
                 match &workflow.spec.definition.trigger {
-                    crate::workflow::Trigger::Schedule { .. } => standing.schedules += 1,
-                    crate::workflow::Trigger::Telegram { .. } => standing.listeners += 1,
+                    // Paused schedules start nothing, and an account's team hears no bot.
+                    crate::workflow::Trigger::Schedule { .. } if !paused => standing.schedules += 1,
+                    crate::workflow::Trigger::Telegram { .. } if team.org_id.is_none() => {
+                        standing.listeners += 1
+                    }
                     _ => {}
                 }
             }
         }
         for id in self.store.workflow_runs_in_flight().await? {
-            let wr = self.store.get_workflow_run(&id).await?;
+            // A run that went away since it was listed is not waiting.
+            let Ok(wr) = self.store.get_workflow_run(&id).await else {
+                continue;
+            };
             if !wait::waits(&wr) {
                 continue;
             }

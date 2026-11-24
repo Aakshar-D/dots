@@ -1384,9 +1384,10 @@ impl Runner {
             .step(&step.step_id)
             .map(|s| s.name.clone())
             .unwrap_or(step.step_id);
-        let git =
-            crate::runtime::is_git_repo(std::path::Path::new(&workflow_run.project.repo_path))
-                .await;
+        let folder = std::path::Path::new(&workflow_run.project.repo_path);
+        // A repo git cannot read just now is still a repo: its step fails rather than work in
+        // the person's own checkout.
+        let git = crate::runtime::is_git_repo(folder).await || folder.join(".git").exists();
         Ok(Some(StepContext {
             git,
             repo: workflow_run.project.repo_path,

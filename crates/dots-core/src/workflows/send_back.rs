@@ -377,6 +377,19 @@ impl Workflows {
             message.push_str("\n\n");
             message.push_str(&again);
         }
+        // A step that gives outputs is asked for them again: its new reply is what counts.
+        if let crate::workflow::StepKind::Agent { produces, .. } = &step.kind {
+            if !produces.is_empty() {
+                let blocks: Vec<String> = produces
+                    .iter()
+                    .map(|name| format!("<{name}>…</{name}>"))
+                    .collect();
+                message.push_str(&format!(
+                    "\n\nEnd your reply again with each of these in a block of its own: {}",
+                    blocks.join(" ")
+                ));
+            }
+        }
         match last.filter(|r| r.session_id.is_some()) {
             Some(last) => {
                 let mut new = crate::checkins::continuation(last, last, message, None);

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useNavigate } from "react-router";
 
 import { commands } from "@/api/commands";
@@ -53,6 +53,15 @@ export function NewWorkflowDialog(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const taken = props.workflows.map((w) => w.name);
+  // A draft still being written when the dialog goes away, however it goes, is ended.
+  const writingNow = useRef(false);
+  writingNow.current = writing;
+  useEffect(
+    () => () => {
+      if (writingNow.current) void commands.workflowDraftCancel(dialog);
+    },
+    [dialog],
+  );
 
   function show(spec: WorkflowSpec, needs: string[]) {
     setError(undefined);
@@ -87,7 +96,8 @@ export function NewWorkflowDialog(props: {
   }
 
   function close() {
-    if (writing) void commands.workflowDraftCancel(dialog);
+    // While it is being made it cannot be called off: it would open in the builder anyway.
+    if (busy) return;
     props.onClose();
   }
 

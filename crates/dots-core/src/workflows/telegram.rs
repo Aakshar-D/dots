@@ -86,7 +86,8 @@ fn incoming(answer: &Value) -> std::result::Result<(Vec<Incoming>, Option<i64>),
         let Some(id) = update.get("update_id").and_then(Value::as_i64) else {
             continue;
         };
-        next = Some(next.map_or(id + 1, |n: i64| n.max(id + 1)));
+        let past = id.saturating_add(1);
+        next = Some(next.map_or(past, |n: i64| n.max(past)));
         let Some(message) = update.get("message") else {
             continue;
         };
@@ -333,17 +334,25 @@ impl Workflows {
                     )
                 })
                 .collect();
-            // Held back while a workflow it would start is full: the message keeps its place.
-            for workflow in &listening {
+            // A workflow with as many runs in flight as a webhook may start takes no more:
+            // the message is not started there, and the bot's other workflows go on.
+            let mut open = Vec::new();
+            for workflow in listening {
                 let in_flight = self
                     .store
                     .count_workflow_runs_in_flight(&workflow.id)
                     .await
                     .map_err(|e| e.to_string())?;
                 if in_flight >= MAX_WEBHOOK_IN_FLIGHT {
-                    return Ok(());
+                    tracing::warn!(
+                        workflow = %workflow.spec.name,
+                        "a message was not started: the workflow has too many runs in flight"
+                    );
+                } else {
+                    open.push(workflow);
                 }
             }
+            let listening = open;
             // Read past before its runs start: a message starts its runs at most once.
             self.store
                 .set_telegram_offset(token, message.update_id + 1)

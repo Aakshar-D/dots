@@ -1328,12 +1328,23 @@ fn an_action_s_texts_name_only_what_the_workflow_has() {
 fn a_wait_names_a_time_it_can_wait_for() {
     let with = |w: Wait| {
         let mut d = def(vec![wait("w", w), agent("a", "dev")]);
-        d.inputs = vec![
-            input("when", InputKind::DateTime),
-            input("chat", InputKind::Text),
-        ];
+        let mut when = input("when", InputKind::DateTime);
+        when.required = true;
+        d.inputs = vec![when, input("chat", InputKind::Text)];
         d
     };
+    // A date and time a start may leave empty would leave the wait with no time.
+    let held = wait(
+        "w",
+        Wait::Input {
+            input: "when".into(),
+        },
+    );
+    let mut loose = def(vec![held, agent("a", "dev")]);
+    loose.inputs = vec![input("when", InputKind::DateTime)];
+    assert!(refusal(&loose).contains("which a start may leave empty"));
+    loose.inputs[0].default = Some("2026-12-01T09:00".into());
+    loose.validate(&members()).unwrap();
     for ok in [
         Wait::Minutes { minutes: 1 },
         Wait::Minutes { minutes: 527_040 },
@@ -1528,4 +1539,27 @@ fn a_later_action_uses_what_an_earlier_action_gave() {
             )
         );
     }
+}
+
+#[test]
+fn a_trigger_nobody_answers_cannot_need_an_input_without_a_default() {
+    let mut needed = input("topic", InputKind::Text);
+    needed.required = true;
+    let mut d = def(vec![agent("a", "dev")]);
+    d.inputs = vec![needed.clone()];
+    // Started by hand, the person is asked: fine.
+    d.validate(&members()).unwrap();
+    d.trigger = Trigger::Telegram {
+        token: "BOT_TOKEN".into(),
+        chats: vec!["42".into()],
+        project: String::new(),
+    };
+    assert!(refusal(&d).contains("this trigger starts with no one to give it"));
+    // A default, or one of the names a message fills, is fine.
+    d.inputs[0].default = Some("News".into());
+    d.validate(&members()).unwrap();
+    let mut chat = input("chat_id", InputKind::Text);
+    chat.required = true;
+    d.inputs = vec![chat];
+    d.validate(&members()).unwrap();
 }

@@ -6470,7 +6470,7 @@ async fn a_wait_whose_time_passed_while_sage_was_closed_ends_on_the_first_pass()
         name: "publish_at".into(),
         label: "Publish at".into(),
         kind: InputKind::DateTime,
-        required: false,
+        required: true,
         default: None,
     };
     let flow = w
@@ -6480,14 +6480,11 @@ async fn a_wait_whose_time_passed_while_sage_was_closed_ends_on_the_first_pass()
             vec![wait, agent("post", "Post it", &w.dev, "Post.")],
         )
         .await;
-    // An input left empty leaves the wait with no time: the step fails.
-    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
-    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
-    assert_eq!(
-        wr.error.as_deref(),
-        Some("Until then: the input \"publish_at\" holds no date and time")
-    );
-    w.workflows.stop(&wr.id).await.unwrap();
+    // The wait's input is needed, so a start without it is refused before anything runs.
+    assert!(matches!(
+        w.workflows.start(w.request(&flow, &[])).await,
+        Err(Error::Invalid(m)) if m.contains("is needed to start")
+    ));
 
     // A time two hours on: the loop stops (Sage is closed), three hours pass, and the first
     // pass after ends the wait.
@@ -6849,4 +6846,52 @@ async fn standing_counts_the_schedules_the_listeners_and_the_waits() {
         }
     );
     assert!(standing.any());
+}
+
+// ---- QA fixes ----
+
+#[tokio::test]
+async fn what_a_step_wrote_fills_a_file_s_name_but_never_picks_its_folder() {
+    let w = world().await;
+    w.engine.set(
+        &w.dev.spec.name,
+        vec![
+            Act::Finish("<name>.git/hooks/pre-commit</name>"),
+            Act::Finish("<name>notes</name>"),
+        ],
+    );
+    let flow = w
+        .workflow_with(
+            "Save",
+            vec![],
+            vec![
+                producing(agent("draft", "Draft it", &w.dev, "Draft."), &["name"]),
+                file_step("save", "out/{{draft.name}}.md", "x"),
+            ],
+        )
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert_eq!(
+        wr.error.as_deref(),
+        Some("Save it: {{draft.name}} holds a slash, and may not add a folder to the file's path")
+    );
+    assert!(!w.team_files().join("out").exists());
+    // A plain name is written where the workflow says.
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    assert!(w.team_files().join("out").join("notes.md").exists());
+
+    // A path the workflow itself writes into git's own folder is refused too.
+    let flow = w
+        .workflow_with("Hook", vec![], vec![file_step("save", ".GIT/hooks/x", "x")])
+        .await;
+    let wr = w.workflows.start(w.request(&flow, &[])).await.unwrap();
+    let wr = w.until(&wr.id, waits_on(WaitingOn::StepFailed)).await;
+    assert!(wr
+        .error
+        .as_deref()
+        .unwrap()
+        .contains("inside git's own folder"));
 }

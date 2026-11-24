@@ -35,7 +35,13 @@ export function RunNowDialog(props: {
   const [projectId, setProjectId] = useState(props.projects[0]?.id ?? "");
   const fields = props.workflow.definition.inputs;
   const [inputs, setInputs] = useState<Record<string, string>>(() =>
-    Object.fromEntries(fields.map((f) => [f.name, f.default ?? ""])),
+    Object.fromEntries(
+      fields.map((f) => [
+        f.name,
+        // A date and time written with a space is one the field cannot show: it takes a T.
+        f.kind === "date_time" ? (f.default ?? "").trim().replace(" ", "T") : (f.default ?? ""),
+      ]),
+    ),
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();

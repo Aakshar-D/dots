@@ -600,6 +600,27 @@ impl Definition {
         if let Err(e) = self.validate_inputs() {
             return whole(e);
         }
+        // A trigger nobody answers cannot be asked for an input: one it needs must have a
+        // default, or every start would be refused.
+        let unasked: Option<&[&str]> = match &self.trigger {
+            Trigger::Schedule { .. } => Some(&[]),
+            Trigger::Telegram { .. } => Some(&["chat_id", "sender", "message_id"]),
+            _ => None,
+        };
+        if let Some(given) = unasked {
+            let stuck = self.inputs.iter().find(|f| {
+                f.required
+                    && !given.contains(&f.name.as_str())
+                    && !f.default.as_deref().is_some_and(|d| !d.trim().is_empty())
+            });
+            if let Some(field) = stuck {
+                return whole(Error::Invalid(format!(
+                    "the input \"{}\" is needed, but this trigger starts with no one to give it: \
+                     give it a default, or make it optional",
+                    field.name
+                )));
+            }
+        }
         if self.steps.is_empty() {
             return whole(Error::Invalid("a workflow needs at least one step".into()));
         }
@@ -852,6 +873,18 @@ impl Definition {
                 }
                 Wait::Input { input } => {
                     let found = self.inputs.iter().find(|f| f.name == *input);
+                    // A start that may leave it empty would leave the wait with no time.
+                    let may_be_empty = found.is_some_and(|f| {
+                        f.kind == InputKind::DateTime
+                            && !f.required
+                            && !f.default.as_deref().is_some_and(|d| !d.trim().is_empty())
+                    });
+                    if may_be_empty {
+                        return invalid(format!(
+                            "step \"{name}\": it waits until \"{input}\", which a start may leave \
+                             empty: make that input needed, or give it a default"
+                        ));
+                    }
                     if !found.is_some_and(|f| f.kind == InputKind::DateTime) {
                         return invalid(format!(
                             "step \"{name}\": it waits until an input that holds a date and \

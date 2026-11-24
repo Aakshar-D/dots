@@ -92,7 +92,12 @@ impl Holder {
             let _ = child.wait();
         }
         if on {
-            match std::process::Command::new("caffeinate").arg("-i").spawn() {
+            // `-w`: it ends with Sage, however Sage ends.
+            let own = std::process::id().to_string();
+            match std::process::Command::new("caffeinate")
+                .args(["-i", "-w", &own])
+                .spawn()
+            {
                 Ok(child) => self.child = Some(child),
                 Err(e) => tracing::warn!("caffeinate could not start: {e}"),
             }

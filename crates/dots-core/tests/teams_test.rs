@@ -792,3 +792,36 @@ async fn a_workflow_goes_to_a_file_and_comes_into_another_team_by_its_members_na
         ));
     }
 }
+
+#[tokio::test]
+async fn a_workflow_from_a_file_sends_nothing_unchecked_and_listens_to_no_chat() {
+    let (dir, store) = temp_store().await;
+    let dev = dot(&store, "dev").await;
+    let teams = Teams::new(store.clone(), new_bus());
+    let t = teams.create(&team("T", &[&dev])).await.unwrap();
+    let file = dir.path().join("theirs.json");
+    std::fs::write(
+        &file,
+        r#"{"sage_workflow": 1, "name": "Theirs", "definition": {
+            "trigger": {"kind": "telegram", "token": "BOT_TOKEN", "chats": ["999"], "project": ""},
+            "steps": [{"id": "send", "name": "Send", "kind": "action", "action": "http",
+                "method": "post", "url": "https://example.com/x", "headers": [], "body": "hi",
+                "unattended": true}]}}"#,
+    )
+    .unwrap();
+    let got = teams.import_workflow(&t.id, &file).await.unwrap();
+    assert!(!got.spec.enabled);
+    assert!(matches!(
+        &got.spec.definition.trigger,
+        Trigger::Telegram { chats, .. } if chats.is_empty()
+    ));
+    assert!(matches!(
+        &got.spec.definition.steps[0].kind,
+        StepKind::Action {
+            unattended: false,
+            ..
+        }
+    ));
+    // So it has a problem the person must put right in the builder before it can be on.
+    assert!(got.problem.is_some());
+}

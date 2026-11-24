@@ -110,7 +110,7 @@ export function StepSheet(props: {
               onChange={(e) => props.onChange({ ...step, name: e.target.value })}
             />
           </Field>
-          <KindFields {...props} step={step} />
+          <KindFields key={step.id} {...props} step={step} />
         </SheetContent>
       )}
     </Sheet>

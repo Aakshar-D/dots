@@ -246,7 +246,7 @@ pub fn read_draft(answer: &str, ctx: &DraftContext) -> Result<WorkflowDraft> {
         .filter(|n| !n.is_empty())
         .unwrap_or("New workflow")
         .chars()
-        .take(crate::workflow::MAX_NAME)
+        .take(crate::model::MAX_TEAM_NAME - 4)
         .collect::<String>();
     let mut notes: Vec<String> = object
         .get("notes")
@@ -280,7 +280,19 @@ pub fn read_draft(answer: &str, ctx: &DraftContext) -> Result<WorkflowDraft> {
         }
     };
     let members: Vec<String> = ctx.members.iter().map(|m| m.id.clone()).collect();
-    definition.validate(&members)?;
+    // The chats a bot listens to are the person's to pick: a draft has none yet, and says so.
+    let mut checked = definition.clone();
+    if let crate::workflow::Trigger::Telegram { chats, .. } = &mut checked.trigger {
+        if chats.is_empty() {
+            chats.push("0".to_string());
+            notes.push(
+                "In the trigger, pick the chats it listens to: write to your bot from the chat, \
+                 then use Find chats."
+                    .to_string(),
+            );
+        }
+    }
+    checked.validate(&members)?;
     Ok(WorkflowDraft {
         name,
         definition,
@@ -507,5 +519,16 @@ mod tests {
             read_draft(shape, &team()),
             Err(Error::Invalid(m)) if m.starts_with("its JSON did not read as a workflow:")
         ));
+    }
+
+    #[test]
+    fn a_draft_a_telegram_message_starts_has_no_chats_yet_and_says_so() {
+        let answer = r#"{"name": "Answer", "trigger": {"kind": "telegram", "token": "BOT_TOKEN", "chats": [], "project": ""},
+            "steps": [{"id": "a", "name": "Answer", "kind": "agent", "member": "Writer", "job": "Answer."}]}"#;
+        let draft = read_draft(answer, &team()).unwrap();
+        assert!(
+            matches!(&draft.definition.trigger, Trigger::Telegram { chats, .. } if chats.is_empty())
+        );
+        assert!(draft.notes[0].starts_with("In the trigger, pick the chats it listens to"));
     }
 }

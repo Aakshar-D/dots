@@ -45,6 +45,8 @@ enum Escape {
     Json,
     /// To sit inside a URL's path or query, or a form body.
     Url,
+    /// To be one part of a file's path: it may name no folder of its own.
+    PathPart,
 }
 
 /// `value` as it sits inside a JSON string: without the quotes around it.
@@ -71,6 +73,7 @@ fn escaped(value: String, escape: Escape) -> String {
         Escape::None => value,
         Escape::Json => json_escaped(&value),
         Escape::Url => url_escaped(&value),
+        Escape::PathPart => value,
     }
 }
 
@@ -86,9 +89,16 @@ fn body_escape(headers: &[Header], body: &str) -> Escape {
         Some(t) if t.contains("json") => Escape::Json,
         Some(t) if t.contains("x-www-form-urlencoded") => Escape::Url,
         Some(_) => Escape::None,
-        None if body.trim_start().starts_with(['{', '[']) => Escape::Json,
+        // A body that opens with a mark (`{{draft.post}}`) is not JSON for that.
+        None if looks_like_json(body) => Escape::Json,
         None => Escape::None,
     }
+}
+
+/// Whether `body` reads as JSON: it opens with `{` or `[`, and not with a mark's `{{`.
+fn looks_like_json(body: &str) -> bool {
+    let body = body.trim_start();
+    body.starts_with('[') || (body.starts_with('{') && !body.starts_with("{{"))
 }
 
 /// `text` in at most `max` characters, ending with an ellipsis when it was longer.
@@ -162,7 +172,24 @@ impl Values<'_> {
         // The values first: a mark's value may need the vault, and `fill` takes no future.
         let mut values = Vec::new();
         for mark in step_template::marks(text)? {
-            values.push(self.value(&mark).await?);
+            let value = self.value(&mark).await?;
+            let written = format!("{{{{{}}}}}", mark.written());
+            // What a step wrote may fill a place in a path, never choose the path: no folder
+            // of its own in a file's path, and no `.` or `..` that would move a URL's.
+            match escape {
+                Escape::PathPart if value.contains(['/', '\\']) => {
+                    return Err(format!(
+                        "{written} holds a slash, and may not add a folder to the file's path"
+                    ));
+                }
+                Escape::Url if matches!(value.trim(), "." | "..") => {
+                    return Err(format!(
+                        "{written} is only dots, which would change the address"
+                    ));
+                }
+                _ => {}
+            }
+            values.push(value);
         }
         let mut values = values.into_iter();
         step_template::fill(text, |_| {
@@ -173,7 +200,10 @@ impl Values<'_> {
     /// `text` with every secret read so far replaced: what is kept never holds one.
     fn hidden(&self, text: &str) -> String {
         let mut out = text.to_string();
-        for secret in &self.secrets {
+        // The longest first: a secret that starts with another is hidden whole.
+        let mut secrets: Vec<&String> = self.secrets.iter().collect();
+        secrets.sort_by_key(|s| std::cmp::Reverse(s.len()));
+        for secret in secrets {
             out = out.replace(secret.as_str(), HIDDEN);
             out = out.replace(&url_escaped(secret), HIDDEN);
             out = out.replace(&json_escaped(secret), HIDDEN);
@@ -391,6 +421,7 @@ async fn message(
         ));
     }
     let answer = super::telegram::send_message(base, &secret, &chat, &text).await?;
+    let answer = values.hidden(&answer);
     Ok((
         format!(
             "Sent a message of {} characters to the chat {}.",
@@ -414,6 +445,7 @@ async fn send(
     let url = values.fill(url.trim(), Escape::Url).await?;
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("the URL cannot be read: {e}"))?;
     let host = parsed.host_str().unwrap_or_default().to_string();
+    let original_body = body;
     let body = values.fill(body, body_escape(headers, body)).await?;
     let mut sent_headers = Vec::new();
     for header in headers {
@@ -449,7 +481,7 @@ async fn send(
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("content-type"));
     if !body.is_empty() && !names_type {
-        let kind = if body.trim_start().starts_with(['{', '[']) {
+        let kind = if looks_like_json(original_body) {
             "application/json"
         } else {
             "text/plain; charset=utf-8"
@@ -474,7 +506,9 @@ async fn send(
         }
     })?;
     let status = answer.status();
-    let text = answer.text().await.unwrap_or_default();
+    // Hidden before it is cut: a secret the answer repeats across the cut would else keep
+    // its first part.
+    let text = values.hidden(&answer.text().await.unwrap_or_default());
     let said = clipped(&text, KEPT_BODY);
     if status.is_success() {
         let summary = match said.is_empty() {
@@ -502,8 +536,17 @@ async fn write(
     path: &str,
     content: &str,
 ) -> std::result::Result<Done, String> {
-    let path = values.fill(path.trim(), Escape::None).await?;
+    let path = values.fill(path.trim(), Escape::PathPart).await?;
     let path = path.trim();
+    // Git's own folder is never written into: a hook there is code that runs.
+    let in_git = path
+        .split(['/', '\\'])
+        .any(|part| part.trim().eq_ignore_ascii_case(".git"));
+    if in_git {
+        return Err(format!(
+            "{path} is inside git's own folder, which a step does not write to"
+        ));
+    }
     if !relative_path_ok(path) {
         return Err(format!(
             "the file's path would leave the project's folder: {path}"
