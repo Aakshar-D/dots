@@ -296,6 +296,7 @@ async fn a_waiting_workflow_run_is_in_the_inbox_and_needs_the_dot_whose_chat_sta
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                options: Default::default(),
                 member: member.id.clone(),
                 job: "Fix it.".into(),
                 can_send_back_to: vec![],

@@ -513,6 +513,7 @@ fn flow(member: &str) -> WorkflowSpec {
                 id: "a".into(),
                 name: "Work".into(),
                 kind: StepKind::Agent {
+                    options: Default::default(),
                     member: member.into(),
                     job: "Fix it.".into(),
                     can_send_back_to: vec![],

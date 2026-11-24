@@ -1,7 +1,7 @@
 use dots_core::schedule::{Rule, Schedule};
 use dots_core::workflow::{
     BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
-    Trigger,
+    StepOptions, Trigger,
 };
 use dots_core::Error;
 use serde_json::json;
@@ -11,6 +11,7 @@ fn agent(id: &str, member: &str) -> Step {
         id: id.into(),
         name: format!("Step {id}"),
         kind: StepKind::Agent {
+            options: Default::default(),
             member: member.into(),
             job: "Do it.".into(),
             can_send_back_to: vec![],
@@ -113,6 +114,7 @@ fn the_rules_of_section_5_8() {
     );
     let mut no_job = agent("a", "dev");
     no_job.kind = StepKind::Agent {
+        options: Default::default(),
         member: "dev".into(),
         job: " ".into(),
         can_send_back_to: vec![],
@@ -243,6 +245,7 @@ fn plan_a_definitions_still_read() {
     assert_eq!(
         d.steps[0].kind,
         StepKind::Agent {
+            options: Default::default(),
             member: "dev".into(),
             job: "Fix the bug.".into(),
             can_send_back_to: vec![],
@@ -883,4 +886,79 @@ fn before_lists_the_steps_on_the_way_to_a_step() {
     // Steps inside the branch's paths are not on the way to the step after it.
     assert_eq!(ids(d.before("z")), ["a", "br"]);
     assert!(d.before("nope").is_empty());
+}
+
+/// `step`, an agent step, reading the steps `ids`.
+fn reading(mut step: Step, ids: &[&str]) -> Step {
+    if let StepKind::Agent { options, .. } = &mut step.kind {
+        options.reads = Some(ids.iter().map(|id| id.to_string()).collect());
+    }
+    step
+}
+
+#[test]
+fn a_step_reads_only_agent_steps_before_it() {
+    // An earlier agent step, also one inside an earlier branch's path: fine.
+    let inside = Step {
+        id: "b".into(),
+        name: "By project".into(),
+        kind: StepKind::Branch {
+            on: BranchOn::Project,
+            paths: vec![BranchPath {
+                label: "Sage".into(),
+                steps: vec![agent("in", "dev")],
+            }],
+            otherwise: vec![],
+        },
+    };
+    let ok = def(vec![
+        agent("a", "helper"),
+        inside,
+        reading(agent("z", "dev"), &["a", "in"]),
+    ]);
+    ok.validate(&members()).unwrap();
+    // Itself, a later step, a check and an unknown id are refused, naming the step.
+    for id in ["z", "later", "c", "nope"] {
+        let d = def(vec![
+            agent("a", "helper"),
+            check("c"),
+            reading(agent("z", "dev"), &[id]),
+            agent("later", "dev"),
+        ]);
+        assert_eq!(
+            refusal(&d),
+            format!("step \"Step z\": it can read only an agent step before it, not {id:?}")
+        );
+        assert_eq!(d.problem(&members()).unwrap().step_id.as_deref(), Some("z"));
+    }
+}
+
+#[test]
+fn a_step_saved_before_the_options_reads_as_one_with_every_default() {
+    let old =
+        json!({"id": "a", "name": "Step a", "kind": "agent", "member": "helper", "job": "Do it."});
+    assert_eq!(
+        serde_json::from_value::<Step>(old).unwrap(),
+        agent("a", "helper")
+    );
+    // Written, a step always carries the three, so the builder reads one shape.
+    let value = serde_json::to_value(agent("a", "helper")).unwrap();
+    assert_eq!(
+        value["options"],
+        json!({"model": null, "lean": false, "reads": null})
+    );
+    let mut set = agent("a", "helper");
+    if let StepKind::Agent { options, .. } = &mut set.kind {
+        *options = StepOptions {
+            model: Some(dots_core::model::ModelTier::Small),
+            lean: true,
+            reads: Some(vec![]),
+        };
+    }
+    let value = serde_json::to_value(&set).unwrap();
+    assert_eq!(
+        value["options"],
+        json!({"model": "small", "lean": true, "reads": []})
+    );
+    assert_eq!(serde_json::from_value::<Step>(value).unwrap(), set);
 }

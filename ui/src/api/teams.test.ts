@@ -23,6 +23,7 @@ const agent = (id: string): T.Step => ({
   can_send_back_to: [],
   outcomes: [],
   delegate: null,
+  options: { model: null, lean: false, reads: null },
 });
 
 /// A branch on outcome whose "fixed" path holds a branch on project: two levels of paths.

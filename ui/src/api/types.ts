@@ -1648,6 +1648,15 @@ export type Delegate = z.infer<typeof Delegate>;
 // A step (sections 5.2 to 5.6): its id is made by the builder, unique across the whole tree.
 // The kind's fields sit beside `id` and `name`, and a deploy's mode's beside those.
 const stepShape = { id: z.string(), name: z.string() };
+// What makes an agent step's run cheaper (lean workflows spec section 2). `model` null: the
+// member's own model. `reads` null: every earlier step's summary, the older ones cut short;
+// a list: those steps' summaries, each whole.
+export const StepOptions = z.strictObject({
+  model: nullable(ModelTier),
+  lean: z.boolean(),
+  reads: nullable(z.array(z.string())),
+});
+export type StepOptions = z.infer<typeof StepOptions>;
 export const AgentStep = z.strictObject({
   ...stepShape,
   kind: z.literal("agent"),
@@ -1658,6 +1667,7 @@ export const AgentStep = z.strictObject({
   // The labels it may report, for a branch on outcome after it.
   outcomes: z.array(z.string()),
   delegate: nullable(Delegate),
+  options: StepOptions,
 });
 export type AgentStep = z.infer<typeof AgentStep>;
 // `send_back_to` null: the nearest agent step before it on its path.

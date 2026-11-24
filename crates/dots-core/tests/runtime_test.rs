@@ -1023,6 +1023,7 @@ async fn renaming_or_deleting_a_member_dot_announces_its_teams() {
                 id: "a".into(),
                 name: "Work".into(),
                 kind: StepKind::Agent {
+                    options: Default::default(),
                     member: dev.id.clone(),
                     job: "Fix it.".into(),
                     can_send_back_to: vec![],

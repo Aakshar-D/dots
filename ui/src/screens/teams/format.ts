@@ -94,6 +94,7 @@ export function newWorkflowSpec(name: string, member: string): WorkflowSpec {
           can_send_back_to: [],
           outcomes: [],
           delegate: null,
+          options: { model: null, lean: false, reads: null },
         },
       ],
       budget: DEFAULT_BUDGET,

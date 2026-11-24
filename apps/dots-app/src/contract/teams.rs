@@ -9,7 +9,7 @@ use dots_core::model::*;
 use dots_core::schedule::Schedule;
 use dots_core::workflow::{
     BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
-    Trigger, WorkflowProblem,
+    StepOptions, Trigger, WorkflowProblem,
 };
 use dots_core::workflows::{CheckView, ShownBranch};
 use serde_json::{json, Value};
@@ -118,6 +118,7 @@ fn agent(id: &str, name: &str, member: &str, job: &str) -> Step {
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            options: Default::default(),
             member: member.into(),
             job: job.into(),
             can_send_back_to: vec![],
@@ -158,6 +159,7 @@ fn chat_definition() -> Definition {
                 id: "build".into(),
                 name: "Build".into(),
                 kind: StepKind::Agent {
+                    options: Default::default(),
                     member: DEV.into(),
                     job: "Fix the bug and say whether it is fixed.".into(),
                     can_send_back_to: vec![],
@@ -190,6 +192,11 @@ fn chat_definition() -> Definition {
                         id: "design".into(),
                         name: "Design".into(),
                         kind: StepKind::Agent {
+                            options: StepOptions {
+                                model: Some(ModelTier::Small),
+                                lean: true,
+                                reads: Some(vec!["build".into()]),
+                            },
                             member: REVIEWER.into(),
                             job: "Propose a design.".into(),
                             can_send_back_to: vec!["build".into()],

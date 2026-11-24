@@ -80,6 +80,7 @@ async fn step_run_in(
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                options: Default::default(),
                 member: dot.id.clone(),
                 job: "Work.".into(),
                 can_send_back_to: vec![],

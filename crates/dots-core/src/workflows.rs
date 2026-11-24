@@ -58,6 +58,10 @@ use crate::{Error, Result};
 pub const MAX_TASK: usize = 8_000;
 /// The longest summary of an earlier step a prompt carries, in characters.
 pub const MAX_HANDOFF_SUMMARY: usize = 4_000;
+/// The longest summary a prompt carries of a step older than the one just before it, in
+/// characters, unless the step names what it reads (lean workflows spec section 4): the whole
+/// text is on the run page, and the work itself is on the branch.
+pub const MAX_OLDER_SUMMARY: usize = 1_000;
 /// Why a run may not continue the thread of a workflow step that has ended (section 8): it
 /// would work in the project's worktree outside the workflow.
 pub const ENDED_STEP_THREAD: &str =
@@ -912,6 +916,7 @@ impl Workflows {
     /// Runs the loop until `shutdown`.
     pub fn spawn(self: &Arc<Self>, shutdown: CancellationToken) -> JoinHandle<()> {
         let this = self.clone();
+        let store = self.store.clone();
         // Subscribed before the first pass, so no change it should see is missed.
         let mut events = self.bus.subscribe();
         tokio::spawn(async move {
@@ -923,7 +928,7 @@ impl Workflows {
                     biased;
                     _ = shutdown.cancelled() => break,
                     _ = this.wake.notified() => {}
-                    _ = relevant(&mut events) => {}
+                    _ = relevant(&mut events, &store) => {}
                     _ = tokio::time::sleep(TICK) => {}
                 }
             }
@@ -945,10 +950,13 @@ impl Workflows {
     /// Does what the workflow run's state calls for: start its first step, watch the step that
     /// runs, or start the step after one that succeeded. A waiting run waits for the person.
     async fn advance(&self, id: &str) -> Result<()> {
-        let wr = self.tick(&self.store.get_workflow_run(id).await?).await?;
+        let wr = self.store.get_workflow_run(id).await?;
+        // A run that waits for the person counts no time, and each of the person's actions
+        // that lets it go on sets its clock first (`tick`): a pass writes nothing for it.
         if wr.status != WorkflowRunStatus::Running {
             return Ok(());
         }
+        let wr = self.tick(&wr).await?;
         let Some(current) = wr.current_step.clone() else {
             return self.begin_or_finish(&wr, wr.definition.first()).await;
         };
@@ -1248,12 +1256,19 @@ impl Workflows {
         };
         let mut new = NewRun::new(member, TriggerKind::Workflow);
         new.workflow_step_run_id = Some(step_run.id.clone());
+        // What Auto reads to size the step: the task and the job, not the summaries of the
+        // steps before it, whose words say what they did (lean workflows spec section 3).
+        let route = match deploy_step::worker(wr, step) {
+            Some((_, job)) => format!("{}\n\n{}", wr.task.trim(), job.trim()),
+            None => String::new(),
+        };
         new.payload = Some(json!({
             "workflow": {
                 "workflow_run_id": wr.id,
                 "step_id": step.id,
                 "start": start,
                 "section": section,
+                "route": route,
             }
         }));
         self.runner.enqueue(new).await
@@ -1329,11 +1344,32 @@ impl Workflows {
         } else {
             handoffs_before(wr, &step.id)
         };
+        // A step that names what it reads gets those steps' summaries, each in full; another
+        // gets every earlier step's, the older ones cut short (lean workflows spec section 4).
+        let reads = wr
+            .definition
+            .options(&step.id)
+            .and_then(|o| o.reads.as_ref());
+        let earlier: Vec<_> = match reads {
+            Some(reads) => earlier
+                .into_iter()
+                .filter(|(s, _)| reads.contains(&s.id))
+                .collect(),
+            None => earlier,
+        };
         if !earlier.is_empty() {
             out.push_str("### Earlier steps\n\n");
-            for (s, h) in earlier {
+            let newest = earlier.len() - 1;
+            for (i, (s, h)) in earlier.into_iter().enumerate() {
                 out.push_str(&format!("#### {}\n\n", s.name));
                 let summary = h.summary.trim();
+                let short;
+                let summary = if reads.is_none() && i < newest {
+                    short = cut(summary, MAX_OLDER_SUMMARY);
+                    short.as_str()
+                } else {
+                    summary
+                };
                 out.push_str(if summary.is_empty() {
                     "(no summary)"
                 } else {
@@ -1534,16 +1570,38 @@ impl Workflows {
     }
 }
 
+/// Whether the run `run_id` works for a workflow step. A run that cannot be read counts: a
+/// pass too many costs little, a pass missed leaves a step waiting for the next `TICK`.
+async fn of_a_step(store: &Store, run_id: Option<&str>) -> bool {
+    let Some(run_id) = run_id else {
+        return false;
+    };
+    match store.get_run(run_id).await {
+        Ok(run) => run.workflow_step_run_id.is_some(),
+        Err(Error::NotFound(_)) => false,
+        Err(_) => true,
+    }
+}
+
 /// Returns when something a pass should see happened: a run of a workflow step changed, a
-/// question was posted or answered, an approval was asked or decided; or events were lost.
-async fn relevant(events: &mut Receiver<RuntimeEvent>) {
+/// question of one was posted or answered, an approval of one was asked or decided; or events
+/// were lost. What the other runs of the app do wakes no pass (lean workflows spec section 6).
+async fn relevant(events: &mut Receiver<RuntimeEvent>, store: &Store) {
     loop {
         match events.recv().await {
             Ok(RuntimeEvent::RunUpdated { run }) if run.workflow_step_run_id.is_some() => return,
-            Ok(RuntimeEvent::MessagePosted { .. })
-            | Ok(RuntimeEvent::MessageUpdated { .. })
-            | Ok(RuntimeEvent::ApprovalRequested { .. })
-            | Ok(RuntimeEvent::ApprovalDecided { .. }) => return,
+            Ok(RuntimeEvent::MessagePosted { message })
+            | Ok(RuntimeEvent::MessageUpdated { message }) => {
+                if of_a_step(store, message.run_id.as_deref()).await {
+                    return;
+                }
+            }
+            Ok(RuntimeEvent::ApprovalRequested { approval })
+            | Ok(RuntimeEvent::ApprovalDecided { approval }) => {
+                if of_a_step(store, Some(&approval.run_id)).await {
+                    return;
+                }
+            }
             Ok(_) => {}
             Err(RecvError::Lagged(_)) => return,
             Err(RecvError::Closed) => std::future::pending().await,

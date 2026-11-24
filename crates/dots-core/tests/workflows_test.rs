@@ -12,10 +12,10 @@ use dots_core::engine::{Engine, EngineEvent, RunContext};
 use dots_core::events::{new_bus, Bus, RuntimeEvent};
 use dots_core::followups::FollowUps;
 use dots_core::model::{
-    Dot, EngineKind, FileStatus, FollowUpStatus, MemberHandoff, MemberSpec, NewRun, ProjectSpec,
-    Run, RunStatus, SendBack, SentBy, StepRun, StepRunChange, StepRunStatus, TeamSpec, TriggerKind,
-    WaitingOn, WorkflowRun, WorkflowRunChange, WorkflowRunFilter, WorkflowRunStatus, WorkflowSpec,
-    WorkflowTrigger, WorkspaceMode,
+    Dot, EngineKind, FileStatus, FollowUpStatus, MemberHandoff, MemberSpec, MemorySource,
+    ModelTier, NewRun, ProjectSpec, Run, RunStatus, SendBack, SentBy, StepRun, StepRunChange,
+    StepRunStatus, TeamSpec, TriggerKind, WaitingOn, WorkflowRun, WorkflowRunChange,
+    WorkflowRunFilter, WorkflowRunStatus, WorkflowSpec, WorkflowTrigger, WorkspaceMode,
 };
 use dots_core::runner::{Runner, RunnerConfig};
 use dots_core::scheduler::{Clock, SystemClock};
@@ -23,11 +23,11 @@ use dots_core::store::Store;
 use dots_core::team_tools::{DelegateTools, SendBackTarget, StartableMember, StepTools, Tool};
 use dots_core::workflow::{
     BranchOn, BranchPath, Budget, Definition, Delegate, DeployMode, MergeMethod, Step, StepKind,
-    Trigger,
+    StepOptions, Trigger,
 };
 use dots_core::workflows::{
     CheckTip, CheckView, ShownBranch, StartRequest, Workflows, ENDED_STEP_THREAD,
-    NO_DEFAULT_BRANCH, STEP_CLOSED,
+    MAX_OLDER_SUMMARY, NO_DEFAULT_BRANCH, STEP_CLOSED,
 };
 use dots_core::Error;
 use serde_json::json;
@@ -429,6 +429,7 @@ fn agent(id: &str, name: &str, member: &Dot, job: &str) -> Step {
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            options: Default::default(),
             member: member.id.clone(),
             job: job.into(),
             can_send_back_to: vec![],
@@ -2311,6 +2312,7 @@ fn delegating(
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            options: Default::default(),
             member: lead.id.clone(),
             job: "Split the work.".into(),
             can_send_back_to: vec![],
@@ -5633,4 +5635,187 @@ async fn a_workflow_run_lists_its_steps_dot_runs_with_their_threads() {
         w.workflows.dot_runs("nope").await,
         Err(Error::NotFound(m)) if m == "workflow run nope"
     ));
+}
+
+/// `step`, an agent step, with `options`.
+fn with_options(mut step: Step, options: StepOptions) -> Step {
+    if let StepKind::Agent { options: o, .. } = &mut step.kind {
+        *o = options;
+    }
+    step
+}
+
+/// Three steps by the helper, the dev and the helper again, the last with `options`: the
+/// first two end with summaries of 1,500 characters, all "a" and all "b". Gives the last
+/// step's prompt and those two summaries.
+async fn three_summaries(w: &World, options: StepOptions) -> (String, String, String) {
+    let first = "a".repeat(1_500);
+    let second = "b".repeat(1_500);
+    w.engine.set(
+        &w.helper.spec.name,
+        vec![Act::Say(first.clone()), Act::Finish("Done.")],
+    );
+    w.engine
+        .set(&w.dev.spec.name, vec![Act::Say(second.clone())]);
+    let flow = w
+        .workflow(
+            "Write",
+            vec![
+                agent("plan", "Plan it", &w.helper, "Plan."),
+                agent("draft", "Draft it", &w.dev, "Draft."),
+                with_options(agent("polish", "Polish it", &w.helper, "Polish."), options),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    let prompt = w.engine.prompts_of("helper")[1].clone();
+    (prompt, first, second)
+}
+
+#[tokio::test]
+async fn an_older_steps_summary_is_cut_short_and_the_newest_is_whole() {
+    let w = world().await;
+    let (prompt, first, second) = three_summaries(&w, StepOptions::default()).await;
+    // The step just before it: whole. The one before that: 1,000 characters, mark included.
+    assert!(prompt.contains(&format!("#### Draft it\n\n{second}\n")));
+    let cut = format!("{} [cut]", "a".repeat(MAX_OLDER_SUMMARY - 6));
+    assert!(
+        prompt.contains(&format!("#### Plan it\n\n{cut}\n")),
+        "{prompt}"
+    );
+    assert!(!prompt.contains(&first));
+}
+
+#[tokio::test]
+async fn a_step_that_names_what_it_reads_gets_those_summaries_whole_and_no_other() {
+    let w = world().await;
+    let options = StepOptions {
+        reads: Some(vec!["plan".into()]),
+        ..Default::default()
+    };
+    let (prompt, first, second) = three_summaries(&w, options).await;
+    assert!(prompt.contains(&format!("#### Plan it\n\n{first}\n")));
+    assert!(!prompt.contains("#### Draft it"), "{prompt}");
+    assert!(!prompt.contains(&second));
+
+    // A step that reads nothing has no "Earlier steps" at all.
+    let w = world().await;
+    let options = StepOptions {
+        reads: Some(vec![]),
+        ..Default::default()
+    };
+    let (prompt, _, _) = three_summaries(&w, options).await;
+    assert!(!prompt.contains("### Earlier steps"), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_lean_step_s_prompt_has_no_memories() {
+    let w = world().await;
+    for dot in [&w.helper, &w.dev] {
+        w.store
+            .add_memory(
+                &dot.id,
+                "The person likes short answers.",
+                "likes-short-answers",
+                MemorySource::Person,
+                None,
+                200,
+            )
+            .await
+            .unwrap();
+    }
+    w.engine
+        .set(&w.helper.spec.name, vec![Act::Finish("Planned.")]);
+    w.engine.set(&w.dev.spec.name, vec![Act::Finish("Done.")]);
+    let lean = StepOptions {
+        lean: true,
+        ..Default::default()
+    };
+    let flow = w
+        .workflow(
+            "Write",
+            vec![
+                agent("plan", "Plan it", &w.helper, "Plan."),
+                with_options(agent("draft", "Draft it", &w.dev, "Draft."), lean),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    w.until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // The step as it always ran carries its dot's memories; the lean one carries none, and
+    // still has its dot's instructions and the workflow.
+    let full = &w.engine.prompts_of("helper")[0];
+    assert!(full.contains("The person likes short answers."), "{full}");
+    let lean = &w.engine.prompts_of("dev")[0];
+    assert!(!lean.contains("The person likes short answers."), "{lean}");
+    assert!(lean.contains("Do the thing."), "{lean}");
+    assert!(
+        lean.contains("### Your job in this step\n\nDraft."),
+        "{lean}"
+    );
+}
+
+#[tokio::test]
+async fn a_step_s_run_starts_with_the_size_of_model_its_step_sets() {
+    let w = world().await;
+    w.engine
+        .set(&w.helper.spec.name, vec![Act::Finish("Planned.")]);
+    w.engine.set(&w.dev.spec.name, vec![Act::Finish("Done.")]);
+    let small = StepOptions {
+        model: Some(ModelTier::Small),
+        ..Default::default()
+    };
+    let flow = w
+        .workflow(
+            "Write",
+            vec![
+                agent("plan", "Plan it", &w.helper, "Plan."),
+                with_options(agent("draft", "Draft it", &w.dev, "Draft."), small),
+            ],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let wr = w
+        .until(&wr.id, |wr| wr.status == WorkflowRunStatus::Succeeded)
+        .await;
+    // A step that sets none runs on its dot's own model.
+    let plan = w.store.runs_of_step_run(&wr.steps[0].id).await.unwrap();
+    assert_eq!(plan[0].model.as_deref(), Some("sonnet"));
+    assert_eq!(plan[0].model_tier, None);
+    // The small one runs on the settings' small model, and says why.
+    let draft = w.store.runs_of_step_run(&wr.steps[1].id).await.unwrap();
+    assert_eq!(draft[0].model.as_deref(), Some("haiku"));
+    assert_eq!(draft[0].model_tier, Some(ModelTier::Small));
+    assert_eq!(
+        draft[0].model_reason.as_deref(),
+        Some("set on the workflow step")
+    );
+}
+
+#[tokio::test]
+async fn a_pass_writes_nothing_for_a_run_that_waits_on_the_person() {
+    let clock = common::clock::FakeClock::new(chrono::Utc::now() - chrono::TimeDelta::hours(3));
+    let w = world_with(clock.clone(), Budget::default()).await;
+    w.engine.set(&w.dev.spec.name, vec![Act::Finish("Done.")]);
+    let flow = w
+        .workflow(
+            "Fix",
+            vec![agent("dev", "Fix it", &w.dev, "Fix."), check("check")],
+        )
+        .await;
+    let wr = w.start(&flow).await;
+    let waiting = w.until(&wr.id, waits_on(WaitingOn::Check)).await;
+    // An hour of passes while it waits: no time counted.
+    let later = clock.now() + chrono::TimeDelta::hours(1);
+    w.run_clock(&clock, later).await;
+    let still = w.store.get_workflow_run(&wr.id).await.unwrap();
+    assert_eq!(still.active_ms, waiting.active_ms);
+    // The approval sets the clock before the run goes on, so the wait is not counted after it
+    // either.
+    let done = w.approve(&wr.id, None).await.unwrap();
+    assert_eq!(done.status, WorkflowRunStatus::Succeeded);
+    assert_eq!(done.active_ms, waiting.active_ms);
 }

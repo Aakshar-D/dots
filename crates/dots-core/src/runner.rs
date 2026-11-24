@@ -1386,6 +1386,25 @@ impl Runner {
         }))
     }
 
+    /// The options of the agent step a run works for (lean workflows spec section 2), as its
+    /// workflow run's own copy of the definition has them; `None` for an ordinary run, for a
+    /// step of another kind, and when they cannot be read: the run then runs as its dot does.
+    async fn step_options(&self, run: &Run) -> Option<crate::workflow::StepOptions> {
+        let step_run_id = run.workflow_step_run_id.as_ref()?;
+        let read = async {
+            let step = self.store.get_step_run(step_run_id).await?;
+            let workflow_run = self.store.get_workflow_run(&step.workflow_run_id).await?;
+            Result::Ok(workflow_run.definition.options(&step.step_id).cloned())
+        };
+        match read.await {
+            Ok(options) => options,
+            Err(e) => {
+                tracing::warn!(run = %run.id, "reading the step's options failed: {e}");
+                None
+            }
+        }
+    }
+
     /// The checkpoints of folder runs, beside the worktrees in Dots' data folder
     /// (`<data>/checkpoints`).
     pub fn checkpoints(&self) -> Checkpoints {
@@ -2185,7 +2204,17 @@ impl Runner {
             },
             None => None,
         };
-        let choice = crate::auto_model::choose(&dot, run, thread_tier, &settings);
+        // A workflow step may set the size of its model, and keep its prompt lean (lean
+        // workflows spec sections 2 and 3).
+        let step_options = self.step_options(run).await;
+        let lean = step_options.as_ref().is_some_and(|o| o.lean);
+        let choice = crate::auto_model::choose_for_step(
+            &dot,
+            run,
+            thread_tier,
+            &settings,
+            step_options.as_ref().and_then(|o| o.model),
+        );
         self.store
             .set_run_model(
                 &run.id,
@@ -2286,7 +2315,8 @@ impl Runner {
                     TriggerKind::Chat | TriggerKind::FollowUp | TriggerKind::Workflow
                 ));
         let memories = match self.checkins() {
-            _ if memory_off || message_only => Vec::new(),
+            // A lean step's prompt carries no memories.
+            _ if memory_off || message_only || lean => Vec::new(),
             Some(checkins) => {
                 // The titles are chosen by what the run is about: its message, or the dot's
                 // instructions when nothing was said (memory spec section 7).
@@ -2348,7 +2378,7 @@ impl Runner {
         let mut prompt = prompt;
         if let Some(graph) = tools
             .graph()
-            .filter(|_| run.session_id.is_none() && seed.is_none())
+            .filter(|_| run.session_id.is_none() && seed.is_none() && !lean)
         {
             let graph = graph.clone();
             let tool = crate::graph::model_name(dot.spec.engine);
@@ -2726,6 +2756,10 @@ impl Runner {
             doings.calls,
         );
         if taken.is_err() {
+            return;
+        }
+        // A lean step reads no memory and saves none: its run pays for no capture.
+        if self.step_options(&run).await.is_some_and(|o| o.lean) {
             return;
         }
         match self.store.claim_memory_capture(run_id).await {

@@ -13922,6 +13922,11 @@
               "kind": "agent",
               "member": "01J0DOT",
               "name": "Build",
+              "options": {
+                "lean": false,
+                "model": null,
+                "reads": null
+              },
               "outcomes": [
                 "fixed",
                 "needs_design"
@@ -13943,6 +13948,13 @@
                   "kind": "agent",
                   "member": "01J0DOT2",
                   "name": "Design",
+                  "options": {
+                    "lean": true,
+                    "model": "small",
+                    "reads": [
+                      "build"
+                    ]
+                  },
                   "outcomes": []
                 }
               ],
@@ -16040,6 +16052,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Build",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": [
               "fixed",
               "needs_design"
@@ -16061,6 +16078,13 @@
                 "kind": "agent",
                 "member": "01J0DOT2",
                 "name": "Design",
+                "options": {
+                  "lean": true,
+                  "model": "small",
+                  "reads": [
+                    "build"
+                  ]
+                },
                 "outcomes": []
               }
             ],
@@ -16126,6 +16150,11 @@
             "kind": "agent",
             "member": "01J0GONE",
             "name": "Work",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": []
           },
           {
@@ -16178,6 +16207,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Work",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": []
           },
           {
@@ -16260,6 +16294,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Work",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": []
           },
           {
@@ -16336,6 +16375,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Build",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": [
               "fixed",
               "needs_design"
@@ -16357,6 +16401,13 @@
                 "kind": "agent",
                 "member": "01J0DOT2",
                 "name": "Design",
+                "options": {
+                  "lean": true,
+                  "model": "small",
+                  "reads": [
+                    "build"
+                  ]
+                },
                 "outcomes": []
               }
             ],
@@ -16530,6 +16581,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Build",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": [
               "fixed",
               "needs_design"
@@ -16551,6 +16607,13 @@
                 "kind": "agent",
                 "member": "01J0DOT2",
                 "name": "Design",
+                "options": {
+                  "lean": true,
+                  "model": "small",
+                  "reads": [
+                    "build"
+                  ]
+                },
                 "outcomes": []
               }
             ],
@@ -16889,6 +16952,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Build",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": [
               "fixed",
               "needs_design"
@@ -16910,6 +16978,13 @@
                 "kind": "agent",
                 "member": "01J0DOT2",
                 "name": "Design",
+                "options": {
+                  "lean": true,
+                  "model": "small",
+                  "reads": [
+                    "build"
+                  ]
+                },
                 "outcomes": []
               }
             ],
@@ -17025,6 +17100,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Build",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": [
               "fixed",
               "needs_design"
@@ -17046,6 +17126,13 @@
                 "kind": "agent",
                 "member": "01J0DOT2",
                 "name": "Design",
+                "options": {
+                  "lean": true,
+                  "model": "small",
+                  "reads": [
+                    "build"
+                  ]
+                },
                 "outcomes": []
               }
             ],
@@ -17165,6 +17252,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Work",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": []
           },
           {
@@ -17315,6 +17407,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Build",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": [
               "fixed",
               "needs_design"
@@ -17336,6 +17433,13 @@
                 "kind": "agent",
                 "member": "01J0DOT2",
                 "name": "Design",
+                "options": {
+                  "lean": true,
+                  "model": "small",
+                  "reads": [
+                    "build"
+                  ]
+                },
                 "outcomes": []
               }
             ],
@@ -17388,6 +17492,11 @@
             "kind": "agent",
             "member": "01J0GONE",
             "name": "Work",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": []
           },
           {
@@ -17427,6 +17536,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Work",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": []
           },
           {
@@ -17501,6 +17615,11 @@
             "kind": "agent",
             "member": "01J0DOT",
             "name": "Work",
+            "options": {
+              "lean": false,
+              "model": null,
+              "reads": null
+            },
             "outcomes": []
           },
           {

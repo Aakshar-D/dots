@@ -1,12 +1,4 @@
-import type {
-  AgentStep,
-  BranchOn,
-  DeployMode,
-  DeployStep,
-  MergeMethod,
-  Step,
-  Trigger,
-} from "@/api/types";
+import type { AgentStep, BranchOn, DeployMode, DeployStep, MergeMethod, Step, Trigger, ModelTier } from "@/api/types";
 
 import { taskLine, TRIGGER_LABEL } from "../format";
 import { findStep, type StepKindName } from "./draft";
@@ -100,6 +92,14 @@ export function deployLine(step: DeployStep, nameOf: NameOf): string {
       return DEPLOY_LABEL[step.mode];
   }
 }
+
+/// The sizes of model a step may ask for (lean workflows spec section 3), smallest first, as
+/// the step's settings name them.
+export const MODEL_SIZE_OPTIONS: { value: ModelTier; label: string }[] = [
+  { value: "small", label: "Small: quick and cheap, for simple steps" },
+  { value: "standard", label: "Standard: most work" },
+  { value: "large", label: "Large: the hardest work, and the most usage" },
+];
 
 /// The card's line under the step's name, by its kind. `steps` is the whole draft, for the
 /// name of the step a check sends back to.

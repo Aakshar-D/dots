@@ -3,7 +3,7 @@ import { useEffect } from "react";
 import { useNavigate } from "react-router";
 
 import { onLagged, onNavigate, onRuntimeEvent, onStatus, onUpdate } from "@/api/events";
-import type { RunEventRecord, RuntimeEvent } from "@/api/types";
+import type { RunEventRecord, RuntimeEvent, WorkflowRun } from "@/api/types";
 import { invalidate, keys, mergeEvents, takeStatus } from "@/lib/query";
 
 /// Brings the query caches in step with one runtime event.
@@ -233,26 +233,59 @@ export function applyRuntimeEvent(qc: QueryClient, event: RuntimeEvent): void {
       invalidate(qc, keys.workflows(event.team_id));
       invalidate(qc, keys.workflow(event.workflow_id));
       break;
-    case "workflow_run_updated": {
-      const { run } = event;
-      // The run page with its check, diffs and dot runs, every list of workflow runs (the team
-      // page's, a conversation's cards), and the workflow's runs in flight and last run, which no
-      // workflow event announces. A waiting run is in the Inbox and needs the dot whose chat
-      // started it.
-      for (const queryKey of [
-        keys.workflowRun(run.id),
-        keys.workflowDotRuns(run.id),
-        ["workflow-runs"],
-        keys.workflows(run.team_id),
-        keys.inbox,
-        keys.overview,
-      ]) {
-        invalidate(qc, queryKey);
-      }
-      if (run.workflow_id !== null) invalidate(qc, keys.workflow(run.workflow_id));
+    case "workflow_run_updated":
+      applyWorkflowRun(qc, event.run);
       break;
-    }
   }
+}
+
+/// Where a workflow run stands, as far as anything but its own page shows: its status, what it
+/// waits on, its step, and each step run's status. Two events with the same mark differ only
+/// in what the run spent.
+function placeOf(run: WorkflowRun): string {
+  const steps = run.steps.map((s) => `${s.id}:${s.status}`).join(",");
+  return `${run.status}|${run.waiting_on}|${run.current_step}|${steps}`;
+}
+
+/// Takes a workflow run the backend announced (lean workflows spec section 7). The event
+/// carries the whole run, so its page and the lists that hold it are given it, with no
+/// question asked. Only a run that moved (a step began or ended, it waits or goes on, it is
+/// new here) changes what else shows it: its check, its steps' sol runs, which lists it is
+/// in, its workflow's runs in flight and last run (no workflow event announces those), the
+/// Inbox and the sols' needs-you counts. A run that only spent more asks for nothing.
+function applyWorkflowRun(qc: QueryClient, run: WorkflowRun): void {
+  const own = keys.workflowRun(run.id);
+  const listed = qc
+    .getQueriesData<WorkflowRun[]>({ queryKey: ["workflow-runs"] })
+    .flatMap(([, list]) => (Array.isArray(list) ? list : []))
+    .find((r) => r.id === run.id);
+  const loaded = qc.getQueryData<WorkflowRun>(own);
+  const before = loaded !== undefined && !Array.isArray(loaded) ? loaded : listed;
+  const moved = before === undefined || placeOf(before) !== placeOf(run);
+
+  // A question about the run that is on its way may have been answered before this change,
+  // and its answer would replace what is put here: it is asked again once it settles.
+  const asking = (queryKey: readonly unknown[], exact: boolean) =>
+    qc.isFetching({ queryKey, exact }) > 0;
+  if (asking(own, true)) invalidate(qc, own);
+  else if (qc.getQueryState(own) !== undefined) qc.setQueryData(own, run);
+  qc.setQueriesData<WorkflowRun[]>({ queryKey: ["workflow-runs"] }, (list) =>
+    Array.isArray(list) ? list.map((r) => (r.id === run.id ? run : r)) : list,
+  );
+  if (asking(["workflow-runs"], false)) invalidate(qc, ["workflow-runs"]);
+  if (!moved) return;
+
+  for (const queryKey of [
+    keys.workflowCheck(run.id),
+    keys.workflowDotRuns(run.id),
+    ["workflow-runs"],
+    keys.workflows(run.team_id),
+    keys.inbox,
+    keys.overview,
+  ]) {
+    invalidate(qc, queryKey);
+  }
+  if (run.workflow_id !== null) invalidate(qc, keys.workflow(run.workflow_id));
 }
 
 /// Marks every loaded dot stale, and what is read per dot under its key. A dot an editor shows

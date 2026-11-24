@@ -427,6 +427,7 @@ async fn ended_step_thread(rt: &Runtime, dot: &Dot, dir: &TempDir) -> Run {
             id: "a".into(),
             name: "Work".into(),
             kind: StepKind::Agent {
+                options: Default::default(),
                 member: dot.id.clone(),
                 job: "Fix it.".into(),
                 can_send_back_to: vec![],

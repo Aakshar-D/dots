@@ -540,6 +540,7 @@ async fn the_answer_to_a_workflow_steps_question_may_not_start_a_workflow() {
             id: "dev".into(),
             name: "Fix it".into(),
             kind: StepKind::Agent {
+                options: Default::default(),
                 member: helper.id.clone(),
                 job: "Fix.".into(),
                 can_send_back_to: vec![],
@@ -715,6 +716,7 @@ async fn a_reply_in_the_chat_of_a_step_that_has_ended_is_refused() {
             id: "dev".into(),
             name: "Fix it".into(),
             kind: StepKind::Agent {
+                options: Default::default(),
                 member: helper.id.clone(),
                 job: "Fix.".into(),
                 can_send_back_to: vec![],
@@ -904,6 +906,7 @@ fn agent_step(id: &str, name: &str, member: &Dot, outcomes: &[&str], back: &[&st
         id: id.into(),
         name: name.into(),
         kind: StepKind::Agent {
+            options: Default::default(),
             member: member.id.clone(),
             job: format!("{name}."),
             can_send_back_to: back.iter().map(|s| s.to_string()).collect(),
@@ -1628,6 +1631,7 @@ fn delegate_step(lead: &Dot, member: &Dot) -> Step {
         id: "split".into(),
         name: "Split it".into(),
         kind: StepKind::Agent {
+            options: Default::default(),
             member: lead.id.clone(),
             job: "Split it.".into(),
             can_send_back_to: vec![],

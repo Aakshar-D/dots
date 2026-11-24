@@ -184,6 +184,7 @@ impl Harness {
                     id: "fix".into(),
                     name: "Fix it".into(),
                     kind: StepKind::Agent {
+                        options: Default::default(),
                         member: member.id.clone(),
                         job: "Fix the bug.".into(),
                         can_send_back_to: vec![],

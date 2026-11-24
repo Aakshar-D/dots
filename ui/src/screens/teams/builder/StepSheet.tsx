@@ -1,7 +1,16 @@
 import { Plus, X } from "lucide-react";
 import { useState } from "react";
 
-import type { AgentStep, BranchStep, CheckStep, DeployStep, Step, Team } from "@/api/types";
+import type {
+  AgentStep,
+  BranchStep,
+  CheckStep,
+  DeployStep,
+  ModelTier,
+  Step,
+  StepOptions,
+  Team,
+} from "@/api/types";
 import { ConfirmButton } from "@/components/ConfirmButton";
 import { Field } from "@/components/Field";
 import { Button } from "@/components/ui/button";
@@ -22,6 +31,7 @@ import { plural } from "@/screens/library/parts";
 import { LimitField } from "./cards";
 import {
   agentsBefore,
+  agentsEarlier,
   findStep,
   MAX_JOB,
   MAX_NAME,
@@ -38,6 +48,7 @@ import {
   KIND_LABEL,
   MERGE_OPTIONS,
   MODE_OPTIONS,
+  MODEL_SIZE_OPTIONS,
   type NameOf,
   ON_OPTIONS,
 } from "./labels";
@@ -202,6 +213,95 @@ function AgentFields({ step, steps, team, nameOf, onChange }: KindProps<AgentSte
             At once is a ceiling: the limit on runs at once in Settings still applies.
           </p>
         </>
+      )}
+      <UsageFields
+        options={step.options}
+        earlier={agentsEarlier(steps, step.id)}
+        nameOfStep={(id) => nameIn(steps, id)}
+        onChange={(options) => onChange({ ...step, options })}
+      />
+    </>
+  );
+}
+
+/// What makes an agent step's run use less (lean workflows spec section 2): the size of its
+/// model, a prompt without the member's memories and project map, and which earlier steps'
+/// summaries it reads.
+function UsageFields(props: {
+  options: StepOptions;
+  earlier: AgentStep[];
+  nameOfStep: (id: string) => string;
+  onChange: (options: StepOptions) => void;
+}) {
+  const { options } = props;
+  const picks = options.reads !== null;
+  return (
+    <>
+      <Field
+        label="Model size"
+        htmlFor="step-model"
+        hint="For a member on Claude. The sizes are the Auto models in Settings."
+      >
+        <NativeSelect
+          id="step-model"
+          className="w-full"
+          value={options.model ?? ""}
+          onChange={(e) =>
+            props.onChange({
+              ...options,
+              model: e.target.value === "" ? null : (e.target.value as ModelTier),
+            })
+          }
+        >
+          <NativeSelectOption value="">The member's own model</NativeSelectOption>
+          {MODEL_SIZE_OPTIONS.map((o) => (
+            <NativeSelectOption key={o.value} value={o.value}>
+              {o.label}
+            </NativeSelectOption>
+          ))}
+        </NativeSelect>
+      </Field>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <Switch
+            id="step-lean"
+            checked={options.lean}
+            onCheckedChange={(lean) => props.onChange({ ...options, lean })}
+          />
+          <Label htmlFor="step-lean">Lean prompt</Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The step gets the member's instructions, the task and its job, without the member's
+          memories or the project map, and saves no memory. Less usage for a step that needs
+          neither.
+        </p>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <div className="flex items-center gap-2">
+          <Switch
+            id="step-reads"
+            checked={picks}
+            onCheckedChange={(on) => props.onChange({ ...options, reads: on ? [] : null })}
+          />
+          <Label htmlFor="step-reads">Pick the earlier steps it reads</Label>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {picks
+            ? "It gets the summaries of the steps ticked below, each whole, and no other."
+            : "It gets every earlier step's summary: the one just before it whole, older ones shortened."}
+        </p>
+      </div>
+      {options.reads !== null && (
+        <ChoiceList
+          legend="Reads"
+          options={props.earlier.map((s) => ({ value: s.id, label: s.name.trim() || "(no name)" }))}
+          chosen={options.reads}
+          stale={props.nameOfStep}
+          empty="No agent step comes before it."
+          onChange={(id, on) =>
+            props.onChange({ ...options, reads: toggled(options.reads ?? [], id, on) })
+          }
+        />
       )}
     </>
   );

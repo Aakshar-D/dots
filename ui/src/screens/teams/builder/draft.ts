@@ -6,6 +6,7 @@ import type {
   Delegate,
   Schedule,
   Step,
+  StepOptions,
   Team,
   Trigger,
 } from "@/api/types";
@@ -19,6 +20,8 @@ export const MAX_TASK = 8_000;
 
 /// What a step becomes a delegate with (section 5.3): no member yet, 3 at once, 6 in all.
 export const NEW_DELEGATE: Delegate = { may_start: [], at_once: 3, total: 6 };
+/// An agent step's options as a step has them until one is set (lean workflows spec section 2).
+export const NO_OPTIONS: StepOptions = { model: null, lean: false, reads: null };
 
 /// The kinds of step the builder adds (teams spec section 5): a delegate is an agent step whose
 /// settings say what it may start.
@@ -80,6 +83,7 @@ export function newStep(
         can_send_back_to: [],
         outcomes: [],
         delegate: null,
+        options: NO_OPTIONS,
       };
     case "check":
       return { id, name: "Your check", kind, send_back_to: null };
@@ -203,6 +207,16 @@ export function stepsBefore(steps: Step[], id: string): Step[] {
 /// The agent steps before the step `id` on its path: what it may send work back to.
 export function agentsBefore(steps: Step[], id: string): AgentStep[] {
   return stepsBefore(steps, id).filter((step): step is AgentStep => step.kind === "agent");
+}
+
+/// The agent steps that come before the step `id` in run order, those inside an earlier
+/// branch's paths included: the steps whose summaries it may read.
+export function agentsEarlier(steps: Step[], id: string): AgentStep[] {
+  const all = allSteps(steps);
+  const here = all.findIndex((step) => step.id === id);
+  return all
+    .slice(0, Math.max(here, 0))
+    .filter((step): step is AgentStep => step.kind === "agent");
 }
 
 /// The agent step whose outcome a branch on outcome `id` goes by: the nearest one before it.

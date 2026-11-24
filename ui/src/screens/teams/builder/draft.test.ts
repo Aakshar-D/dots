@@ -12,6 +12,7 @@ import { sample } from "@/test/fixtures";
 
 import {
   agentsBefore,
+  agentsEarlier,
   allSteps,
   canMove,
   deleteStep,
@@ -79,6 +80,7 @@ describe("the builder's draft", () => {
       can_send_back_to: [],
       outcomes: [],
       delegate: null,
+      options: { model: null, lean: false, reads: null },
     });
     expect(newStep("check", nightlySteps, crew)).toEqual({
       id: "check-1",
@@ -200,6 +202,19 @@ describe("the builder's draft", () => {
     expect(agentsBefore(fixSteps, "build")).toEqual([]);
     expect(outcomeSource(fixSteps, "route")?.outcomes).toEqual(["fixed", "needs_design"]);
     expect(outcomeSource(fixSteps, "build")).toBeUndefined();
+  });
+
+  it("lists the agent steps earlier in run order, the ones inside an earlier branch too", () => {
+    // What a step may read: any agent step that comes before it, on its path or not.
+    const names = (steps: Step[]) => steps.map((s) => s.id);
+    expect(names(agentsEarlier(fixSteps, "design"))).toEqual(["build"]);
+    const after = insertStep(fixSteps, TOP, fixSteps.length, {
+      ...(findStep(fixSteps, "design") as Step),
+      id: "wrap",
+    });
+    expect(names(agentsEarlier(after, "wrap"))).toEqual(["build", "design"]);
+    expect(agentsEarlier(fixSteps, "build")).toEqual([]);
+    expect(agentsEarlier(fixSteps, "nope")).toEqual([]);
   });
 
   it("gives a deploy of a new mode and a trigger of a new kind defaults a save takes", () => {
