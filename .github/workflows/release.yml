@@ -353,7 +353,8 @@ jobs:
           if [ -s release-notes.out.md ]; then
             flags+=(--notes-file release-notes.out.md)
           else
-            flags+=(--generate-notes)
+            # GitHub's own notes, with how to install above them.
+            flags+=(--generate-notes --notes "$(cat tools/release/install-notes.md)")
           fi
           gh release create "$GITHUB_REF_NAME" --title "Sage $version" \
             "${flags[@]}" "$installer" "$installer.sig" latest.json "${mac_files[@]}" "${arm_files[@]}"

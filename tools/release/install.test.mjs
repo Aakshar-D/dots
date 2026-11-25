@@ -97,6 +97,19 @@ test("the Windows command finds the installer for the PC's processor", (t) => {
   assert.equal(fallback.out, `Sage ${v}: ${releases}/v${v}/Sage_${v}_x64-setup.exe`);
 });
 
+test("the Windows command, run as the README gives it, leaves the PowerShell as it was", (t) => {
+  const file = manifestFile("0.5.4", all("0.5.4"));
+  const piped = [
+    "-NoProfile",
+    "-Command",
+    'Get-Content -Raw install.ps1 | iex; "left: $ErrorActionPreference $($null -eq $manifest)"',
+  ];
+  const run = dryRun("powershell", piped, file, { SAGE_ARCH: "x64" });
+  if (!run) return t.skip("no powershell here");
+  assert.equal(run.status, 0, run.out);
+  assert.match(run.out, /^Sage 0\.5\.4: \S+x64-setup\.exe\s+left: Continue True$/);
+});
+
 test("the Windows command runs nothing from outside this repository's releases", (t) => {
   const file = manifestFile("0.5.4", all("0.5.4"));
   writeFileSync(
