@@ -63,7 +63,7 @@ jobs:
         run: cargo test -p dots-app --locked
 
       - name: Run the release script's tests
-        run: node --test tools/release/release.test.mjs
+        run: node --test tools/release/release.test.mjs tools/release/install.test.mjs
 
       - name: Run the sherpa-onnx fetch script's tests
         run: node --test tools/voice/sherpa-lib.test.mjs
@@ -234,7 +234,7 @@ jobs:
         id: version
         shell: bash
         run: |
-          node --test tools/release/release.test.mjs
+          node --test tools/release/release.test.mjs tools/release/install.test.mjs
           node tools/release/release.mjs check "$GITHUB_REF_NAME"
 
       # Fails unless the check said "true" or "false", so a check that printed nothing cannot
@@ -343,12 +343,18 @@ jobs:
             echo "release: the ARM64 build gave '$ARM_RESULT'; publishing without the ARM64 installer"
           fi
           node tools/release/release.mjs manifest "$GITHUB_REF_NAME" "$installer" latest.json release-notes.out.md "${mac_archive:--}" "${arm_installer:--}"
+          # How to install, under the notes on the release's page. After the manifest, so the
+          # notes Sage shows for an update stay the notes alone.
+          if [ -s release-notes.out.md ]; then
+            cat tools/release/install-notes.md >> release-notes.out.md
+          fi
           flags=()
           if [ "$PRERELEASE" = "true" ]; then flags+=(--prerelease); fi
           if [ -s release-notes.out.md ]; then
             flags+=(--notes-file release-notes.out.md)
           else
-            flags+=(--generate-notes)
+            # GitHub's own notes, with how to install above them.
+            flags+=(--generate-notes --notes "$(cat tools/release/install-notes.md)")
           fi
           gh release create "$GITHUB_REF_NAME" --title "Sage $version" \
             "${flags[@]}" "$installer" "$installer.sig" latest.json "${mac_files[@]}" "${arm_files[@]}"
