@@ -1,3 +1,4 @@
 *.sql text eol=lf
 # The apps that come with Dots are built into it byte for byte: their text is LF everywhere.
 crates/dots-core/apps/** text eol=lf
+install.sh text eol=lf
