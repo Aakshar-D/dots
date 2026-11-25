@@ -12,8 +12,9 @@
 #   $env:SAGE_DRY_RUN = '1'       says what it would download, and stops
 
 # In a block of its own, so that a run through `iex` leaves nothing behind in the PowerShell
-# it was typed into: no variables, and no changed error setting.
-& {
+# it was typed into: no variables, and no changed error setting. What goes wrong is said in
+# one line, not as PowerShell's own error report.
+try { & {
     $ErrorActionPreference = 'Stop'
 
     # GitHub answers only TLS 1.2 and newer, which an older Windows PowerShell does not offer
@@ -96,4 +97,8 @@
         throw "The installer ended with code $($installer.ExitCode). Sage may not be installed."
     }
     Write-Host "Sage $($manifest.version) is installed. Find it in the Start menu."
+} } catch {
+    Write-Host "install: $($_.Exception.Message)" -ForegroundColor Red
+    # Run as a file, it ends as failed. Typed into a PowerShell, it must not close that window.
+    if ($PSCommandPath) { exit 1 }
 }

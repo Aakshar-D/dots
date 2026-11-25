@@ -84,7 +84,15 @@ if pgrep -x Sage >/dev/null 2>&1 || pgrep -x dots-app >/dev/null 2>&1; then
   fail "Sage is running. Quit it (the menu bar icon, then Quit), and run this again."
 fi
 
-rm -rf "$target/$name"
-mv "$app" "$target/$name"
+# The Sage already there is set aside, and put back when the new one cannot take its place.
+old=""
+if [ -e "$target/$name" ]; then
+  old="$work/old.app"
+  mv "$target/$name" "$old" || fail "the Sage already in $target could not be replaced."
+fi
+if ! mv "$app" "$target/$name"; then
+  [ -z "$old" ] || mv "$old" "$target/$name"
+  fail "Sage could not be put in $target."
+fi
 echo "Sage $version is installed in $target. Opening it."
 open "$target/$name"
